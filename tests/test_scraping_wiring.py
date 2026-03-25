@@ -36,10 +36,12 @@ def test_rate_limiter_includes_x_domain_from_config():
     cfg.peerspot_rpm = 4
     cfg.software_advice_rpm = 8
     cfg.sourceforge_rpm = 12
+    cfg.slashdot_rpm = 8
 
     limiter = DomainRateLimiter.from_config(cfg)
     assert limiter._rpm_map["x.com"] == 10
     assert limiter._rpm_map["sourceforge.net"] == 12
+    assert limiter._rpm_map["slashdot.org"] == 8
 
 
 def test_structured_sources_match_verified_review_platforms():
@@ -50,34 +52,41 @@ def test_structured_sources_match_verified_review_platforms():
     assert ReviewSource.SOFTWARE_ADVICE in STRUCTURED_SOURCES
 
 
-def test_default_source_allowlist_includes_getapp_and_excludes_sourceforge():
+def test_default_source_allowlist_includes_developer_sources_and_excludes_noise():
     from atlas_brain.services.scraping.sources import is_source_allowed
 
     allowlist = (
         "g2,capterra,trustradius,gartner,peerspot,"
-        "getapp,software_advice,trustpilot,reddit,hackernews"
+        "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow"
     )
 
     assert is_source_allowed("getapp", allowlist)
+    assert is_source_allowed("github", allowlist)
+    assert is_source_allowed("stackoverflow", allowlist)
+    assert not is_source_allowed("quora", allowlist)
     assert not is_source_allowed("twitter", allowlist)
     assert not is_source_allowed("sourceforge", allowlist)
     assert is_source_allowed("software_advice", allowlist)
 
 
-def test_capabilities_match_getapp_twitter_and_sourceforge_parser_paths():
-    from atlas_brain.services.scraping.capabilities import AccessPattern, get_capability
+def test_capabilities_match_getapp_twitter_sourceforge_and_slashdot_profiles():
+    from atlas_brain.services.scraping.capabilities import AccessPattern, ProxyClass, get_capability
 
     getapp = get_capability("getapp")
     twitter = get_capability("twitter")
     sourceforge = get_capability("sourceforge")
+    slashdot = get_capability("slashdot")
 
     assert getapp is not None
     assert twitter is not None
     assert sourceforge is not None
+    assert slashdot is not None
     assert AccessPattern.js_rendered in getapp.access_patterns
     assert getapp.fallback_chain == ("web_unlocker", "js_rendered", "html_scrape")
     assert twitter.fallback_chain == ("js_rendered", "html_scrape")
     assert sourceforge.fallback_chain == ("html_scrape",)
+    assert slashdot.fallback_chain == ("html_scrape",)
+    assert slashdot.proxy_class == ProxyClass.residential
 
 
 def test_builtin_task_registry_includes_scrape_target_pruning():
@@ -86,18 +95,52 @@ def test_builtin_task_registry_includes_scrape_target_pruning():
     assert ("b2b_scrape_target_pruning", "run", "b2b_scrape_target_pruning") in _BUILTIN_TASKS
 
 
-def test_source_fit_policy_flags_crm_github_but_allows_cloud_github():
+def test_source_fit_policy_keeps_crm_github_conditional_and_cloud_github_core():
     from atlas_brain.services.scraping.source_fit import classify_source_fit, is_source_fit_allowed
 
     crm = classify_source_fit("github", "CRM")
     cloud = classify_source_fit("github", "Cloud Infrastructure")
 
-    assert crm.fit == "avoid"
+    assert crm.fit == "conditional"
     assert crm.vertical == "crm_support_marketing"
-    assert is_source_fit_allowed("github", "CRM") is False
+    assert is_source_fit_allowed("github", "CRM") is True
     assert cloud.fit == "core"
     assert cloud.vertical == "cloud_devops_security"
     assert is_source_fit_allowed("github", "Cloud Infrastructure") is True
+
+
+def test_source_fit_policy_treats_communication_stackoverflow_as_core():
+    from atlas_brain.services.scraping.source_fit import classify_source_fit, is_source_fit_allowed
+
+    comm_so = classify_source_fit("stackoverflow", "Communication")
+    comm_gh = classify_source_fit("github", "Communication")
+    comm_sf = classify_source_fit("sourceforge", "Communication")
+
+    assert comm_so.fit == "core"
+    assert comm_so.vertical == "communication"
+    assert is_source_fit_allowed("stackoverflow", "Communication") is True
+    assert comm_gh.fit == "core"
+    assert comm_gh.vertical == "communication"
+    assert is_source_fit_allowed("github", "Communication") is True
+    assert comm_sf.fit == "avoid"
+    assert is_source_fit_allowed("sourceforge", "Communication") is False
+
+
+def test_source_fit_policy_keeps_project_stackoverflow_conditional():
+    from atlas_brain.services.scraping.source_fit import classify_source_fit, is_source_fit_allowed
+
+    project_so = classify_source_fit("stackoverflow", "Project Management")
+    project_gh = classify_source_fit("github", "Project Management")
+    project_sf = classify_source_fit("sourceforge", "Project Management")
+
+    assert project_so.fit == "conditional"
+    assert project_so.vertical == "project_collaboration"
+    assert is_source_fit_allowed("stackoverflow", "Project Management") is True
+    assert project_gh.fit == "conditional"
+    assert project_gh.vertical == "project_collaboration"
+    assert is_source_fit_allowed("github", "Project Management") is True
+    assert project_sf.fit == "avoid"
+    assert is_source_fit_allowed("sourceforge", "Project Management") is False
 
 
 @pytest.mark.asyncio
@@ -182,12 +225,11 @@ def test_scrape_intake_filters_poor_source_fit_targets():
         cfg,
     )
 
-    assert [row["source"] for row in kept] == ["g2", "github"]
-    assert kept[0]["_source_fit"] == "core"
+    assert [row["source"] for row in kept] == ["github", "g2", "github"]
+    assert kept[0]["_source_fit"] == "conditional"
     assert kept[1]["_source_fit"] == "core"
-    assert len(skipped) == 1
-    assert skipped[0]["source"] == "github"
-    assert skipped[0]["fit"] == "avoid"
+    assert kept[2]["_source_fit"] == "core"
+    assert skipped == []
 
 
 def test_scrape_intake_allows_conditional_probation_target():
@@ -467,8 +509,8 @@ def test_coverage_planner_flags_missing_core_and_poor_fit_targets():
         allowed_sources=["g2", "github", "reddit"],
     )
 
-    assert plan["summary"]["poor_fit_enabled_targets"] == 1
-    assert plan["poor_fit_enabled_targets"][0]["source"] == "github"
+    assert plan["summary"]["poor_fit_enabled_targets"] == 0
+    assert plan["poor_fit_enabled_targets"] == []
     missing = {(row["vendor_name"], row["source"]) for row in plan["missing_core_targets"]}
     assert ("HubSpot", "reddit") in missing
     assert ("Datadog", "github") in missing
@@ -852,7 +894,7 @@ async def test_disable_poor_fit_endpoint_disables_targets():
             [
                 {
                     "id": "t-1",
-                    "source": "github",
+                    "source": "sourceforge",
                     "vendor_name": "HubSpot",
                     "product_name": "HubSpot",
                     "product_category": "CRM",
@@ -873,7 +915,7 @@ async def test_disable_poor_fit_endpoint_disables_targets():
         result = await disable_poor_fit_targets(DisablePoorFitRequest(dry_run=False))
 
     assert result["disabled"] == 1
-    assert result["targets"][0]["source"] == "github"
+    assert result["targets"][0]["source"] == "sourceforge"
     pool.execute.assert_awaited_once()
 
 
@@ -1518,6 +1560,45 @@ async def test_run_probation_batch_runs_due_targets_only():
         return_value=[
             {
                 "id": "00000000-0000-0000-0000-000000000001",
+                "source": "g2",
+                "vendor_name": "HubSpot",
+                "last_scraped_at": None,
+                "priority": 3,
+            }
+        ]
+    )
+
+    cfg = MagicMock()
+    cfg.source_allowlist = "g2"
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
+            with patch(
+                "atlas_brain.api.b2b_scrape.trigger_scrape",
+                new=AsyncMock(return_value={"target_id": "00000000-0000-0000-0000-000000000001", "status": "success"}),
+            ) as trigger:
+                result = await run_probation_batch(RunProbationBatchRequest(limit=5, due_only=True))
+
+    assert result["selected"] == 1
+    assert result["succeeded"] == 1
+    assert result["skipped_disallowed_sources"] == 0
+    trigger.assert_awaited_once_with("00000000-0000-0000-0000-000000000001")
+    sql = pool.fetch.await_args.args[0]
+    assert "source_fit_probation" in sql
+    assert "source = ANY(" in sql
+    assert "make_interval(hours => scrape_interval_hours)" in sql
+
+
+@pytest.mark.asyncio
+async def test_run_probation_batch_skips_disallowed_sources():
+    from atlas_brain.api.b2b_scrape import RunProbationBatchRequest, run_probation_batch
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "id": "00000000-0000-0000-0000-000000000001",
                 "source": "twitter",
                 "vendor_name": "HubSpot",
                 "last_scraped_at": None,
@@ -1526,16 +1607,35 @@ async def test_run_probation_batch_runs_due_targets_only():
         ]
     )
 
-    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
-        with patch(
-            "atlas_brain.api.b2b_scrape.trigger_scrape",
-            new=AsyncMock(return_value={"target_id": "00000000-0000-0000-0000-000000000001", "status": "success"}),
-        ) as trigger:
-            result = await run_probation_batch(RunProbationBatchRequest(limit=5, due_only=True))
+    cfg = MagicMock()
+    cfg.source_allowlist = "g2"
 
-    assert result["selected"] == 1
-    assert result["succeeded"] == 1
-    trigger.assert_awaited_once_with("00000000-0000-0000-0000-000000000001")
-    sql = pool.fetch.await_args.args[0]
-    assert "source_fit_probation" in sql
-    assert "make_interval(hours => scrape_interval_hours)" in sql
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
+            with patch("atlas_brain.api.b2b_scrape.trigger_scrape", new=AsyncMock()) as trigger:
+                result = await run_probation_batch(RunProbationBatchRequest(limit=5, due_only=True))
+
+    assert result["selected"] == 0
+    assert result["attempted"] == 0
+    assert result["skipped_disallowed_sources"] == 1
+    trigger.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_trigger_scrape_all_rejects_disallowed_source_filter():
+    from fastapi import HTTPException
+    from atlas_brain.api.b2b_scrape import trigger_scrape_all
+
+    pool = AsyncMock()
+    pool.is_initialized = True
+
+    cfg = MagicMock()
+    cfg.source_allowlist = "g2"
+
+    with patch("atlas_brain.api.b2b_scrape.get_db_pool", return_value=pool):
+        with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
+            with pytest.raises(HTTPException) as exc:
+                await trigger_scrape_all(source="twitter")
+
+    assert exc.value.status_code == 400
+    assert "ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST" in str(exc.value.detail)

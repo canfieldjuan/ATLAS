@@ -2796,3 +2796,47 @@ class TestNormalizeCompanyName:
 
     def test_preserves_multi_word(self):
         assert normalize_company_name("BrightPath Software") == "brightpath software"
+
+
+@pytest.mark.asyncio
+async def test_fetch_company_signal_review_context_filters_quarantined_reviews():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    result = await churn_intel_mod._fetch_company_signal_review_context(
+        pool,
+        [uuid4()],
+    )
+
+    assert result == {}
+    query = pool.fetch.await_args.args[0]
+    assert "enrichment_status = 'enriched'" in query
+
+
+@pytest.mark.asyncio
+async def test_head_to_head_from_edges_filters_quarantined_review_companies():
+    sample_review_id = uuid4()
+    pool = SimpleNamespace(
+        fetch=AsyncMock(
+            side_effect=[
+                [{
+                    "from_vendor": "CrowdStrike",
+                    "to_vendor": "SentinelOne",
+                    "mention_count": 2,
+                    "sample_review_ids": [sample_review_id],
+                }],
+                [],
+                [],
+            ],
+        ),
+    )
+
+    result = await churn_intel_mod._head_to_head_from_edges(
+        pool,
+        "CrowdStrike",
+        "SentinelOne",
+        window_days=None,
+    )
+
+    assert len(result) == 2
+    review_query = pool.fetch.await_args_list[2].args[0]
+    assert "enrichment_status = 'enriched'" in review_query

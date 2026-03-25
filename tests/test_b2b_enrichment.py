@@ -56,6 +56,7 @@ async def test_run_limits_rounds_and_reports_orphan_recovery(monkeypatch):
     monkeypatch.setattr(cfg, "enrichment_max_per_batch", 10)
     monkeypatch.setattr(cfg, "enrichment_max_attempts", 3)
     monkeypatch.setattr(cfg, "enrichment_max_rounds_per_run", 1)
+    monkeypatch.setattr(cfg, "enrichment_priority_sources", "stackoverflow,github")
 
     result = await b2b_enrichment.run(_task())
 
@@ -64,6 +65,57 @@ async def test_run_limits_rounds_and_reports_orphan_recovery(monkeypatch):
     assert result["version_upgrade_requeued"] == 2
     assert result["enriched"] == 3
     assert pool.fetch.await_count == 1
+    fetch_query, max_attempts, max_batch, priority_sources = pool.fetch.await_args.args
+    assert "source = ANY($3::text[])" in fetch_query
+    assert "imported_at DESC" in fetch_query
+    assert max_attempts == 3
+    assert max_batch == 10
+    assert priority_sources == ["stackoverflow", "github"]
+
+
+@pytest.mark.asyncio
+async def test_run_applies_manual_metadata_overrides(monkeypatch):
+    rows = [{"id": uuid4(), "enrichment_attempts": 0}]
+    pool = _Pool([rows, []])
+    task = _task()
+    task.metadata = {
+        "builtin_handler": "b2b_enrichment",
+        "enrichment_max_per_batch": 25,
+        "enrichment_max_rounds_per_run": 3,
+        "enrichment_concurrency": 17,
+    }
+
+    monkeypatch.setattr(b2b_enrichment, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_recover_orphaned_enriching",
+        AsyncMock(return_value=0),
+    )
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_queue_version_upgrades",
+        AsyncMock(return_value=0),
+    )
+    enrich_rows = AsyncMock(return_value={"enriched": 1, "failed": 0, "no_signal": 0})
+    monkeypatch.setattr(b2b_enrichment, "_enrich_rows", enrich_rows)
+
+    cfg = b2b_enrichment.settings.b2b_churn
+    monkeypatch.setattr(cfg, "enabled", True)
+    monkeypatch.setattr(cfg, "enrichment_max_per_batch", 10)
+    monkeypatch.setattr(cfg, "enrichment_max_attempts", 3)
+    monkeypatch.setattr(cfg, "enrichment_max_rounds_per_run", 1)
+    monkeypatch.setattr(cfg, "enrichment_concurrency", 10)
+    monkeypatch.setattr(cfg, "enrichment_priority_sources", "stackoverflow,github")
+
+    result = await b2b_enrichment.run(task)
+
+    assert result["rounds"] == 1
+    fetch_query, max_attempts, max_batch, priority_sources = pool.fetch.await_args_list[0].args
+    assert "source = ANY($3::text[])" in fetch_query
+    assert max_attempts == 3
+    assert max_batch == 25
+    assert priority_sources == ["stackoverflow", "github"]
+    assert enrich_rows.await_args.kwargs["concurrency_override"] == 17
 
 
 @pytest.mark.asyncio
@@ -106,3 +158,337 @@ async def test_enrich_rows_uses_configured_concurrency(monkeypatch):
 
     assert result["enriched"] == 5
     assert max_seen == 2
+
+
+def test_get_base_enrichment_llm_uses_vllm_first(monkeypatch):
+    calls = []
+
+    def _fake_get_pipeline_llm(**kwargs):
+        calls.append(kwargs)
+        return object()
+
+    with patch("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm):
+        llm = b2b_enrichment._get_base_enrichment_llm(local_only=False)
+
+    assert llm is not None
+    assert calls == [{
+        "workload": "vllm",
+        "try_openrouter": False,
+        "auto_activate_ollama": False,
+    }]
+
+
+def test_get_base_enrichment_llm_respects_local_only(monkeypatch):
+    calls = []
+
+    def _fake_get_pipeline_llm(**kwargs):
+        calls.append(kwargs)
+        return None
+
+    with patch("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm):
+        llm = b2b_enrichment._get_base_enrichment_llm(local_only=True)
+
+    assert llm is None
+    assert calls == [{
+        "workload": "vllm",
+        "try_openrouter": False,
+        "auto_activate_ollama": False,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_enrich_single_skips_hybrid_when_local_only(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    row = {
+        "id": uuid4(),
+        "review_text": "A" * 200,
+        "source": "reddit",
+        "enrichment_attempts": 0,
+        "vendor_name": "Example",
+        "review_text": "We are actively evaluating alternatives after support issues." * 4,
+        "summary": "Switching evaluation",
+        "rating": 2.0,
+    }
+    cfg = b2b_enrichment.settings.b2b_churn
+
+    monkeypatch.setattr(cfg, "enrichment_hybrid_enabled", True)
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_triage_review",
+        AsyncMock(return_value=({"signal": True}, "vllm-model")),
+    )
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_classify_review_async",
+        AsyncMock(return_value=({
+            "churn_signals": {
+                "intent_to_leave": True,
+                "actively_evaluating": False,
+                "migration_in_progress": False,
+                "support_escalation": False,
+                "contract_renewal_mentioned": False,
+            },
+            "urgency_score": 7,
+            "reviewer_context": {"role_level": "unknown", "decision_maker": False},
+            "buyer_authority": {
+                "role_type": "unknown",
+                "has_budget_authority": False,
+                "executive_sponsor_mentioned": False,
+                "buying_stage": "unknown",
+            },
+            "sentiment_trajectory": {"direction": "declining"},
+        }, "vllm-model")),
+    )
+    monkeypatch.setattr(b2b_enrichment, "_validate_enrichment", lambda result, source_row=None: True)
+    monkeypatch.setattr(b2b_enrichment, "_notify_high_urgency", AsyncMock(return_value=None))
+    hybrid = AsyncMock(return_value=(None, None, None))
+    monkeypatch.setattr(b2b_enrichment, "_enrich_hybrid", hybrid)
+
+    ok = await b2b_enrichment._enrich_single(
+        pool,
+        row,
+        max_attempts=3,
+        local_only=True,
+        max_tokens=512,
+    )
+
+    assert ok is True
+    hybrid.assert_not_awaited()
+
+
+def test_detect_low_fidelity_reasons_flags_vendor_absent_noisy_source(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "hackernews,quora,twitter",
+        raising=False,
+    )
+    row = {
+        "source": "hackernews",
+        "vendor_name": "Shopify",
+        "product_name": "Shopify",
+        "summary": "I switched from Spotify back to Apple Music",
+        "review_text": "Spotify playback is better. Apple Music failed in the car.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "competitors_mentioned": [{"name": "Spotify"}],
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, result)
+
+    assert "vendor_absent_noisy_source" in reasons
+    assert "competitor_only_context" in reasons
+
+
+def test_detect_low_fidelity_reasons_keeps_vendor_present_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "hackernews,quora,twitter",
+        raising=False,
+    )
+    row = {
+        "source": "hackernews",
+        "vendor_name": "Intercom",
+        "product_name": "Intercom",
+        "summary": "We use Intercom for support and need secure file uploads",
+        "review_text": "Intercom file limits are a long-term issue for our support workflow.",
+        "pros": "",
+        "cons": "",
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, {"competitors_mentioned": []})
+
+    assert reasons == []
+
+
+def test_detect_low_fidelity_reasons_flags_technical_stackoverflow_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "stackoverflow,github",
+        raising=False,
+    )
+    row = {
+        "source": "stackoverflow",
+        "vendor_name": "Intercom",
+        "product_name": "Intercom",
+        "summary": "How can I integrate Intercom in Xamarin.Forms?",
+        "review_text": "I am trying to add Intercom in Xamarin.Forms for iOS and things are not going well.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "urgency_score": 2,
+        "competitors_mentioned": [],
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, result)
+
+    assert "technical_question_context" in reasons
+
+
+def test_detect_low_fidelity_reasons_keeps_commercial_stackoverflow_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "stackoverflow,github",
+        raising=False,
+    )
+    row = {
+        "source": "stackoverflow",
+        "vendor_name": "Jira",
+        "product_name": "Jira",
+        "summary": "Looking for Jira alternatives before renewal",
+        "review_text": "We are evaluating alternatives to Jira because renewal pricing doubled for our team.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "urgency_score": 7,
+        "competitors_mentioned": [{"name": "Linear"}],
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, result)
+
+    assert "technical_question_context" not in reasons
+
+
+def test_detect_low_fidelity_reasons_flags_consumer_trustpilot_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "hackernews,quora,twitter,github,stackoverflow",
+        raising=False,
+    )
+    row = {
+        "source": "trustpilot",
+        "vendor_name": "Microsoft Teams",
+        "product_name": "Microsoft Teams",
+        "summary": "Emailed copilot via app ghosting Email address on Google play",
+        "review_text": "This app downloaded Microsoft 365 was a free version. Contacted app support via app and got a ghosting email from Google Play.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "urgency_score": 3,
+        "competitors_mentioned": [],
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, result)
+
+    assert "consumer_support_context" in reasons
+
+
+def test_detect_low_fidelity_reasons_keeps_commercial_trustpilot_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "hackernews,quora,twitter,github,stackoverflow",
+        raising=False,
+    )
+    row = {
+        "source": "trustpilot",
+        "vendor_name": "HubSpot",
+        "product_name": "HubSpot",
+        "summary": "Great product, but every wiggle cost money",
+        "review_text": "HubSpot has powerful tools but the costs climb steeply and support wants to charge more for every change.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "urgency_score": 4,
+        "competitors_mentioned": [],
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, result)
+
+    assert "consumer_support_context" not in reasons
+
+
+def test_detect_low_fidelity_reasons_keeps_trustpilot_vendor_absent_false_positive(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "hackernews,quora,twitter,github,stackoverflow",
+        raising=False,
+    )
+    row = {
+        "source": "trustpilot",
+        "vendor_name": "RingCentral",
+        "product_name": "RingCentral",
+        "summary": "Ring Central's servicing is very poor",
+        "review_text": "Ring Central's servicing is very poor. They commit to having a supervisor call to assist with unclear contract terms with no follow through.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "urgency_score": 4,
+        "competitors_mentioned": [],
+    }
+
+    reasons = b2b_enrichment._detect_low_fidelity_reasons(row, result)
+
+    assert "vendor_absent_noisy_source" not in reasons
+    assert "consumer_support_context" not in reasons
+
+
+def test_text_mentions_name_matches_compact_vendor_with_spaced_text():
+    haystack = b2b_enrichment._normalize_compare_text(
+        "Ring Central's servicing is very poor and support did not clarify the contract."
+    )
+
+    assert b2b_enrichment._text_mentions_name(haystack, "RingCentral") is True
+
+
+def test_apply_structural_repair_promotes_only_unknown_fields():
+    baseline = {
+        "urgency_score": 8,
+        "churn_signals": {"intent_to_leave": True, "actively_evaluating": True},
+        "buyer_authority": {"role_type": "unknown", "buying_stage": "unknown"},
+        "timeline": {"decision_timeline": "unknown"},
+        "contract_context": {"contract_value_signal": "unknown", "usage_duration": None},
+    }
+    repair = {
+        "urgency_score": 2,
+        "churn_signals": {"intent_to_leave": False, "actively_evaluating": False},
+        "buyer_authority": {"role_type": "economic_buyer", "buying_stage": "renewal_decision"},
+        "timeline": {"decision_timeline": "within_quarter"},
+        "contract_context": {"contract_value_signal": "enterprise_mid", "usage_duration": "2_years"},
+    }
+
+    merged, applied = b2b_enrichment._apply_structural_repair(baseline, repair)
+
+    assert merged["urgency_score"] == 8
+    assert merged["churn_signals"]["intent_to_leave"] is True
+    assert merged["buyer_authority"]["role_type"] == "economic_buyer"
+    assert merged["timeline"]["decision_timeline"] == "within_quarter"
+    assert merged["contract_context"]["contract_value_signal"] == "enterprise_mid"
+    assert "buyer_authority.role_type" in applied
+    assert "timeline.decision_timeline" in applied
+    assert "contract_context.contract_value_signal" in applied
+
+
+@pytest.mark.asyncio
+async def test_enrich_rows_counts_quarantined(monkeypatch):
+    async def _fake_enrich_single(pool, row, max_attempts, local_only, max_tokens, truncate_length):
+        return "quarantined"
+
+    monkeypatch.setattr(b2b_enrichment, "_enrich_single", _fake_enrich_single)
+
+    rows = [{"id": uuid4(), "enrichment_attempts": 0} for _ in range(3)]
+    cfg = SimpleNamespace(
+        enrichment_max_attempts=3,
+        enrichment_concurrency=2,
+        enrichment_local_only=False,
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+    )
+    pool = SimpleNamespace(fetchval=AsyncMock(return_value=0))
+
+    result = await b2b_enrichment._enrich_rows(rows, cfg, pool)
+
+    assert result["enriched"] == 0
+    assert result["quarantined"] == 3

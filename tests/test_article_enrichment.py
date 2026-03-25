@@ -41,6 +41,13 @@ class _FakeAsyncClient:
         return None
 
 
+class _Pool:
+    def __init__(self, rows):
+        self.is_initialized = True
+        self.fetch = AsyncMock(return_value=rows)
+        self.execute = AsyncMock(return_value="UPDATE 1")
+
+
 @pytest.mark.asyncio
 async def test_resolve_google_news_url_decodes_publisher_url():
     wrapper_url = (
@@ -134,13 +141,14 @@ async def test_fetch_article_content_resolves_wrapper_and_returns_canonical_url(
         enrichment_fetch_timeout=5.0,
         enrichment_content_max_chars=1000,
     )
-    content, final_url = await article_enrichment._fetch_article_content(
+    content, final_url, reason = await article_enrichment._fetch_article_content(
         "https://news.google.com/rss/articles/test-id?oc=5",
         cfg,
     )
 
     assert final_url == "https://example.com/article"
     assert content == "A" * 120
+    assert reason is None
     assert seen_urls == ["https://example.com/article"]
 
 
@@ -170,13 +178,14 @@ async def test_fetch_article_content_returns_resolved_url_on_empty_extract(monke
         enrichment_fetch_timeout=5.0,
         enrichment_content_max_chars=1000,
     )
-    content, final_url = await article_enrichment._fetch_article_content(
+    content, final_url, reason = await article_enrichment._fetch_article_content(
         "https://news.google.com/rss/articles/test-id?oc=5",
         cfg,
     )
 
     assert content is None
     assert final_url == "https://example.com/article"
+    assert reason == "fetch_extraction_empty"
 
 
 @pytest.mark.asyncio
@@ -193,16 +202,17 @@ async def test_classify_soram_uses_default_triage_routing(monkeypatch):
     monkeypatch.setattr(llm_mod, "call_llm_with_skill", _fake_call)
     monkeypatch.setattr(llm_mod, "parse_json_response", lambda text, recover_truncated=True: llm_mod.json.loads(text))
 
-    result = await article_enrichment._classify_soram(
+    result, reason = await article_enrichment._classify_soram(
         "Example title",
         "Example content",
         ["example"],
     )
 
     assert result["pressure_direction"] == "building"
+    assert reason is None
     assert captured["skill_name"] == "digest/soram_classification"
     assert captured["kwargs"]["max_tokens"] == 1200
-    assert captured["kwargs"]["workload"] == "openrouter"
+    assert captured["kwargs"]["workload"] == "vllm"
     assert "try_openrouter" not in captured["kwargs"]
     assert captured["kwargs"]["response_format"] == {"type": "json_object"}
     assert captured["kwargs"]["guided_json"]["title"] == "soram_classification"
@@ -218,3 +228,59 @@ def test_validate_classification_defaults_pressure_direction():
     )
 
     assert result["pressure_direction"] == "unclear"
+
+
+@pytest.mark.asyncio
+async def test_classify_soram_returns_invalid_json_reason(monkeypatch):
+    import atlas_brain.pipelines.llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "call_llm_with_skill", lambda *args, **kwargs: '{"oops":true}')
+    monkeypatch.setattr(llm_mod, "parse_json_response", lambda text, recover_truncated=True: llm_mod.json.loads(text))
+
+    result, reason = await article_enrichment._classify_soram(
+        "Example title",
+        "Example content",
+        ["example"],
+    )
+
+    assert result is None
+    assert reason == "classify_invalid_json"
+
+
+@pytest.mark.asyncio
+async def test_run_marks_terminal_fetch_failures_with_reason(monkeypatch):
+    row = {
+        "id": "article-1",
+        "title": "Example title",
+        "url": "https://example.com/article",
+        "summary": "Example summary",
+        "matched_keywords": [],
+        "enrichment_status": "pending",
+        "enrichment_attempts": 2,
+        "content": None,
+    }
+    pool = _Pool([row])
+    cfg = article_enrichment.settings.external_data
+
+    monkeypatch.setattr(article_enrichment, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(cfg, "enabled", True)
+    monkeypatch.setattr(cfg, "enrichment_enabled", True)
+    monkeypatch.setattr(cfg, "enrichment_max_per_batch", 10)
+    monkeypatch.setattr(cfg, "enrichment_max_attempts", 3)
+    monkeypatch.setattr(
+        article_enrichment,
+        "_fetch_article_content",
+        AsyncMock(return_value=(None, row["url"], "fetch_blocked")),
+    )
+
+    result = await article_enrichment.run(SimpleNamespace())
+
+    assert result["failed"] == 1
+    assert result["failure_reasons"] == {"fetch_blocked": 1}
+    query, url, attempts, reason, status, article_id = pool.execute.await_args.args
+    assert "enrichment_failure_reason = $3" in query
+    assert url == row["url"]
+    assert attempts == 3
+    assert reason == "fetch_blocked"
+    assert status == "failed"
+    assert article_id == "article-1"
