@@ -17,7 +17,7 @@ async def list_scrape_targets(
     """
     View scrape target configuration and last run status.
 
-    source: Filter by source (g2, capterra, trustradius, reddit, gartner, getapp, github, hackernews, peerspot, producthunt, quora, rss, stackoverflow, trustpilot, youtube)
+    source: Filter by source (g2, capterra, trustradius, reddit, gartner, getapp, github, hackernews, peerspot, producthunt, quora, rss, slashdot, stackoverflow, trustpilot, youtube)
     scrape_mode: Filter by mode -- "incremental" or "exhaustive" (optional)
     enabled_only: Only show enabled targets (default true)
     limit: Maximum results (default 20, cap 100)
@@ -117,6 +117,7 @@ async def add_scrape_target(
           getapp: "project-management-software/a/monday-com" (category/a/product)
           producthunt: "my-product" (GraphQL slug)
           trustpilot: "monday.com" (company domain)
+          slashdot: "slack"
         Search sources (informational -- vendor_name is used for search):
           reddit, hackernews, github, youtube, stackoverflow, quora, twitter:
           use vendor name as slug (e.g. "salesforce")

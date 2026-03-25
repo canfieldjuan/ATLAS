@@ -32,6 +32,7 @@ class ReviewSource(str, Enum):
     RSS = "rss"
     SOFTWARE_ADVICE = "software_advice"
     SOURCEFORGE = "sourceforge"
+    SLASHDOT = "slashdot"
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ _DISPLAY_NAMES: dict[ReviewSource, str] = {
     ReviewSource.RSS: "RSS",
     ReviewSource.SOFTWARE_ADVICE: "Software Advice",
     ReviewSource.SOURCEFORGE: "SourceForge",
+    ReviewSource.SLASHDOT: "Slashdot",
 }
 
 
@@ -96,6 +98,7 @@ SLUG_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.PRODUCTHUNT,
     ReviewSource.TRUSTPILOT,
     ReviewSource.SOURCEFORGE,
+    ReviewSource.SLASHDOT,
 })
 
 API_SOURCES: frozenset[ReviewSource] = frozenset({
@@ -117,6 +120,7 @@ VERIFIED_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.TRUSTPILOT,
     ReviewSource.SOURCEFORGE,
+    ReviewSource.SLASHDOT,
 })
 
 # Structured review platforms should stay aligned with the verified-review set
@@ -142,6 +146,9 @@ DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.TRUSTPILOT,
     ReviewSource.REDDIT,
     ReviewSource.HACKERNEWS,
+    ReviewSource.GITHUB,
+    ReviewSource.STACKOVERFLOW,
+    ReviewSource.SLASHDOT,
 })
 
 

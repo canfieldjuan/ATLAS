@@ -35,6 +35,7 @@ _SLUG_RULES: dict[str, tuple[re.Pattern[str], str]] = {
         ),
         "project-management/asana-profile",
     ),
+    "slashdot": (re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"), "slack"),
     "producthunt": (re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"), "asana"),
     "trustpilot": (re.compile(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "asana.com"),
 }

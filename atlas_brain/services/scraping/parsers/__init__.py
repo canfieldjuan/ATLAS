@@ -41,6 +41,7 @@ class ScrapeTarget:
       - getapp: ``category/a/product`` -> getapp.com/software/{cat}/a/{slug}/reviews/
       - producthunt: ``my-product`` -> GraphQL slug + producthunt.com/products/{slug}/reviews
       - trustpilot: ``monday.com`` -> trustpilot.com/review/monday.com (company domain)
+      - slashdot: ``slack`` -> slashdot.org/software/p/slack/
 
       Search-based sources (slug informational, vendor_name is the search term):
       - reddit: vendor name (Reddit API search + churn qualifiers)
@@ -334,4 +335,4 @@ def get_parser_version(source: str) -> str | None:
 
 
 # Auto-register parsers on import
-from . import reddit, trustradius, capterra, g2, peerspot, getapp, gartner, hackernews, github, rss, youtube, producthunt, trustpilot, stackoverflow, quora, twitter, software_advice, sourceforge  # noqa: E402, F401
+from . import reddit, trustradius, capterra, g2, peerspot, getapp, gartner, hackernews, github, rss, youtube, producthunt, trustpilot, stackoverflow, quora, twitter, software_advice, sourceforge, slashdot  # noqa: E402, F401

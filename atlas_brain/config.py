@@ -2189,6 +2189,13 @@ class B2BChurnConfig(BaseSettings):
         le=100,
         description="Concurrent review enrichments allowed within a single batch",
     )
+    enrichment_priority_sources: str = Field(
+        default="",
+        description=(
+            "Comma-separated enrichment source priority queue. "
+            "When set, these sources are claimed first in each enrichment batch."
+        ),
+    )
     enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts")
     enrichment_auto_requeue_parser_upgrades: bool = Field(
         default=False,
@@ -2228,6 +2235,52 @@ class B2BChurnConfig(BaseSettings):
         default="",
         description="OpenRouter model override for Tier 2 (empty = use enrichment_openrouter_model)",
     )
+    enrichment_repair_enabled: bool = Field(
+        default=False,
+        description="Enable structural repair pass for already-enriched B2B reviews",
+    )
+    enrichment_repair_interval_seconds: int = Field(
+        default=900,
+        description="Repair polling interval for structurally weak enriched reviews",
+    )
+    enrichment_repair_max_per_batch: int = Field(
+        default=25,
+        description="Max enriched reviews to repair per batch",
+    )
+    enrichment_repair_max_rounds_per_run: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Max repair claim rounds to process per scheduled run",
+    )
+    enrichment_repair_concurrency: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Concurrent review repairs allowed within a single batch",
+    )
+    enrichment_repair_max_attempts: int = Field(
+        default=2,
+        description="Max structural repair attempts per enriched review",
+    )
+    enrichment_repair_model: str = Field(
+        default="",
+        description="OpenRouter model for structural repair pass",
+    )
+    enrichment_repair_min_urgency: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Minimum urgency score for repair unless leave/eval pressure is already present",
+    )
+    enrichment_low_fidelity_enabled: bool = Field(
+        default=True,
+        description="Enable deterministic quarantine of low-fidelity enriched rows",
+    )
+    enrichment_low_fidelity_noisy_sources: str = Field(
+        default="hackernews,quora,twitter,github,stackoverflow",
+        description="Comma-separated noisy sources eligible for low-fidelity quarantine heuristics",
+    )
 
     # Intelligence aggregation
     intelligence_enabled: bool = Field(default=True, description="Enable churn intelligence aggregation")
@@ -2261,7 +2314,10 @@ class B2BChurnConfig(BaseSettings):
     )
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
     intelligence_source_allowlist: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
+        default=(
+            "g2,capterra,trustradius,gartner,peerspot,"
+            "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
+        ),
         description="Sources allowed in churn intelligence aggregation (comma-separated)",
     )
     intelligence_executive_sources: str = Field(
@@ -2392,8 +2448,11 @@ class B2BChurnConfig(BaseSettings):
     blog_auto_deploy_hook_url: str = Field(default="", description="Vercel deploy hook URL for B2B blog")
     # Blog source filtering
     blog_source_allowlist: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
-        description="Sources to include in blog data queries (excludes stackoverflow, youtube, github)",
+        default=(
+            "g2,capterra,trustradius,gartner,peerspot,"
+            "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
+        ),
+        description="Sources to include in blog data queries",
     )
     # Regeneration mode -- re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
@@ -2696,7 +2755,10 @@ class B2BScrapeConfig(BaseSettings):
     enrichment_on_scrape: bool = Field(default=True, description="Fire enrichment immediately after scraping new reviews (disable to save credits when enrichment model is failing)")
     max_targets_per_run: int = Field(default=0, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot,getapp,software_advice,trustpilot,reddit,hackernews",
+        default=(
+            "g2,capterra,trustradius,gartner,peerspot,"
+            "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
+        ),
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
     source_fit_filter_enabled: bool = Field(
@@ -2812,6 +2874,7 @@ class B2BScrapeConfig(BaseSettings):
     peerspot_rpm: int = Field(default=4, description="PeerSpot requests per minute")
     software_advice_rpm: int = Field(default=8, description="Software Advice requests per minute")
     sourceforge_rpm: int = Field(default=12, description="SourceForge requests per minute")
+    slashdot_rpm: int = Field(default=8, description="Slashdot Software requests per minute")
 
     # Behavioral delays
     min_delay_seconds: float = Field(default=2.0, description="Min delay between requests")
@@ -2896,7 +2959,7 @@ class B2BScrapeConfig(BaseSettings):
         description="Bright Data Scraping Browser WebSocket URL (wss://...@brd.superproxy.io:9222)",
     )
     scraping_browser_domains: str = Field(
-        default="getapp.com,x.com",
+        default="getapp.com,x.com,slashdot.org",
         description="Domains to route through Scraping Browser instead of Web Unlocker (comma-separated)",
     )
 

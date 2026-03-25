@@ -19,6 +19,7 @@ class SourceFit(str, Enum):
 
 class ScrapeVertical(str, Enum):
     crm_support_marketing = "crm_support_marketing"
+    communication = "communication"
     cloud_devops_security = "cloud_devops_security"
     project_collaboration = "project_collaboration"
     data_analytics = "data_analytics"
@@ -38,6 +39,14 @@ class SourceFitDecision:
 
 
 _CATEGORY_RULES: tuple[tuple[ScrapeVertical, tuple[re.Pattern[str], ...]], ...] = (
+    (
+        ScrapeVertical.communication,
+        (
+            re.compile(r"communication|team\s+chat|messaging|video\s+conferencing", re.I),
+            re.compile(r"ucaas|voip|contact\s+center|call\s+center", re.I),
+            re.compile(r"business\s+phone|meeting\s+platform", re.I),
+        ),
+    ),
     (
         ScrapeVertical.crm_support_marketing,
         (
@@ -95,6 +104,10 @@ _CATEGORY_RULES: tuple[tuple[ScrapeVertical, tuple[re.Pattern[str], ...]], ...] 
 
 
 _CORE_SOURCES: dict[ScrapeVertical, frozenset[str]] = {
+    ScrapeVertical.communication: frozenset({
+        "g2", "capterra", "trustradius", "getapp", "software_advice",
+        "trustpilot", "reddit", "hackernews", "github", "stackoverflow",
+    }),
     ScrapeVertical.crm_support_marketing: frozenset({
         "g2", "capterra", "trustradius", "getapp", "software_advice",
         "trustpilot", "reddit",
@@ -131,9 +144,10 @@ _CORE_SOURCES: dict[ScrapeVertical, frozenset[str]] = {
 
 
 _AVOID_SOURCES: dict[ScrapeVertical, frozenset[str]] = {
-    ScrapeVertical.crm_support_marketing: frozenset({"github", "stackoverflow", "sourceforge"}),
+    ScrapeVertical.communication: frozenset({"sourceforge", "twitter"}),
+    ScrapeVertical.crm_support_marketing: frozenset({"sourceforge"}),
     ScrapeVertical.cloud_devops_security: frozenset({"sourceforge"}),
-    ScrapeVertical.project_collaboration: frozenset({"github", "stackoverflow", "sourceforge"}),
+    ScrapeVertical.project_collaboration: frozenset({"sourceforge"}),
     ScrapeVertical.data_analytics: frozenset({"sourceforge"}),
     ScrapeVertical.ecommerce_retail: frozenset({"github", "stackoverflow", "sourceforge", "peerspot"}),
     ScrapeVertical.hr_hcm: frozenset({"github", "stackoverflow", "hackernews", "sourceforge", "twitter"}),

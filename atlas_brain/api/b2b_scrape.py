@@ -39,7 +39,7 @@ router = APIRouter(prefix="/b2b/scrape", tags=["b2b-scrape"])
 # ---------------------------------------------------------------------------
 
 class ScrapeTargetCreate(BaseModel):
-    source: str = Field(description="Source: g2, capterra, trustradius, reddit, hackernews, github, rss")
+    source: str = Field(description="Source: g2, capterra, trustradius, gartner, peerspot, getapp, software_advice, trustpilot, reddit, hackernews, github, stackoverflow, slashdot, rss")
     vendor_name: str
     product_name: Optional[str] = None
     product_slug: str
@@ -145,6 +145,10 @@ class PromoteProbationTargetsRequest(BaseModel):
 
 def _normalize_filters(values: list[str]) -> set[str]:
     return {value.strip().lower() for value in values if value and value.strip()}
+
+
+def _current_allowed_sources() -> list[str]:
+    return sorted(parse_source_allowlist(settings.b2b_scrape.source_allowlist))
 
 
 def _matches_filters(
@@ -1349,11 +1353,20 @@ async def run_probation_batch(body: RunProbationBatchRequest) -> dict:
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
+    allowed_sources = _current_allowed_sources()
+    if body.source and body.source not in allowed_sources:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source '{body.source}' is currently disabled by ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST",
+        )
+
     params: list[Any] = []
     where_clauses = [
         "enabled = true",
         "COALESCE((metadata->>'source_fit_probation')::boolean, false) = true",
     ]
+    params.append(allowed_sources)
+    where_clauses.append(f"source = ANY(${len(params)}::text[])")
     if body.source:
         params.append(body.source)
         where_clauses.append(f"source = ${len(params)}")
@@ -1377,10 +1390,13 @@ async def run_probation_batch(body: RunProbationBatchRequest) -> dict:
         *params,
     )
 
+    candidate_rows = [row for row in rows if str(row.get("source") or "") in allowed_sources]
+    skipped_disallowed = len(rows) - len(candidate_rows)
+
     results: list[dict[str, Any]] = []
     succeeded = 0
     failed = 0
-    for row in rows:
+    for row in candidate_rows:
         try:
             result = await trigger_scrape(row["id"])
             succeeded += 1
@@ -1398,10 +1414,11 @@ async def run_probation_batch(body: RunProbationBatchRequest) -> dict:
             )
 
     return {
-        "selected": len(rows),
+        "selected": len(candidate_rows),
         "attempted": len(results),
         "succeeded": succeeded,
         "failed": failed,
+        "skipped_disallowed_sources": skipped_disallowed,
         "due_only": body.due_only,
         "results": results,
     }
@@ -1419,6 +1436,13 @@ async def trigger_scrape_all(
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
 
+    allowed_sources = _current_allowed_sources()
+    if source and source not in allowed_sources:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Source '{source}' is currently disabled by ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST",
+        )
+
     query = """
         SELECT id, source, vendor_name, product_name, product_slug,
                product_category, max_pages, metadata, scrape_mode,
@@ -1431,14 +1455,16 @@ async def trigger_scrape_all(
                last_scrape_resume_page, last_scraped_at
         FROM b2b_scrape_targets
         WHERE enabled = true
+          AND source = ANY($1::text[])
     """
-    params: list = []
+    params: list[Any] = [allowed_sources]
     if source:
-        query += " AND source = $1"
+        query += " AND source = $2"
         params.append(source)
     query += " ORDER BY priority DESC, source, vendor_name"
 
     rows = await pool.fetch(query, *params)
+    rows = [row for row in rows if str(row.get("source") or "") in allowed_sources]
     if not rows:
         return {"targets": 0, "message": "No enabled targets found"}
 

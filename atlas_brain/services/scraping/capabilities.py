@@ -95,7 +95,7 @@ class SourceCapabilityProfile:
 
 
 # ---------------------------------------------------------------------------
-# Registry: 16 source profiles from codebase audit
+# Registry: 17 source profiles from codebase audit
 # ---------------------------------------------------------------------------
 
 _PROFILES: dict[str, SourceCapabilityProfile] = {}
@@ -218,6 +218,19 @@ _r(SourceCapabilityProfile(
     proxy_class=ProxyClass.datacenter,
     data_quality=DataQuality.structured,
     default_rpm=12,
+    concurrency_class=ConcurrencyClass.web,
+    max_concurrency=4,
+    retry_max=2,
+    cooldown_minutes=720,
+    fallback_chain=("html_scrape",),
+))
+_r(SourceCapabilityProfile(
+    source="slashdot",
+    access_patterns=(AccessPattern.html_scrape,),
+    anti_bot=AntiBot.none,
+    proxy_class=ProxyClass.residential,
+    data_quality=DataQuality.structured,
+    default_rpm=8,
     concurrency_class=ConcurrencyClass.web,
     max_concurrency=4,
     retry_max=2,

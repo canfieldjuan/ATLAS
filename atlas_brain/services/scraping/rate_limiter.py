@@ -35,6 +35,7 @@ _DEFAULT_RPM: dict[str, int] = {
     "api.stackexchange.com": 25,
     "peerspot.com": 4,
     "sourceforge.net": 12,
+    "slashdot.org": 8,
 }
 
 _MIN_RPM = 1
@@ -111,6 +112,7 @@ class DomainRateLimiter:
         rpm_map["peerspot.com"] = _clamp_rpm(cfg.peerspot_rpm)
         rpm_map["softwareadvice.com"] = _clamp_rpm(cfg.software_advice_rpm)
         rpm_map["sourceforge.net"] = _clamp_rpm(cfg.sourceforge_rpm)
+        rpm_map["slashdot.org"] = _clamp_rpm(cfg.slashdot_rpm)
         return cls(rpm_map)
 
     async def acquire(self, domain: str) -> None:
