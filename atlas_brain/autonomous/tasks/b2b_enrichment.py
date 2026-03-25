@@ -26,13 +26,13 @@ from ...services.scraping.sources import VERIFIED_SOURCES as _VERIFIED_SOURCES
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
-# Dedicated OpenRouter instance for enrichment -- not shared with the global
-# registry singleton (used by synthesis/reasoning workloads).
+# Dedicated OpenRouter instance for hybrid Tier 2 enrichment -- not shared with
+# the global registry singleton used by synthesis/reasoning workloads.
 _enrichment_llm = None
 
 
 def _get_enrichment_llm():
-    """Get or create a dedicated OpenRouter LLM for enrichment."""
+    """Get or create a dedicated OpenRouter LLM for hybrid Tier 2 enrichment."""
     global _enrichment_llm
     target_model = (
         str(settings.b2b_churn.enrichment_openrouter_model or "").strip()
@@ -58,6 +58,25 @@ def _get_enrichment_llm():
     except Exception as e:
         logger.warning("Failed to create enrichment LLM: %s", e)
         return None
+
+
+def _get_base_enrichment_llm(local_only: bool):
+    """Resolve the base enrichment model with local vLLM first."""
+    from ...pipelines.llm import get_pipeline_llm
+
+    llm = get_pipeline_llm(
+        workload="vllm",
+        try_openrouter=False,
+        auto_activate_ollama=False,
+    )
+    if llm is not None or local_only:
+        return llm
+
+    return get_pipeline_llm(
+        workload="anthropic",
+        try_openrouter=False,
+        auto_activate_ollama=False,
+    )
 
 
 # ------------------------------------------------------------------
@@ -407,13 +426,36 @@ async def enrich_batch(batch_id: str) -> dict[str, Any]:
     return await _enrich_rows(rows, cfg, pool)
 
 
-async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
+def _coerce_int_override(
+    raw_value: Any,
+    default_value: int,
+    *,
+    min_value: int,
+    max_value: int,
+) -> int:
+    """Return clamped integer override value, or default on parse failure."""
+    try:
+        coerced = int(raw_value)
+    except (TypeError, ValueError):
+        return default_value
+    return max(min_value, min(max_value, coerced))
+
+
+async def _enrich_rows(
+    rows,
+    cfg,
+    pool,
+    *,
+    concurrency_override: int | None = None,
+) -> dict[str, Any]:
     """Enrich a list of claimed rows concurrently."""
     max_attempts = cfg.enrichment_max_attempts
     enriched = 0
     failed = 0
+    quarantined = 0
 
-    sem = asyncio.Semaphore(max(1, cfg.enrichment_concurrency))
+    effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_concurrency))
+    sem = asyncio.Semaphore(effective_concurrency)
 
     async def _bounded_enrich(row):
         async with sem:
@@ -430,6 +472,8 @@ async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
             logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
             if (row["enrichment_attempts"] + 1) >= max_attempts:
                 failed += 1
+        elif result == "quarantined":
+            quarantined += 1
         elif result:
             enriched += 1
         elif (row["enrichment_attempts"] + 1) >= max_attempts:
@@ -442,13 +486,14 @@ async def _enrich_rows(rows, cfg, pool) -> dict[str, Any]:
     )
 
     logger.info(
-        "B2B enrichment: %d enriched, %d no_signal, %d failed (of %d)",
-        enriched, no_signal or 0, failed, len(rows),
+        "B2B enrichment: %d enriched, %d quarantined, %d no_signal, %d failed (of %d)",
+        enriched, quarantined, no_signal or 0, failed, len(rows),
     )
 
     return {
         "total": len(rows),
         "enriched": enriched,
+        "quarantined": quarantined,
         "no_signal": no_signal or 0,
         "failed": failed,
     }
@@ -474,6 +519,26 @@ async def _recover_orphaned_enriching(pool, max_attempts: int) -> int:
         count = 0
     if count:
         logger.warning("Recovered %d orphaned B2B enrichment rows", count)
+    return count
+
+
+async def _mark_exhausted_pending_failed(pool, max_attempts: int) -> int:
+    """Mark pending rows as failed when attempts already reached max."""
+    result = await pool.execute(
+        """
+        UPDATE b2b_reviews
+        SET enrichment_status = 'failed'
+        WHERE enrichment_status = 'pending'
+          AND enrichment_attempts >= $1
+        """,
+        max_attempts,
+    )
+    try:
+        count = int(str(result).split()[-1])
+    except (TypeError, ValueError, IndexError):
+        count = 0
+    if count:
+        logger.warning("Marked %d exhausted pending rows as failed", count)
     return count
 
 
@@ -506,11 +571,20 @@ async def _queue_version_upgrades(pool) -> int:
                 WITH updated AS (
                     UPDATE b2b_reviews
                     SET enrichment_status = 'pending',
-                        enrichment_attempts = 0
+                        enrichment_attempts = 0,
+                        low_fidelity = false,
+                        low_fidelity_reasons = '[]'::jsonb,
+                        low_fidelity_detected_at = NULL,
+                        enrichment_repair = NULL,
+                        enrichment_repair_status = NULL,
+                        enrichment_repair_attempts = 0,
+                        enrichment_repair_model = NULL,
+                        enrichment_repaired_at = NULL,
+                        enrichment_repair_applied_fields = '[]'::jsonb
                     WHERE source = $1
                       AND parser_version IS NOT NULL
                       AND parser_version != $2
-                      AND enrichment_status IN ('enriched', 'no_signal')
+                      AND enrichment_status IN ('enriched', 'no_signal', 'quarantined')
                     RETURNING 1
                 )
                 SELECT count(*) FROM updated
@@ -542,17 +616,43 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "DB not ready"}
 
     orphaned = await _recover_orphaned_enriching(pool, cfg.enrichment_max_attempts)
+    exhausted = await _mark_exhausted_pending_failed(pool, cfg.enrichment_max_attempts)
 
     # Auto re-process reviews scraped with outdated parser versions
     requeued = await _queue_version_upgrades(pool)
 
-    max_batch = min(cfg.enrichment_max_per_batch, 500)
+    task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
+    default_max_batch = min(cfg.enrichment_max_per_batch, 500)
+    max_batch = _coerce_int_override(
+        task_metadata.get("enrichment_max_per_batch"),
+        default_max_batch,
+        min_value=1,
+        max_value=500,
+    )
     max_attempts = cfg.enrichment_max_attempts
-    max_rounds = max(1, cfg.enrichment_max_rounds_per_run)
+    default_max_rounds = max(1, cfg.enrichment_max_rounds_per_run)
+    max_rounds = _coerce_int_override(
+        task_metadata.get("enrichment_max_rounds_per_run"),
+        default_max_rounds,
+        min_value=1,
+        max_value=100,
+    )
+    effective_concurrency = _coerce_int_override(
+        task_metadata.get("enrichment_concurrency"),
+        max(1, cfg.enrichment_concurrency),
+        min_value=1,
+        max_value=100,
+    )
+    priority_sources = [
+        source.strip().lower()
+        for source in str(cfg.enrichment_priority_sources or "").split(",")
+        if source.strip()
+    ]
 
     total_enriched = 0
     total_failed = 0
     total_no_signal = 0
+    total_quarantined = 0
     rounds = 0
 
     while rounds < max_rounds:
@@ -563,7 +663,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 FROM b2b_reviews
                 WHERE enrichment_status = 'pending'
                   AND enrichment_attempts < $1
-                ORDER BY imported_at ASC
+                ORDER BY CASE
+                    WHEN source = ANY($3::text[]) THEN 0
+                    ELSE 1
+                END,
+                imported_at DESC
                 LIMIT $2
                 FOR UPDATE SKIP LOCKED
             )
@@ -579,16 +683,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             """,
             max_attempts,
             max_batch,
+            priority_sources,
         )
 
         if not rows:
             break
 
-        result = await _enrich_rows(rows, cfg, pool)
+        result = await _enrich_rows(
+            rows,
+            cfg,
+            pool,
+            concurrency_override=effective_concurrency,
+        )
         total_enriched += result.get("enriched", 0)
         batch_failed = result.get("failed", 0)
         total_failed += batch_failed
         total_no_signal += result.get("no_signal", 0)
+        total_quarantined += result.get("quarantined", 0)
         rounds += 1
 
         # If most of the batch failed, vLLM is likely overwhelmed -- stop the loop
@@ -604,10 +715,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     result = {
         "enriched": total_enriched,
+        "quarantined": total_quarantined,
         "failed": total_failed,
         "no_signal": total_no_signal,
         "rounds": rounds,
         "orphaned_requeued": orphaned,
+        "exhausted_marked_failed": exhausted,
         "_skip_synthesis": "B2B enrichment complete",
     }
     if requeued:
@@ -676,7 +789,8 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
 
         # Stage 2: Full 47-field extraction (only for reviews that passed triage)
         cfg = settings.b2b_churn
-        if cfg.enrichment_hybrid_enabled:
+        use_hybrid = cfg.enrichment_hybrid_enabled and not local_only
+        if use_hybrid:
             tier1, tier2, tier2_model_id = await asyncio.wait_for(
                 _enrich_hybrid(row, cfg, truncate_length),
                 timeout=120,
@@ -702,27 +816,41 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             st_direction = st.get("direction") if isinstance(st, dict) else None
             st_tenure = st.get("tenure") if isinstance(st, dict) else None
             st_turning = st.get("turning_point") if isinstance(st, dict) else None
+            low_fidelity_reasons = (
+                _detect_low_fidelity_reasons(row, result)
+                if cfg.enrichment_low_fidelity_enabled
+                else []
+            )
+            detected_at = datetime.now(timezone.utc)
+            target_status = "quarantined" if low_fidelity_reasons else "enriched"
 
             await pool.execute(
                 """
                 UPDATE b2b_reviews
                 SET enrichment = $1,
-                    enrichment_status = 'enriched',
+                    enrichment_status = $8,
                     enrichment_attempts = enrichment_attempts + 1,
                     enriched_at = $2,
                     enrichment_model = $4,
                     sentiment_direction = $5,
                     sentiment_tenure = $6,
-                    sentiment_turning_point = $7
+                    sentiment_turning_point = $7,
+                    low_fidelity = $9,
+                    low_fidelity_reasons = $10::jsonb,
+                    low_fidelity_detected_at = $11
                 WHERE id = $3
                 """,
                 json.dumps(result),
-                datetime.now(timezone.utc),
+                detected_at,
                 review_id,
                 model_id,
                 st_direction,
                 st_tenure,
                 st_turning if st_turning and st_turning != "null" else None,
+                target_status,
+                bool(low_fidelity_reasons),
+                json.dumps(low_fidelity_reasons),
+                detected_at if low_fidelity_reasons else None,
             )
 
             # Fire ntfy notification for high-urgency signals (must never
@@ -757,7 +885,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             except Exception:
                 logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
 
-            return True
+            return "quarantined" if low_fidelity_reasons else True
         else:
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
             return False
@@ -825,6 +953,178 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
     }
 
 
+_LOW_FIDELITY_TOKEN_STOPWORDS = {
+    "and", "for", "the", "with", "cloud", "software", "platform",
+}
+
+_LOW_FIDELITY_COMMERCIAL_MARKERS = {
+    "alternative", "alternatives", "budget", "contract", "cost", "expensive",
+    "migrate", "migration", "pricing", "renewal", "replace", "replaced",
+    "seat", "seats", "support", "switch", "switching",
+}
+
+_LOW_FIDELITY_STRONG_COMMERCIAL_MARKERS = {
+    "alternative", "alternatives", "budget", "contract", "cost", "expensive",
+    "migrate", "migration", "pricing", "renewal", "replace", "replaced",
+    "seat", "seats", "switch", "switching",
+}
+
+_LOW_FIDELITY_TECHNICAL_PATTERNS = (
+    r"\bhow (?:can|do|to)\b",
+    r"\bbest practice\b",
+    r"\bsetting up\b",
+    r"\banswer to question\b",
+    r"\bapi token\b",
+    r"\bbuild pipeline\b",
+    r"\bconnect(?:ing)?\b",
+    r"\bcosmos db\b",
+    r"\bdocker\b",
+    r"\berror\b",
+    r"\bfailed\b",
+    r"\bintegrat(?:e|ion)\b",
+    r"\bjenkins\b",
+    r"\bkey vault\b",
+    r"\blogin\b",
+    r"\bplugin\b",
+    r"\breact frontend\b",
+    r"\bssl verification failed\b",
+    r"\bsubscription form\b",
+    r"\bvagrant\b",
+    r"\bxamarin\b",
+)
+
+_LOW_FIDELITY_CONSUMER_PATTERNS = (
+    r"\b2fa\b",
+    r"\bapp support\b",
+    r"\bdownloaded\b",
+    r"\bghosting email\b",
+    r"\bgoogle play\b",
+    r"\bhacked\b",
+    r"\bminecraft\b",
+    r"\bmy son\b",
+    r"\boutlook app\b",
+    r"\btaskbar\b",
+    r"\bwindows 11\b",
+    r"\bworkspace account\b",
+)
+
+
+def _normalize_compare_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _normalized_name_tokens(value: Any) -> list[str]:
+    normalized = _normalize_compare_text(value)
+    if not normalized:
+        return []
+    return [
+        token for token in normalized.split()
+        if len(token) >= 3 and token not in _LOW_FIDELITY_TOKEN_STOPWORDS
+    ]
+
+
+def _text_mentions_name(haystack: str, needle: Any) -> bool:
+    normalized = _normalize_compare_text(needle)
+    if not normalized:
+        return False
+    wrapped = f" {haystack} "
+    if f" {normalized} " in wrapped:
+        return True
+    compact_haystack = haystack.replace(" ", "")
+    compact_needle = normalized.replace(" ", "")
+    if compact_needle and compact_needle in compact_haystack:
+        return True
+    return any(
+        re.search(rf"\b{re.escape(token)}\b", haystack)
+        for token in _normalized_name_tokens(needle)
+    )
+
+
+def _dedupe_reason_codes(codes: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for code in codes:
+        if code and code not in seen:
+            seen.add(code)
+            ordered.append(code)
+    return ordered
+
+
+def _has_commercial_context(text: str) -> bool:
+    return any(marker in text for marker in _LOW_FIDELITY_COMMERCIAL_MARKERS)
+
+
+def _has_strong_commercial_context(text: str) -> bool:
+    return any(marker in text for marker in _LOW_FIDELITY_STRONG_COMMERCIAL_MARKERS)
+
+
+def _has_technical_context(summary_text: str, combined_text: str) -> bool:
+    if summary_text.endswith("?"):
+        return True
+    haystack = f"{summary_text} {combined_text}".strip()
+    return any(re.search(pattern, haystack) for pattern in _LOW_FIDELITY_TECHNICAL_PATTERNS)
+
+
+def _has_consumer_context(text: str) -> bool:
+    return any(re.search(pattern, text) for pattern in _LOW_FIDELITY_CONSUMER_PATTERNS)
+
+
+def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) -> list[str]:
+    source = str(row.get("source") or "").strip().lower()
+    noisy_sources = {
+        item.strip().lower()
+        for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
+        if item.strip()
+    }
+    if source not in noisy_sources and source != "trustpilot":
+        return []
+
+    combined_text = " ".join(
+        str(row.get(field) or "")
+        for field in ("summary", "review_text", "pros", "cons")
+    )
+    combined_norm = _normalize_compare_text(combined_text)
+    if not combined_norm:
+        return ["empty_noisy_context"]
+
+    summary_norm = _normalize_compare_text(row.get("summary"))
+    vendor_hit = any(
+        _text_mentions_name(combined_norm, row.get(field))
+        for field in ("vendor_name", "product_name")
+        if row.get(field)
+    )
+    competitor_hit = any(
+        _text_mentions_name(combined_norm, comp.get("name"))
+        for comp in (result.get("competitors_mentioned") or [])
+        if isinstance(comp, dict) and comp.get("name")
+    )
+    summary_tokens = _normalized_name_tokens(row.get("summary"))
+    urgency = float(result.get("urgency_score") or 0)
+    reasons: list[str] = []
+    if source in noisy_sources:
+        if not vendor_hit:
+            reasons.append("vendor_absent_noisy_source")
+        if not vendor_hit and competitor_hit:
+            reasons.append("competitor_only_context")
+        if source in {"twitter", "quora"} and len(combined_norm) < 120:
+            reasons.append("thin_social_context")
+        if source == "quora" and summary_tokens and len(summary_tokens) <= 3 and not vendor_hit:
+            reasons.append("author_style_summary")
+    if source in {"stackoverflow", "github"}:
+        if (
+            urgency <= 5
+            and _has_technical_context(summary_norm, combined_norm)
+            and not _has_commercial_context(combined_norm)
+        ):
+            reasons.append("technical_question_context")
+    if source == "trustpilot":
+        if _has_consumer_context(combined_norm) and not _has_strong_commercial_context(combined_norm):
+            reasons.append("consumer_support_context")
+    return _dedupe_reason_codes(reasons)
+
+
 async def _triage_review(row, local_only: bool) -> tuple[dict[str, Any] | None, str | None]:
     """Fast LLM triage: does this review contain churn signals worth extracting?
 
@@ -833,19 +1133,14 @@ async def _triage_review(row, local_only: bool) -> tuple[dict[str, Any] | None, 
     """
     from ...skills import get_skill_registry
     from ...services.protocols import Message
-    from ...pipelines.llm import get_pipeline_llm, clean_llm_output
+    from ...pipelines.llm import clean_llm_output
 
     skill = get_skill_registry().get("digest/b2b_churn_triage")
     if not skill:
         # Triage skill missing -- fall through to full extraction
         return None, None
 
-    # Use same dedicated OpenRouter instance as extraction
-    llm = None
-    if not local_only:
-        llm = _get_enrichment_llm()
-    if llm is None:
-        llm = get_pipeline_llm(prefer_cloud=False, try_openrouter=False, auto_activate_ollama=True)
+    llm = _get_base_enrichment_llm(local_only)
     if llm is None:
         return None, None
 
@@ -898,24 +1193,14 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
     """
     from ...skills import get_skill_registry
     from ...services.protocols import Message
-    from ...pipelines.llm import get_pipeline_llm, clean_llm_output, parse_json_response
+    from ...pipelines.llm import clean_llm_output, parse_json_response
 
     skill = get_skill_registry().get("digest/b2b_churn_extraction")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction' not found")
         return None, None
 
-    # Primary: Dedicated OpenRouter instance (not shared registry singleton)
-    # Fallback: local vLLM/Ollama
-    llm = None
-    if not local_only:
-        llm = _get_enrichment_llm()
-    if llm is None:
-        llm = get_pipeline_llm(
-            prefer_cloud=False,
-            try_openrouter=False,
-            auto_activate_ollama=True,
-        )
+    llm = _get_base_enrichment_llm(local_only)
     if llm is None:
         logger.warning("No LLM available for B2B churn extraction")
         return None, None
@@ -1219,6 +1504,73 @@ def _infer_buyer_role_type(
     if role_level == "ic":
         return "end_user"
     return _infer_buyer_role_type_from_text(buyer_authority, source_row)
+
+
+def _is_unknownish(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text in {"", "unknown", "none", "null", "n/a", "na"}
+
+
+def _coerce_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _has_structural_gap(result: dict[str, Any]) -> bool:
+    buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
+    timeline = _coerce_json_dict(result.get("timeline"))
+    contract = _coerce_json_dict(result.get("contract_context"))
+    return any((
+        _is_unknownish(buyer_authority.get("role_type")),
+        _is_unknownish(timeline.get("decision_timeline")),
+        _is_unknownish(contract.get("contract_value_signal")),
+    ))
+
+
+def _apply_structural_repair(
+    baseline: dict[str, Any],
+    repair: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    merged = json.loads(json.dumps(baseline))
+    applied: list[str] = []
+
+    buyer_authority = _coerce_json_dict(merged.get("buyer_authority"))
+    repair_authority = _coerce_json_dict(repair.get("buyer_authority"))
+    if _is_unknownish(buyer_authority.get("role_type")) and not _is_unknownish(repair_authority.get("role_type")):
+        buyer_authority["role_type"] = repair_authority.get("role_type")
+        applied.append("buyer_authority.role_type")
+    if _is_unknownish(buyer_authority.get("buying_stage")) and not _is_unknownish(repair_authority.get("buying_stage")):
+        buyer_authority["buying_stage"] = repair_authority.get("buying_stage")
+        applied.append("buyer_authority.buying_stage")
+    if applied:
+        merged["buyer_authority"] = buyer_authority
+
+    timeline = _coerce_json_dict(merged.get("timeline"))
+    repair_timeline = _coerce_json_dict(repair.get("timeline"))
+    for field in ("decision_timeline", "contract_end", "evaluation_deadline"):
+        if _is_unknownish(timeline.get(field)) and not _is_unknownish(repair_timeline.get(field)):
+            timeline[field] = repair_timeline.get(field)
+            applied.append(f"timeline.{field}")
+    if any(field.startswith("timeline.") for field in applied):
+        merged["timeline"] = timeline
+
+    contract = _coerce_json_dict(merged.get("contract_context"))
+    repair_contract = _coerce_json_dict(repair.get("contract_context"))
+    for field in ("contract_value_signal", "usage_duration", "price_context"):
+        if _is_unknownish(contract.get(field)) and not _is_unknownish(repair_contract.get(field)):
+            contract[field] = repair_contract.get(field)
+            applied.append(f"contract_context.{field}")
+    if any(field.startswith("contract_context.") for field in applied):
+        merged["contract_context"] = contract
+
+    return merged, applied
 
 
 def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None) -> bool:

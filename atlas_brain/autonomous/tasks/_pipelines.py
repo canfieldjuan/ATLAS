@@ -235,6 +235,16 @@ register_pipeline(PipelineConfig(
             interval_config_key="b2b_churn.enrichment_interval_seconds",
         ),
         TaskDef(
+            name="b2b_enrichment_repair",
+            module="b2b_enrichment_repair",
+            schedule_type="interval",
+            interval_seconds=None,
+            timeout_seconds=180,
+            description="Repair structural gaps on already-enriched B2B reviews via shadow cloud pass",
+            metadata={"builtin_handler": "b2b_enrichment_repair"},
+            interval_config_key="b2b_churn.enrichment_repair_interval_seconds",
+        ),
+        TaskDef(
             name="b2b_churn_intelligence",
             module="b2b_churn_intelligence",
             schedule_type="cron",

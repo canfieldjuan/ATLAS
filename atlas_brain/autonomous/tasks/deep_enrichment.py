@@ -82,6 +82,17 @@ _VALID_TRAJECTORY = {"always_negative", "degraded", "mixed_then_negative", "mixe
 _VALID_OCCASION = {"none", "gift", "replacement", "upgrade", "first_in_category", "seasonal", "event", "professional_use"}
 
 
+def _get_deep_enrichment_llm():
+    """Resolve the local vLLM used for deep enrichment."""
+    from ...pipelines.llm import get_pipeline_llm
+
+    return get_pipeline_llm(
+        workload="vllm",
+        try_openrouter=False,
+        auto_activate_ollama=False,
+    )
+
+
 def _validate_extraction(data: dict) -> bool:
     """Check all 32 required keys present with correct types, enums, and sub-objects."""
     for key, expected in _REQUIRED_KEYS.items():
@@ -286,18 +297,14 @@ async def _extract_review(row, max_tokens: int) -> dict[str, Any] | None:
     """Call LLM with deep_extraction skill to extract 32 fields."""
     from ...skills import get_skill_registry
     from ...services.protocols import Message
-    from ...pipelines.llm import get_pipeline_llm, clean_llm_output
+    from ...pipelines.llm import clean_llm_output
 
     skill = get_skill_registry().get("digest/deep_extraction")
     if not skill:
         logger.warning("Skill 'digest/deep_extraction' not found")
         return None
 
-    llm = get_pipeline_llm(
-        prefer_cloud=False,
-        try_openrouter=False,
-        auto_activate_ollama=True,
-    )
+    llm = _get_deep_enrichment_llm()
     if llm is None:
         logger.warning("No LLM available for deep extraction")
         return None
@@ -319,14 +326,27 @@ async def _extract_review(row, max_tokens: int) -> dict[str, Any] | None:
     ]
 
     try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                llm.chat, messages=messages,
-                max_tokens=max_tokens, temperature=0.1,
-            ),
-            timeout=120,
-        )
-        text = clean_llm_output(result.get("response", ""))
+        if hasattr(llm, "chat_async"):
+            text = await asyncio.wait_for(
+                llm.chat_async(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                ),
+                timeout=120,
+            )
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    llm.chat,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                ),
+                timeout=120,
+            )
+            text = result.get("response", "")
+        text = clean_llm_output(text)
         if not text:
             return None
         parsed = json.loads(text)

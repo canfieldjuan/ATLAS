@@ -15,8 +15,8 @@ Supports two modes:
     back to single on parse failure)
 
 LLM routing:
-  - local_only=False (default): tries triage LLM (Claude) first, falls back to local
-  - local_only=True: skips triage LLM, uses only the active local model
+  - local_only=False (default): uses local vLLM first, then Anthropic only if vLLM is unavailable
+  - local_only=True: uses only the local vLLM path
 
 Runs on an interval (default 5 min). Returns _skip_synthesis so the
 runner does not double-synthesize.
@@ -224,10 +224,18 @@ def _get_llm(local_only: bool):
     """Resolve the LLM to use for classification."""
     from ...pipelines.llm import get_pipeline_llm
 
+    llm = get_pipeline_llm(
+        workload="vllm",
+        try_openrouter=False,
+        auto_activate_ollama=False,
+    )
+    if llm is not None or local_only:
+        return llm
+
     return get_pipeline_llm(
-        prefer_cloud=not local_only,
-        try_openrouter=False,  # enrichment uses simpler prompts, local is fine
-        auto_activate_ollama=True,
+        workload="anthropic",
+        try_openrouter=False,
+        auto_activate_ollama=False,
     )
 
 
