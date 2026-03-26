@@ -191,4 +191,76 @@ The driver extraction pipeline sometimes surfaces competitor names as displaceme
 
 ---
 
+## Issue 9: Zeroed-Out Metrics — Boolean/Null Parsing Failure
+
+**Discovered:** 2026-03-26
+**Report Type:** Vendor Scorecard
+**Status:** Open
+
+### Description
+
+Computed metrics (e.g., "Recommend Ratio") render as `0` for every vendor in the scorecard, regardless of review volume. A vendor with 500+ reviews cannot have a 0% recommendation rate — this points to a parsing failure where a boolean, null, or missing field is being coerced to `0` instead of being calculated or flagged as unavailable.
+
+### Downstream Impact
+
+- **Immediate credibility killer.** The Vendor Scorecard is positioned for C-Suite and Strategic Partnerships — the most scrutinizing audience. A column of zeros will be spotted instantly and discredit the entire report.
+- **Silent data corruption pattern.** If one metric is zeroed out, others may be too — but less obviously. Metrics that *should* be low might appear correct by coincidence while actually being wrong.
+- **Breaks comparative analysis.** The scorecard's core value is vendor-vs-vendor comparison. If a key metric is uniformly zero, that comparison dimension is completely eliminated.
+
+### Potential Investigation Directions
+
+- Trace the "recommend" field from source ingestion → extraction → aggregation → report rendering to find where the value drops to 0 or null.
+- Check whether the source data uses a non-standard representation (e.g., "Yes"/"No" string instead of boolean, or a nested field the extractor isn't reaching).
+- Add validation that flags any metric that is identical across all vendors in a scorecard — statistically impossible uniformity is a reliable bug signal.
+
+---
+
+## Issue 10: Uncategorized Pain Points — The "Other" Bucket Problem
+
+**Discovered:** 2026-03-26
+**Report Type:** Vendor Scorecard
+**Status:** Open
+
+### Description
+
+The pain-point extraction pipeline produces "Other" as a top category for some vendors. In a scorecard designed for strategic decision-makers, "Other" is a wasted slot — it means the LLM could not confidently classify the complaint into an existing taxonomy and gave up. This is especially damaging when "Other" is the *#1 pain point*, as it implies the pipeline doesn't understand the most common complaint.
+
+### Downstream Impact
+
+- **Wastes the most valuable real estate in the report.** The top pain point slot in a scorecard drives strategic narratives. Filling it with "Other" communicates nothing.
+- **Hides actionable intelligence.** The underlying reviews that got bucketed into "Other" likely *do* contain classifiable complaints — technical debt, integration complexity, contract lock-in, poor support — but the extraction gave up too early.
+- **Skews competitive comparison.** If Vendor A's top pain is "Pricing" and Vendor B's is "Other," the comparison is meaningless. Vendor B looks better by default because its real pain is hidden.
+
+### Potential Investigation Directions
+
+- Force the classification model to choose from a defined taxonomy rather than allowing an "Other" escape hatch. If confidence is low, use a secondary classification pass or expand the taxonomy.
+- Post-process: when "Other" exceeds a threshold (e.g., >10% of complaints for a vendor), re-run classification on those reviews with a more granular prompt.
+- Audit what's actually *in* the "Other" bucket — it may reveal taxonomy gaps (categories the pipeline doesn't have yet).
+
+---
+
+## Issue 11: Emerging Displacement Signals in Unexpected Segments
+
+**Discovered:** 2026-03-26
+**Report Type:** Vendor Scorecard
+**Status:** Open — Flagged as Potential Feature
+
+### Description
+
+The scorecard surfaces low-volume but strategically significant displacement signals in unexpected product segments (e.g., a community/collaboration tool threatening an enterprise meeting platform — not the expected enterprise competitors). These signals are currently buried alongside high-volume flows without differentiation.
+
+### Downstream Impact
+
+- **High-value signal hidden in plain sight.** Unexpected displacement patterns (a tool from an adjacent category encroaching) are often the earliest indicators of market disruption. They deserve amplification, not burial.
+- **Segment misattribution.** The pipeline treats all displacement equally — it doesn't distinguish "enterprise competitors swapping" from "category boundary erosion." These are fundamentally different strategic signals.
+- **Missed narrative opportunity.** A scorecard that says "your competition isn't just who you think it is" is far more valuable to a C-Suite audience than one that confirms known rivalries.
+
+### Potential Investigation Directions
+
+- Tag displacement flows with a "same-category" vs. "cross-category" flag based on vendor registry metadata.
+- Surface cross-category displacements in a dedicated "Emerging Threats" or "Category Boundary Shifts" section.
+- Weight low-volume cross-category signals higher in strategic reports, as they indicate early-stage disruption.
+
+---
+
 *New issues will be appended below as they are discovered.*
