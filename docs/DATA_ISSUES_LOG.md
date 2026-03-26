@@ -263,4 +263,76 @@ The scorecard surfaces low-volume but strategically significant displacement sig
 
 ---
 
+## Issue 12: Self-Referential Challenger — Incumbent Echo Loop
+
+**Discovered:** 2026-03-26
+**Report Type:** Category Overview
+**Status:** Open
+
+### Description
+
+The "Emerging Challenger" logic sometimes returns the incumbent vendor as its own primary challenger (e.g., "AWS is the primary alternative to AWS," "Gusto is the primary challenger to Gusto"). The pipeline has no filter to exclude the subject vendor from its own challenger/alternative output. When no clear challenger exists in the data, the query falls back to the highest-signal vendor — which is often the incumbent itself.
+
+### Downstream Impact
+
+- **Reads as a hallucination.** To a C-Suite reader viewing a Market Heatmap, a vendor challenging itself looks like the system is broken or the LLM is hallucinating. This is the single fastest way to lose credibility.
+- **Masks real competitive dynamics.** The self-reference hides what's actually happening — either the market is fragmented (no clear challenger) or the pipeline failed to surface a real one. Both are useful signals; the echo loop is not.
+- **Systemic, not one-off.** Observed in multiple categories (Cloud Infrastructure, HR/HCM), meaning the logic gap is in the shared challenger-resolution code, not a category-specific edge case.
+
+### Potential Investigation Directions
+
+- Add an exclusion filter in the challenger/alternative resolution query that removes the incumbent vendor from the candidate set.
+- When no challenger clears the threshold after exclusion, return a structured label like "Fragmented" or "No clear challenger" rather than defaulting to the top result.
+- Audit all report types that use challenger resolution — this likely affects Displacement Reports and Battle Cards too.
+
+---
+
+## Issue 13: Object Serialization Leak — `[object Object]` in Output
+
+**Discovered:** 2026-03-26
+**Report Type:** Category Overview
+**Status:** Open
+
+### Description
+
+The Cross Vendor Analysis section contains `[object Object]` strings — a JavaScript/JSON rendering error where a nested data structure is being coerced to a string instead of being properly serialized or destructured. This is the third variant of the rendering failure pattern (joining Issues 3, 6, 7): raw IDs → template variables → now raw object references.
+
+### Downstream Impact
+
+- **Looks like broken software.** `[object Object]` is universally recognized as a code bug, even by non-technical readers. In a report positioned as a Market Heatmap for strategic buyers, this is disqualifying.
+- **Data is present but invisible.** The object *contains* the intended data — it's just not being accessed correctly. This means the report is actively throwing away information it already has.
+- **Points to a type mismatch in the rendering pipeline.** Somewhere between data retrieval and report output, a structured object is being passed where a string is expected. This class of bug tends to be widespread once it appears.
+
+### Potential Investigation Directions
+
+- Trace the Cross Vendor Analysis data flow to find where an object is passed to a string context (likely a template interpolation or JSON.stringify gap).
+- Add type checking in the rendering layer that catches non-string values before they reach output — log them for debugging rather than printing `[object Object]`.
+- Related to Issues 3, 6, 7 — consider a unified post-render sanitization pass that catches all rendering leak patterns (`#1, 13`, `displacement_detail.*`, `[object Object]`, raw Source IDs).
+
+---
+
+## Issue 14: Low-Sample-Size Signals in Aggregate Reports — Statistical Noise
+
+**Discovered:** 2026-03-26
+**Report Type:** Category Overview
+**Status:** Open
+
+### Description
+
+The Category Overview includes "Market Shift Signals" based on vendors with extremely low review counts (e.g., 8 reviews showing 0.0% churn density). While technically accurate for that sample, featuring it alongside vendors with 500+ reviews in an aggregate market view presents statistical noise as if it were a meaningful trend. There is no minimum review threshold gating inclusion in overview-level reports.
+
+### Downstream Impact
+
+- **Ruins statistical integrity.** A Market Heatmap is an aggregate strategic tool. Including data points with n=8 alongside n=500+ makes the entire visualization unreliable — readers can't tell which signals are robust and which are noise.
+- **Creates false confidence or false alarm.** A vendor showing "0.0% churn" on 8 reviews looks like a fortress; one showing "50% churn" on 4 reviews looks like a disaster. Both are meaningless at that sample size.
+- **Dilutes high-value signals.** The strong, statistically significant displacement flows (like the 110-mention patterns in Issue 7) get crowded out by noise from vendors that barely register in the data.
+
+### Potential Investigation Directions
+
+- Implement a minimum review threshold (e.g., 50 reviews) for inclusion in aggregate/overview reports. Individual vendor reports can still show low-count data with a confidence disclaimer.
+- Add a confidence tier to all metrics: "High confidence (n>100)," "Moderate (50-100)," "Low (<50, interpret with caution)."
+- Separate "statistically significant signals" from "emerging/early signals" in report layout so readers can weight them appropriately.
+
+---
+
 *New issues will be appended below as they are discovered.*
