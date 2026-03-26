@@ -104,7 +104,9 @@ Reports contain raw technical artifacts — numbered section markers like `#1, 1
 - **No stripping step exists** between the data assembly layer and the LLM prompt. The `_sid` fields and pool metadata are passed through to the render payload, and the LLM sometimes includes them in output.
 - **Related to Issues 6, 7, 13** — all are variants of "internal data structures leaking into rendered output."
 
-**Conclusion:** The rendering pipeline has no sanitization pass. Internal tracking fields (`_sid`, pool indices, raw IDs) are included in LLM context and sometimes echoed verbatim. A post-render regex filter or pre-render field stripping would catch all variants.
+**Additional finding:** Quote fallback logic in `_b2b_shared.py:9180` falls back to `str(q)` when neither `quote` nor `text` fields exist on a dict — this stringifies the entire dict including internal keys. Same pattern at line 8146: `quotes[0].get("quote", str(quotes[0]))`.
+
+**Conclusion:** The rendering pipeline has no sanitization pass. Internal tracking fields (`_sid`, pool indices, raw IDs) are included in LLM context and sometimes echoed verbatim. Quote fallback logic also stringifies entire dicts. A post-render regex filter or pre-render field stripping would catch all variants.
 
 ---
 
@@ -204,7 +206,16 @@ Raw template variable names (e.g., `displacement_detail.primary_driver`) are app
 - **The battle card / challenger brief skill** receives these as nested JSON. When the LLM can't resolve a field (e.g., `primary_driver` is null or empty), it sometimes outputs the *path name* instead of omitting it.
 - **No output validation** checks for dotted-path patterns in rendered text.
 
-**Conclusion:** Same class as Issue 3. The LLM is trained to reference input fields but sometimes outputs the field path when the value is missing. A regex-based post-render check for patterns like `word.word` or `word_word.word_word` would catch these.
+**Exact code found:** `b2b_challenger_brief.py:1311-1324` — the `evidence` field is **hardcoded as a literal string**, not a variable reference:
+```python
+insights.append({
+    "insight": "Primary displacement driver: %s" % driver,
+    "evidence": "displacement_detail.primary_driver"  # ← LITERAL STRING, not resolved
+})
+```
+Same pattern at line 1317 (`"evidence": "stratified_reasoning.archetype"`) and line 1324 (`fallback to "product_profile"`).
+
+**Conclusion:** This is NOT the LLM echoing field paths — it's the Python code itself writing literal variable-path strings into the `evidence` field. These strings are then passed to the LLM and rendered into the report verbatim. Fix requires replacing the hardcoded strings with actual resolved values from the data.
 
 ---
 
@@ -459,7 +470,9 @@ The Cross Vendor Analysis section contains `[object Object]` strings — a JavaS
 - **The `intelligence_data` JSONB column** stores the full report payload. If a downstream consumer (web UI, PDF exporter) reads this JSONB and tries to render nested objects as strings, `[object Object]` appears.
 - **This is likely a consumer-side bug**, not a pipeline bug — the data in PostgreSQL is correct, but the rendering client doesn't handle nested objects.
 
-**Conclusion:** Two-pronged: (1) The pipeline should flatten nested objects to strings before storing in `intelligence_data`, and (2) any frontend consumer should handle nested objects gracefully. The pipeline-side fix is more reliable since it catches all consumers.
+**Exact code found:** `b2b_battle_cards.py:1685` uses `json.dumps(payload, default=str)` — the `default=str` fallback stringifies any non-serializable object (dicts, datetimes, custom objects) into their Python `str()` representation. Same pattern at `_b2b_shared.py:1729` and `2299`. If any downstream consumer (web UI, PDF exporter) parses this JSON and re-renders nested objects, JavaScript produces `[object Object]`.
+
+**Conclusion:** Two-pronged: (1) Replace `default=str` with a custom JSON encoder that properly flattens nested structures, and (2) any frontend consumer should handle nested objects gracefully. The pipeline-side fix is more reliable since it catches all consumers.
 
 ---
 
