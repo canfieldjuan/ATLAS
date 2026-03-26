@@ -74,4 +74,73 @@ Reports contain raw technical artifacts — numbered section markers like `#1, 1
 
 ---
 
+## Issue 4: De-Anonymization Ceiling — Enrichment Fails on Vague Identifiers
+
+**Discovered:** 2026-03-26
+**Report Type:** Challenger Brief
+**Status:** Open
+
+### Description
+
+The enrichment layer cannot resolve vague organizational descriptors like "Fortune 200 company" or "Big 4 Firm" to specific entities. The intent signal is present in the source data (Reddit, Trustpilot, G2), but the pipeline has no mechanism to map these fuzzy labels to actual companies. This is a variation of Issue 1 (entity resolution), but distinct — here the source *does* provide a partial identifier, and the pipeline still can't close the gap.
+
+### Downstream Impact
+
+- **Near-miss intelligence.** The data is tantalizingly close to actionable — a "Fortune 200" evaluating a switch is valuable, but without knowing *which one*, sales can't act on it.
+- **Segment-level analysis is blocked.** We can't aggregate signals by company size, vertical, or account tier if the entities behind vague labels remain unresolved.
+- **Report feels speculative.** Citing anonymous archetypes ("a Big 4 firm") reads as hearsay rather than evidence-backed intelligence.
+
+### Potential Investigation Directions
+
+- Build a fuzzy-match enrichment step that cross-references vague descriptors with known tech-stack databases, job postings, or procurement signals to narrow candidates.
+- Flag "partially identified" signals separately so reports can at least segment by confidence tier (named → partially identified → anonymous).
+
+---
+
+## Issue 5: Contradictory Signals Between Report Sections — Narrative Coherence Gap
+
+**Discovered:** 2026-03-26
+**Report Type:** Challenger Brief
+**Status:** Open
+
+### Description
+
+Different sections of the same report can assert contradictory facts without reconciliation. For example, a Target Accounts section may show "0 companies considering Vendor Y," while the Head-to-Head section says "Vendor Y is displacing Vendor X." This creates a narrative gap — the displacement signal exists but isn't reflected in the pipeline counts. This is a broadening of Issue 2 (contradiction detection), now observed across *structural sections* of a report, not just within a single narrative.
+
+### Downstream Impact
+
+- **Erodes trust in the report as a whole.** If two sections disagree, readers don't know which to believe.
+- **Signals a data flow disconnect.** The displacement graph and the target-account pipeline are likely pulling from different query scopes or time windows, producing inconsistent views of the same reality.
+- **Missed early-stage signals.** A displacement trend emerging in reviews may not yet appear in structured "consideration" data — but the report should explain that gap, not ignore it.
+
+### Potential Investigation Directions
+
+- Audit whether displacement signals and target-account counts query the same underlying data or different snapshots/time ranges.
+- Add a coherence-check pass that cross-references section assertions and flags contradictions or explains the discrepancy (e.g., "Displacement signal is emerging but no accounts have formally entered evaluation stage yet").
+
+---
+
+## Issue 6: Template Variable Leakage — Code Strings in Report Output
+
+**Discovered:** 2026-03-26
+**Report Type:** Challenger Brief
+**Status:** Open
+
+### Description
+
+Raw template variable names (e.g., `displacement_detail.primary_driver`) are appearing verbatim in rendered report text. This indicates the LLM prompt or report template has unresolved placeholders that are not being substituted before output — the code is "leaking" into the final deliverable. This is related to Issue 3 (variable bloat) but more severe: Issue 3 involved raw IDs/markers, while this involves actual code-level variable paths.
+
+### Downstream Impact
+
+- **Immediate credibility hit.** A report containing `displacement_detail.primary_driver` looks broken, not professional.
+- **Indicates fragile template logic.** If one variable leaks, others may be silently failing too — meaning some report sections could be rendering with missing or default data without anyone noticing.
+- **Compounds across report types.** If the same template engine serves multiple report types, the leakage pattern likely affects more than just challenger briefs.
+
+### Potential Investigation Directions
+
+- Audit all report templates/prompts for unresolved variable references and ensure fallback/default handling exists for every placeholder.
+- Add a post-render validation step that rejects or flags output containing common variable patterns (e.g., anything matching `*.primary_driver`, `*.detail.*`, etc.).
+
+---
+
 *New issues will be appended below as they are discovered.*
