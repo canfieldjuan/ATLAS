@@ -1228,4 +1228,74 @@ The summary states: "5 high-risk, 8 medium-risk, 1 low-risk" = 14 vendors. But t
 
 ---
 
+## Issue 24: Category Overview Audit (2026-03-25 Report) — Live Evidence
+
+**Discovered:** 2026-03-26
+**Report Type:** Category Overview
+**Model:** `pipeline_deterministic`
+**Source:** Live report from 2026-03-25, 12 categories, 46 vendors, 3,447 reviews
+**Status:** Open — Confirms Issues 10, 12, 13, 14
+
+### What the Report Shows
+
+| Category | Dominant Pain | Highest Churn Risk | Emerging Challenger | Signal Density | Archetype | Cross Vendor |
+|---|---|---|---|---|---|---|
+| CRM | **other** | Salesforce | HubSpot | 27.3% | leadership_redesign | -- |
+| Cloud Infrastructure | pricing | AWS | **AWS** | 25.8% | mixed | **[object Object]** |
+| Collaboration | ux | Slack | Microsoft Teams | **0.0%** | leadership_redesign | -- |
+| Communication | support | RingCentral | Microsoft Teams | 40.1% | support_collapse | -- |
+| Customer Messaging | **other** | Intercom | Zendesk | 43.6% | category_disruption | -- |
+| Cybersecurity | reliability | Fortinet | Palo Alto | 14.6% | mixed | **[object Object]** |
+| Data & Analytics | ux | Tableau | Power BI | 16.4% | leadership_redesign | -- |
+| E-commerce | **other** | BigCommerce | Shopify | 33.2% | mixed | **[object Object]** |
+| Email Marketing | pricing | Mailchimp | Brevo | 48.7% | pricing_shock | -- |
+| HR / HCM | **other** | Gusto | **Gusto** | 24.8% | support_collapse | **[object Object]** |
+| Helpdesk | features | HubSpot | Salesforce | 40.0% | feature_gap | **[object Object]** |
+| Marketing Automation | pricing | Mailchimp | Salesforce | 29.7% | pricing_shock | **[object Object]** |
+
+### Issues Confirmed by This Report
+
+**Issue 12 — Self-Challenger Loop (TWO instances):**
+- **HR / HCM:** Gusto is emerging as the primary alternative to **Gusto**
+- **Cloud Infrastructure:** AWS is emerging as the primary alternative to **AWS**
+- Both appear in the executive summary: "in cloud infrastructure, amazon web services is emerging as the primary alternative to amazon web services"
+- The exact code bug at `_b2b_shared.py:9107-9113` — no incumbent exclusion filter
+
+**Issue 13 — `[object Object]` (SIX instances):**
+- Appears in Cross Vendor Analysis for: Cloud Infrastructure, Cybersecurity, Data & Analytics, E-commerce, HR / HCM, Helpdesk, Marketing Automation
+- 7 of 12 categories have `[object Object]` instead of actual cross-vendor analysis
+- Confirms `json.dumps(default=str)` at `b2b_battle_cards.py:1685` or nested objects being stringified by a frontend consumer
+
+**Issue 10 — "Other" as dominant pain (FOUR categories):**
+- CRM (Salesforce, 575 reviews) → "other"
+- Customer Messaging (Intercom, 55 reviews) → "other"
+- E-commerce (BigCommerce, 343 reviews) → "other"
+- HR / HCM (Gusto, 327 reviews) → "other"
+- 4 of 12 categories can't name their top pain. One-third of the market heatmap is blank.
+
+**Issue 14 — Low Sample Size:**
+- Collaboration: Slack at **8 reviews** with **0.0% churn density** gets its own category row alongside vendors with 300-575 reviews
+- 8 reviews tells you nothing. This category should not appear in an aggregate overview, or should carry an explicit low-confidence flag.
+
+### What the Archetypes Get Right
+
+The archetype classifications are actually interesting and differentiated:
+- `pricing_shock`: Mailchimp (both Email Marketing and Marketing Automation) — correct, pricing is their known pain
+- `support_collapse`: RingCentral, Gusto — support-driven churn
+- `category_disruption`: Intercom — being disrupted by Zendesk
+- `feature_gap`: HubSpot in Helpdesk — features trailing Salesforce
+- `leadership_redesign`: Salesforce in CRM, Tableau in Analytics, Slack in Collaboration — established leaders facing structural pressure
+
+This is the deterministic pipeline working well. The archetype assignment comes from the aggregation layer, not from the model's inference. It's evidence-based classification, exactly the pattern Issue 21 argues for.
+
+### What the Executive Summary Gets Right and Wrong
+
+**Right:** "Email Marketing shows the highest pressure — Mailchimp at 48.7% churn density, driven by pricing." Accurate, specific, actionable.
+
+**Wrong:** "in cloud infrastructure, amazon web services is emerging as the primary alternative to amazon web services" — the self-challenger bug leaking directly into the summary copy. This sentence would immediately discredit the report with any reader.
+
+**Missing:** The summary mentions "Pricing is the dominant churn driver in 3 of 12 categories" but doesn't mention that "other" is the dominant driver in 4 of 12. The biggest signal in the data — that one-third of categories can't even name their top pain — is invisible.
+
+---
+
 *New issues will be appended below as they are discovered.*
