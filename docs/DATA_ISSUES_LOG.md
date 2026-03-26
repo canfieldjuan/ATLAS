@@ -1090,4 +1090,73 @@ This reframes several existing issues:
 
 ---
 
+## Issue 22: Dead Extraction Paths — Fields Extracted but Never Consumed
+
+**Discovered:** 2026-03-26
+**Report Type:** ALL (pipeline waste + routing gaps)
+**Status:** Open — ARCHITECTURAL
+
+### Description
+
+The enrichment pipeline extracts 47 fields per review, but not all of them reach any report. Some fields are fully extracted by the LLM, aggregated into lookup tables, but then never passed to any deterministic report builder. This wastes LLM tokens on extraction, adds noise to the enrichment JSONB, and — critically — means that routing or schema changes may have *created* new fields that downstream reports never learned to use.
+
+### Dead Extraction Paths (Extracted, Never Consumed by Reports)
+
+| Field / Lookup | Extracted From | Aggregated Into | Consumed By | Status |
+|---|---|---|---|---|
+| `insider_signals.org_health` (bureaucracy_level, leadership_quality, innovation_climate, culture_indicators) | Tier 2 | `_build_insider_lookup()` | **Nothing** | Dead code — lookup built but never passed to any report builder |
+| `insider_signals.talent_drain` (departures_mentioned, layoff_fear, morale) | Tier 2 | `_build_insider_lookup()` | **Nothing** | Dead code |
+| `_build_role_churn_lookup()` (role_type → churn_rate, top_pain) | Aggregation | In-memory lookup | **Nothing** | Dead code — defined but not passed to builders |
+| `_build_usage_duration_lookup()` (contract_context.usage_duration) | Tier 2 | In-memory lookup | **Nothing** | Superseded by `contract_value_lookup` |
+| `competitor_reasons.reason_detail` | Tier 1 | competitive_disp | **Partially** | Extracted but only `reason_category` used; detail discarded |
+
+### Underutilized Paths (Extracted, Used in Only 1 Report)
+
+| Field / Lookup | Used By | Not Used By |
+|---|---|---|
+| `sentiment_turning_point` | Vendor Scorecard only | Feed, Displacement, Category, Battle Card |
+| `sentiment_tenure` | Vendor Scorecard only | Feed, Displacement, Category, Battle Card |
+| `timeline.contract_end` / `evaluation_deadline` | Vendor Scorecard, Battle Card | Feed, Category, Displacement |
+| `use_case.lock_in_level` | Vendor Scorecard (minimal) | All others |
+| `contract_context.contract_value_signal` | Vendor Scorecard | All others |
+
+### Report-Specific Consumption Differences
+
+Different reports consume very different slices of the enrichment:
+
+| Enrichment Area | Weekly Feed | Scorecard | Displacement | Category | Battle Card |
+|---|---|---|---|---|---|
+| urgency_score | yes | yes | no | indirect | yes |
+| pain_category | yes | yes | no | yes | yes |
+| competitors_mentioned | yes | yes | **core** | yes | yes |
+| quotable_phrases | yes | yes | yes | yes | yes |
+| buyer_authority | yes | yes | no | no | yes |
+| budget_signals | yes | yes | no | no | yes |
+| timeline | no | yes | no | no | yes |
+| use_case / lock_in | no | yes | no | no | partial |
+| contract_context | no | yes | no | no | partial |
+| insider_signals | no | no | no | no | no |
+| sentiment_trajectory | no | yes | no | no | no |
+| positive_aspects | no | yes | no | no | yes |
+| specific_complaints | no | yes | no | no | yes |
+
+### Downstream Impact
+
+- **Wasted LLM tokens.** Every review pays the cost of extracting `insider_signals` (a complex nested object with 9+ sub-fields) that no report ever uses. At scale, this is meaningful cost and latency.
+- **Schema changes create invisible dead ends.** When new enrichment fields are added, there's no mechanism to wire them to existing reports. The field exists in the JSONB but report builders don't query it. New routing logic may populate new aggregation tables that existing report templates never learned about.
+- **The Gemini second pass may enrich fields nobody uses.** If a re-enrichment pass adds or improves fields that have dead paths, the improvement is invisible. Cost is spent, no report improves.
+- **Confirms Issue 21's point:** The extraction prompt tries to do too much per review. Slimming to only fields that reports actually consume would reduce cost, improve extraction quality (fewer fields = more model attention per field), and eliminate dead paths.
+
+### Connection to "Reasoning Per Pool"
+
+This data directly supports the idea of report-specific evidence pools:
+- **Universal pool** (consumed by 4+ report types): `pain_category`, `competitors_mentioned`, `quotable_phrases`, `urgency indicators`, `churn_signals`
+- **Scorecard-specific pool**: `sentiment_trajectory`, `timeline`, `contract_context`, `use_case`, `positive_aspects`, `specific_complaints`
+- **Displacement-specific pool**: `competitors_mentioned.evidence_type`, `reason_category` — essentially only needs the competitor extraction, nothing else
+- **Eliminate entirely**: `insider_signals` (dead code), `role_churn_lookup` (dead code), `usage_duration_lookup` (superseded)
+
+A leaner extraction prompt that only extracts universally-consumed fields would be cheaper, faster, and more reliable. Report-specific enrichment can run as optional second passes only when generating those report types.
+
+---
+
 *New issues will be appended below as they are discovered.*
