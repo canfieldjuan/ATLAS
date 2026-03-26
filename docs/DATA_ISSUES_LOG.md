@@ -1159,4 +1159,73 @@ A leaner extraction prompt that only extracts universally-consumed fields would 
 
 ---
 
+## Issue 23: Vendor Scorecard Audit (2026-03-25 Report) — Live Evidence
+
+**Discovered:** 2026-03-26
+**Report Type:** Vendor Scorecard
+**Model:** `openai/gpt-oss-120b`
+**Source:** Live report from 2026-03-25, 3,447 reviews, 15 vendors, 5 sources (G2, Capterra, TrustRadius, Gartner, PeerSpot)
+**Status:** Open — Confirms Issues 9, 10, 19, 20, 21
+
+### What the Report Shows
+
+| Vendor | Reviews | Signal Density | Avg Urgency | Recommend | Top Pain | Competitor | Trend | Sentiment |
+|--------|---------|---------------|-------------|-----------|----------|------------|-------|-----------|
+| Magento | 218 | 28.4% | 3.9 | 0 | ux | Shopify (66) | stable | unknown |
+| RingCentral | 357 | 40.1% | 4.2 | 0 | support | 3CX (3) | stable | unknown |
+| Mailchimp | 501 | 36.9% | 4.1 | 0 | pricing | Brevo (27) | stable | unknown |
+| BigCommerce | 343 | 33.2% | 4.0 | 0 | **other** | Shopify (48) | stable | unknown |
+| Zoom | 336 | 34.8% | 3.9 | 0 | ux | Discord (4) | stable | unknown |
+| Shopify | 572 | 33.2% | 3.9 | 0 | pricing | BigCommerce (34) | stable | unknown |
+| Jira | 468 | 28.8% | 3.9 | 0 | ux | Notion (13) | stable | unknown |
+| Salesforce | 575 | 27.3% | 3.7 | 0 | **other** | HubSpot (37) | stable | unknown |
+| Zendesk | 399 | 30.3% | 3.6 | 0 | support | Intercom (23) | stable | unknown |
+| HubSpot | 511 | 29.5% | 3.6 | 0 | features | Salesforce (44) | stable | unknown |
+| Klaviyo | 400 | 29.2% | 3.6 | 0 | pricing | Mailchimp (18) | stable | unknown |
+| WooCommerce | 308 | 25.0% | 3.5 | 0 | ux | Shopify (110) | stable | unknown |
+| Asana | 351 | 28.8% | 3.3 | 0 | ux | ClickUp (36) | stable | unknown |
+| Notion | 449 | 29.8% | 3.2 | 0 | ux | Obsidian (78) | stable | unknown |
+| AWS | 337 | 25.8% | 3.1 | 0 | pricing | Azure (4) | new | unknown |
+
+### Issues Confirmed by This Report
+
+**Issue 9 — Recommend Ratio = 0 for ALL 15 vendors.** 575 Salesforce reviews, 572 Shopify reviews — impossible for all to have zero recommendation signal. The `openai/gpt-oss-120b` model is either not populating `would_recommend` or returning null/non-boolean values that the `::boolean` cast silently drops.
+
+**Issue 10 — "Other" as top pain for BigCommerce (343 reviews) and Salesforce (575 reviews).** Two commercially significant vendors with hundreds of reviews each, and the model can't classify their primary complaint.
+
+**Issue 21 — Sentiment "unknown" for ALL 15 vendors.** The model is returning "unknown" for `sentiment_trajectory.direction` on every review, confirming that temporal inference from single reviews doesn't work — especially with this model.
+
+**Issue 21 — Trend "stable" for 14/15 vendors.** Near-zero trend differentiation. Only AWS shows "new" (likely because it was recently added to tracking).
+
+### NEW Finding: Urgency Score Compression
+
+**All 15 vendors cluster between 3.1 and 4.2 on a 0-10 scale.** This is a 1.1-point spread across vendors with vastly different churn profiles:
+
+- RingCentral: **40.1% signal density** (4 in 10 reviews mention switching) → urgency 4.2
+- AWS: **25.8% signal density** → urgency 3.1
+- Delta: **1.1 points** to separate a vendor losing 40% of reviewers from one losing 26%
+
+This compression destroys the discriminating power of the metric. On a 0-10 scale, all 15 vendors being between 3 and 4 means the model treats everything as "mildly concerning." A vendor where 40% of reviewers explicitly discuss leaving should score dramatically higher than one at 25%.
+
+**Root cause (confirms Issue 21):** The model is being asked to score urgency per-review, not per-vendor. Individual reviews rarely contain extreme urgency language — most complaints are moderate. The per-review scores cluster around 3-4, and averaging across hundreds of reviews compresses them further. The *aggregate signal* (40% signal density) is dramatic, but the per-review urgency scoring can't capture that.
+
+**This is exactly why urgency should be computed from indicators, not inferred by the model.** A deterministic formula that factors in signal density, decision-maker churn rate, displacement mentions, and timeline signals would produce a meaningful spread. The model's job should be to find the indicators; the pipeline's job should be to score them.
+
+### What the Report Gets Right
+
+The executive summary is actually solid — concise, data-backed, identifies the top risk (Magento) and the top competitive threat (Shopify). The competitive displacement data is plausible and actionable:
+- WooCommerce → Shopify (110 mentions) is the strongest signal in the dataset
+- Mailchimp → Brevo (27) and Shopify → BigCommerce (34) show real competitive dynamics
+- Notion → Obsidian (78) is a notable category-disruption signal
+
+The pain categories that ARE classified (not "other") are reasonable: ux for Jira/Magento/Zoom, pricing for Mailchimp/Klaviyo/Shopify, support for RingCentral/Zendesk.
+
+**This confirms the extraction layer gets competitive displacement and basic pain classification mostly right.** The problems are in the inference fields (urgency, recommend, sentiment) and edge cases (the "other" bucket).
+
+### Executive Summary Math Check
+
+The summary states: "5 high-risk, 8 medium-risk, 1 low-risk" = 14 vendors. But the report lists 15 vendors. One vendor's risk level is unaccounted for — likely a rendering or counting bug in the summary generation.
+
+---
+
 *New issues will be appended below as they are discovered.*
