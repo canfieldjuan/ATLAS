@@ -335,4 +335,104 @@ The Category Overview includes "Market Shift Signals" based on vendors with extr
 
 ---
 
+## Issue 15: Bidirectional Flow Blindness — No Net Flow Metric
+
+**Discovered:** 2026-03-26
+**Report Type:** Weekly Feed
+**Status:** Open — Highest Priority Logic Issue
+
+### Description
+
+The pipeline tracks churn *from* a vendor and displacement *to* a vendor independently, but never reconciles them. A vendor can simultaneously appear as "High Churn Risk" (everyone leaving) and "Top Displacement Target" (everyone arriving) in the same report. Without a net flow calculation, the report presents two contradictory truths with no resolution.
+
+### Downstream Impact
+
+- **The most damaging contradiction yet.** Unlike Issues 2/5/12 where contradictions appear in different sections or require close reading, this one is front-and-center: the same vendor name appears in both the "losing" and "winning" lists.
+- **Blocks the most basic strategic question.** "Is Vendor X growing or shrinking?" is the first thing a reader asks. The report currently can't answer it.
+- **Misallocates sales effort.** If a vendor is a "Leaking Bucket" (losing more than gaining), it's a prime target. If it's a "Market Aggregator" (gaining more than losing despite visible churn), attacking it is a waste of resources. Without net flow, sales teams can't tell the difference.
+
+### Potential Investigation Directions
+
+- Introduce a **Net Flow metric**: `inbound displacement signals - outbound churn signals` per vendor, per time window.
+- Classify vendors into archetypes based on net flow: "Leaking Bucket" (net negative), "Market Aggregator" (net positive), "Churning Equally" (net zero with high volume on both sides).
+- Surface net flow prominently in any report that shows both churn and displacement data — it should be impossible to show one without the other.
+
+---
+
+## Issue 16: Zero Entity Resolution in High-Volume Feeds
+
+**Discovered:** 2026-03-26
+**Report Type:** Weekly Feed
+**Status:** Open
+
+### Description
+
+A Weekly Feed with 3,447 reviews across 32 vendors surfaces zero named companies. This is a reappearance of Issues 1 and 4 (entity resolution), but at the worst possible scale — a feed designed for Sales Managers who need to act *this week* on specific accounts. Even a 5% resolution rate would yield ~170 named signals. Currently: zero.
+
+### Downstream Impact
+
+- **Renders the feed non-actionable for its primary audience.** Sales Managers need "Director at [Company] is evaluating alternatives to [Vendor]" — not anonymous aggregate counts. Without names, the feed is a market research document, not a sales tool.
+- **The gap between data volume and actionability is at its widest here.** 3,447 reviews is an impressive number that sets high expectations. Delivering zero names against that volume feels like a broken promise.
+- **Compounds Issue 1 and Issue 4.** This is now the third report type where entity resolution failure is the primary blocker. It's no longer an edge case — it's the pipeline's single biggest capability gap.
+
+### Potential Investigation Directions
+
+- Prioritize entity resolution for the Weekly Feed above other report types, since it has the most time-sensitive audience.
+- Even partial resolution adds massive value: "VP-level at a Fortune 500 *[financial services]* evaluating alternatives" is 5x more actionable than fully anonymous.
+- Consider a tiered resolution display: Named → Partially Identified (title + industry) → Anonymous, so readers can see the pipeline is working even when full resolution isn't possible.
+
+---
+
+## Issue 17: Scroll Fatigue — Flat List Format in Time-Sensitive Reports
+
+**Discovered:** 2026-03-26
+**Report Type:** Weekly Feed
+**Status:** Open
+
+### Description
+
+The Weekly Feed renders as a long, flat list of vendor-level signals. In a weekly cadence report, readers need to triage quickly — but the current format requires scrolling through everything to find what matters. There is no grouping by strategic theme, urgency tier, or action type.
+
+### Downstream Impact
+
+- **Time-to-insight is too high.** A weekly report that takes 20 minutes to read defeats its purpose. Sales Managers will skim, miss critical signals, or stop reading entirely.
+- **All signals appear equally important.** Without grouping, a "Fire Drill" vendor (high urgency + high pressure) sits alongside a "Slow Burn" (low urgency + high pressure) with no visual or structural differentiation.
+- **Missed opportunity for strategic framing.** Grouping by archetype (e.g., "Pricing Crisis" vendors vs. "UX Decay" vendors) would transform the feed from a data dump into a strategic playbook with implied action items.
+
+### Potential Investigation Directions
+
+- Group feed entries by displacement driver archetype (Pricing Crisis, UX Decay, Feature Gap, Integration Pain) with per-group action guidance.
+- Add an executive summary / "Top 3 This Week" section at the top for rapid triage.
+- Limit the full feed to a configurable depth (e.g., top 10 by urgency) with a "See all" expansion, rather than rendering everything flat.
+
+---
+
+## Issue 18: Composite Vulnerability Score — Missing Strategic Metric
+
+**Discovered:** 2026-03-26
+**Report Type:** Weekly Feed
+**Status:** Open — Flagged as Premium Feature Opportunity
+
+### Description
+
+The pipeline tracks "Pressure" and "Urgency" as separate dimensions but doesn't combine them into a single actionable score. Sales teams must mentally cross-reference two metrics to prioritize accounts. A composite **Vulnerability Score (0-100)** would collapse this into one number that directly maps to action priority.
+
+### Downstream Impact
+
+- **Without a composite score, prioritization is manual and inconsistent.** Each sales rep will weigh Pressure vs. Urgency differently, leading to inconsistent outreach strategies across the team.
+- **Misses the strategic quadrant.** The two dimensions create four natural archetypes that map to distinct sales motions:
+  - **High Urgency + High Pressure ("Fire Drill"):** Act now — these accounts are actively leaving.
+  - **Low Urgency + High Pressure ("Slow Burn"):** Nurture — unhappy but sticky, respond to educational/long-term plays.
+  - **High Urgency + Low Pressure ("Window Shopper"):** Evaluating but not in pain — needs a compelling trigger.
+  - **Low Urgency + Low Pressure ("Stable"):** Deprioritize — not a near-term opportunity.
+- **Premium positioning opportunity.** A single Vulnerability Score is the kind of "magic number" that differentiates a data product from a report. It's the feature that makes the Weekly Feed worth paying for.
+
+### Potential Investigation Directions
+
+- Define the Vulnerability Score formula: weighted combination of Pressure (complaint density, severity, recency) and Urgency (active evaluation signals, timeline mentions, competitor mentions).
+- Surface the score prominently in the Weekly Feed and Vendor Scorecard, with color-coded tiers (Critical / High / Medium / Low).
+- Enable sorting and filtering by Vulnerability Score so users can immediately focus on "Fire Drill" accounts.
+
+---
+
 *New issues will be appended below as they are discovered.*
