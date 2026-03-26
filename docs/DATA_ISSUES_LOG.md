@@ -659,4 +659,119 @@ The pipeline tracks "Pressure" and "Urgency" as separate dimensions but doesn't 
 
 ---
 
+## Issue 19: Mixed-Model Enrichment — Silent Data Inconsistency from Model Swaps
+
+**Discovered:** 2026-03-26
+**Report Type:** ALL (systemic — affects every downstream report and aggregation)
+**Status:** Open — Potential Root Cause for Issues 9, 10, 1/4/16
+
+### Description
+
+The enrichment pipeline allows hot-swapping of both Tier 1 (local vLLM) and Tier 2 (cloud OpenRouter) models without triggering re-enrichment of existing reviews. When models are swapped — which has happened repeatedly during testing and cost management — already-enriched reviews retain their original enrichment from the old model while new reviews get enriched by the new model. Intelligence aggregations then mix data from different models without distinguishing them, producing inconsistent metrics across the dataset.
+
+### How Model Selection Works
+
+**Tier 1 (Local/Deterministic):**
+- Config: `ATLAS_B2B_CHURN_ENRICHMENT_TIER1_MODEL` (default: `stelterlab/Qwen3-30B-A3B-Instruct-2507-AWQ`)
+- Runs on local vLLM at `http://localhost:8082`
+- Extracts 26 factual fields (NER, booleans, verbatim text)
+
+**Tier 2 (Cloud/Interpretive):**
+- Config: `ATLAS_B2B_CHURN_ENRICHMENT_TIER2_MODEL` → fallback `ATLAS_B2B_CHURN_ENRICHMENT_OPENROUTER_MODEL` → fallback `ATLAS_LLM__OPENROUTER_REASONING_MODEL`
+- Runs via OpenRouter (multiple cloud models swappable)
+- Extracts 21 interpretive fields (urgency_score, pain_category, would_recommend, buyer_authority, displacement evidence types)
+
+**Model tracking exists but isn't used for consistency:**
+- `b2b_reviews.enrichment_model` column (migration 096) stores the model used — e.g., `"hybrid:qwen3-30b+anthropic/claude-3.5-sonnet"`
+- `b2b_reviews.enrichment_repair_model` column (migration 237) stores repair model
+- **Neither column is checked during aggregation.** All `enriched` reviews are treated identically regardless of which model produced the enrichment.
+
+### What Happens When Models Are Swapped
+
+1. **New reviews** get enriched with the new model configuration
+2. **Old reviews** retain enrichment from whatever model was active when they were processed
+3. **No re-enrichment is triggered.** The `parser_version` mechanism detects stale *parsers* (scraping logic), NOT model changes
+4. **Aggregation queries** (`_fetch_vendor_churn_scores()`, `_build_deterministic_vendor_feed()`, etc.) read all `enriched` reviews equally
+5. **Result:** Intelligence metrics are computed from a mix of models with potentially different extraction quality, scoring calibration, and field coverage
+
+### Why This Is a Root Cause for Other Issues
+
+**Issue 9 (Zeroed Recommend Ratio):** Different models may handle the `would_recommend` inference differently. A smaller/cheaper model may return `null` for ambiguous cases where a more capable model would infer true/false. If the earlier model populated `would_recommend` but the current model doesn't (or vice versa), the aggregate metric becomes unreliable — or zero if the current model always returns null.
+
+**Issue 10 (Other Bucket):** Pain category classification (`pricing`, `features`, `ux`, etc.) is inherently model-dependent. A less capable model will bucket more complaints as "other" because it can't confidently classify them. Swapping from a strong classifier to a weaker one inflates the "other" bucket for new reviews while old reviews retain their (potentially better) classifications.
+
+**Issues 1/4/16 (Entity Resolution):** Company name extraction from review text is one of the hardest NER tasks. Model capability directly affects extraction yield. A model swap could have dropped the extraction rate from (say) 8% to 0% without any visible error — the reviews simply get `null` for `company_name` and the pipeline moves on.
+
+**Urgency score calibration:** Different models may score urgency on different scales. One model's "7" may be another model's "5". Since `avg_urgency` is a key input to `churn_pressure_score` (25% weight), model swaps shift vendor risk rankings without any underlying change in the data.
+
+### Downstream Impact
+
+- **Every aggregation is contaminated.** `b2b_churn_signals`, `b2b_vendor_pain_points`, `b2b_displacement_edges`, `b2b_vendor_snapshots` — all aggregate from reviews with mixed models.
+- **Metrics drift silently.** A vendor's churn_pressure_score can change not because the market changed, but because the enrichment model changed. No audit trail connects score changes to model changes.
+- **Historical trend analysis is broken.** `b2b_vendor_snapshots` captures daily metrics, but if the model changed mid-period, the trend line reflects model capability changes, not market changes.
+- **Report quality is non-deterministic.** Running the same report on the same data with a different enrichment model mix produces different results. This makes debugging and quality assurance extremely difficult.
+
+### What the Pipeline Already Has (Building Blocks)
+
+- `b2b_reviews.enrichment_model` — records which model was used (format: `"hybrid:{tier1}+{tier2}"`)
+- `b2b_reviews.enrichment_repair_model` — records repair model
+- `b2b_reviews.parser_version` + `_queue_version_upgrades()` — auto re-queues stale reviews when parser changes (but NOT model changes)
+- `enrichment_auto_requeue_parser_upgrades` config flag — controls whether re-queuing happens (default: False to avoid mass re-enrichment during testing)
+- `b2b_intelligence.llm_model` — records which model generated each report
+
+### Potential Investigation Directions
+
+**Immediate (Diagnostic):**
+- Query `b2b_reviews` grouped by `enrichment_model` to see how many distinct models have been used and what percentage of reviews each model enriched.
+- Compare field population rates (especially `would_recommend`, `pain_category`, `company_name`) by model to identify which model swaps caused extraction regressions.
+- Check if `enrichment_model` contains `'none'` or null for either tier — indicating a model wasn't available during enrichment.
+
+**Short-term (Guard Rails):**
+- Add a model-change detection mechanism: when `enrichment_tier1_model` or `enrichment_tier2_model` changes, log a warning and optionally trigger re-enrichment of recent reviews.
+- Add model filtering to aggregation queries: when building intelligence, optionally filter to reviews enriched by the current model configuration only.
+- Add a `model_consistency_score` to report metadata: what percentage of source reviews were enriched by the current model vs. legacy models.
+
+**Medium-term (Re-enrichment):**
+- Build a selective re-enrichment tool that re-processes reviews from a specific model to the current model.
+- Prioritize re-enrichment by vendor importance (high-signal vendors first) to manage cost.
+- Add model-version-aware aggregation that weights or segments metrics by enrichment model.
+
+### Diagnostic Queries
+
+```sql
+-- Distribution of enrichment models across all reviews
+SELECT enrichment_model, COUNT(*) as review_count,
+       COUNT(*) FILTER (WHERE enrichment->>'would_recommend' IS NOT NULL) as has_recommend,
+       COUNT(*) FILTER (WHERE enrichment->>'pain_category' = 'other') as pain_other,
+       COUNT(*) FILTER (WHERE enrichment->'reviewer_context'->>'company_name' IS NOT NULL) as has_company
+FROM b2b_reviews
+WHERE enrichment_status = 'enriched'
+GROUP BY enrichment_model
+ORDER BY review_count DESC;
+
+-- Model timeline: when were different models active?
+SELECT enrichment_model,
+       MIN(enriched_at) as first_used,
+       MAX(enriched_at) as last_used,
+       COUNT(*) as reviews_enriched
+FROM b2b_reviews
+WHERE enrichment_status = 'enriched' AND enrichment_model IS NOT NULL
+GROUP BY enrichment_model
+ORDER BY first_used;
+
+-- Field population rates by model (to identify extraction regressions)
+SELECT enrichment_model,
+       COUNT(*) as total,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE enrichment->>'would_recommend' IS NOT NULL) / COUNT(*), 1) as pct_recommend,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE enrichment->>'pain_category' != 'other') / COUNT(*), 1) as pct_classified_pain,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE enrichment->>'urgency_score' IS NOT NULL) / COUNT(*), 1) as pct_urgency,
+       ROUND(AVG((enrichment->>'urgency_score')::numeric) FILTER (WHERE enrichment->>'urgency_score' IS NOT NULL), 2) as avg_urgency
+FROM b2b_reviews
+WHERE enrichment_status = 'enriched'
+GROUP BY enrichment_model
+ORDER BY COUNT(*) DESC;
+```
+
+---
+
 *New issues will be appended below as they are discovered.*
