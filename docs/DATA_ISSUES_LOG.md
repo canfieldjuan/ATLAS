@@ -934,4 +934,120 @@ A route audit should map: `enrichment field → aggregation query → report sec
 
 ---
 
+## Issue 21: Extraction Model Is Reasoning — It Should Be Finding
+
+**Discovered:** 2026-03-26
+**Report Type:** ALL (foundational architecture issue)
+**Status:** Open — ARCHITECTURAL
+
+### The Core Insight
+
+The enrichment pipeline currently asks the LLM to **reason and conclude** from individual reviews. It should instead ask the LLM to **extract and classify evidence** — then let the deterministic pipeline draw conclusions from accumulated evidence.
+
+This is the fundamental mismatch: we're building reports deterministically (hard-coded aggregation logic, weighted scores, threshold gates), but feeding them with data produced by a model that was asked to *think* rather than *look*. The model is being asked "what does this mean?" when it should be asked "what do you see?"
+
+### What's Happening Now
+
+The current Tier 2 extraction prompt asks the LLM to do interpretive work per-review:
+- **Urgency score (0-10):** The model must *judge* how urgent a situation is from a single review. Different models calibrate this differently (Issue 19). This is a conclusion, not an observation.
+- **Sentiment trajectory:** The model must *infer* temporal direction (improving, declining, stable) from a single snapshot. This is inherently unreliable — temporal reasoning requires multiple data points, not one review.
+- **Would recommend (boolean):** The model must *infer* intent from tone. This is a judgment call that varies by model capability.
+- **Pain category:** The model must *classify* into a fixed taxonomy. Closer to extraction, but the "other" escape hatch (Issue 10) shows the model is being asked to reason when it can't confidently classify.
+- **Displacement evidence type** (explicit_switch, active_evaluation, implied_preference): This is well-designed — it asks the model to categorize observable evidence, not draw conclusions.
+
+### What Should Happen Instead
+
+**The LLM should extract observable facts. The pipeline should reason about them.**
+
+Split the extraction into two concerns:
+
+**Concern 1: What does the review SAY? (LLM extraction — pattern matching)**
+- Named entities: company, people, products, competitors, integrations
+- Quoted complaints: verbatim phrases that express pain
+- Stated actions: "we switched," "we're evaluating," "we cancelled"
+- Stated relationships: "compared to X," "replaced Y with Z," "considering A and B"
+- Stated attributes: pricing mentioned (yes/no + amount if stated), contract terms, team size, timeline
+- Observable sentiment markers: explicit positive/negative language, recommendation language
+
+**Concern 2: What does this MEAN? (Deterministic pipeline — evidence accumulation)**
+- Urgency: Don't ask the model to score 0-10. Instead, extract *indicators* (contract end date mentioned, active evaluation stated, migration in progress, timeline urgency language). The pipeline scores urgency from the *count and type* of indicators.
+- Pain category: Don't ask the model to pick one. Instead, extract all complaint phrases. The pipeline classifies them against the taxonomy using keyword matching + a lightweight classifier, with "other" only when zero keywords match.
+- Displacement: Already partially working this way (evidence_type classification). Extend it — extract the raw relationship, let the pipeline weight it.
+- Recommend: Don't infer. Extract explicit recommendation language ("I would recommend," "I would not recommend," "stay away," "great tool"). If no explicit language, it's NULL — not a model judgment call.
+
+### Why This Matters for Reports
+
+Reports are built deterministically. The deterministic builder needs predictable, comparable inputs:
+
+```
+CURRENT (broken):
+  Review → LLM reasons → urgency=7 (model-dependent) → pipeline aggregates → report
+
+PROPOSED (reliable):
+  Review → LLM extracts facts → {contract_ending: true, evaluating_alternatives: true,
+                                   timeline_mentioned: "Q2", migration_stated: false}
+         → Pipeline scores urgency from indicators → urgency=7 (deterministic) → report
+```
+
+In the proposed model, swapping the LLM changes the *extraction yield* (how many facts it finds) but NOT the *scoring calibration* (how facts become scores). Two different models might extract 4 vs 5 indicators from the same review, but the scoring formula produces consistent results from whatever indicators are found.
+
+### The Evidence Map Concept
+
+The user's insight: "we need to add some kind of map that says — come to this kind of conclusion if the evidence presents itself, if not we don't pass it until we have enough data."
+
+This is an **Evidence-to-Conclusion Map** — a deterministic ruleset that gates conclusions behind evidence thresholds:
+
+```
+CONCLUSION: "Vendor X has a pricing crisis"
+REQUIRES:
+  - price_complaint mentions >= 15 across 3+ sources
+  - price_complaint is #1 or #2 pain category by volume
+  - at least 2 explicit quotes mentioning price increases or competitor pricing
+  - Optional amplifier: contract_end mentions correlate with price complaints
+IF NOT MET: Do not surface this conclusion. Report raw pain distribution instead.
+
+CONCLUSION: "Vendor X is losing market share to Vendor Y"
+REQUIRES:
+  - displacement edge X→Y with mention_count >= 5
+  - signal_strength = "strong" or "moderate"
+  - at least 1 explicit_switch evidence type
+  - net flow X→Y is negative (more leaving X for Y than reverse)
+IF NOT MET: Surface as "emerging signal" with low confidence, not as a conclusion.
+```
+
+This approach means:
+- **The LLM can't hallucinate conclusions** — it only extracts evidence
+- **Weak evidence doesn't produce conclusions** — thresholds gate output
+- **New patterns emerge from evidence accumulation**, not from asking the model to find them
+- **Model swaps affect yield, not meaning** — a better model finds more evidence, but the same evidence always produces the same conclusion
+
+### How This Relates to the "Reasoning Per Pool" Concern
+
+The current pipeline has a single enrichment pass that tries to extract everything for all report types. But different reports need different evidence:
+
+- **Battle Cards** need: competitive positioning, feature comparisons, objection language, pricing intelligence
+- **Displacement Reports** need: explicit switch statements, competitor mentions, migration evidence
+- **Vendor Scorecards** need: pain distribution, satisfaction indicators, buyer authority signals
+- **Weekly Feeds** need: urgency indicators, named accounts, timeline evidence
+
+Instead of one model trying to extract all 47 fields per review, consider:
+- **Universal extraction** (Tier 1): Named entities, stated actions, verbatim quotes — the same for all reports
+- **Report-specific evidence pools**: Each report type defines what evidence it needs. The pipeline filters the universal extraction into report-specific pools before building.
+
+This is the "tighten the reasoning per pool" idea — but framed as "tighten the evidence requirements per report type."
+
+### Relationship to Other Issues
+
+This reframes several existing issues:
+
+| Issue | Current Frame | Reframed |
+|-------|--------------|----------|
+| 9 (recommend_ratio = 0) | Model fails to infer would_recommend | Stop inferring. Extract explicit recommendation language. NULL if none. |
+| 10 (Other bucket) | Model can't classify pain | Extract raw complaint phrases. Pipeline classifies deterministically. |
+| 19 (mixed models) | Different models produce different scores | Models extract facts; pipeline scores. Model swap changes yield, not calibration. |
+| 14 (low sample size) | No minimum threshold | Evidence map gates conclusions behind thresholds. Low-evidence vendors get "insufficient data." |
+| 2/5/15 (contradictions) | Pipeline doesn't detect contradictions | Evidence map prevents contradictions — conclusions only form when evidence is sufficient and directionally consistent. |
+
+---
+
 *New issues will be appended below as they are discovered.*
