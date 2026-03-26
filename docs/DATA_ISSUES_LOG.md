@@ -8,6 +8,7 @@ Each issue is framed holistically — focusing on systemic pipeline impact, not 
 ## Issue 1: Single-Source Entity Resolution — The "Unnamed Signal" Problem
 
 **Discovered:** 2026-03-26
+**Report Type:** Battle Card
 **Status:** Open
 
 ### Description
@@ -30,6 +31,7 @@ Reports can surface hundreds of evaluation signals but resolve only a tiny fract
 ## Issue 2: Contradictory Narrative Detection — Aggressive Pricing Nuance
 
 **Discovered:** 2026-03-26
+**Report Type:** Battle Card
 **Status:** Open
 
 ### Description
@@ -52,6 +54,7 @@ Reports can label a vendor as a "clear loser" in a competitive landscape while s
 ## Issue 3: Variable Bloat / Raw Identifiers in Report Output
 
 **Discovered:** 2026-03-26
+**Report Type:** Battle Card
 **Status:** Open
 
 ### Description
