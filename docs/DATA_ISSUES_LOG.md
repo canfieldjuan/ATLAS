@@ -143,4 +143,52 @@ Raw template variable names (e.g., `displacement_detail.primary_driver`) are app
 
 ---
 
+## Issue 7: Unlabeled Ranked Lists — Data Without Context
+
+**Discovered:** 2026-03-26
+**Report Type:** Displacement Report
+**Status:** Open
+
+### Description
+
+Ranked lists in reports render as bare numbers without labels (e.g., `#2: 66`, `#3: 61`). The underlying data contains the entity names, but the rendering step only outputs the rank position and count — stripping the most important piece: *what* is being ranked. This is a sibling of Issues 3 and 6 (rendering/template gaps), but distinct because the data exists and is correct; it's purely a presentation failure.
+
+### Downstream Impact
+
+- **Entire report sections become useless.** A top-50 list with no labels is dead space — readers can't act on it, reference it, or even understand it.
+- **Wastes the strongest signal.** Displacement flow rankings are among the highest-value outputs the pipeline produces. Rendering them without names throws away the payoff.
+- **Suggests the serialization layer is dropping fields.** If the LLM or template receives a list of `{rank, name, count}` objects but only prints `{rank, count}`, there may be a field-mapping or context-window issue at play.
+
+### Potential Investigation Directions
+
+- Check whether the ranked data passed to the LLM/template includes entity names or only IDs that require a separate lookup.
+- If names are present in the data, audit the prompt/template to ensure the name field is referenced in the output format.
+- If names are missing, trace back to the query layer to confirm the join to the vendor registry is happening.
+
+---
+
+## Issue 8: Competitor Names Extracted as Feature Drivers — Misclassification Opportunity
+
+**Discovered:** 2026-03-26
+**Report Type:** Displacement Report
+**Status:** Open — Flagged as Potential Feature
+
+### Description
+
+The driver extraction pipeline sometimes surfaces competitor names as displacement drivers (e.g., "Flexibility and depth comparable to Tableau" classified as a 6% driver). This happens because reviewers use well-known products as shorthand for feature expectations — "I want Tableau-like dashboards" — and the extraction treats the entire phrase as a driver string.
+
+### Downstream Impact
+
+- **Not a bug in isolation, but needs classification.** This is actually valuable signal — it reveals which products serve as the *mental benchmark* in a category. Knowing that users measure alternatives against a specific product is strategic intelligence.
+- **Without classification, it muddies driver analysis.** If competitor-as-benchmark signals are mixed in with true feature drivers (pricing, UX, integrations), aggregate driver breakdowns become noisy. "Tableau" isn't a *feature* — it's a *reference point*.
+- **Opportunity for a new signal type.** Separating "benchmark mentions" from "feature drivers" would create a distinct intelligence layer: which products define the category standard in users' minds.
+
+### Potential Investigation Directions
+
+- Add a classification step in driver extraction that detects when a driver string contains a known vendor/product name and tags it as "benchmark reference" vs. "feature driver."
+- Surface benchmark references as their own report section (e.g., "Category Benchmarks — products users compare against").
+- Cross-reference with the vendor registry to auto-detect product names in driver strings.
+
+---
+
 *New issues will be appended below as they are discovered.*
