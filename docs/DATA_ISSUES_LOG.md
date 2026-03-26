@@ -774,4 +774,164 @@ ORDER BY COUNT(*) DESC;
 
 ---
 
+## Issue 20: No Trusted Baseline — Enrichment Data May Need Full Reset
+
+**Discovered:** 2026-03-26
+**Report Type:** ALL (systemic — foundational data integrity question)
+**Status:** Open — CRITICAL — Blocks all other fixes
+
+### The Core Problem
+
+There is no trusted enrichment baseline. The combination of:
+1. Starting with cheap/local models that may have produced poor extractions
+2. Swapping through multiple cloud models during testing to manage costs
+3. Schema and routing changes between enrichment cycles
+4. No re-enrichment on model change (Issue 19)
+
+...means the current enrichment data is a patchwork of unknown quality. Fixing downstream issues (rendering, logic, aggregation) is pointless if the underlying extraction data is unreliable. **You can't build accurate reports on inaccurate extractions.**
+
+### Why This Is Different from Issue 19
+
+Issue 19 describes the *mechanism* (model swaps don't trigger re-enrichment). This issue describes the *consequence*: the accumulated enrichment data may be too inconsistent to salvage. The question isn't "how do we prevent this in the future" — it's "do we need to wipe and re-enrich from scratch?"
+
+### What's Contaminated
+
+Every derived table is built from `b2b_reviews.enrichment` JSONB. If that JSONB was produced by inconsistent models, every table below it inherits the inconsistency:
+
+```
+b2b_reviews.enrichment (CONTAMINATED SOURCE)
+    │
+    ├→ b2b_churn_signals         (vendor aggregates — mixed model scores)
+    ├→ b2b_displacement_edges    (vendor pairs — mixed model evidence types)
+    ├→ b2b_company_signals       (company resolution — mixed model NER)
+    ├→ b2b_vendor_pain_points    (pain categories — mixed model classification)
+    ├→ b2b_vendor_use_cases      (use cases — mixed model extraction)
+    ├→ b2b_vendor_integrations   (integrations — mixed model NER)
+    ├→ b2b_vendor_buyer_profiles (buyer authority — mixed model inference)
+    ├→ b2b_product_profiles      (vendor cards — mixed model aggregation)
+    ├→ b2b_vendor_snapshots      (daily health — mixed model trend data)
+    │
+    └→ Canonical Vaults (all derived from above)
+        ├→ b2b_evidence_vault
+        ├→ b2b_segment_intelligence
+        ├→ b2b_temporal_intelligence
+        ├→ b2b_displacement_dynamics
+        ├→ b2b_category_dynamics
+        └→ b2b_account_intelligence
+            │
+            └→ b2b_intelligence (final reports — built on all of the above)
+```
+
+### What's NOT Contaminated
+
+The raw review data itself is clean. These fields come from the scraper/parser, not the LLM:
+- `review_text`, `pros`, `cons`, `summary`
+- `reviewer_name`, `reviewer_title`, `reviewer_company` (raw from source)
+- `vendor_name`, `product_name`, `product_category`
+- `rating`, `rating_max`
+- `source`, `source_url`, `source_review_id`
+- `reviewed_at`, `imported_at`
+- `raw_metadata`
+
+**The reviews themselves are the ground truth.** Everything in the `enrichment` JSONB column is derived and can be re-derived.
+
+### The Routing / Schema Change Factor
+
+Beyond model swaps, enrichment schema and routing changes between cycles add another layer:
+- **New fields added to extraction prompts** (e.g., `would_recommend` added in Tier 2) — older reviews enriched before this field existed will have NULL regardless of model quality.
+- **Routing changes** (e.g., which reviews go to Tier 1 vs Tier 2, triage logic changes) — reviews processed under old routing may have different field coverage.
+- **Report generation changes** — some reports and blog generators may still reference old data paths that don't see new enrichment fields. A report template that was written before a field existed won't use it even if re-enrichment adds it.
+
+### The Second-Pass Approach (Gemini)
+
+A second model pass using Gemini (already started yesterday) is the right instinct, but needs careful design to avoid compounding the problem:
+- **What it solves:** A strong second model can fill gaps left by weaker first-pass models (e.g., populate `would_recommend`, reclassify "other" pain points, improve NER yield).
+- **What it risks:** If the second pass *partially* overwrites the first pass (some fields updated, some not), the enrichment becomes a Frankenstein of three+ models. The `enrichment_repair` mechanism (migration 237) supports this pattern with `enrichment_baseline` + `enrichment_repair` + `enrichment_repair_applied_fields` — but only if used correctly.
+- **Key question:** Does the Gemini pass replace the entire enrichment JSONB, or selectively patch specific fields?
+
+### Decision Framework: Clean Slate vs. Selective Re-enrichment
+
+**Option A: Full Reset (Clean Slate)**
+- Wipe all `enrichment` JSONB, reset `enrichment_status = 'pending'` for all reviews
+- Truncate all derived tables (`b2b_churn_signals`, `b2b_displacement_edges`, etc.)
+- Re-enrich everything with a single, trusted model configuration
+- **Pro:** Guaranteed consistency. Clean baseline. Every metric is comparable.
+- **Con:** Cost (re-enriching thousands of reviews through cloud models). Time. Loses any manually validated data.
+
+**Option B: Selective Re-enrichment by Model**
+- Use `enrichment_model` column to identify reviews from untrusted models
+- Re-enrich only those reviews with the current trusted model
+- Keep reviews from models known to produce good results
+- **Pro:** Lower cost. Preserves good data.
+- **Con:** Requires knowing which models produced good results (which we don't have a baseline to judge). Still mixing models, just fewer of them.
+
+**Option C: Parallel Baseline (Recommended)**
+- Keep existing enrichment data as-is
+- Run a full re-enrichment into a *new column* or *separate table* using the trusted model
+- Compare old vs. new enrichment side-by-side to identify divergence
+- Once validated, promote the new enrichment and rebuild all derived tables
+- **Pro:** Non-destructive. Provides the comparison data needed to assess damage. Can be done incrementally.
+- **Con:** Highest storage cost (two enrichments per review). More complex pipeline temporarily.
+
+### Pre-Reset Diagnostic Checklist
+
+Before deciding on approach, run these diagnostics (requires database access):
+
+```sql
+-- 1. How many distinct model configurations exist?
+SELECT enrichment_model, COUNT(*) as n
+FROM b2b_reviews WHERE enrichment_status = 'enriched'
+GROUP BY enrichment_model ORDER BY n DESC;
+
+-- 2. How many reviews have NO enrichment_model recorded?
+SELECT COUNT(*) FROM b2b_reviews
+WHERE enrichment_status = 'enriched' AND enrichment_model IS NULL;
+
+-- 3. Field population rates by model (identifies extraction regressions)
+SELECT enrichment_model,
+       COUNT(*) as total,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE enrichment->>'would_recommend' IS NOT NULL) / COUNT(*), 1) as pct_recommend,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE enrichment->>'pain_category' IS NOT NULL AND enrichment->>'pain_category' != 'other') / COUNT(*), 1) as pct_classified_pain,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE enrichment->'reviewer_context'->>'company_name' IS NOT NULL) / COUNT(*), 1) as pct_company_name,
+       ROUND(AVG((enrichment->>'urgency_score')::numeric) FILTER (WHERE enrichment->>'urgency_score' IS NOT NULL), 2) as avg_urgency
+FROM b2b_reviews WHERE enrichment_status = 'enriched'
+GROUP BY enrichment_model ORDER BY total DESC;
+
+-- 4. Timeline of model usage (shows swap history)
+SELECT enrichment_model,
+       MIN(enriched_at)::date as first_used,
+       MAX(enriched_at)::date as last_used,
+       COUNT(*) as reviews
+FROM b2b_reviews WHERE enrichment_status = 'enriched' AND enrichment_model IS NOT NULL
+GROUP BY enrichment_model ORDER BY first_used;
+
+-- 5. Total review volume (to estimate re-enrichment cost)
+SELECT enrichment_status, COUNT(*) FROM b2b_reviews GROUP BY enrichment_status;
+
+-- 6. Reviews that went through repair (already multi-model)
+SELECT enrichment_repair_status, COUNT(*)
+FROM b2b_reviews WHERE enrichment_repair_status IS NOT NULL
+GROUP BY enrichment_repair_status;
+
+-- 7. Derived table row counts (what gets wiped in a reset)
+SELECT 'b2b_churn_signals' as tbl, COUNT(*) FROM b2b_churn_signals
+UNION ALL SELECT 'b2b_displacement_edges', COUNT(*) FROM b2b_displacement_edges
+UNION ALL SELECT 'b2b_company_signals', COUNT(*) FROM b2b_company_signals
+UNION ALL SELECT 'b2b_vendor_pain_points', COUNT(*) FROM b2b_vendor_pain_points
+UNION ALL SELECT 'b2b_vendor_snapshots', COUNT(*) FROM b2b_vendor_snapshots
+UNION ALL SELECT 'b2b_intelligence', COUNT(*) FROM b2b_intelligence;
+```
+
+### Downstream Route Audit Needed
+
+Even after re-enrichment, some downstream consumers may not see new data:
+- **Report templates** that reference old field paths
+- **Blog post generators** that were built against an older enrichment schema
+- **MCP tool queries** that may filter on fields that changed names or structure
+- **Cached intelligence** in canonical vaults (`b2b_evidence_vault`, etc.) that won't auto-refresh
+
+A route audit should map: `enrichment field → aggregation query → report section → consumer endpoint` to ensure no dead paths exist.
+
+---
+
 *New issues will be appended below as they are discovered.*
