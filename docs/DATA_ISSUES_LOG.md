@@ -1298,4 +1298,136 @@ This is the deterministic pipeline working well. The archetype assignment comes 
 
 ---
 
+## Architectural Direction: Three-Layer Reasoning Model
+
+**Established:** 2026-03-26
+**Status:** Agreed — Design pending
+
+### The Question
+
+If we rebuild extraction to remove all model inference, is reasoning still necessary? Where does it live?
+
+### Answer: Reasoning moves, it doesn't disappear
+
+Reasoning is essential. But it moves from the model (unreliable, model-dependent, uncalibrated) to the pipeline (deterministic, auditable, yours).
+
+### The Three Layers
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  LAYER 1: EXTRACTION (Model)                                │
+│                                                              │
+│  Job: Find facts. No reasoning. No scoring. No conclusions. │
+│                                                              │
+│  "Did they say they're leaving?"  → yes/no                  │
+│  "Did they name a competitor?"    → which one                │
+│  "Did they mention price?"        → what did they say        │
+│  "What is their role?"            → verbatim title           │
+│                                                              │
+│  Any model that can read English can do this.                │
+│  Model swap changes YIELD (how many facts found),            │
+│  not MEANING (what the facts mean).                          │
+│                                                              │
+│  Output: Structured evidence per review                      │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LAYER 2: PIPELINE REASONING (Your code — the Evidence Map) │
+│                                                              │
+│  Job: Draw conclusions from accumulated evidence.            │
+│  Gate conclusions behind evidence thresholds.                │
+│  This is YOUR domain expertise encoded as rules.             │
+│                                                              │
+│  Evidence Map examples:                                      │
+│                                                              │
+│  URGENCY SCORE (replaces model-inferred 0-10):              │
+│    intent_to_leave         = +3                              │
+│    actively_evaluating     = +2                              │
+│    renewal < 90 days       = +2                              │
+│    decision_maker          = +1                              │
+│    price_increase_stated   = +1                              │
+│    migration_in_progress   = +1                              │
+│    → Sum indicators, normalize to 0-10                       │
+│    → Same score regardless of which model extracted          │
+│                                                              │
+│  CONCLUSION GATES:                                           │
+│    "Pricing crisis":                                         │
+│      REQUIRES: price_mentions >= 15, sources >= 3,           │
+│                at least 2 direct quotes                      │
+│      IF NOT MET: Don't say it. Show raw pain distribution.   │
+│                                                              │
+│    "Vendor X losing to Vendor Y":                            │
+│      REQUIRES: displacement edge X→Y, mention_count >= 5,   │
+│                signal_strength = strong OR moderate,          │
+│                at least 1 explicit_switch evidence,           │
+│                net flow X→Y is negative                      │
+│      IF NOT MET: "Emerging signal" with low confidence.      │
+│                                                              │
+│  This layer is your IP. It's what makes the reports          │
+│  trustworthy. Models on either side are commodities.         │
+│                                                              │
+│  Output: Scored vendors, gated conclusions, classified       │
+│          archetypes, evidence-backed assertions               │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  LAYER 3: SYNTHESIS (Model — optional)                      │
+│                                                              │
+│  Job: Turn structured conclusions into readable prose.       │
+│  No discovering. No scoring. No new conclusions.             │
+│  Narrative only.                                             │
+│                                                              │
+│  Input: Deterministic scores, gated conclusions, evidence    │
+│  Output: Executive summary, battle card copy, briefing       │
+│                                                              │
+│  Rules (already in battle_card_sales_copy.md):               │
+│  - Every number MUST come from input                         │
+│  - Every quote MUST be verbatim from input                   │
+│  - No fabrication                                            │
+│                                                              │
+│  This works TODAY when the input is trustworthy.             │
+│  The problem is that input from Layer 1+2 is currently       │
+│  unreliable. Fix Layers 1+2 and Layer 3 works as designed.  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### What This Changes
+
+| Concern | Today | New Model |
+|---------|-------|-----------|
+| Urgency scoring | Model infers 0-10 per review (compressed, uncalibrated) | Pipeline computes from extracted indicators (deterministic, spreads meaningfully) |
+| Pain classification | Model picks category (escapes to "other") | Pipeline keyword-matches on extracted complaint phrases |
+| Recommend ratio | Model infers boolean (returns NULL → zeroes) | Pipeline derives from explicit language + rating + complaint ratio |
+| Sentiment trajectory | Model guesses direction from 1 review (always "unknown") | Pipeline compares reviews over time for same vendor (cross-review analysis) |
+| Trend detection | Model can't do this (always "stable") | Pipeline compares snapshots over time (already has `b2b_vendor_snapshots`) |
+| Contradictions | Pipeline doesn't detect them | Evidence map prevents them — conclusions require consistent directional evidence |
+| Model swap impact | Changes scores, classifications, and conclusions | Changes extraction yield only — pipeline conclusions are stable |
+
+### What Stays the Same
+
+- **Tier 1 extraction prompt** — already pure EXTRACT (26 fields, zero inference). Keep it.
+- **Archetype classification** — already deterministic pipeline logic. Works well (confirmed in live reports). Keep it.
+- **Displacement evidence typing** — `explicit_switch`, `active_evaluation`, `implied_preference` classification is close to extraction. Keep it, possibly tighten definitions.
+- **Battle card synthesis skill** — already designed for "no fabrication" narrative-from-facts. Works when input is clean.
+- **`churn_pressure_score` formula** — already deterministic weighted scoring. Just needs better inputs.
+
+### What Gets Eliminated
+
+- **Tier 2 INFER fields (7 fields):** `urgency_score`, `sentiment_trajectory.direction`, `sentiment_trajectory.turning_point`, `buyer_authority.has_budget_authority`, `contract_context.price_complaint`, `contract_context.price_context`, `would_recommend`
+- **Dead extraction paths (Issue 22):** `insider_signals` (entire object), `role_churn_lookup`, `usage_duration_lookup`
+- **The concept of "model-dependent conclusions"** — no report conclusion should change when the extraction model changes
+
+### Next Steps
+
+1. **Design the new extraction schema** — slim Tier 1+2 down to universal EXTRACT fields + report-consumed CLASSIFY fields only
+2. **Design the Evidence Map** — define every conclusion the pipeline can make, what evidence gates it, and what the fallback is when evidence is insufficient
+3. **Define report-specific evidence pools** — what each report type needs from the universal extraction
+4. **Re-enrich from raw reviews** using the new schema
+5. **Rebuild derived tables** from clean enrichment
+6. **Fix rendering bugs** (Issues 3, 6, 7, 12, 13) — quick cleanup on top of clean data
+
+---
+
 *New issues will be appended below as they are discovered.*
