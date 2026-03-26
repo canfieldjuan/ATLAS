@@ -1036,6 +1036,45 @@ Instead of one model trying to extract all 47 fields per review, consider:
 
 This is the "tighten the reasoning per pool" idea — but framed as "tighten the evidence requirements per report type."
 
+### The 7 Inference Fields That Break on Model Swap
+
+Current Tier 2 has exactly 7 fields classified as INFER (model judgment, not fact extraction):
+
+| Field | What It Asks | Replacement Strategy |
+|-------|-------------|---------------------|
+| `urgency_score` (0-10) | "Rate urgency" | Score deterministically from Tier 1 indicators: `intent_to_leave` + `actively_evaluating` + `renewal_timing` + `migration_in_progress` + `decision_maker` + `price_increase_mentioned` |
+| `sentiment_trajectory.direction` | "Is sentiment declining?" | Cannot be determined from a single review. Requires cross-review analysis (same reviewer/company over time). Remove from per-review extraction. |
+| `sentiment_trajectory.turning_point` | "What caused the change?" | Extract event mentions ("after the acquisition", "since the price increase"). Pipeline correlates events with sentiment shifts across reviews. |
+| `buyer_authority.has_budget_authority` | "Does this person control budget?" | Derive from `role_level` (executive/director = yes) + explicit budget language in `specific_complaints`. |
+| `contract_context.price_complaint` | "Is pricing the issue?" | Derive from `price_increase_mentioned` (Tier 1) + keyword match on `specific_complaints` for pricing language. |
+| `contract_context.price_context` | "Describe the pricing issue" | Extract verbatim pricing phrases. Don't summarize. |
+| `would_recommend` | "Would they recommend?" | Extract explicit recommendation language only. NULL if no explicit signal. Pipeline infers from `rating` + `positive_aspects` vs `complaints` ratio. |
+
+The remaining 40 fields (36 EXTRACT + 4 solid CLASSIFY) are reliable across model swaps — they ask the model to find things stated in the text, not to judge.
+
+### Two Optimization Targets (Must Not Be Mixed)
+
+**Model's job:** Maximize *extraction yield* — find as many observable facts as possible from the review text. A better model finds more facts. A weaker model finds fewer. Both produce correct facts; yield differs.
+
+**Pipeline's job:** Maximize *conclusion reliability* — only conclude what the accumulated evidence supports. Conclusions are gated by evidence thresholds, not model judgment.
+
+When these two concerns are mixed in the same prompt (as they are today), model swaps change both yield AND conclusions simultaneously, making it impossible to debug which changed.
+
+### Pattern Discovery: Query Evidence, Don't Ask the Model
+
+Once extraction produces clean, reliable evidence, patterns emerge from the data itself:
+
+```sql
+-- What pain drives switching from Vendor X to Vendor Y?
+SELECT pain_category, COUNT(*), AVG(urgency_score)
+FROM b2b_reviews r
+JOIN b2b_displacement_edges d ON r.vendor_name = d.from_vendor
+WHERE d.to_vendor = 'Shopify' AND d.signal_strength = 'strong'
+GROUP BY pain_category ORDER BY count DESC;
+```
+
+The model doesn't need to "discover" patterns — the pipeline queries for them. If the pattern exists in the evidence, the query surfaces it. If it doesn't exist, no conclusion is drawn. This is the evidence map at work.
+
 ### Relationship to Other Issues
 
 This reframes several existing issues:
@@ -1047,6 +1086,7 @@ This reframes several existing issues:
 | 19 (mixed models) | Different models produce different scores | Models extract facts; pipeline scores. Model swap changes yield, not calibration. |
 | 14 (low sample size) | No minimum threshold | Evidence map gates conclusions behind thresholds. Low-evidence vendors get "insufficient data." |
 | 2/5/15 (contradictions) | Pipeline doesn't detect contradictions | Evidence map prevents contradictions — conclusions only form when evidence is sufficient and directionally consistent. |
+| 12 (self-challenger) | No exclusion filter | Evidence map: "challenger" conclusion requires displacement evidence FROM incumbent TO challenger. Self-reference is structurally impossible. |
 
 ---
 
