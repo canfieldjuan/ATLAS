@@ -2950,7 +2950,34 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
                 ) AS legacy_support_score,
                 COUNT(*) FILTER (
                     WHERE review_text ILIKE '%new feature%' OR review_text ILIKE '%update%' OR review_text ILIKE '%release%'
-                ) * 1.0 / NULLIF(count(*), 0) AS new_feature_velocity
+                ) * 1.0 / NULLIF(count(*), 0) AS new_feature_velocity,
+                -- v2 urgency indicator counts (from three-layer extraction)
+                count(*) FILTER (
+                    WHERE (enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean = true
+                ) AS indicator_cancel_count,
+                count(*) FILTER (
+                    WHERE (enrichment->'urgency_indicators'->>'active_migration_language')::boolean = true
+                ) AS indicator_migration_count,
+                count(*) FILTER (
+                    WHERE (enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean = true
+                ) AS indicator_evaluation_count,
+                count(*) FILTER (
+                    WHERE (enrichment->'urgency_indicators'->>'completed_switch_language')::boolean = true
+                ) AS indicator_switch_count,
+                count(*) FILTER (
+                    WHERE (enrichment->'urgency_indicators'->>'named_alternative_with_reason')::boolean = true
+                ) AS indicator_named_alt_count,
+                count(*) FILTER (
+                    WHERE (enrichment->'urgency_indicators'->>'decision_maker_language')::boolean = true
+                ) AS indicator_dm_language_count,
+                -- v2 pricing phrase count
+                count(*) FILTER (
+                    WHERE jsonb_array_length(COALESCE(enrichment->'pricing_phrases', '[]'::jsonb)) > 0
+                ) AS has_pricing_phrases_count,
+                -- v2 recommendation language count
+                count(*) FILTER (
+                    WHERE jsonb_array_length(COALESCE(enrichment->'recommendation_language', '[]'::jsonb)) > 0
+                ) AS has_recommendation_language_count
             FROM b2b_reviews
             WHERE {filters}
             GROUP BY vendor_name, product_category
@@ -3106,7 +3133,12 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             enrichment->'timeline'->>'contract_end' AS contract_end,
             enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
             relevance_score,
-            author_churn_score
+            author_churn_score,
+            -- v2 urgency indicators for richer account intelligence
+            (enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
+            (enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
+            (enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
+            (enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
         FROM b2b_reviews
         WHERE {filters}
           AND (enrichment->>'urgency_score')::numeric >= $1
@@ -3165,6 +3197,12 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             "buying_stage": r["buying_stage"],
             "relevance_score": float(r["relevance_score"]) if r["relevance_score"] is not None else None,
             "author_churn_score": float(r["author_churn_score"]) if r["author_churn_score"] is not None else None,
+            "intent_signals": {
+                "cancel": bool(r.get("indicator_cancel")),
+                "migration": bool(r.get("indicator_migration")),
+                "evaluation": bool(r.get("indicator_evaluation")),
+                "completed_switch": bool(r.get("indicator_switch")),
+            },
         })
     return results
 
@@ -3816,6 +3854,12 @@ async def _fetch_price_complaint_rates(pool, window_days: int) -> list[dict[str,
         f"""
         SELECT vendor_name,
             count(*) FILTER (WHERE enrichment->>'pain_category' = 'pricing') AS pricing_count,
+            count(*) FILTER (
+                WHERE (enrichment->'contract_context'->>'price_complaint')::boolean = true
+            ) AS price_complaint_count,
+            count(*) FILTER (
+                WHERE jsonb_array_length(COALESCE(enrichment->'pricing_phrases', '[]'::jsonb)) > 0
+            ) AS pricing_phrases_count,
             count(*) AS total
         FROM b2b_reviews
         WHERE {filters}
@@ -3828,7 +3872,11 @@ async def _fetch_price_complaint_rates(pool, window_days: int) -> list[dict[str,
     return [
         {
             "vendor": r["vendor_name"],
-            "price_complaint_rate": r["pricing_count"] / r["total"] if r["total"] else 0,
+            "price_complaint_rate": max(
+                r["pricing_count"] / r["total"] if r["total"] else 0,
+                r["price_complaint_count"] / r["total"] if r["total"] else 0,
+            ),
+            "pricing_phrases_rate": r["pricing_phrases_count"] / r["total"] if r["total"] else 0,
         }
         for r in rows
     ]
@@ -6814,6 +6862,17 @@ def build_evidence_vault(
         "positive_review_pct": _sf(vs.get("positive_review_pct")),
         "displacement_mention_count": vs.get("displacement_mention_count") or 0,
         "keyword_spike_count": kw.get("spike_count") or 0,
+        # v2 indicator-based signal counts
+        "indicator_counts": {
+            "cancel": vs.get("indicator_cancel_count") or 0,
+            "migration": vs.get("indicator_migration_count") or 0,
+            "evaluation": vs.get("indicator_evaluation_count") or 0,
+            "completed_switch": vs.get("indicator_switch_count") or 0,
+            "named_alternative": vs.get("indicator_named_alt_count") or 0,
+            "decision_maker_language": vs.get("indicator_dm_language_count") or 0,
+        },
+        "has_pricing_phrases_count": vs.get("has_pricing_phrases_count") or 0,
+        "has_recommendation_language_count": vs.get("has_recommendation_language_count") or 0,
     }
 
     # --- Company signals (pre-filtered for this vendor) ---
