@@ -3,7 +3,7 @@ name: digest/b2b_churn_extraction
 domain: digest
 description: Single-pass churn signal extraction from B2B software reviews
 tags: [digest, b2b, churn, saas, autonomous]
-version: 2
+version: 3
 ---
 
 # B2B Churn Signal Extraction
@@ -128,9 +128,29 @@ You are a B2B software intelligence analyst. Given a single software review, ext
 
   "content_classification": "review",
 
+  "recommendation_language": ["I would not recommend this to anyone"],
+  "pricing_phrases": ["3x more expensive than HubSpot", "30% increase at renewal"],
+  "event_mentions": [
+    {"event": "latest pricing update", "timeframe": "Q1 2026"}
+  ],
+  "urgency_indicators": {
+    "explicit_cancel_language": false,
+    "active_migration_language": false,
+    "active_evaluation_language": true,
+    "completed_switch_language": false,
+    "comparison_shopping_language": false,
+    "named_alternative_with_reason": true,
+    "frustration_without_alternative": false,
+    "dollar_amount_mentioned": false,
+    "timeline_mentioned": true,
+    "decision_maker_language": false
+  },
+
   "insider_signals": null
 }
 ```
+
+**Pipeline-computed fields:** `urgency_score`, `would_recommend`, `pain_category`, `sentiment_trajectory.direction`, `sentiment_trajectory.turning_point`, `buyer_authority.has_budget_authority`, `contract_context.price_complaint`, and `contract_context.price_context` are computed deterministically by the pipeline after extraction. You may still return them as hints but the pipeline will override with its own calculation.
 
 For `content_type = "insider_account"`, populate `insider_signals`:
 
@@ -139,17 +159,14 @@ For `content_type = "insider_account"`, populate `insider_signals`:
   "insider_signals": {
     "role_at_company": "Senior Engineer",
     "departure_type": "voluntary",
-    "org_health": {
-      "bureaucracy_level": "high",
-      "leadership_quality": "poor",
-      "innovation_climate": "stagnant",
-      "culture_indicators": ["micromanagement", "no autonomy", "reorg every 6 months"]
-    },
-    "talent_drain": {
-      "departures_mentioned": true,
-      "layoff_fear": false,
-      "morale": "low"
-    }
+    "departures_mentioned": true,
+    "layoff_fear": false,
+    "morale": "low",
+    "bureaucracy_level": "high",
+    "leadership_quality": "poor",
+    "innovation_climate": "stagnant",
+    "culture_indicators": ["micromanagement", "no autonomy", "reorg every 6 months"],
+    "morale_language": ["team morale is at an all-time low", "people are leaving in droves"]
   }
 }
 ```
@@ -199,7 +216,7 @@ Extract the reviewer's company name ONLY when explicitly stated in the review te
 - If reviewer_company is already provided in the input and is not empty, use that value
 
 ### pain_category
-One of: pricing, features, reliability, support, integration, performance, security, ux, onboarding, other. Pick the PRIMARY driver of dissatisfaction -- the root cause that, if fixed, would retain the customer. When multiple pains co-occur, apply these tiebreakers: (1) the pain explicitly linked to switching/evaluation language wins; (2) pricing beats other categories only when dollar amounts or "too expensive" are stated; (3) "other" is a last resort -- prefer a specific category even if the fit is imperfect. For comparison/evaluation posts where no pain is expressed, use "features" (the reviewer is comparing capabilities).
+One of: pricing, features, reliability, support, integration, performance, security, ux, onboarding, technical_debt, contract_lock_in, data_migration, api_limitations, other. Pick the PRIMARY driver of dissatisfaction -- the root cause that, if fixed, would retain the customer. When multiple pains co-occur, apply these tiebreakers: (1) the pain explicitly linked to switching/evaluation language wins; (2) pricing beats other categories only when dollar amounts or "too expensive" are stated; (3) "other" is a last resort -- prefer a specific category even if the fit is imperfect. For comparison/evaluation posts where no pain is expressed, use "features" (the reviewer is comparing capabilities).
 
 ### competitors_mentioned
 Only include ACTUAL product/vendor names explicitly mentioned in the review text. Never invent or assume competitors.
@@ -229,6 +246,10 @@ Why this competitor is being considered or chosen. MUST be one of:
 - **"ux"**: User experience, ease of use, learning curve, admin burden
 - **"support"**: Customer support quality, response time, account management
 - **"integration"**: API quality, integrations, ecosystem compatibility
+- **"technical_debt"**: Code quality, legacy stack, maintenance burden
+- **"contract_lock_in"**: Renewal terms, exit costs, rigid contracts
+- **"data_migration"**: Ease/difficulty of moving data, portability
+- **"api_limitations"**: Rate limits, missing endpoints, poor documentation
 - **null**: No reason stated in the review text. Do NOT infer a reason.
 
 ### competitors_mentioned[].reason_detail
@@ -329,15 +350,16 @@ Set to the `content_type` value from the input (pass-through for downstream filt
 ### insider_signals
 Only populated when `content_type = "insider_account"`. All other types must set this to `null`.
 
-- `role_at_company`: The role the author held at the vendor (not the reviewer of the product). E.g., "Senior Engineer", "Product Manager", "Support Lead". Null if not stated.
-- `departure_type`: `"voluntary"` (quit), `"involuntary"` (laid off / fired), `"still_employed"`, or `"unknown"`.
-- `org_health.bureaucracy_level`: How bureaucratic/slow the company is (`"high"`, `"medium"`, `"low"`, `"unknown"`).
-- `org_health.leadership_quality`: Perception of leadership effectiveness (`"poor"`, `"mixed"`, `"good"`, `"unknown"`).
-- `org_health.innovation_climate`: Whether the product/engineering culture is innovative (`"stagnant"`, `"declining"`, `"healthy"`, `"unknown"`).
-- `org_health.culture_indicators`: Array of specific culture descriptors extracted from the text (e.g., `["micromanagement", "no autonomy"]`). Empty array if none.
-- `talent_drain.departures_mentioned`: True if the text mentions people leaving, high turnover, or difficulty retaining talent.
-- `talent_drain.layoff_fear`: True if the text mentions fear of layoffs, RIFs, or job security concerns.
-- `talent_drain.morale`: Overall morale signal: `"high"`, `"medium"`, `"low"`, or `"unknown"`.
+- `role_at_company` (EXTRACT): The role the author held at the vendor. E.g., "Senior Engineer", "Product Manager". Null if not stated.
+- `departure_type` (CLASSIFY): `"voluntary"`, `"involuntary"`, `"still_employed"`, or `"unknown"`.
+- `departures_mentioned` (boolean): True if the text mentions people leaving, high turnover, or difficulty retaining talent.
+- `layoff_fear` (boolean): True if the text mentions fear of layoffs, RIFs, or job security concerns.
+- `morale` (CLASSIFY): Overall morale signal: `"high"`, `"medium"`, `"low"`, or `"unknown"`.
+- `bureaucracy_level` (CLASSIFY): How bureaucratic/slow the company is: `"high"`, `"medium"`, `"low"`, `"unknown"`.
+- `leadership_quality` (CLASSIFY): Perception of leadership effectiveness: `"poor"`, `"mixed"`, `"good"`, `"unknown"`.
+- `innovation_climate` (CLASSIFY): Product/engineering culture: `"stagnant"`, `"declining"`, `"healthy"`, `"unknown"`.
+- `culture_indicators` (EXTRACT): Array of specific culture descriptors from the text (e.g., `["micromanagement", "no autonomy"]`). Empty array if none.
+- `morale_language` (EXTRACT): Verbatim phrases about morale, culture, or team health. Empty array if none.
 
 **Why insider signals matter for churn prediction**: A vendor with deteriorating engineering culture, talent exodus, and poor leadership quality will ship a worse product over time — directly increasing customer churn risk. Treat insider accounts as forward-looking churn indicators.
 
@@ -350,6 +372,28 @@ The `source_weight` field indicates how much to trust this review source. Calibr
 - **weight 0.1-0.3** (TrustRadius aggregate): Product-level summary, not an individual review. Set `intent_to_leave=false`, `urgency_score=0`, `decision_maker=false`. Extract only `pain_category` and `feature_gaps` from the aggregate notes.
 - **content_type = "insider_account"**: Employee/ex-employee perspective. Prioritize `insider_signals` extraction. The standard churn fields (`urgency_score`, `churn_signals`) still apply -- an insider post predicting product stagnation IS a churn signal. Map insider signals to urgency: mass departures or talent drain = urgency 7-8 (customers will see quality decline); leadership dysfunction or repeated reorgs = urgency 5-6 (product direction uncertainty); minor culture gripes = urgency 3-4. Set `intent_to_leave=true` when the insider describes conditions that will drive customer churn (product quality collapse, support degradation).
 - **content_type = "comment"**: Short reply in a thread. Lower signal confidence. Reduce urgency by 1 point. Focus on extracting `quotable_phrases` and `competitors_mentioned`.
+
+### recommendation_language (NEW)
+Extract ALL verbatim phrases where the reviewer expresses a recommendation or anti-recommendation. Include the full phrase. Examples: "I would highly recommend this", "stay away from this product", "not worth the price". Empty array if none.
+
+### pricing_phrases (NEW)
+Extract ALL verbatim phrases where the reviewer complains about pricing, cost, or value. Include specific amounts when stated. Examples: "3x more expensive than HubSpot", "$150/user/month is outrageous". Empty array if none.
+
+### event_mentions (NEW)
+Extract mentions of specific events that affected the reviewer's experience. Each entry: `{"event": "verbatim description", "timeframe": "when it happened or null"}`. Examples: `{"event": "latest pricing update", "timeframe": "Q1 2026"}`. Empty array if none.
+
+### urgency_indicators (NEW)
+Set each boolean based on whether the language pattern is explicitly present in the review:
+- `explicit_cancel_language`: "canceling", "not renewing", "terminating contract"
+- `active_migration_language`: describes ongoing migration or switch in progress
+- `active_evaluation_language`: describes evaluating alternatives, running POC, comparing
+- `completed_switch_language`: past-tense switch: "we moved to X", "we switched last year"
+- `comparison_shopping_language`: "which should I choose", "X vs Y", "looking for alternatives"
+- `named_alternative_with_reason`: competitor named AND specific reason given
+- `frustration_without_alternative`: complaints but no competitor named
+- `dollar_amount_mentioned`: specific dollar amount appears
+- `timeline_mentioned`: contract end date, renewal date, or deadline mentioned
+- `decision_maker_language`: "I decided", "our team approved", "we signed off on"
 
 ## Reasoning Framework
 
