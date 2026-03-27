@@ -189,6 +189,7 @@ def _normalize_migration_semantics(migration_proof: dict[str, Any]) -> dict[str,
     active_eval_volume = _wrapper_numeric_value(
         migration_proof.get("active_evaluation_volume"),
     )
+    confidence = str(migration_proof.get("confidence") or "").strip().lower()
 
     has_switches = (switch_volume or 0.0) > 0.0
     has_active_eval = (active_eval_volume or 0.0) > 0.0
@@ -198,8 +199,12 @@ def _normalize_migration_semantics(migration_proof: dict[str, Any]) -> dict[str,
         migration_proof["evidence_type"] = "explicit_switch"
     elif has_active_eval:
         migration_proof["evidence_type"] = "active_evaluation"
+        if confidence in {"", "high"}:
+            migration_proof["confidence"] = "medium"
     else:
         migration_proof["evidence_type"] = "insufficient_data"
+        if confidence in {"", "high", "medium"}:
+            migration_proof["confidence"] = "low"
     return migration_proof
 
 

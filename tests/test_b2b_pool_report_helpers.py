@@ -51,6 +51,18 @@ class FakePool:
         raise AssertionError(f"Unexpected fetchrow query: {normalized}")
 
 
+def test_count_analyzed_vendors_dedupes_canonical_vendor_rows():
+    rows = [
+        {"vendor_name": "HubSpot", "product_category": "CRM"},
+        {"vendor_name": "hubspot", "product_category": "Marketing"},
+        {"vendor": "Intercom"},
+        {"vendor_name": ""},
+        {"vendor_name": None},
+    ]
+
+    assert mod._count_analyzed_vendors(rows) == 2
+
+
 @pytest.mark.asyncio
 async def test_vendor_snapshot_parses_vendor_mentions_shape(monkeypatch):
     monkeypatch.setattr(mod, "_canonicalize_competitor", lambda raw: str(raw or "").strip())
