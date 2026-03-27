@@ -4972,6 +4972,38 @@ async def _fetch_related_for_linking(
         return []
 
 
+def _fallback_target_keyword(blueprint: PostBlueprint) -> str:
+    """Generate a deterministic target keyword when the LLM omits it."""
+    ctx = blueprint.data_context.get("topic_ctx") or blueprint.data_context
+    tt = blueprint.topic_type
+    vendor = str(ctx.get("vendor") or ctx.get("vendor_a") or ctx.get("from_vendor") or "").strip()
+    vendor_b = str(ctx.get("vendor_b") or "").strip()
+    category = str(ctx.get("category") or "").strip()
+    kw_map = {
+        "vendor_showdown": f"{vendor} vs {vendor_b}".strip(),
+        "vendor_alternative": f"{vendor} alternatives".strip(),
+        "churn_report": f"{vendor} churn rate".strip(),
+        "pricing_reality_check": f"{vendor} pricing".strip(),
+        "migration_guide": f"switch from {vendor}".strip(),
+        "switching_story": f"why teams leave {vendor}".strip(),
+        "vendor_deep_dive": f"{vendor} reviews".strip(),
+        "market_landscape": f"{category} software comparison".strip(),
+        "pain_point_roundup": f"{category} software complaints".strip(),
+        "best_fit_guide": f"best {category} software".strip(),
+    }
+    return kw_map.get(tt, vendor).lower() or blueprint.slug.replace("-", " ")[:50]
+
+
+def _fallback_seo_title(display_title: str, blueprint: PostBlueprint) -> str:
+    """Generate a deterministic SEO title when the LLM omits it."""
+    kw = _fallback_target_keyword(blueprint)
+    year = date.today().year
+    candidate = f"{kw.title()} {year}"
+    if len(candidate) <= 60:
+        return candidate
+    return display_title[:60]
+
+
 async def _assemble_and_store(
     pool, blueprint: PostBlueprint, content: dict[str, Any], llm
 ) -> str:
@@ -5015,9 +5047,9 @@ async def _assemble_and_store(
         json.dumps(blueprint.data_context, default=str),
         str(model_name),
         date.today(),
-        content.get("seo_title", content["title"][:60]),
-        content.get("seo_description", content.get("description", "")[:155]),
-        content.get("target_keyword", ""),
+        content.get("seo_title") or _fallback_seo_title(content["title"], blueprint),
+        content.get("seo_description") or content.get("description", "")[:155],
+        content.get("target_keyword") or _fallback_target_keyword(blueprint),
         json.dumps(content.get("secondary_keywords", []), default=str),
         json.dumps(content.get("faq", []), default=str),
         json.dumps(blueprint.cta, default=str) if blueprint.cta else None,
