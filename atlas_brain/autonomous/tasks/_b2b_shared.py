@@ -9337,6 +9337,7 @@ def _build_deterministic_battle_cards(
                 "churn_intent": churn,
                 "avg_urgency": urgency,
                 "category": category,
+                "vendor_score": row,
             }
 
     cards: list[dict[str, Any]] = []
@@ -9659,6 +9660,21 @@ def _build_deterministic_battle_cards(
         if isinstance(_cat_dyn, dict):
             card_entry["category_dynamics"] = _cat_dyn
 
+        vendor_evidence = _build_vendor_evidence(
+            m.get("vendor_score") or {},
+            pain_lookup=pain_lookup,
+            competitor_lookup=competitor_lookup,
+            feature_gap_lookup=feature_gap_lookup,
+            insider_lookup={},
+            keyword_spike_lookup=keyword_spike_lookup or {},
+            dm_lookup=dm_lookup,
+            price_lookup=price_lookup,
+            quote_lookup=quote_lookup,
+            budget_lookup=budget_lookup,
+            buyer_auth_lookup=buyer_auth_lookup,
+            use_case_lookup=use_case_lookup,
+        )
+
         # Inject reasoning synthesis via typed reader contract
         synth = (reasoning_synthesis_lookup or {}).get(vendor, {})
         if synth:
@@ -9673,6 +9689,7 @@ def _build_deterministic_battle_cards(
                 card_entry,
                 view,
                 requested_as_of=synthesis_requested_as_of,
+                vendor_evidence=vendor_evidence,
             )
         segment_playbook = _battle_card_segment_playbook(card_entry)
         if segment_playbook:
