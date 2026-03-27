@@ -61,9 +61,10 @@ async def main():
 
     # Import inside main to avoid import side effects
     sys.path.insert(0, ".")
-    from atlas_brain.storage.database import get_db_pool
+    from atlas_brain.storage.database import get_db_pool, init_database
     from atlas_brain.config import settings
 
+    await init_database()
     pool = get_db_pool()
 
     rows = await pool.fetch("""
