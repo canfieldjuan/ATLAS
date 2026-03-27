@@ -74,6 +74,9 @@ _BATTLE_CARD_RENDER_INPUT_KEYS = (
     "evidence_window_days",
     "reasoning_source",
     "synthesis_schema_version",
+    "low_confidence_sections",
+    "section_disclaimers",
+    "evidence_conclusions",
 )
 
 _BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
@@ -768,7 +771,24 @@ def _build_battle_card_render_payload(
         payload["prior_attempt"] = prior_attempt
     if validation_feedback:
         payload["validation_feedback"] = list(validation_feedback)
+    # Strip internal _sid provenance keys before LLM sees the payload.
+    # These are source-tracing markers from pool compression that leak
+    # into rendered output when the LLM echoes them.
+    _strip_internal_keys(payload)
     return payload
+
+
+def _strip_internal_keys(obj: Any) -> None:
+    """Recursively remove _sid and other internal keys from nested dicts/lists."""
+    if isinstance(obj, dict):
+        for key in list(obj.keys()):
+            if key.startswith("_sid") or key == "_source_id":
+                del obj[key]
+            else:
+                _strip_internal_keys(obj[key])
+    elif isinstance(obj, list):
+        for item in obj:
+            _strip_internal_keys(item)
 
 
 def _attach_battle_card_render_provenance(

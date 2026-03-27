@@ -8160,7 +8160,13 @@ def _build_vendor_evidence(
         quotes = quote_lookup.get(vendor, [])
         if quotes:
             evidence["quote_count"] = len(quotes)
-            evidence["top_quote"] = (quotes[0].get("quote", str(quotes[0])) if isinstance(quotes[0], dict) else str(quotes[0]))[:200] if quotes else None
+            q0 = quotes[0]
+            if isinstance(q0, dict):
+                evidence["top_quote"] = str(q0.get("quote") or q0.get("text") or "")[:200] or None
+            elif isinstance(q0, str):
+                evidence["top_quote"] = q0[:200]
+            else:
+                evidence["top_quote"] = None
     if budget_lookup:
         budget = budget_lookup.get(vendor, {})
         if budget:
@@ -9206,7 +9212,7 @@ def _build_deterministic_category_overview(
                 if isinstance(q, dict):
                     cat_quotes.append({
                         "vendor": v,
-                        "quote": str(q.get("quote", q.get("text", str(q))))[:200],
+                        "quote": str(q.get("quote") or q.get("text") or "")[:200],
                         "company": q.get("company", "Anonymous"),
                         "urgency": q.get("urgency", 0),
                         "title": q.get("title"),
