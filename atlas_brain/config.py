@@ -2202,7 +2202,20 @@ class B2BChurnConfig(BaseSettings):
             "When set, these sources are claimed first in each enrichment batch."
         ),
     )
+    enrichment_skip_sources: str = Field(
+        default="",
+        description=(
+            "Comma-separated sources to skip for churn enrichment. "
+            "These rows are marked not_applicable because they are unsupported for the review extractor."
+        ),
+    )
     enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts")
+    enrichment_full_extraction_timeout_seconds: float = Field(
+        default=120.0,
+        ge=30.0,
+        le=1800.0,
+        description="Per-review timeout for full enrichment extraction stages",
+    )
     enrichment_auto_requeue_parser_upgrades: bool = Field(
         default=False,
         description=(
@@ -2227,18 +2240,14 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
 
-    # Hybrid two-pass enrichment (Tier 1 local + Tier 2 cloud)
+    # Hybrid two-pass enrichment (Tier 1 local + Tier 2 local)
     enrichment_schema_version: int = Field(
-        default=2,
-        description="Current enrichment schema version (1 = original LLM inference, 2 = three-layer extract+compute)",
+        default=3,
+        description="Current enrichment schema version (1 = original LLM inference, 2 = extract plus Tier 2 LLM, 3 = single-pass extract plus deterministic compute)",
     )
     evidence_map_path: str = Field(
         default="",
         description="Path to evidence_map.yaml (empty = use default at atlas_brain/reasoning/evidence_map.yaml)",
-    )
-    enrichment_hybrid_enabled: bool = Field(
-        default=True,
-        description="Enable hybrid enrichment: Tier 1 (local vLLM, deterministic) + Tier 2 (local vLLM, classify+extract). Default on for three-layer architecture.",
     )
     enrichment_tier1_vllm_url: str = Field(
         default="http://localhost:8082",
@@ -2252,9 +2261,17 @@ class B2BChurnConfig(BaseSettings):
         default=1024,
         description="Max output tokens for Tier 1 vLLM extraction",
     )
-    enrichment_tier2_model: str = Field(
-        default="",
-        description="OpenRouter model override for Tier 2 (empty = use enrichment_openrouter_model)",
+    enrichment_tier1_timeout_seconds: float = Field(
+        default=60.0,
+        ge=5.0,
+        le=600.0,
+        description="HTTP timeout for Tier 1 vLLM extraction requests",
+    )
+    enrichment_tier1_connect_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description="HTTP connect timeout for Tier 1 vLLM extraction requests",
     )
     enrichment_repair_enabled: bool = Field(
         default=False,
@@ -2286,7 +2303,7 @@ class B2BChurnConfig(BaseSettings):
     )
     enrichment_repair_model: str = Field(
         default="",
-        description="OpenRouter model for structural repair pass",
+        description="Local vLLM model for structural repair pass",
     )
     enrichment_repair_min_urgency: int = Field(
         default=3,

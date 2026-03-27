@@ -1274,7 +1274,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Enrichment fires as background tasks per-target (see _fire_enrichment).
     # No need to wait -- vLLM handles concurrent requests natively.
-    # The b2b_enrichment scheduler task catches any stragglers every 30s.
+    # The b2b_enrichment scheduler task catches any stragglers on its configured
+    # interval when the B2B churn pipeline is enabled.
 
     return {
         "_skip_synthesis": True,

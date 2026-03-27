@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any
 
 from ...config import settings
@@ -40,19 +39,33 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
         )
         return "shadowed"
 
-    repair_cfg = SimpleNamespace(
-        enrichment_tier2_model=cfg.enrichment_repair_model,
-        enrichment_max_tokens=cfg.enrichment_max_tokens,
-    )
+    repair_model = str(cfg.enrichment_repair_model or cfg.enrichment_tier1_model or "").strip()
+    repair_cfg = type(
+        "RepairCfg",
+        (),
+        {
+            "enrichment_tier1_model": repair_model,
+            "enrichment_tier1_vllm_url": cfg.enrichment_tier1_vllm_url,
+            "enrichment_tier1_timeout_seconds": cfg.enrichment_tier1_timeout_seconds,
+            "enrichment_tier1_connect_timeout_seconds": cfg.enrichment_tier1_connect_timeout_seconds,
+            "enrichment_tier1_max_tokens": cfg.enrichment_tier1_max_tokens,
+        },
+    )()
     try:
-        repair_result, model_id = await asyncio.wait_for(
-            base_enrichment._call_cloud_tier2(
-                row,
-                repair_cfg,
-                cfg.review_truncate_length,
-            ),
-            timeout=120,
+        payload = base_enrichment._build_classify_payload(row, cfg.review_truncate_length)
+        payload_json = json.dumps(payload)
+        client = base_enrichment._get_tier1_client(repair_cfg)
+        tier1_result, model_id = await asyncio.wait_for(
+            base_enrichment._call_vllm_tier1(payload_json, repair_cfg, client),
+            timeout=cfg.enrichment_full_extraction_timeout_seconds,
         )
+        if tier1_result is None:
+            repair_result = None
+        else:
+            repair_result = base_enrichment._compute_derived_fields(
+                base_enrichment._merge_tier1_tier2(tier1_result, None),
+                row,
+            )
     except Exception:
         logger.exception("Repair call failed for review %s", review_id)
         repair_result, model_id = None, None

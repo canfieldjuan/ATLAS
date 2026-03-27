@@ -197,52 +197,70 @@ def test_get_base_enrichment_llm_respects_local_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enrich_single_skips_hybrid_when_local_only(monkeypatch):
+async def test_enrich_single_uses_single_pass_tier1_only(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
     row = {
         "id": uuid4(),
-        "review_text": "A" * 200,
         "source": "reddit",
         "enrichment_attempts": 0,
         "vendor_name": "Example",
-        "review_text": "We are actively evaluating alternatives after support issues." * 4,
+        "product_name": "Example Product",
+        "product_category": "CRM",
+        "raw_metadata": {},
+        "rating_max": 5,
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Sales",
+        "reviewer_company": "Acme",
+        "company_size_raw": "1001-5000",
+        "reviewer_industry": "Technology",
+        "content_type": "review",
         "summary": "Switching evaluation",
-        "rating": 2.0,
+        "review_text": "We are actively evaluating alternatives after support issues." * 4,
+        "rating": 2.0
     }
-    cfg = b2b_enrichment.settings.b2b_churn
+    tier1_result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {"role_level": "director", "decision_maker": True},
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": ["support issues"],
+        "quotable_phrases": ["actively evaluating alternatives"],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "urgency_indicators": {},
+        "sentiment_trajectory": {},
+        "buyer_authority": {},
+        "timeline": {},
+        "contract_context": {},
+        "insider_signals": None,
+    }
 
-    monkeypatch.setattr(cfg, "enrichment_hybrid_enabled", True)
+    tier1_call = AsyncMock(return_value=(tier1_result, "vllm-model"))
     monkeypatch.setattr(
         b2b_enrichment,
-        "_triage_review",
-        AsyncMock(return_value=({"signal": True}, "vllm-model")),
+        "_get_tier1_client",
+        lambda cfg: object(),
     )
     monkeypatch.setattr(
         b2b_enrichment,
-        "_classify_review_async",
-        AsyncMock(return_value=({
-            "churn_signals": {
-                "intent_to_leave": True,
-                "actively_evaluating": False,
-                "migration_in_progress": False,
-                "support_escalation": False,
-                "contract_renewal_mentioned": False,
-            },
-            "urgency_score": 7,
-            "reviewer_context": {"role_level": "unknown", "decision_maker": False},
-            "buyer_authority": {
-                "role_type": "unknown",
-                "has_budget_authority": False,
-                "executive_sponsor_mentioned": False,
-                "buying_stage": "unknown",
-            },
-            "sentiment_trajectory": {"direction": "declining"},
-        }, "vllm-model")),
+        "_call_vllm_tier1",
+        tier1_call,
     )
     monkeypatch.setattr(b2b_enrichment, "_validate_enrichment", lambda result, source_row=None: True)
     monkeypatch.setattr(b2b_enrichment, "_notify_high_urgency", AsyncMock(return_value=None))
-    hybrid = AsyncMock(return_value=(None, None, None))
-    monkeypatch.setattr(b2b_enrichment, "_enrich_hybrid", hybrid)
 
     ok = await b2b_enrichment._enrich_single(
         pool,
@@ -253,7 +271,7 @@ async def test_enrich_single_skips_hybrid_when_local_only(monkeypatch):
     )
 
     assert ok is True
-    hybrid.assert_not_awaited()
+    tier1_call.assert_awaited_once()
 
 
 def test_detect_low_fidelity_reasons_flags_vendor_absent_noisy_source(monkeypatch):

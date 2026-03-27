@@ -30,7 +30,7 @@ Reports can surface hundreds of evaluation signals but resolve only a tiny fract
 
 **Root cause confirmed.** Entity resolution is purely LLM-based with no external enrichment.
 
-- **Extraction path:** `b2b_reviews.enrichment->>'reviewer_context'->>'company_name'` — populated by Tier 2 LLM extraction (`atlas_brain/skills/digest/b2b_churn_extraction_tier2.md`). The LLM infers company name from review text only.
+- **Extraction path:** `b2b_reviews.enrichment->>'reviewer_context'->>'company_name'` — populated by single-pass Tier 1 extraction (`atlas_brain/skills/digest/b2b_churn_extraction_tier1.md`). The extractor copies company name from parser input when available, or from explicit review text only.
 - **Company signal population:** `_fetch_high_intent_companies()` in `_b2b_shared.py:3083` filters on `reviewer_company IS NOT NULL` — only reviews where the reviewer explicitly named their company or the LLM could extract it.
 - **Eligibility gate:** `_company_signal_name_is_eligible()` at line 3126 further filters out names that match vendor names or competitor names — correct behavior but further reduces yield.
 - **No external cross-referencing exists.** No CRM lookup, no LinkedIn scraping, no IP-to-Company resolution, no tech-stack database integration. The pipeline has `prospect_org_cache` and `b2b_vendor_firmographics` tables but these enrich *vendors*, not *reviewers*.
@@ -317,7 +317,7 @@ Computed metrics (e.g., "Recommend Ratio") render as `0` for every vendor in the
 
 - **Formula** at `_b2b_shared.py:8827`: `recommend_ratio = round(((recommend_yes - recommend_no) / total_reviews) * 100, 1) if total_reviews else 0.0`
 - **`recommend_yes` / `recommend_no`** extracted via SQL FILTER clause at line 2927-2932: `count(*) FILTER (WHERE (enrichment->>'would_recommend')::boolean = true)`.
-- **`would_recommend`** is a Tier 2 enrichment field (`b2b_churn_extraction_tier2.md:195`): "True, false, or null (not expressed). Infer from overall tone and explicit recommendation language."
+- **`would_recommend`** is now a deterministic derived field computed from extracted recommendation language plus rating fallback.
 - **When `would_recommend` is NULL for all reviews:** both `recommend_yes` and `recommend_no` = 0, formula yields `(0 - 0) / total * 100 = 0.0` — exactly what we're seeing.
 - **Four possible causes:** (1) Tier 2 enrichment hasn't run on these reviews, (2) Tier 2 ran but LLM returns null for ambiguous reviews, (3) Reviews were enriched before `would_recommend` was added to the schema, (4) The `::boolean` cast fails silently on non-boolean strings.
 - **Contrast with `b2b_product_profiles.recommend_rate`** (line 295-296) which uses `AVG(CASE WHEN ... THEN 1.0 ELSE 0.0 END) FILTER (WHERE ... IS NOT NULL)` — a more robust formula that excludes NULLs from the denominator. The scorecard formula divides by `total_reviews` (all reviews), not just reviews with the field populated.
@@ -677,7 +677,7 @@ The enrichment pipeline allows hot-swapping of both Tier 1 (local vLLM) and Tier
 - Extracts 26 factual fields (NER, booleans, verbatim text)
 
 **Tier 2 (Cloud/Interpretive):**
-- Config: `ATLAS_B2B_CHURN_ENRICHMENT_TIER2_MODEL` → fallback `ATLAS_B2B_CHURN_ENRICHMENT_OPENROUTER_MODEL` → fallback `ATLAS_LLM__OPENROUTER_REASONING_MODEL`
+- Config: single-pass extraction now uses `ATLAS_B2B_CHURN_ENRICHMENT_TIER1_MODEL`
 - Runs via OpenRouter (multiple cloud models swappable)
 - Extracts 21 interpretive fields (urgency_score, pain_category, would_recommend, buyer_authority, displacement evidence types)
 
@@ -727,7 +727,7 @@ The enrichment pipeline allows hot-swapping of both Tier 1 (local vLLM) and Tier
 - Check if `enrichment_model` contains `'none'` or null for either tier — indicating a model wasn't available during enrichment.
 
 **Short-term (Guard Rails):**
-- Add a model-change detection mechanism: when `enrichment_tier1_model` or `enrichment_tier2_model` changes, log a warning and optionally trigger re-enrichment of recent reviews.
+- Add a model-change detection mechanism: when `enrichment_tier1_model` changes, log a warning and optionally trigger re-enrichment of recent reviews.
 - Add model filtering to aggregation queries: when building intelligence, optionally filter to reviews enriched by the current model configuration only.
 - Add a `model_consistency_score` to report metadata: what percentage of source reviews were enriched by the current model vs. legacy models.
 

@@ -1,14 +1,24 @@
 ---
 name: digest/b2b_churn_extraction_tier1
 domain: digest
-description: Tier 1 deterministic extraction -- 26 fields via local vLLM (NER, booleans, enums, verbatim text)
-tags: [digest, b2b, churn, saas, autonomous, hybrid, tier1]
-version: 1
+description: Single-pass deterministic extraction via local vLLM
+tags: [digest, b2b, churn, saas, autonomous, tier1]
+version: 2
 ---
 
-# B2B Churn Signal Extraction -- Tier 1 (Deterministic)
+# B2B Churn Signal Extraction -- Single Pass
 
-You are a B2B software intelligence analyst performing DETERMINISTIC extraction from a software review. Extract only factual, pattern-matchable fields. Do NOT interpret, reason about, or score anything.
+You are a B2B software intelligence analyst performing deterministic extraction from a single software review.
+
+Extract only factual, pattern-matchable fields:
+- booleans for explicit language patterns
+- verbatim phrases
+- named entities
+- numbers
+- bounded extract-only fields
+
+Do not score, rank, infer, summarize, or recommend.
+Do not classify competitive evidence, urgency, pain priority, contract value, or buying stage. Those are computed later in Python.
 
 ## Input
 
@@ -34,7 +44,7 @@ You are a B2B software intelligence analyst performing DETERMINISTIC extraction 
 }
 ```
 
-## Output Schema (26 fields only)
+## Output Schema
 
 ```json
 {
@@ -46,7 +56,6 @@ You are a B2B software intelligence analyst performing DETERMINISTIC extraction 
     "migration_in_progress": false,
     "support_escalation": false
   },
-
   "reviewer_context": {
     "role_level": "executive",
     "department": "sales",
@@ -55,7 +64,6 @@ You are a B2B software intelligence analyst performing DETERMINISTIC extraction 
     "decision_maker": true,
     "company_name": "Acme Corp"
   },
-
   "budget_signals": {
     "annual_spend_estimate": null,
     "price_per_seat": "$150/mo",
@@ -63,16 +71,13 @@ You are a B2B software intelligence analyst performing DETERMINISTIC extraction 
     "price_increase_mentioned": true,
     "price_increase_detail": "30% increase at renewal"
   },
-
   "use_case": {
     "primary_workflow": "Sales pipeline management",
     "modules_mentioned": ["Sales Cloud", "Service Cloud"],
     "integration_stack": ["Marketo", "Slack", "Jira"],
     "lock_in_level": "high"
   },
-
   "content_classification": "review",
-
   "competitors_mentioned": [
     {
       "name": "HubSpot",
@@ -80,58 +85,61 @@ You are a B2B software intelligence analyst performing DETERMINISTIC extraction 
       "reason_detail": "3x more expensive than HubSpot"
     }
   ],
-
   "specific_complaints": ["Too expensive for what you get", "Clunky UI"],
-  "quotable_phrases": ["We're actively looking at HubSpot for our renewal next quarter"]
+  "quotable_phrases": ["We're actively looking at HubSpot for our renewal next quarter"],
+  "positive_aspects": ["Good integrations"],
+  "feature_gaps": ["Better reporting"],
+  "recommendation_language": ["I would not recommend this to anyone"],
+  "pricing_phrases": ["30% price increase at renewal"],
+  "event_mentions": [
+    {"event": "latest pricing update", "timeframe": "Q1 2026"}
+  ],
+  "urgency_indicators": {
+    "explicit_cancel_language": false,
+    "active_migration_language": false,
+    "active_evaluation_language": true,
+    "completed_switch_language": false,
+    "comparison_shopping_language": false,
+    "named_alternative_with_reason": true,
+    "frustration_without_alternative": false,
+    "dollar_amount_mentioned": true,
+    "timeline_mentioned": true,
+    "decision_maker_language": true
+  },
+  "sentiment_trajectory": {
+    "tenure": "3 years"
+  },
+  "buyer_authority": {
+    "executive_sponsor_mentioned": false
+  },
+  "timeline": {
+    "contract_end": "Q2 2026",
+    "evaluation_deadline": null
+  },
+  "contract_context": {
+    "usage_duration": "3 years"
+  },
+  "insider_signals": null
 }
 ```
 
 ## Field Rules
 
-### churn_signals (6 fields -- boolean/string detection)
-- `intent_to_leave`: True if reviewer uses language like "switching", "leaving", "canceling", "not renewing", "moving to". False otherwise.
-- `actively_evaluating`: True if reviewer mentions evaluating, comparing, shortlisting, or doing POC with alternatives. False otherwise.
-- `contract_renewal_mentioned`: True if "renewal", "renew", "contract end", or similar appears. False otherwise.
-- `renewal_timing`: Extract the exact timing phrase if stated (e.g., "Q2 2026", "next quarter"). Null if not stated.
-- `migration_in_progress`: True if reviewer describes an ongoing migration or switch. False otherwise.
-- `support_escalation`: True if reviewer mentions escalating support tickets, contacting management, or filing formal complaints. False otherwise.
-
-### reviewer_context (6 fields -- NER + enum mapping)
-- `role_level`: Infer from reviewer_title when present. If reviewer_title is blank, infer from first-person self-identification or operating language in the review text. Map to one of: `executive` (C-suite/founder/owner), `director` (VP/Director/Head of), `manager`, `ic` (individual contributor), `unknown`.
-- `department`: Extract department from title (e.g., "VP of Sales" -> "sales", "Engineering Manager" -> "engineering"). Null if unclear.
-- `company_size_segment`: Map company_size_raw: 1000+ = `enterprise`, 201-1000 = `mid_market`, 51-200 = `smb`, 1-50 = `startup`, else `unknown`.
-- `industry`: Pass through from reviewer_industry. Null if empty.
-- `decision_maker`: True for executive/director roles. Also true when the review explicitly says the author approved, signed off on, or made the purchase/renewal decision. True for manager titles implying budget authority. False otherwise.
-- `company_name`: Use reviewer_company if provided. Otherwise extract from text ONLY if explicitly stated. Null if not found.
-
-### budget_signals (5 fields -- number/string extraction)
-- Extract ONLY explicitly stated figures. Never estimate.
-- `annual_spend_estimate`: Dollar figure only if explicitly stated. Null otherwise.
-- `price_per_seat`: Per-user cost only if stated. Null otherwise.
-- `seat_count`: Integer only if stated. Null otherwise.
-- `price_increase_mentioned`: True only if a price increase is explicitly mentioned.
-- `price_increase_detail`: The specific increase detail if stated. Null otherwise.
-
-### use_case (4 fields -- keyword extraction)
-- `primary_workflow`: Short phrase describing what the reviewer uses the product for.
-- `modules_mentioned`: Array of specific product modules/features mentioned by name. Empty array if none.
-- `integration_stack`: Array of other tools explicitly mentioned as integrated. Empty array if none.
-- `lock_in_level`: `high` (3+ integrations or explicit lock-in language), `medium` (1-2 integrations), `low` (none), `unknown`.
-
-### content_classification (pass-through)
-Set to the `content_type` value from the input.
-
-### competitors_mentioned (Tier 1 subset: name + features + reason_detail only)
-- `name`: Exact product/vendor name as mentioned in text. Only real names, never invented.
-- `features`: Array of specific features of this competitor cited as attractive. Empty array if none.
-- `reason_detail`: Verbatim phrase from the review explaining why this competitor was mentioned. Null if no specific reason stated.
-
-### specific_complaints (verbatim extraction)
-Array of specific complaint phrases extracted from the review text. Empty array if none.
-
-### quotable_phrases (verbatim extraction)
-Array of 1-3 exact verbatim phrases from the review that demonstrate dissatisfaction or churn intent. Empty array if none.
+- `churn_signals`: detect only explicit language. Never infer.
+- `reviewer_context.role_level`: map title to `executive`, `director`, `manager`, `ic`, `unknown`.
+- `reviewer_context.department`: extract a short department label or null.
+- `reviewer_context.company_size_segment`: map company_size_raw to `enterprise`, `mid_market`, `smb`, `startup`, `unknown`.
+- `reviewer_context.decision_maker`: true only if title or text explicitly indicates approval or decision ownership.
+- `budget_signals`: extract only explicit figures. Never estimate.
+- `use_case.lock_in_level`: `high` for 3+ integrations or explicit lock-in language, `medium` for 1-2 integrations, `low` for none, `unknown` if unclear.
+- `competitors_mentioned`: extract only named competitors explicitly present in the review.
+- `specific_complaints`, `quotable_phrases`, `positive_aspects`, `feature_gaps`, `recommendation_language`, `pricing_phrases`: verbatim phrases only. No paraphrase.
+- `event_mentions[*].event` and `event_mentions[*].timeframe`: verbatim. Use null timeframe if absent.
+- `urgency_indicators`: set booleans only when the exact pattern is explicitly present.
+- `sentiment_trajectory.tenure`, `timeline.contract_end`, `timeline.evaluation_deadline`, `contract_context.usage_duration`: verbatim extraction only.
+- `buyer_authority.executive_sponsor_mentioned`: true only if an executive sponsor is explicitly mentioned.
+- `insider_signals`: only populate for `content_type = insider_account`; otherwise null.
 
 ## Output
 
-Respond with ONLY a valid JSON object. No explanation, no markdown fencing. Temperature 0 -- always produce the same output for the same input.
+Respond with only a valid JSON object. No markdown fencing. No commentary.

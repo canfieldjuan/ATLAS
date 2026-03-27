@@ -464,6 +464,13 @@ function BattleCardView({ d }: { d: AnyData }) {
   const diffs = Array.isArray(d.competitor_differentiators) ? d.competitor_differentiators : []
   const objections = Array.isArray(d.objection_handlers) ? d.objection_handlers : []
   const plays = Array.isArray(d.recommended_plays) ? d.recommended_plays : []
+  const lowConfidence = Array.isArray(d.low_confidence_sections) ? d.low_confidence_sections : []
+  const sectionDisclaimers = d.section_disclaimers && typeof d.section_disclaimers === 'object' && !Array.isArray(d.section_disclaimers)
+    ? Object.entries(d.section_disclaimers as Record<string, unknown>)
+    : []
+  const evidenceConclusions = d.evidence_conclusions && typeof d.evidence_conclusions === 'object' && !Array.isArray(d.evidence_conclusions)
+    ? Object.entries(d.evidence_conclusions as Record<string, AnyData>)
+    : []
   const qualityStatus = d.quality_status || d?.battle_card_quality?.status
   const qualityScore = d?.battle_card_quality?.score
 
@@ -482,6 +489,37 @@ function BattleCardView({ d }: { d: AnyData }) {
         <Metric label="Confidence" value={d.confidence} />
         <Metric label="Quality Score" value={qualityScore ?? '--'} />
       </div>
+
+      {(lowConfidence.length > 0 || sectionDisclaimers.length > 0) && (
+        <Section title="Evidence Notes">
+          {lowConfidence.length > 0 && (
+            <div className="bg-amber-950/30 border border-amber-500/30 rounded p-2 mb-2">
+              <p className="text-[11px] uppercase tracking-wide text-amber-300">Low Confidence Sections</p>
+              <p className="text-xs text-slate-200 mt-1">{lowConfidence.map(fmt).join(', ')}</p>
+            </div>
+          )}
+          {sectionDisclaimers.map(([section, disclaimer]) => (
+            <div key={section} className="bg-slate-900/30 rounded p-2 mb-2">
+              <p className="text-[11px] uppercase tracking-wide text-slate-400">{fmt(section)}</p>
+              <p className="text-xs text-slate-200 mt-1">{String(disclaimer || '')}</p>
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {evidenceConclusions.length > 0 && (
+        <Section title="Evidence Conclusions">
+          <MiniTable
+            headers={['Conclusion', 'Status', 'Confidence', 'Fallback']}
+            rows={evidenceConclusions.map(([name, detail]) => [
+              fmt(name),
+              detail?.met ? 'Met' : 'Not Met',
+              fmt(detail?.confidence || ''),
+              String(detail?.fallback_label || detail?.fallback_action || '').slice(0, 60),
+            ])}
+          />
+        </Section>
+      )}
 
       {weaknesses.length > 0 && (
         <Section title="Vendor Weaknesses">

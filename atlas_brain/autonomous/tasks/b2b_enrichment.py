@@ -13,7 +13,6 @@ runner does not double-synthesize.
 import asyncio
 import json
 import logging
-import os
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -22,114 +21,62 @@ from ...config import settings
 from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...services.scraping.sources import VERIFIED_SOURCES as _VERIFIED_SOURCES
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
-# Dedicated OpenRouter instance for hybrid Tier 2 enrichment -- not shared with
-# the global registry singleton used by synthesis/reasoning workloads.
-_enrichment_llm = None
-
-
-def _get_enrichment_llm():
-    """Get or create a dedicated OpenRouter LLM for hybrid Tier 2 enrichment."""
-    global _enrichment_llm
-    target_model = (
-        str(settings.b2b_churn.enrichment_openrouter_model or "").strip()
-        or str(settings.llm.openrouter_reasoning_model or "").strip()
-    )
-    or_key = (
-        str(settings.b2b_churn.openrouter_api_key or "").strip()
-        or os.environ.get("OPENROUTER_API_KEY", "")
-        or os.environ.get("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", "")
-    )
-    if not or_key or not target_model:
-        return None
-
-    if _enrichment_llm is not None and getattr(_enrichment_llm, "model", "") == target_model:
-        return _enrichment_llm
-
-    try:
-        from ...services.llm.openrouter import OpenRouterLLM
-        _enrichment_llm = OpenRouterLLM(model=target_model, api_key=or_key)
-        _enrichment_llm.load()
-        logger.info("Dedicated enrichment LLM ready: %s", target_model)
-        return _enrichment_llm
-    except Exception as e:
-        logger.warning("Failed to create enrichment LLM: %s", e)
-        return None
-
+_TIER1_JSON_SCHEMA: dict[str, Any] = {
+    "title": "b2b_churn_extraction",
+    "type": "object",
+    "additionalProperties": True,
+}
 
 def _get_base_enrichment_llm(local_only: bool):
-    """Resolve the base enrichment model with local vLLM first."""
+    """Resolve the deterministic local enrichment model from vLLM only."""
     from ...pipelines.llm import get_pipeline_llm
 
-    llm = get_pipeline_llm(
+    return get_pipeline_llm(
         workload="vllm",
         try_openrouter=False,
         auto_activate_ollama=False,
     )
-    if llm is not None or local_only:
-        return llm
-
-    return get_pipeline_llm(
-        workload="anthropic",
-        try_openrouter=False,
-        auto_activate_ollama=False,
-    )
-
-
-# ------------------------------------------------------------------
-# Hybrid enrichment: cached LLM instances + connection pool
-# ------------------------------------------------------------------
-_tier2_llm = None
-
-
-def _get_tier2_llm(cfg):
-    """Get or create a cached OpenRouter LLM for Tier 2 hybrid extraction."""
-    global _tier2_llm
-    target_model = cfg.enrichment_tier2_model
-    if not target_model:
-        return None
-
-    if _tier2_llm is not None and getattr(_tier2_llm, "model", "") == target_model:
-        return _tier2_llm
-
-    or_key = (
-        str(settings.b2b_churn.openrouter_api_key or "").strip()
-        or os.environ.get("OPENROUTER_API_KEY", "")
-        or os.environ.get("ATLAS_B2B_CHURN_OPENROUTER_API_KEY", "")
-    )
-    if not or_key:
-        return None
-
-    try:
-        from ...services.llm.openrouter import OpenRouterLLM
-        _tier2_llm = OpenRouterLLM(model=target_model, api_key=or_key)
-        _tier2_llm.load()
-        logger.info("Dedicated Tier 2 LLM ready: %s", target_model)
-        return _tier2_llm
-    except Exception as e:
-        logger.warning("Failed to create Tier 2 LLM: %s", e)
-        return None
 
 
 _tier1_client = None
+_tier1_client_signature = None
 
 
 def _get_tier1_client(cfg):
     """Get or create a pooled httpx.AsyncClient for Tier 1 vLLM calls."""
-    global _tier1_client
-    if _tier1_client is not None and not _tier1_client.is_closed:
+    global _tier1_client, _tier1_client_signature
+    client_signature = (
+        str(cfg.enrichment_tier1_vllm_url).strip(),
+        float(cfg.enrichment_tier1_timeout_seconds),
+        float(cfg.enrichment_tier1_connect_timeout_seconds),
+    )
+    if (
+        _tier1_client is not None
+        and not _tier1_client.is_closed
+        and _tier1_client_signature == client_signature
+    ):
         return _tier1_client
 
     import httpx
 
+    if _tier1_client is not None and not _tier1_client.is_closed:
+        try:
+            asyncio.get_running_loop().create_task(_tier1_client.aclose())
+        except RuntimeError:
+            pass
+
     _tier1_client = httpx.AsyncClient(
         base_url=cfg.enrichment_tier1_vllm_url,
-        timeout=httpx.Timeout(60.0, connect=10.0),
+        timeout=httpx.Timeout(
+            cfg.enrichment_tier1_timeout_seconds,
+            connect=cfg.enrichment_tier1_connect_timeout_seconds,
+        ),
         limits=httpx.Limits(max_connections=30, max_keepalive_connections=15),
     )
+    _tier1_client_signature = client_signature
     return _tier1_client
 
 
@@ -157,6 +104,8 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
                 ],
                 "max_tokens": cfg.enrichment_tier1_max_tokens,
                 "temperature": 0.0,
+                "guided_json": _TIER1_JSON_SCHEMA,
+                "response_format": {"type": "json_object"},
             },
         )
         resp.raise_for_status()
@@ -178,62 +127,8 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
         return None, None
 
 
-async def _call_cloud_tier2(row, cfg, truncate_length: int) -> tuple[dict | None, str | None]:
-    """Tier 2 extraction: interpretive fields via cloud LLM (OpenRouter).
-
-    Returns (result_dict, model_id) or (None, None) on failure.
-    """
-    from ...skills import get_skill_registry
-    from ...services.protocols import Message
-    from ...pipelines.llm import clean_llm_output
-
-    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
-    if not skill:
-        logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found")
-        return None, None
-
-    # Tier 2 must use a cloud model (OpenRouter). Falling back to local would
-    # defeat the purpose -- Tier 1 already covers the local path.
-    llm = _get_tier2_llm(cfg) or _get_enrichment_llm()
-    if llm is None:
-        logger.warning("No cloud LLM available for Tier 2 -- returning None (Tier 1 result will get defaults)")
-        return None, None
-
-    model_id = getattr(llm, "model_id", None) or getattr(llm, "model", None)
-
-    payload = _build_classify_payload(row, truncate_length)
-    messages = [
-        Message(role="system", content=skill.content),
-        Message(role="user", content=json.dumps(payload)),
-    ]
-
-    try:
-        if hasattr(llm, "chat_async"):
-            text = await llm.chat_async(messages=messages, max_tokens=cfg.enrichment_max_tokens, temperature=0.1)
-        else:
-            result = await asyncio.to_thread(
-                llm.chat, messages=messages, max_tokens=cfg.enrichment_max_tokens, temperature=0.1,
-            )
-            text = result.get("response", "").strip()
-
-        if not text:
-            return None, model_id
-        text = clean_llm_output(text)
-        from ...pipelines.llm import parse_json_response
-        parsed = parse_json_response(text, recover_truncated=True)
-        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-            return parsed, model_id
-        return None, model_id
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("Tier 2 cloud returned invalid JSON for review %s", row["id"])
-        return None, model_id
-    except Exception:
-        logger.exception("Tier 2 cloud LLM call failed")
-        return None, None
-
-
 def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
-    """Merge Tier 1 (deterministic) + Tier 2 (interpretive) into a single 47-field JSONB.
+    """Merge Tier 1 + Tier 2 deterministic extraction into a single 47-field JSONB.
 
     Tier 1 provides the base. Tier 2 keys are overlaid on top.
     competitors_mentioned is merged by name (case-insensitive).
@@ -313,6 +208,290 @@ def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
 
     result["competitors_mentioned"] = merged_comps
     return result
+
+
+_PAIN_KEYWORDS = {
+    "pricing": ("price", "pricing", "cost", "expensive", "overpriced", "value", "renewal"),
+    "support": ("support", "ticket", "response", "customer service", "escalat"),
+    "features": ("feature", "functionality", "capability", "missing"),
+    "ux": ("ui", "ux", "interface", "clunky", "usability", "navigation"),
+    "reliability": ("outage", "downtime", "crash", "bug", "unstable", "reliable"),
+    "performance": ("slow", "latency", "lag", "performance", "speed"),
+    "integration": ("integration", "integrate", "sync", "connector", "api"),
+    "security": ("security", "permission", "access control", "compliance", "sso", "mfa"),
+    "onboarding": ("onboarding", "setup", "implementation", "training", "adoption"),
+    "technical_debt": ("technical debt", "legacy", "outdated", "deprecated", "workaround"),
+    "contract_lock_in": ("lock-in", "locked in", "vendor lock", "multi-year", "exit fee"),
+    "data_migration": ("migration", "migrate", "import", "export", "data transfer"),
+    "api_limitations": ("api", "webhook", "sdk", "rate limit", "endpoint"),
+}
+
+
+def _normalize_text_list(values: Any) -> list[str]:
+    normalized: list[str] = []
+    for value in values or []:
+        if value:
+            normalized.append(str(value))
+    return normalized
+
+
+def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    haystack = text.lower()
+    return any(needle in haystack for needle in needles)
+
+
+def _pain_scores(texts: list[str]) -> dict[str, int]:
+    scores = {category: 0 for category in _PAIN_KEYWORDS}
+    for text in texts:
+        lowered = text.lower()
+        for category, needles in _PAIN_KEYWORDS.items():
+            if any(needle in lowered for needle in needles):
+                scores[category] += 1
+    return scores
+
+
+def _primary_reason_category(*texts: str) -> str | None:
+    normalized = [text for text in texts if text]
+    if not normalized:
+        return None
+    scored = _pain_scores(normalized)
+    ranked = sorted(
+        ((score, category) for category, score in scored.items() if score > 0),
+        reverse=True,
+    )
+    return ranked[0][1] if ranked else None
+
+
+def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
+    texts = (
+        _normalize_text_list(result.get("specific_complaints"))
+        + _normalize_text_list(result.get("pricing_phrases"))
+        + _normalize_text_list(result.get("feature_gaps"))
+        + _normalize_text_list(result.get("quotable_phrases"))
+    )
+    if not texts:
+        return []
+    scored = _pain_scores(texts)
+    ranked = [(score, category) for category, score in scored.items() if score > 0]
+    ranked.sort(reverse=True)
+    if not ranked:
+        return [{"category": "other", "severity": "primary"}]
+    categories = [{"category": ranked[0][1], "severity": "primary"}]
+    for _score, category in ranked[1:3]:
+        if category != categories[0]["category"]:
+            categories.append({"category": category, "severity": "secondary"})
+    return categories
+
+
+def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
+    comps = []
+    churn = result.get("churn_signals") or {}
+    review_blob = " ".join(
+        str(source_row.get(field) or "")
+        for field in ("summary", "review_text", "pros", "cons")
+    ).lower()
+    for comp in result.get("competitors_mentioned", []) or []:
+        if not isinstance(comp, dict):
+            continue
+        merged = dict(comp)
+        name = str(comp.get("name") or "").strip()
+        comp_blob = " ".join(
+            [name]
+            + _normalize_text_list(comp.get("features"))
+            + [str(comp.get("reason_detail") or "")]
+        ).lower()
+        switch_patterns = (
+            f"switched to {name.lower()}",
+            f"moved to {name.lower()}",
+            f"replaced with {name.lower()}",
+            f"migrating to {name.lower()}",
+        )
+        reverse_patterns = (
+            f"moved from {name.lower()}",
+            f"switched from {name.lower()}",
+        )
+        evaluation_patterns = (
+            f"evaluating {name.lower()}",
+            f"looking at {name.lower()}",
+            f"considering {name.lower()}",
+            f"shortlist {name.lower()}",
+            f"poc with {name.lower()}",
+        )
+        if any(pattern in review_blob for pattern in reverse_patterns):
+            evidence_type = "reverse_flow"
+        elif any(pattern in review_blob for pattern in switch_patterns):
+            evidence_type = "explicit_switch"
+        elif any(pattern in review_blob for pattern in evaluation_patterns) or churn.get("actively_evaluating"):
+            evidence_type = "active_evaluation"
+        elif merged.get("reason_detail") or merged.get("features"):
+            evidence_type = "implied_preference"
+        else:
+            evidence_type = "neutral_mention"
+        confidence = "low"
+        if evidence_type == "explicit_switch":
+            confidence = "high" if churn.get("migration_in_progress") or churn.get("renewal_timing") else "medium"
+        elif evidence_type == "active_evaluation":
+            confidence = "medium" if merged.get("reason_detail") else "low"
+        elif evidence_type == "implied_preference" and merged.get("reason_detail"):
+            confidence = "medium"
+        merged["evidence_type"] = evidence_type
+        merged["displacement_confidence"] = confidence
+        merged["reason_category"] = _primary_reason_category(
+            str(merged.get("reason_detail") or ""),
+            comp_blob,
+        )
+        comps.append(merged)
+    return comps
+
+
+def _derive_decision_timeline(result: dict) -> str:
+    churn = result.get("churn_signals") or {}
+    timeline = result.get("timeline") or {}
+    event_mentions = result.get("event_mentions") or []
+    parts = [
+        str(churn.get("renewal_timing") or ""),
+        str(timeline.get("contract_end") or ""),
+        str(timeline.get("evaluation_deadline") or ""),
+    ]
+    for event in event_mentions:
+        if isinstance(event, dict):
+            parts.append(str(event.get("timeframe") or ""))
+    text = " ".join(parts).lower()
+    if _contains_any(text, ("asap", "immediately", "right away", "this week", "today", "urgent")):
+        return "immediate"
+    if _contains_any(text, ("next quarter", "this quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days")):
+        return "within_quarter"
+    if _contains_any(text, ("this year", "next year", "12 months", "end of year", "2026", "2027")):
+        return "within_year"
+    return "unknown"
+
+
+def _extract_numeric_amount(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)", str(value))
+    return float(match.group(1)) if match else None
+
+
+def _derive_contract_value_signal(result: dict) -> str:
+    budget = result.get("budget_signals") or {}
+    reviewer_context = result.get("reviewer_context") or {}
+    spend = _extract_numeric_amount(budget.get("annual_spend_estimate"))
+    seats = budget.get("seat_count")
+    try:
+        seat_count = int(seats) if seats is not None else 0
+    except (TypeError, ValueError):
+        seat_count = 0
+    segment = str(reviewer_context.get("company_size_segment") or "unknown")
+    if spend is not None and spend >= 100000:
+        return "enterprise_high"
+    if seat_count >= 500 or segment == "enterprise":
+        return "enterprise_high"
+    if spend is not None and spend >= 25000:
+        return "enterprise_mid"
+    if seat_count >= 200 or segment == "mid_market":
+        return "enterprise_mid"
+    if spend is not None and spend >= 5000:
+        return "mid_market"
+    if seat_count >= 25:
+        return "mid_market"
+    if segment in {"smb", "startup"}:
+        return "smb"
+    return "unknown"
+
+
+def _derive_buyer_authority_fields(result: dict, source_row: dict[str, Any]) -> tuple[str, bool, str]:
+    reviewer_context = result.get("reviewer_context") or {}
+    churn = result.get("churn_signals") or {}
+    role_level = str(reviewer_context.get("role_level") or "unknown")
+    decision_maker = bool(reviewer_context.get("decision_maker"))
+    review_blob = " ".join(
+        str(source_row.get(field) or "")
+        for field in ("summary", "review_text", "pros", "cons")
+    ).lower()
+    if decision_maker or role_level in {"executive", "director"}:
+        role_type = "economic_buyer"
+    elif churn.get("actively_evaluating"):
+        role_type = "evaluator"
+    elif role_level == "manager":
+        role_type = "champion"
+    elif role_level == "ic":
+        role_type = "end_user"
+    else:
+        role_type = "unknown"
+    executive_sponsor_mentioned = _contains_any(
+        review_blob,
+        ("ceo", "cfo", "cto", "coo", "leadership", "executive team", "vp approved", "signed off"),
+    )
+    if churn.get("contract_renewal_mentioned") or churn.get("renewal_timing"):
+        buying_stage = "renewal_decision"
+    elif churn.get("actively_evaluating") or churn.get("migration_in_progress"):
+        buying_stage = "evaluation"
+    elif decision_maker and _contains_any(review_blob, ("approved", "signed off", "purchased", "bought")):
+        buying_stage = "active_purchase"
+    else:
+        buying_stage = "post_purchase"
+    return role_type, executive_sponsor_mentioned, buying_stage
+
+
+def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict[str, bool]:
+    churn = result.get("churn_signals") or {}
+    budget = result.get("budget_signals") or {}
+    timeline = result.get("timeline") or {}
+    competitors = result.get("competitors_mentioned") or []
+    complaints = result.get("specific_complaints") or []
+    review_blob = " ".join(
+        str(source_row.get(field) or "")
+        for field in ("summary", "review_text", "pros", "cons")
+    ).lower()
+    price_text = " ".join(_normalize_text_list(result.get("pricing_phrases"))).lower()
+    recommendation_text = " ".join(_normalize_text_list(result.get("recommendation_language"))).lower()
+    named_alt_with_reason = any(
+        isinstance(comp, dict) and comp.get("name") and comp.get("reason_detail")
+        for comp in competitors
+    )
+    return {
+        "explicit_cancel_language": bool(churn.get("intent_to_leave")) and _contains_any(
+            review_blob, ("cancel", "not renewing", "terminate", "ending our contract")
+        ),
+        "active_migration_language": bool(churn.get("migration_in_progress")) or "migrat" in review_blob,
+        "active_evaluation_language": bool(churn.get("actively_evaluating")) or _contains_any(
+            review_blob, ("evaluating", "shortlist", "poc", "comparing options")
+        ),
+        "completed_switch_language": _contains_any(review_blob, ("switched to", "moved to", "replaced with")),
+        "comparison_shopping_language": _contains_any(review_blob, ("vs ", "alternative", "which should", "looking for options")),
+        "named_alternative_with_reason": named_alt_with_reason,
+        "frustration_without_alternative": bool(complaints) and not competitors,
+        "dollar_amount_mentioned": bool(budget.get("annual_spend_estimate") or budget.get("price_per_seat")) or "$" in price_text,
+        "timeline_mentioned": bool(
+            churn.get("renewal_timing")
+            or timeline.get("contract_end")
+            or timeline.get("evaluation_deadline")
+        ),
+        "decision_maker_language": bool((result.get("reviewer_context") or {}).get("decision_maker")) or _contains_any(
+            review_blob + " " + recommendation_text,
+            ("i decided", "we approved", "signed off", "our team approved"),
+        ),
+    }
+
+
+def _is_no_signal_result(result: dict, source_row: dict[str, Any]) -> bool:
+    churn = result.get("churn_signals") or {}
+    if any(bool(value) for value in churn.values()):
+        return False
+    if result.get("competitors_mentioned"):
+        return False
+    if result.get("specific_complaints") or result.get("quotable_phrases"):
+        return False
+    if result.get("pricing_phrases") or result.get("recommendation_language"):
+        return False
+    if result.get("event_mentions") or result.get("feature_gaps"):
+        return False
+    rating = source_row.get("rating")
+    try:
+        return float(rating or 0) >= 3.0
+    except (TypeError, ValueError):
+        return True
 
 
 def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
@@ -398,42 +577,30 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     cc["price_complaint"] = engine.derive_price_complaint(result)
     cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
 
+    # 8. deterministic replacements for deprecated Tier 2 classify path
+    result["pain_categories"] = _derive_pain_categories(result)
+    result["competitors_mentioned"] = _derive_competitor_annotations(result, source_row)
+
+    role_type, executive_sponsor_mentioned, buying_stage = _derive_buyer_authority_fields(
+        result, source_row
+    )
+    ba["role_type"] = role_type
+    ba["executive_sponsor_mentioned"] = executive_sponsor_mentioned
+    ba["buying_stage"] = buying_stage
+
+    timeline = result.get("timeline")
+    if not isinstance(timeline, dict):
+        timeline = {}
+        result["timeline"] = timeline
+    timeline["decision_timeline"] = _derive_decision_timeline(result)
+
+    cc["contract_value_signal"] = _derive_contract_value_signal(result)
+    result["urgency_indicators"] = _derive_urgency_indicators(result, source_row)
+
     # Mark schema version
-    result["enrichment_schema_version"] = 2
+    result["enrichment_schema_version"] = 3
 
     return result
-
-
-async def _enrich_hybrid(row, cfg, truncate_length: int) -> tuple[dict | None, dict | None, str | None]:
-    """Run Tier 1 + Tier 2 extraction in parallel.
-
-    Returns (tier1_result, tier2_result, tier2_model_id).
-    """
-    payload = _build_classify_payload(row, truncate_length)
-    payload_json = json.dumps(payload)
-
-    client = _get_tier1_client(cfg)
-
-    tier1_task = _call_vllm_tier1(payload_json, cfg, client)
-    tier2_task = _call_cloud_tier2(row, cfg, truncate_length)
-
-    results = await asyncio.gather(tier1_task, tier2_task, return_exceptions=True)
-
-    # Unpack Tier 1
-    if isinstance(results[0], Exception):
-        logger.error("Tier 1 raised: %s", results[0])
-        tier1, tier1_model = None, None
-    else:
-        tier1, tier1_model = results[0]
-
-    # Unpack Tier 2
-    if isinstance(results[1], Exception):
-        logger.error("Tier 2 raised: %s", results[1])
-        tier2, tier2_model = None, None
-    else:
-        tier2, tier2_model = results[1]
-
-    return tier1, tier2, tier2_model
 
 
 async def _notify_high_urgency(
@@ -544,9 +711,6 @@ async def _enrich_rows(
 ) -> dict[str, Any]:
     """Enrich a list of claimed rows concurrently."""
     max_attempts = cfg.enrichment_max_attempts
-    enriched = 0
-    failed = 0
-    quarantined = 0
 
     effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_concurrency))
     sem = asyncio.Semaphore(effective_concurrency)
@@ -564,20 +728,22 @@ async def _enrich_rows(
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
             logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
-            if (row["enrichment_attempts"] + 1) >= max_attempts:
-                failed += 1
-        elif result == "quarantined":
-            quarantined += 1
-        elif result:
-            enriched += 1
-        elif (row["enrichment_attempts"] + 1) >= max_attempts:
-            failed += 1
 
-    # Count how many were triaged out in this batch
-    no_signal = await pool.fetchval(
-        "SELECT count(*) FROM b2b_reviews WHERE id = ANY($1::uuid[]) AND enrichment_status = 'no_signal'",
-        [row["id"] for row in rows],
+    batch_ids = [row["id"] for row in rows]
+    status_rows = await pool.fetch(
+        """
+        SELECT enrichment_status, count(*) AS ct
+        FROM b2b_reviews
+        WHERE id = ANY($1::uuid[])
+        GROUP BY enrichment_status
+        """,
+        batch_ids,
     )
+    status_counts = {r["enrichment_status"]: int(r["ct"]) for r in status_rows}
+    enriched = status_counts.get("enriched", 0)
+    quarantined = status_counts.get("quarantined", 0)
+    no_signal = status_counts.get("no_signal", 0)
+    failed = status_counts.get("failed", 0)
 
     logger.info(
         "B2B enrichment: %d enriched, %d quarantined, %d no_signal, %d failed (of %d)",
@@ -710,21 +876,7 @@ async def _queue_model_upgrades(pool, cfg) -> int:
     if not cfg.enrichment_auto_requeue_model_upgrades:
         return 0
 
-    # Build current model signature matching the format used at persist time.
-    # Hybrid rows are stored as "hybrid:{tier1}+{tier2}" (see line ~949).
-    # Single-pass rows store just the model ID.
-    if cfg.enrichment_hybrid_enabled:
-        tier2_model = getattr(cfg, "enrichment_tier2_model", "") or ""
-        tier1_model = cfg.enrichment_tier1_model or ""
-        current_sig = f"hybrid:{tier1_model}+{tier2_model}" if tier2_model else tier1_model
-    else:
-        # Single-pass stores whatever _get_base_enrichment_llm() returns as
-        # model_id (via getattr(llm, "model_id") or getattr(llm, "model")).
-        # Resolve the same way to avoid perpetual drift detection.
-        llm = _get_base_enrichment_llm(cfg.enrichment_local_only)
-        if llm is None:
-            return 0
-        current_sig = getattr(llm, "model_id", None) or getattr(llm, "model", None) or ""
+    current_sig = str(cfg.enrichment_tier1_model or "").strip()
     if not current_sig:
         return 0
 
@@ -804,6 +956,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         min_value=1,
         max_value=100,
     )
+    inter_batch_delay = max(
+        0.0,
+        float(
+            task_metadata.get(
+                "enrichment_inter_batch_delay_seconds",
+                cfg.enrichment_inter_batch_delay_seconds,
+            )
+        ),
+    )
     priority_sources = [
         source.strip().lower()
         for source in str(cfg.enrichment_priority_sources or "").split(",")
@@ -869,7 +1030,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                            batch_failed, len(rows))
             break
 
-        await asyncio.sleep(2)  # breathing room between batches
+        if inter_batch_delay > 0:
+            await asyncio.sleep(inter_batch_delay)
 
     if rounds == 0:
         return {"_skip_synthesis": "No B2B reviews to enrich"}
@@ -908,68 +1070,46 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         )
         return False
 
-    source = (row.get("source") or "").lower().strip()
-    is_verified = source in _VERIFIED_SOURCES
+    source = str(row.get("source") or "").strip().lower()
+    skip_sources = {
+        item.strip().lower()
+        for item in str(settings.b2b_churn.enrichment_skip_sources or "").split(",")
+        if item.strip()
+    }
+    if source in skip_sources:
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment_status = 'not_applicable',
+                low_fidelity = false,
+                low_fidelity_reasons = '[]'::jsonb,
+                low_fidelity_detected_at = NULL
+            WHERE id = $1
+            """,
+            review_id,
+        )
+        logger.debug(
+            "Skipping unsupported churn-enrichment source %s for review %s",
+            source,
+            review_id,
+        )
+        return False
 
     try:
-        if is_verified:
-            # Verified sources: skip triage, go straight to full extraction.
-            # Every review on these platforms has signal worth extracting.
-            logger.debug("Verified source %s for %s -- skipping triage", source, review_id)
-        else:
-            # Stage 1: Fast triage -- is this review worth full extraction?
-            triage, triage_model_id = await asyncio.wait_for(
-                _triage_review(row, local_only),
-                timeout=30,
-            )
-
-            if triage is None:
-                # Triage failed (no LLM, skill missing, parse error).
-                # Don't fall through to full extraction -- that will likely fail too.
-                # Leave as pending for retry on next cycle.
-                logger.debug("Triage returned None for %s, deferring to next cycle", review_id)
-                await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-                return False
-
-            if not triage.get("signal", True):
-                # No churn signal -- skip full extraction
-                await pool.execute(
-                    """
-                    UPDATE b2b_reviews
-                    SET enrichment_status = 'no_signal',
-                        enrichment_attempts = enrichment_attempts + 1,
-                        enrichment = $1,
-                        enrichment_model = $3
-                    WHERE id = $2
-                    """,
-                    json.dumps({"triage": triage}),
-                    review_id,
-                    triage_model_id,
-                )
-                return False
-
-        # Stage 2: Full 47-field extraction (only for reviews that passed triage)
         cfg = settings.b2b_churn
-        use_hybrid = cfg.enrichment_hybrid_enabled and not local_only
-        if use_hybrid:
-            tier1, tier2, tier2_model_id = await asyncio.wait_for(
-                _enrich_hybrid(row, cfg, truncate_length),
-                timeout=120,
-            )
-            if tier1 is not None:
-                result = _merge_tier1_tier2(tier1, tier2)
-                model_id = f"hybrid:{cfg.enrichment_tier1_model}+{tier2_model_id or 'none'}"
-            else:
-                # Tier 1 failed -- fall back to single-pass
-                result, model_id = await asyncio.wait_for(
-                    _classify_review_async(row, local_only, max_tokens, truncate_length),
-                    timeout=120,
-                )
-        else:
-            result, model_id = await asyncio.wait_for(
-                _classify_review_async(row, local_only, max_tokens, truncate_length),
-                timeout=120,
-            )
+        full_extraction_timeout = cfg.enrichment_full_extraction_timeout_seconds
+        payload = _build_classify_payload(row, truncate_length)
+        payload_json = json.dumps(payload)
+        client = _get_tier1_client(cfg)
+        tier1, model_id = await asyncio.wait_for(
+            _call_vllm_tier1(payload_json, cfg, client),
+            timeout=full_extraction_timeout,
+        )
+        if tier1 is None:
+            logger.debug("Tier 1 returned None for %s, deferring to next cycle", review_id)
+            await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
+            return False
+        result = _merge_tier1_tier2(tier1, None)
 
         # Layer 3: compute derived fields from indicators (urgency, pain, recommend, etc.)
         # Hard-fail if compute breaks -- do NOT fall back to model-dependent output.
@@ -1007,7 +1147,10 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 else []
             )
             detected_at = datetime.now(timezone.utc)
-            target_status = "quarantined" if low_fidelity_reasons else "enriched"
+            if not low_fidelity_reasons and _is_no_signal_result(result, row):
+                target_status = "no_signal"
+            else:
+                target_status = "quarantined" if low_fidelity_reasons else "enriched"
 
             await pool.execute(
                 """
@@ -1070,7 +1213,9 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             except Exception:
                 logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
 
-            return "quarantined" if low_fidelity_reasons else True
+            if target_status == "quarantined":
+                return "quarantined"
+            return True
         else:
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
             return False
@@ -1308,123 +1453,6 @@ def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) ->
         if _has_consumer_context(combined_norm) and not _has_strong_commercial_context(combined_norm):
             reasons.append("consumer_support_context")
     return _dedupe_reason_codes(reasons)
-
-
-async def _triage_review(row, local_only: bool) -> tuple[dict[str, Any] | None, str | None]:
-    """Fast LLM triage: does this review contain churn signals worth extracting?
-
-    Returns ({"signal": bool, "confidence": int, "reason": str}, model_id) or (None, None) on error.
-    ~50 tokens output -- runs 5-10x faster than full extraction.
-    """
-    from ...skills import get_skill_registry
-    from ...services.protocols import Message
-    from ...pipelines.llm import clean_llm_output
-
-    skill = get_skill_registry().get("digest/b2b_churn_triage")
-    if not skill:
-        # Triage skill missing -- fall through to full extraction
-        return None, None
-
-    llm = _get_base_enrichment_llm(local_only)
-    if llm is None:
-        return None, None
-
-    model_id = getattr(llm, "model_id", None) or getattr(llm, "model", None)
-
-    # Compact payload -- triage doesn't need all fields
-    review_text = (row.get("review_text") or "")[:1500]
-    payload = json.dumps({
-        "vendor_name": row["vendor_name"],
-        "source": row.get("source") or "",
-        "content_type": row.get("content_type") or "review",
-        "rating": float(row["rating"]) if row.get("rating") is not None else None,
-        "summary": row.get("summary") or "",
-        "review_text": review_text,
-        "pros": (row.get("pros") or "")[:300],
-        "cons": (row.get("cons") or "")[:300],
-    })
-
-    messages = [
-        Message(role="system", content=skill.content),
-        Message(role="user", content=payload),
-    ]
-
-    try:
-        if hasattr(llm, "chat_async"):
-            text = await llm.chat_async(messages=messages, max_tokens=64, temperature=0.0)
-        else:
-            result = await asyncio.to_thread(
-                llm.chat, messages=messages, max_tokens=64, temperature=0.0,
-            )
-            text = result.get("response", "").strip()
-
-        if not text:
-            return None, model_id
-        text = clean_llm_output(text)
-        parsed = json.loads(text)
-        if isinstance(parsed, dict) and "signal" in parsed:
-            return parsed, model_id
-    except (json.JSONDecodeError, Exception):
-        pass
-    # On any failure, return None (fall through to full extraction -- safe default)
-    return None, model_id
-
-
-async def _classify_review_async(row, local_only: bool, max_tokens: int,
-                                  truncate_length: int = 3000) -> tuple[dict[str, Any] | None, str | None]:
-    """Async LLM call -- no thread pool, pure async for maximum vLLM throughput.
-
-    Returns (enrichment_dict, model_id) tuple.
-    """
-    from ...skills import get_skill_registry
-    from ...services.protocols import Message
-    from ...pipelines.llm import clean_llm_output, parse_json_response
-
-    skill = get_skill_registry().get("digest/b2b_churn_extraction")
-    if not skill:
-        logger.warning("Skill 'digest/b2b_churn_extraction' not found")
-        return None, None
-
-    llm = _get_base_enrichment_llm(local_only)
-    if llm is None:
-        logger.warning("No LLM available for B2B churn extraction")
-        return None, None
-
-    model_id = getattr(llm, "model_id", None) or getattr(llm, "model", None)
-
-    payload = _build_classify_payload(row, truncate_length)
-    messages = [
-        Message(role="system", content=skill.content),
-        Message(role="user", content=json.dumps(payload)),
-    ]
-
-    try:
-        # Use async chat if available (vLLM, httpx-based backends)
-        if hasattr(llm, "chat_async"):
-            text = await llm.chat_async(messages=messages, max_tokens=max_tokens, temperature=0.1)
-        else:
-            # Fallback to sync in thread for backends without async
-            result = await asyncio.to_thread(
-                llm.chat, messages=messages, max_tokens=max_tokens, temperature=0.1
-            )
-            text = result.get("response", "").strip()
-
-        if not text:
-            return None, model_id
-        text = clean_llm_output(text)
-        parsed = parse_json_response(text, recover_truncated=True)
-        if not isinstance(parsed, dict) or parsed.get("_parse_fallback"):
-            return None, model_id
-        return parsed, model_id
-    except (json.JSONDecodeError, ValueError):
-        logger.warning(
-            "Failed to parse B2B enrichment JSON for review %s (vendor=%s)",
-            row["id"], row["vendor_name"],
-        )
-        return None, model_id
-    except Exception:
-        logger.exception("B2B enrichment LLM call failed")
-        return None, None
 
 
 _KNOWN_PAIN_CATEGORIES = {

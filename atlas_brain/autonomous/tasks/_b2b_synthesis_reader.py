@@ -39,6 +39,13 @@ _REQUIRED_SECTIONS = (
     "competitive_reframes", "migration_proof",
 )
 
+_EVIDENCE_SUMMARY_SECTIONS = (
+    "executive_summary",
+    "target_accounts",
+    "displacement_rankings",
+    "recommend_ratio",
+) + _REQUIRED_SECTIONS
+
 _SECTION_CONTRACT_PATHS = {
     "causal_narrative": ("vendor_core_reasoning", "causal_narrative"),
     "segment_playbook": ("vendor_core_reasoning", "segment_playbook"),
@@ -627,7 +634,7 @@ def evaluate_vendor_conclusions(
     # Evaluate section suppressions
     suppressed: list[str] = []
     degraded: dict[str, str] = {}
-    for section in ("executive_summary", "target_accounts", "displacement_rankings", "recommend_ratio"):
+    for section in _EVIDENCE_SUMMARY_SECTIONS:
         result = engine.evaluate_suppression(section, vendor_evidence)
         if result.suppress:
             suppressed.append(section)

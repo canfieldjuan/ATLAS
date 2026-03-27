@@ -992,6 +992,37 @@ def _render_battle_card(
         pdf.multi_cell(0, 4, _latin1_safe(" | ".join(context_parts)))
     pdf.ln(3)
 
+    low_confidence_sections = _safe_list(card.get("low_confidence_sections"))
+    section_disclaimers = _copy_dict(card.get("section_disclaimers"))
+    if low_confidence_sections or section_disclaimers:
+        pdf.section_title("Evidence Notes")
+        if low_confidence_sections:
+            joined = ", ".join(_titleize_slug(item) for item in low_confidence_sections if str(item or "").strip())
+            if joined:
+                pdf.body_text(f"Low confidence sections: {joined}")
+        for section, disclaimer in section_disclaimers.items():
+            sec_label = _titleize_slug(section)
+            disc_text = _safe_str(disclaimer)
+            if sec_label and disc_text:
+                pdf.body_text(f"{sec_label}: {disc_text}")
+
+    evidence_conclusions = _copy_dict(card.get("evidence_conclusions"))
+    if evidence_conclusions:
+        rows: list[list[str]] = []
+        for name, detail in evidence_conclusions.items():
+            if not isinstance(detail, dict):
+                continue
+            fallback = _safe_str(detail.get("fallback_label") or detail.get("fallback_action"))
+            rows.append([
+                _titleize_slug(name),
+                "Met" if detail.get("met") else "Not Met",
+                _titleize_slug(detail.get("confidence")),
+                fallback[:60],
+            ])
+        if rows:
+            pdf.section_title("Evidence Conclusions")
+            pdf.simple_table(["Conclusion", "Status", "Confidence", "Fallback"], rows, [52, 24, 28, 76])
+
     # Section 1: Causal Narrative
     causal = _copy_dict(card.get("causal_narrative"))
     if causal:
