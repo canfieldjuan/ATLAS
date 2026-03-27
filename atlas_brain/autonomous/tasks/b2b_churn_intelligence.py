@@ -603,7 +603,7 @@ def _count_analyzed_vendors(vendor_scores: Any) -> int:
         vendor_name = row.get("vendor_name") or row.get("vendor") or ""
         canon = _canonicalize_vendor(vendor_name)
         if canon:
-            seen.add(canon)
+            seen.add(canon.strip().lower())
     return len(seen)
 
 

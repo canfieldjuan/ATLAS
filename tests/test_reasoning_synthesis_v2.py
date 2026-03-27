@@ -2762,6 +2762,43 @@ class TestReasoningContracts:
             "source_id": "segment:aggregate:active_eval_signal_count",
         }
 
+    def test_build_persistable_synthesis_downgrades_stale_explicit_switch_claims(self):
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks._b2b_reasoning_contracts import (
+            build_persistable_synthesis,
+        )
+        from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
+            validate_synthesis,
+        )
+
+        layers = _make_layers()
+        for flow in layers["displacement"]:
+            flow["flow_summary"]["explicit_switch_count"] = 0
+        packet = compress_vendor_pools("ContractVendor", layers)
+        synthesis, _ = _make_valid_synthesis(packet)
+        synthesis["migration_proof"]["switching_is_real"] = True
+        synthesis["migration_proof"]["evidence_type"] = "explicit_switch"
+        synthesis["migration_proof"]["switch_volume"] = {
+            "value": 5,
+            "source_id": "displacement:aggregate:total_explicit_switches",
+        }
+
+        persisted = build_persistable_synthesis(synthesis, packet)
+        migration = persisted["reasoning_contracts"]["displacement_reasoning"]["migration_proof"]
+
+        assert migration["switch_volume"] == {
+            "value": 0,
+            "source_id": "displacement:aggregate:total_explicit_switches",
+        }
+        assert migration["switching_is_real"] is False
+        assert migration["evidence_type"] == "active_evaluation"
+        assert migration["confidence"] == "medium"
+
+        result = validate_synthesis(persisted, packet)
+        assert result.is_valid, result.summary()
+
     def test_build_reasoning_contracts_uses_broader_displacement_mentions(self):
         from atlas_brain.autonomous.tasks._b2b_pool_compression import (
             compress_vendor_pools,
