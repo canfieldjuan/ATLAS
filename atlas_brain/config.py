@@ -2204,6 +2204,13 @@ class B2BChurnConfig(BaseSettings):
             "Disabled by default to avoid expensive mass re-enrichment during normal testing."
         ),
     )
+    enrichment_auto_requeue_model_upgrades: bool = Field(
+        default=False,
+        description=(
+            "Automatically reset enriched reviews to pending when the enrichment model changes. "
+            "Disabled by default to avoid mass re-enrichment on model swaps."
+        ),
+    )
     enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
     enrichment_openrouter_model: str = Field(
@@ -2215,9 +2222,17 @@ class B2BChurnConfig(BaseSettings):
     )
 
     # Hybrid two-pass enrichment (Tier 1 local + Tier 2 cloud)
+    enrichment_schema_version: int = Field(
+        default=2,
+        description="Current enrichment schema version (1 = original LLM inference, 2 = three-layer extract+compute)",
+    )
+    evidence_map_path: str = Field(
+        default="",
+        description="Path to evidence_map.yaml (empty = use default at atlas_brain/reasoning/evidence_map.yaml)",
+    )
     enrichment_hybrid_enabled: bool = Field(
-        default=False,
-        description="Enable hybrid enrichment: Tier 1 (local vLLM, deterministic) + Tier 2 (cloud, interpretive)",
+        default=True,
+        description="Enable hybrid enrichment: Tier 1 (local vLLM, deterministic) + Tier 2 (local vLLM, classify+extract). Default on for three-layer architecture.",
     )
     enrichment_tier1_vllm_url: str = Field(
         default="http://localhost:8082",
