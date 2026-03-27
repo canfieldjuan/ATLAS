@@ -548,47 +548,88 @@ function BattleCardView({ d }: { d: AnyData }) {
 /*  Generic fallback renderer (still better than raw JSON)             */
 /* ------------------------------------------------------------------ */
 
+function GenericValueRenderer({ val, depth = 0 }: { val: any; depth?: number }) {
+  if (val == null) return <span className="text-slate-500 italic">--</span>
+  if (depth > 3) return <span className="text-slate-500 italic truncate max-w-[200px]">{JSON.stringify(val)}</span>
+
+  if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+    return <span>{String(val)}</span>
+  }
+
+  if (Array.isArray(val)) {
+    if (val.length === 0) return <span className="text-slate-500 italic">Empty</span>
+    return (
+      <ul className="list-disc list-inside space-y-0.5 mt-0.5 ml-1">
+        {val.slice(0, 10).map((item, i) => (
+          <li key={i} className="text-slate-300">
+            <GenericValueRenderer val={item} depth={depth + 1} />
+          </li>
+        ))}
+        {val.length > 10 && <li className="text-slate-500 italic">... {val.length - 10} more</li>}
+      </ul>
+    )
+  }
+
+  if (typeof val === 'object') {
+    return (
+      <div className="space-y-1 mt-1 ml-2 border-l border-slate-700/50 pl-2">
+        {Object.entries(val).map(([k, v]) => {
+          if (k.startsWith('_')) return null
+          return (
+            <div key={k} className="flex flex-col">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{fmt(k)}</span>
+              <div className="text-xs text-slate-300">
+                <GenericValueRenderer val={v} depth={depth + 1} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  return <span>{String(val)}</span>
+}
+
 function GenericReportView({ d }: { d: AnyData }) {
   return (
-    <div className="space-y-2">
+    <div className="space-y-4">
       {Object.entries(d).map(([key, val]) => {
         if (key.startsWith('_')) return null
         if (val == null) return null
+        
+        // Use metrics for flat primitives at top level
         if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
           return <Metric key={key} label={fmt(key)} value={String(val)} />
         }
-        if (Array.isArray(val) && val.length > 0) {
-          if (typeof val[0] === 'object' && val[0] !== null) {
-            const headers = Object.keys(val[0]).slice(0, 5)
-            return (
-              <Section key={key} title={fmt(key)}>
-                <MiniTable
-                  headers={headers.map(fmt)}
-                  rows={val.slice(0, 15).map(item =>
-                    headers.map(h => String(item?.[h] ?? '').slice(0, 40))
-                  )}
-                />
-              </Section>
-            )
-          }
+
+        // Use MiniTable for arrays of objects at top level (visual priority)
+        if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'object' && val[0] !== null) {
+          const headers = Object.keys(val[0]).filter(k => !k.startsWith('_')).slice(0, 5)
           return (
             <Section key={key} title={fmt(key)}>
-              <ul className="list-disc list-inside text-xs text-slate-300 space-y-0.5">
-                {val.slice(0, 10).map((item, i) => <li key={i}>{String(item).slice(0, 200)}</li>)}
-              </ul>
+              <MiniTable
+                headers={headers.map(fmt)}
+                rows={val.slice(0, 15).map(item =>
+                  headers.map(h => {
+                    const cell = item?.[h]
+                    if (typeof cell === 'object' && cell !== null) return '[Object]'
+                    return String(cell ?? '').slice(0, 40)
+                  })
+                )}
+              />
             </Section>
           )
         }
-        if (typeof val === 'object') {
-          return (
-            <Section key={key} title={fmt(key)}>
-              {Object.entries(val).map(([k2, v2]) => (
-                <Metric key={k2} label={fmt(k2)} value={v2 != null ? String(v2).slice(0, 100) : '--'} />
-              ))}
-            </Section>
-          )
-        }
-        return null
+
+        // Use recursive renderer for everything else (objects, nested arrays)
+        return (
+          <Section key={key} title={fmt(key)}>
+            <div className="text-xs">
+              <GenericValueRenderer val={val} />
+            </div>
+          </Section>
+        )
       })}
     </div>
   )

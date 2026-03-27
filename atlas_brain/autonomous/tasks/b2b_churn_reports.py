@@ -706,6 +706,8 @@ async def _build_deterministic_report_bundle(
         prior_reports=prior_reports,
         reasoning_lookup=reasoning_lookup,
     )
+    inbound_displacement_lookup = _build_inbound_displacement_lookup(competitive_disp)
+
     deterministic_vendor_scorecards = _build_deterministic_vendor_scorecards(
         vendor_scores,
         pain_lookup=lookups["pain_lookup"],
@@ -720,6 +722,7 @@ async def _build_deterministic_report_bundle(
         company_lookup=lookups["company_lookup"],
         product_profile_lookup=lookups["product_profile_lookup"],
         prior_reports=prior_reports,
+        inbound_displacement_lookup=inbound_displacement_lookup,
         reasoning_lookup=reasoning_lookup,
         timeline_lookup=lookups["timeline_lookup"],
         use_case_lookup=lookups["use_case_lookup"],
@@ -790,15 +793,14 @@ async def _build_deterministic_report_bundle(
         council = xv_lookup.get("councils", {}).get(cat_name)
         if council:
             conclusion = council.get("conclusion", {})
-            cat_entry["cross_vendor_analysis"] = {
-                "conclusion": conclusion.get("conclusion", ""),
-                "market_regime": conclusion.get("market_regime", ""),
-                "durability_assessment": conclusion.get("durability_assessment", ""),
-                "key_insights": conclusion.get("key_insights", []),
-                "winner": conclusion.get("winner", ""),
-                "loser": conclusion.get("loser", ""),
-                "confidence": council.get("confidence", 0),
-            }
+            # Flatten cross_vendor_analysis to avoid [object Object] in UI GenericReportView
+            cat_entry["market_regime"] = conclusion.get("market_regime", "")
+            cat_entry["market_conclusion"] = conclusion.get("conclusion", "")
+            cat_entry["market_winner"] = conclusion.get("winner", "")
+            cat_entry["market_loser"] = conclusion.get("loser", "")
+            cat_entry["market_durability"] = conclusion.get("durability_assessment", "")
+            cat_entry["market_confidence"] = council.get("confidence", 0)
+            cat_entry["market_insights"] = conclusion.get("key_insights", [])
     return {
         "weekly_churn_feed": deterministic_weekly_feed,
         "vendor_scorecards": deterministic_vendor_scorecards,

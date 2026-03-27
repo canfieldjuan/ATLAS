@@ -209,13 +209,43 @@ class SynthesisView:
         sec = self.section(section)
         return sec.get("confidence", "insufficient")
 
-    def should_suppress(self, section: str) -> bool:
-        """True if section has insufficient confidence (should not display)."""
-        return self.confidence(section) == "insufficient"
+    def should_suppress(self, section: str, vendor_evidence: dict[str, Any] | None = None) -> bool:
+        """True if section should not display.
 
-    def should_flag(self, section: str) -> bool:
-        """True if section has low confidence (display with caveat)."""
-        return self.confidence(section) == "low"
+        Checks both synthesis confidence AND evidence-engine suppression rules
+        when vendor_evidence is provided.
+        """
+        if self.confidence(section) == "insufficient":
+            return True
+        if vendor_evidence is not None:
+            from ...reasoning.evidence_engine import get_evidence_engine
+            result = get_evidence_engine().evaluate_suppression(section, vendor_evidence)
+            if result.suppress:
+                return True
+        return False
+
+    def should_flag(self, section: str, vendor_evidence: dict[str, Any] | None = None) -> bool:
+        """True if section should display with a caveat/disclaimer.
+
+        Checks both synthesis confidence AND evidence-engine degrade rules.
+        """
+        if self.confidence(section) == "low":
+            return True
+        if vendor_evidence is not None:
+            from ...reasoning.evidence_engine import get_evidence_engine
+            result = get_evidence_engine().evaluate_suppression(section, vendor_evidence)
+            if result.degrade:
+                return True
+        return False
+
+    def get_disclaimer(self, section: str, vendor_evidence: dict[str, Any] | None = None) -> str | None:
+        """Get the disclaimer text for a degraded section, if any."""
+        if vendor_evidence is not None:
+            from ...reasoning.evidence_engine import get_evidence_engine
+            result = get_evidence_engine().evaluate_suppression(section, vendor_evidence)
+            if result.disclaimer:
+                return result.disclaimer
+        return None
 
     def is_quotable(self, section: str) -> bool:
         """True if section is safe for outbound material.
@@ -473,16 +503,20 @@ def inject_synthesis_into_card(
     *,
     materialize_flat_sections: bool = False,
     requested_as_of: date | None = None,
+    vendor_evidence: dict[str, Any] | None = None,
 ) -> None:
     """Inject synthesis sections into a battle card entry.
 
     When synthesis is present, the synthesis wedge becomes the authoritative
     churn angle -- it overrides the archetype label so the card tells one
     consistent story.
+
+    If ``vendor_evidence`` is provided, evidence-engine suppression and
+    conclusion gating rules are applied to sections and injected into the card.
     """
     if materialize_flat_sections:
         for section in _REQUIRED_SECTIONS:
-            if not view.should_suppress(section):
+            if not view.should_suppress(section, vendor_evidence):
                 card_entry[section] = view.section(section)
 
     contracts = view.materialized_contracts()
@@ -511,9 +545,21 @@ def inject_synthesis_into_card(
         card_entry["archetype_label"] = view.wedge_label
 
     # Flag low-confidence sections
-    flagged = [s for s in _REQUIRED_SECTIONS if view.should_flag(s)]
+    flagged = [s for s in _REQUIRED_SECTIONS if view.should_flag(s, vendor_evidence)]
     if flagged:
         card_entry["low_confidence_sections"] = flagged
+    # Inject disclaimers for degraded sections
+    disclaimers: dict[str, str] = {}
+    for s in _REQUIRED_SECTIONS:
+        disc = view.get_disclaimer(s, vendor_evidence)
+        if disc:
+            disclaimers[s] = disc
+    if disclaimers:
+        card_entry["section_disclaimers"] = disclaimers
+
+    # Inject evidence-engine conclusion results when evidence is available
+    if vendor_evidence is not None:
+        card_entry["evidence_conclusions"] = evaluate_vendor_conclusions(vendor_evidence)
 
     # Surface temporal depth warning in card header
     meta = view.meta
@@ -541,3 +587,61 @@ def inject_synthesis_into_card(
 
     # Attach schema version for downstream branching
     card_entry["synthesis_schema_version"] = view.schema_version
+
+
+def evaluate_vendor_conclusions(
+    vendor_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate evidence-engine conclusion gates for a vendor.
+
+    Call this at report generation time with aggregated vendor-level evidence
+    (total_reviews, pain_distribution, displacement_edge, indicator_counts, etc.).
+
+    Returns a dict suitable for merging into the report payload:
+    {
+        "conclusions": {
+            "pricing_crisis": {"met": True, "confidence": "high"},
+            "losing_market_share": {"met": False, "fallback_label": "Emerging..."},
+            ...
+        },
+        "suppressed_sections": ["target_accounts"],
+        "degraded_sections": {"executive_summary": "Based on limited..."},
+        "confidence_tier": "high",
+    }
+    """
+    from ...reasoning.evidence_engine import get_evidence_engine
+
+    engine = get_evidence_engine()
+
+    # Evaluate all conclusion gates
+    raw_conclusions = engine.evaluate_conclusions(vendor_evidence)
+    conclusions: dict[str, dict[str, Any]] = {}
+    for c in raw_conclusions:
+        entry: dict[str, Any] = {"met": c.met, "confidence": c.confidence}
+        if c.fallback_label:
+            entry["fallback_label"] = c.fallback_label
+        if c.fallback_action:
+            entry["fallback_action"] = c.fallback_action
+        conclusions[c.conclusion_id] = entry
+
+    # Evaluate section suppressions
+    suppressed: list[str] = []
+    degraded: dict[str, str] = {}
+    for section in ("executive_summary", "target_accounts", "displacement_rankings", "recommend_ratio"):
+        result = engine.evaluate_suppression(section, vendor_evidence)
+        if result.suppress:
+            suppressed.append(section)
+        elif result.degrade and result.disclaimer:
+            degraded[section] = result.disclaimer
+
+    # Confidence tier
+    total_reviews = int(vendor_evidence.get("total_reviews", 0))
+    confidence_tier = engine.get_confidence_tier(total_reviews)
+
+    return {
+        "conclusions": conclusions,
+        "suppressed_sections": suppressed,
+        "degraded_sections": degraded,
+        "confidence_tier": confidence_tier,
+        "confidence_label": engine.get_confidence_label(total_reviews),
+    }

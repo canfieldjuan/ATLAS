@@ -1308,20 +1308,20 @@ def _build_challenger_brief(
         confidence = displacement_detail.get("confidence_score", 0)
         insights: list[dict[str, str]] = []
         if driver and driver != "unknown":
-            insights.append({"insight": "Primary displacement driver: %s" % driver, "evidence": "displacement_detail.primary_driver"})
+            insights.append({"insight": "Primary displacement driver: %s" % driver, "evidence": driver})
         if mentions:
-            insights.append({"insight": "%d displacement mentions across sources" % mentions, "evidence": "total_mentions: %d" % mentions})
+            insights.append({"insight": "%d displacement mentions across sources" % mentions, "evidence": "%d mentions" % mentions})
         # Add archetype context if available
         archetype = (churn_signal or {}).get("archetype")
         if archetype:
-            insights.append({"insight": "%s classified as %s archetype" % (incumbent, archetype), "evidence": "stratified_reasoning.archetype"})
+            insights.append({"insight": "%s classified as %s archetype" % (incumbent, archetype), "evidence": archetype})
         # Add top weakness from incumbent profile
         if inc_weaknesses:
             top_w = inc_weaknesses[0]
             area = top_w.get("area") or top_w.get("weakness") or ""
             count = top_w.get("count") or top_w.get("evidence_count") or 0
             if area:
-                insights.append({"insight": "Top incumbent weakness: %s" % area, "evidence": "%d mentions" % count if count else "product_profile"})
+                insights.append({"insight": "Top incumbent weakness: %s" % area, "evidence": "%d mentions" % count if count else "product profile"})
         head_to_head = {
             "winner": challenger if mentions >= 5 and signal in ("strong", "moderate") else "",
             "loser": incumbent if mentions >= 5 and signal in ("strong", "moderate") else "",
