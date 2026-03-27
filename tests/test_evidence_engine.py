@@ -13,7 +13,7 @@ def engine():
     return EvidenceEngine()
 
 
-# ── Urgency Scoring ─────────────────────────────────────────────────────
+# -- Urgency Scoring ------------------------------------------------------
 
 
 class TestUrgencyScoring:
@@ -30,8 +30,8 @@ class TestUrgencyScoring:
             "completed_switch_language": True,
         }
         score = engine.compute_urgency(indicators, rating=None, rating_max=5, content_type="review", source_weight=0.7)
-        # 3.0 + 2.5 + 2.0 + 2.0 = 9.5
-        assert score == 9.5
+        # 3.0 + 2.5 + 2.5 + 3.0 = 11.0, clamped to 10
+        assert score == 10.0
 
     def test_all_indicators_clamped_at_10(self, engine):
         indicators = {k: True for k in [
@@ -62,8 +62,8 @@ class TestUrgencyScoring:
     def test_rating_floor_does_not_lower_score(self, engine):
         indicators = {"explicit_cancel_language": True, "active_evaluation_language": True}
         score = engine.compute_urgency(indicators, rating=2.0, rating_max=5.0, content_type="review", source_weight=0.7)
-        # 3.0 + 2.0 = 5.0, floor is 2.0 -- should keep 5.0
-        assert score == 5.0
+        # 3.0 + 2.5 = 5.5, floor is 2.0 -- should keep 5.5
+        assert score == 5.5
 
     def test_comment_adjustment(self, engine):
         score = engine.compute_urgency(
@@ -85,19 +85,21 @@ class TestUrgencyScoring:
             "named_alternative_with_reason": True,
         }
         score = engine.compute_urgency(indicators, rating=None, rating_max=5, content_type="review", source_weight=0.7)
-        assert score == 3.0
+        # 2.0 + 2.0 = 4.0
+        assert score == 4.0
 
     def test_mixed_tiers(self, engine):
         indicators = {
-            "active_evaluation_language": True,  # +2.0
-            "timeline_mentioned": True,          # +0.5
-            "decision_maker_language": True,      # +0.5
+            "active_evaluation_language": True,  # +2.5
+            "timeline_mentioned": True,          # +1.5
+            "decision_maker_language": True,      # +1.0
         }
         score = engine.compute_urgency(indicators, rating=None, rating_max=5, content_type="review", source_weight=0.7)
-        assert score == 3.0
+        # 2.5 + 1.5 + 1.0 = 5.0
+        assert score == 5.0
 
 
-# ── Pain Override ───────────────────────────────────────────────────────
+# -- Pain Override --------------------------------------------------------
 
 
 class TestPainOverride:
@@ -134,7 +136,7 @@ class TestPainOverride:
         assert result == "performance"
 
 
-# ── Recommend Derivation ────────────────────────────────────────────────
+# -- Recommend Derivation --------------------------------------------------
 
 
 class TestRecommendDerivation:
@@ -175,7 +177,7 @@ class TestRecommendDerivation:
         assert result is False
 
 
-# ── Price Complaint Derivation ──────────────────────────────────────────
+# -- Price Complaint Derivation --------------------------------------------
 
 
 class TestPriceComplaintDerivation:
@@ -197,7 +199,7 @@ class TestPriceComplaintDerivation:
         assert engine.derive_price_complaint(enrichment) is False
 
 
-# ── Budget Authority Derivation ─────────────────────────────────────────
+# -- Budget Authority Derivation -------------------------------------------
 
 
 class TestBudgetAuthorityDerivation:
@@ -227,7 +229,7 @@ class TestBudgetAuthorityDerivation:
         assert engine.derive_budget_authority(enrichment) is False
 
 
-# ── Conclusion Gating ───────────────────────────────────────────────────
+# -- Conclusion Gating ----------------------------------------------------
 
 
 class TestConclusionGating:
@@ -295,7 +297,7 @@ class TestConclusionGating:
         assert wave.confidence == "high"
 
 
-# ── Suppression ─────────────────────────────────────────────────────────
+# -- Suppression ----------------------------------------------------------
 
 
 class TestSuppression:
@@ -328,7 +330,7 @@ class TestSuppression:
         assert result.suppress is False
 
 
-# ── Confidence Tiers ────────────────────────────────────────────────────
+# -- Confidence Tiers -----------------------------------------------------
 
 
 class TestConfidenceTiers:

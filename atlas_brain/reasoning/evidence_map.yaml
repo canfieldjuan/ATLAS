@@ -18,16 +18,16 @@ enrichment:
       # Tier A: Hard churn signals
       explicit_cancel_language: 3.0
       active_migration_language: 2.5
-      active_evaluation_language: 2.0
-      completed_switch_language: 2.0
+      active_evaluation_language: 2.5
+      completed_switch_language: 3.0
       # Tier B: Moderate signals
-      comparison_shopping_language: 1.5
-      named_alternative_with_reason: 1.5
+      comparison_shopping_language: 2.0
+      named_alternative_with_reason: 2.0
       # Tier C: Supporting signals
       frustration_without_alternative: 1.0
-      dollar_amount_mentioned: 0.5
-      timeline_mentioned: 0.5
-      decision_maker_language: 0.5
+      dollar_amount_mentioned: 1.0
+      timeline_mentioned: 1.5
+      decision_maker_language: 1.0
     rating_floors:
       - max_normalized_rating: 0.2
         min_score: 3.0
@@ -231,6 +231,18 @@ suppression:
     suppress_when:
       - {field: recommend_denominator, lt: 10}
     fallback_label: "Insufficient recommendation data"
+
+  timing_intelligence:
+    degrade_when:
+      - {field: quote_count, lt: 3}
+    degrade_action: prepend_disclaimer
+    disclaimer: "Timing guidance is based on limited direct evidence."
+
+  migration_proof:
+    degrade_when:
+      - {field: displacement_mention_count, lt: 3}
+    degrade_action: prepend_disclaimer
+    disclaimer: "Migration evidence is preliminary."
 
 # -- Confidence Tiers -------------------------------------------------------
 

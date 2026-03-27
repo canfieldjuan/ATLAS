@@ -3902,7 +3902,7 @@ async def _fetch_churning_companies(pool, window_days: int) -> list[dict[str, An
     return results
 
 
-async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float = 6) -> list[dict[str, Any]]:
+async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float = 4.5) -> list[dict[str, Any]]:
     """Top quotable phrases per vendor (highest urgency, deduplicated).
 
     Each quote is a dict with 'quote', 'urgency', and 'review_id' for provenance.
@@ -6656,7 +6656,7 @@ def build_evidence_vault(
             recency_bonus = 0.0
         sm = w.get("supporting_metrics") if isinstance(w.get("supporting_metrics"), dict) else {}
         urg = float(sm.get("avg_urgency_when_mentioned") or sm.get("avg_urgency") or 0)
-        urgency_bonus = 0.1 if urg >= 8.0 else (0.05 if urg >= 6.0 else 0.0)
+        urgency_bonus = 0.1 if urg >= 7.0 else (0.05 if urg >= 4.5 else 0.0)
         w["confidence_score"] = round(min(0.95, max(0.0, share + type_bonus + volume_bonus + corr_bonus + recency_bonus + urgency_bonus)), 2)
 
     # Fallback: assign vendor quotes to weaknesses that lack a best_quote
@@ -8086,6 +8086,8 @@ def _build_vendor_evidence(
         "avg_urgency": avg_urgency,
         "recommend_yes": int(vs.get("recommend_yes") or 0),
         "recommend_no": int(vs.get("recommend_no") or 0),
+        "displacement_mention_count": 0,
+        "quote_count": 0,
     }
     for raw_key in (
         "support_sentiment",

@@ -2189,6 +2189,12 @@ class B2BChurnConfig(BaseSettings):
         le=100,
         description="Concurrent review enrichments allowed within a single batch",
     )
+    enrichment_inter_batch_delay_seconds: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=60.0,
+        description="Delay between enrichment claim rounds within a single run",
+    )
     enrichment_priority_sources: str = Field(
         default="",
         description=(
@@ -2404,7 +2410,7 @@ class B2BChurnConfig(BaseSettings):
     # Aggregation thresholds
     negative_review_threshold: float = Field(default=0.5, description="Rating ratio below this is negative")
     feature_gap_min_mentions: int = Field(default=2, description="Min mentions to include a feature gap")
-    quotable_phrase_min_urgency: float = Field(default=6, description="Min urgency for quotable phrases")
+    quotable_phrase_min_urgency: float = Field(default=4.5, description="Min urgency for quotable phrases (4.5 = moderate+ with indicator-based scoring)")
     timeline_signals_limit: int = Field(default=50, description="Max timeline signal rows per run")
     prior_reports_limit: int = Field(default=4, description="Prior reports for trend comparison")
 
