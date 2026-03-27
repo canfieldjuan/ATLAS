@@ -4061,6 +4061,22 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
             takeaway_stats["top_displacement_driver"] = em.get("primary_driver")
             takeaway_stats["displacement_velocity_7d"] = em.get("velocity_7d")
     causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+
+    # --- Reasoning wedge injection (AEO authority) ---
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        takeaway_stats["synthesis_wedge"] = wedge
+        takeaway_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+    cn = causal.get("causal_narrative")
+    if isinstance(cn, dict) and cn.get("trigger"):
+        takeaway_stats["causal_trigger"] = cn["trigger"]
+        takeaway_stats["causal_why_now"] = cn.get("why_now")
+    _seg = data.get("pool_segment") or {}
+    _budget = _seg.get("budget_pressure") or {}
+    if _budget.get("dm_churn_rate") is not None and "dm_churn_rate" not in takeaway_stats:
+        takeaway_stats["dm_churn_rate"] = _budget["dm_churn_rate"]
+
     cn = causal.get("causal_narrative")
     if isinstance(cn, dict) and cn.get("trigger"):
         takeaway_stats["causal_trigger"] = cn["trigger"]
@@ -4373,6 +4389,23 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
     if council.get("winner"):
         takeaway_stats["category_winner"] = council["winner"]
 
+    # --- Reasoning wedge injection (AEO authority) ---
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        takeaway_stats["synthesis_wedge"] = wedge
+        takeaway_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+    cn = causal.get("causal_narrative")
+    if isinstance(cn, dict) and cn.get("trigger"):
+        takeaway_stats["causal_trigger"] = cn["trigger"]
+        takeaway_stats["causal_why_now"] = cn.get("why_now")
+    _seg = data.get("pool_segment") or {}
+    _budget = _seg.get("budget_pressure") or {}
+    if _budget.get("dm_churn_rate") is not None and "dm_churn_rate" not in takeaway_stats:
+        takeaway_stats["dm_churn_rate"] = _budget["dm_churn_rate"]
+
+        takeaway_stats["category_winner"] = council["winner"]
+
     sections.append(SectionSpec(
         id="takeaway",
         heading=f"Choosing the Right {category} Platform",
@@ -4471,6 +4504,22 @@ def _blueprint_pricing_reality_check(ctx: dict, data: dict) -> PostBlueprint:
     if budget.get("dm_churn_rate") is not None:
         bl_stats["dm_churn_rate"] = budget["dm_churn_rate"]
     roles = pool_segment.get("affected_roles") or []
+
+    # --- Reasoning wedge injection (AEO authority) ---
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        bl_stats["synthesis_wedge"] = wedge
+        bl_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+    cn = causal.get("causal_narrative")
+    if isinstance(cn, dict) and cn.get("trigger"):
+        bl_stats["causal_trigger"] = cn["trigger"]
+        bl_stats["causal_why_now"] = cn.get("why_now")
+    _seg = data.get("pool_segment") or {}
+    _budget = _seg.get("budget_pressure") or {}
+    if _budget.get("dm_churn_rate") is not None and "dm_churn_rate" not in bl_stats:
+        bl_stats["dm_churn_rate"] = _budget["dm_churn_rate"]
+
     if roles:
         bl_stats["top_churning_role"] = roles[0].get("role_type")
 
@@ -4568,6 +4617,22 @@ def _blueprint_switching_story(ctx: dict, data: dict) -> PostBlueprint:
         sv_stats["top_destination"] = top_edge.get("to_vendor")
         sv_stats["displacement_driver"] = em.get("primary_driver")
         switch_reasons = top_edge.get("switch_reasons") or []
+
+    # --- Reasoning wedge injection (AEO authority) ---
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        sv_stats["synthesis_wedge"] = wedge
+        sv_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+    cn = causal.get("causal_narrative")
+    if isinstance(cn, dict) and cn.get("trigger"):
+        sv_stats["causal_trigger"] = cn["trigger"]
+        sv_stats["causal_why_now"] = cn.get("why_now")
+    _seg = data.get("pool_segment") or {}
+    _budget = _seg.get("budget_pressure") or {}
+    if _budget.get("dm_churn_rate") is not None and "dm_churn_rate" not in sv_stats:
+        sv_stats["dm_churn_rate"] = _budget["dm_churn_rate"]
+
         if switch_reasons:
             sv_stats["top_switch_reasons"] = [r.get("reason_category") or r.get("reason") for r in switch_reasons[:3]]
 
@@ -4667,6 +4732,22 @@ def _blueprint_pain_point_roundup(ctx: dict, data: dict) -> PostBlueprint:
     if regime.get("outlier_vendors"):
         pp_stats["outlier_vendors"] = regime["outlier_vendors"][:3]
 
+
+    # --- Reasoning wedge injection (AEO authority) ---
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        pp_stats["synthesis_wedge"] = wedge
+        pp_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+    cn = causal.get("causal_narrative")
+    if isinstance(cn, dict) and cn.get("trigger"):
+        pp_stats["causal_trigger"] = cn["trigger"]
+        pp_stats["causal_why_now"] = cn.get("why_now")
+    _seg = data.get("pool_segment") or {}
+    _budget = _seg.get("budget_pressure") or {}
+    if _budget.get("dm_churn_rate") is not None and "dm_churn_rate" not in pp_stats:
+        pp_stats["dm_churn_rate"] = _budget["dm_churn_rate"]
+
     sections.append(SectionSpec(
         id="takeaway",
         heading="Every Tool Has a Flaw -- Pick the One You Can Live With",
@@ -4761,6 +4842,22 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
         bf_stats["category_winner"] = council["winner"]
     if council.get("conclusion"):
         bf_stats["category_conclusion"] = council["conclusion"]
+
+
+    # --- Reasoning wedge injection (AEO authority) ---
+    wedge = data.get("synthesis_wedge")
+    if wedge:
+        bf_stats["synthesis_wedge"] = wedge
+        bf_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
+    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
+    cn = causal.get("causal_narrative")
+    if isinstance(cn, dict) and cn.get("trigger"):
+        bf_stats["causal_trigger"] = cn["trigger"]
+        bf_stats["causal_why_now"] = cn.get("why_now")
+    _seg = data.get("pool_segment") or {}
+    _budget = _seg.get("budget_pressure") or {}
+    if _budget.get("dm_churn_rate") is not None and "dm_churn_rate" not in bf_stats:
+        bf_stats["dm_churn_rate"] = _budget["dm_churn_rate"]
 
     sections.append(SectionSpec(
         id="decision_framework",
@@ -4972,6 +5069,38 @@ async def _fetch_related_for_linking(
         return []
 
 
+def _fallback_target_keyword(blueprint: PostBlueprint) -> str:
+    """Generate a deterministic target keyword when the LLM omits it."""
+    ctx = blueprint.data_context.get("topic_ctx") or blueprint.data_context
+    tt = blueprint.topic_type
+    vendor = str(ctx.get("vendor") or ctx.get("vendor_a") or ctx.get("from_vendor") or "").strip()
+    vendor_b = str(ctx.get("vendor_b") or "").strip()
+    category = str(ctx.get("category") or "").strip()
+    kw_map = {
+        "vendor_showdown": f"{vendor} vs {vendor_b}".strip(),
+        "vendor_alternative": f"{vendor} alternatives".strip(),
+        "churn_report": f"{vendor} churn rate".strip(),
+        "pricing_reality_check": f"{vendor} pricing".strip(),
+        "migration_guide": f"switch from {vendor}".strip(),
+        "switching_story": f"why teams leave {vendor}".strip(),
+        "vendor_deep_dive": f"{vendor} reviews".strip(),
+        "market_landscape": f"{category} software comparison".strip(),
+        "pain_point_roundup": f"{category} software complaints".strip(),
+        "best_fit_guide": f"best {category} software".strip(),
+    }
+    return kw_map.get(tt, vendor).lower() or blueprint.slug.replace("-", " ")[:50]
+
+
+def _fallback_seo_title(display_title: str, blueprint: PostBlueprint) -> str:
+    """Generate a deterministic SEO title when the LLM omits it."""
+    kw = _fallback_target_keyword(blueprint)
+    year = date.today().year
+    candidate = f"{kw.title()} {year}"
+    if len(candidate) <= 60:
+        return candidate
+    return display_title[:60]
+
+
 async def _assemble_and_store(
     pool, blueprint: PostBlueprint, content: dict[str, Any], llm
 ) -> str:
@@ -5015,9 +5144,9 @@ async def _assemble_and_store(
         json.dumps(blueprint.data_context, default=str),
         str(model_name),
         date.today(),
-        content.get("seo_title", content["title"][:60]),
-        content.get("seo_description", content.get("description", "")[:155]),
-        content.get("target_keyword", ""),
+        content.get("seo_title") or _fallback_seo_title(content["title"], blueprint),
+        content.get("seo_description") or content.get("description", "")[:155],
+        content.get("target_keyword") or _fallback_target_keyword(blueprint),
         json.dumps(content.get("secondary_keywords", []), default=str),
         json.dumps(content.get("faq", []), default=str),
         json.dumps(blueprint.cta, default=str) if blueprint.cta else None,
