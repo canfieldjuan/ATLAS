@@ -2930,6 +2930,9 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
                 count(*) FILTER (
                     WHERE (enrichment->>'would_recommend')::boolean = false
                 ) AS recommend_no,
+                count(*) FILTER (
+                    WHERE enrichment->>'would_recommend' IS NOT NULL
+                ) AS recommend_total,
                 ROUND(
                     count(*) FILTER (
                         WHERE rating IS NOT NULL AND rating_max > 0
@@ -2992,6 +2995,7 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
             "avg_rating_normalized": float(r["avg_rating_normalized"]) if r["avg_rating_normalized"] else None,
             "recommend_yes": r["recommend_yes"],
             "recommend_no": r["recommend_no"],
+            "recommend_total": r["recommend_total"],
             "positive_review_pct": float(r["positive_review_pct"]) if r["positive_review_pct"] is not None else None,
             "avg_author_churn_score": float(r["avg_author_churn_score"]) if r["avg_author_churn_score"] is not None else None,
             "support_sentiment": float(r["support_sentiment"]) if r["support_sentiment"] is not None else None,
@@ -5518,6 +5522,17 @@ def _build_competitor_lookup(competitive_disp: list[dict]) -> dict[str, list[dic
             reverse=True,
         )
     return lookup
+
+
+def _build_inbound_displacement_lookup(competitive_disp: list[dict]) -> dict[str, int]:
+    """Sum mentions where vendor is the target (inbound displacement)."""
+    inbound: dict[str, int] = {}
+    for row in competitive_disp:
+        comp = row.get("competitor", "")
+        mentions = row.get("mention_count", 0)
+        if comp:
+            inbound[comp] = inbound.get(comp, 0) + mentions
+    return inbound
 
 
 def _build_feature_gap_lookup(feature_gaps: list[dict]) -> dict[str, list[dict]]:
@@ -8742,6 +8757,7 @@ def _build_deterministic_vendor_scorecards(
     company_lookup: dict[str, list[dict]],
     product_profile_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
+    inbound_displacement_lookup: dict[str, int] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     temporal_lookup: dict[str, dict] | None = None,
     timeline_lookup: dict[str, list[dict]] | None = None,
@@ -8787,6 +8803,7 @@ def _build_deterministic_vendor_scorecards(
         pos_pct = row.get("positive_review_pct")
         rec_yes = int(row.get("recommend_yes") or 0)
         rec_no = int(row.get("recommend_no") or 0)
+        rec_total = int(row.get("recommend_total") or 0)
         category = row.get("product_category") or "Unknown"
         if vendor not in merged:
             merged[vendor] = {
@@ -8795,6 +8812,7 @@ def _build_deterministic_vendor_scorecards(
                 "urgency_weighted_sum": urgency * reviews,
                 "recommend_yes": rec_yes,
                 "recommend_no": rec_no,
+                "recommend_total": rec_total,
                 "positive_pct_sum": (float(pos_pct) * reviews) if pos_pct is not None else 0,
                 "positive_pct_count": reviews if pos_pct is not None else 0,
                 "category": category,
@@ -8807,6 +8825,7 @@ def _build_deterministic_vendor_scorecards(
             m["urgency_weighted_sum"] += urgency * reviews
             m["recommend_yes"] += rec_yes
             m["recommend_no"] += rec_no
+            m["recommend_total"] += rec_total
             if pos_pct is not None:
                 m["positive_pct_sum"] += float(pos_pct) * reviews
                 m["positive_pct_count"] += reviews
@@ -8824,7 +8843,8 @@ def _build_deterministic_vendor_scorecards(
         positive_pct = round(m["positive_pct_sum"] / m["positive_pct_count"], 1) if m["positive_pct_count"] else None
         recommend_yes = m["recommend_yes"]
         recommend_no = m["recommend_no"]
-        recommend_ratio = round(((recommend_yes - recommend_no) / total_reviews) * 100, 1) if total_reviews else 0.0
+        recommend_total = m.get("recommend_total", 0)
+        recommend_ratio = round(((recommend_yes - recommend_no) / recommend_total) * 100, 1) if recommend_total else 0.0
 
         if total_reviews >= 50:
             confidence = "high"
@@ -8994,10 +9014,16 @@ def _build_deterministic_vendor_scorecards(
         role_types = ba.get("role_types", {})
         dominant_role = _dominant_segment_role(role_types)
 
+        # Net Flow calculation: Inbound Displacement - Outbound Churn
+        inbound_count = (inbound_displacement_lookup or {}).get(vendor, 0)
+        net_flow = inbound_count - churn_intent
+
         sc_entry = {
             "vendor": vendor,
             "total_reviews": total_reviews,
             "churn_signal_density": churn_density,
+            "inbound_displacement_count": inbound_count,
+            "net_flow": net_flow,
             "positive_review_pct": float(positive_pct) if positive_pct is not None else None,
             "avg_urgency": avg_urgency,
             "recommend_ratio": recommend_ratio,
@@ -9109,7 +9135,8 @@ def _build_deterministic_category_overview(
             source_vendor = _canonicalize_vendor(flow.get("vendor") or "")
             if any(_canonicalize_vendor(r.get("vendor_name") or "") == source_vendor for r in rows):
                 competitor = _canonicalize_competitor(flow.get("competitor") or "")
-                category_flows[competitor] = category_flows.get(competitor, 0) + int(flow.get("mention_count") or 0)
+                if competitor != highest_vendor:
+                    category_flows[competitor] = category_flows.get(competitor, 0) + int(flow.get("mention_count") or 0)
         emerging = max(category_flows.items(), key=lambda item: item[1])[0] if category_flows else "Insufficient data"
 
         total_reviews = int(top_vendor.get("total_reviews") or 0)
