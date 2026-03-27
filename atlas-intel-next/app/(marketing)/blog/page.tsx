@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { SITE_URL } from "@/lib/constants";
-import { POSTS } from "@/content/blog";
+import { fetchAllPosts } from "@/lib/api/blog";
 
 export const metadata: Metadata = {
   title: "Blog",
@@ -16,7 +16,8 @@ export const metadata: Metadata = {
   },
 };
 
-export default function BlogPage() {
+export default async function BlogPage() {
+  const POSTS = await fetchAllPosts();
   return (
     <section className="max-w-4xl mx-auto px-6 py-16">
       <h1 className="text-3xl font-bold mb-2">Blog</h1>

@@ -1,14 +1,16 @@
 import { SITE_URL } from "@/lib/constants";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { POSTS } from "@/content/blog";
+import { fetchAllPosts, fetchPostBySlug } from "@/lib/api/blog";
 import BlogPostContent from "./blog-post-content";
 
 // ---------------------------------------------------------------------------
 // SSG: pre-render all known blog slugs at build time
+// New posts from the API appear via ISR revalidation (hourly)
 // ---------------------------------------------------------------------------
-export function generateStaticParams() {
-  return POSTS.map((post) => ({ slug: post.slug }));
+export async function generateStaticParams() {
+  const posts = await fetchAllPosts();
+  return posts.map((post) => ({ slug: post.slug }));
 }
 
 // ---------------------------------------------------------------------------
@@ -18,7 +20,7 @@ type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const { slug } = await props.params;
-  const post = POSTS.find((p) => p.slug === slug);
+  const post = await fetchPostBySlug(slug);
   if (!post) return {};
 
   const title = post.seo_title || post.title;
@@ -53,7 +55,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
 // ---------------------------------------------------------------------------
 export default async function BlogPostPage(props: PageProps) {
   const { slug } = await props.params;
-  const post = POSTS.find((p) => p.slug === slug);
+  const post = await fetchPostBySlug(slug);
   if (!post) notFound();
 
   // Build JSON-LD structured data (baked into HTML at build time)

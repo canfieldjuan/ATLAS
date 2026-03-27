@@ -1,27 +1,27 @@
 import type { MetadataRoute } from "next";
-import { POSTS } from "@/content/blog";
-
 import { SITE_URL } from "@/lib/constants";
-const BASE_URL = SITE_URL;
+import { fetchAllPosts } from "@/lib/api/blog";
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const posts = await fetchAllPosts();
+
   const staticPages: MetadataRoute.Sitemap = [
     {
-      url: BASE_URL,
+      url: SITE_URL,
       lastModified: new Date(),
       changeFrequency: "weekly",
       priority: 1.0,
     },
     {
-      url: `${BASE_URL}/blog`,
+      url: `${SITE_URL}/blog`,
       lastModified: new Date(),
       changeFrequency: "daily",
       priority: 0.9,
     },
   ];
 
-  const blogPages: MetadataRoute.Sitemap = POSTS.map((post) => ({
-    url: `${BASE_URL}/blog/${post.slug}`,
+  const blogPages: MetadataRoute.Sitemap = posts.map((post) => ({
+    url: `${SITE_URL}/blog/${post.slug}`,
     lastModified: new Date(post.date),
     changeFrequency: "monthly" as const,
     priority: 0.7,
