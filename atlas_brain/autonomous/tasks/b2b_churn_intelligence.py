@@ -820,7 +820,8 @@ async def _persist_vendor_snapshots(
         positive_pct = row.get("positive_review_pct")
         recommend_yes = int(row.get("recommend_yes") or 0)
         recommend_no = int(row.get("recommend_no") or 0)
-        recommend_ratio = round(((recommend_yes - recommend_no) / total_reviews) * 100, 1) if total_reviews else 0.0
+        recommend_denom = recommend_yes + recommend_no
+        recommend_ratio = round(((recommend_yes - recommend_no) / recommend_denom) * 100, 1) if recommend_denom else 0.0
 
         pains = pain_lookup.get(vendor, [])
         top_pain = (pains[0] if pains else {}).get("category")
@@ -1179,7 +1180,8 @@ async def _detect_change_events(
         avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
         recommend_yes = int(row.get("recommend_yes") or 0)
         recommend_no = int(row.get("recommend_no") or 0)
-        recommend_ratio = round(((recommend_yes - recommend_no) / total_reviews) * 100, 1) if total_reviews else 0.0
+        recommend_denom = recommend_yes + recommend_no
+        recommend_ratio = round(((recommend_yes - recommend_no) / recommend_denom) * 100, 1) if recommend_denom else 0.0
 
         pains = pain_lookup.get(vendor, [])
         top_pain = (pains[0] if pains else {}).get("category")

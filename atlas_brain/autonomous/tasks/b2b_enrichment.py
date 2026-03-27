@@ -242,23 +242,23 @@ def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
     result = dict(tier1)
 
     if tier2 is None:
-        # Tier 2 failed -- apply minimal defaults so validation passes
-        signals = result.get("churn_signals", {})
-        any_signal = any(signals.get(f) for f in (
-            "intent_to_leave", "actively_evaluating", "migration_in_progress",
-        ))
-        result.setdefault("urgency_score", 5 if any_signal else 3)
-        result.setdefault("pain_category", "other")
-        result.setdefault("pain_categories", [{"category": "other", "severity": "primary"}])
-        result.setdefault("sentiment_trajectory", {"direction": "unknown"})
+        # Tier 2 failed -- apply minimal defaults for CLASSIFY fields only.
+        # INFER-derived fields (urgency_score, would_recommend, pain_category,
+        # has_budget_authority, price_complaint, price_context, sentiment direction)
+        # will be computed by _compute_derived_fields() downstream.
+        result.setdefault("pain_categories", [])
+        result.setdefault("sentiment_trajectory", {})
         result.setdefault("buyer_authority", {"role_type": "unknown", "buying_stage": "unknown",
-                                              "has_budget_authority": False, "executive_sponsor_mentioned": False})
+                                              "executive_sponsor_mentioned": False})
         result.setdefault("timeline", {"decision_timeline": "unknown"})
         result.setdefault("contract_context", {"contract_value_signal": "unknown"})
         result.setdefault("insider_signals", None)
-        result.setdefault("would_recommend", None)
         result.setdefault("positive_aspects", [])
         result.setdefault("feature_gaps", [])
+        result.setdefault("recommendation_language", [])
+        result.setdefault("pricing_phrases", [])
+        result.setdefault("event_mentions", [])
+        result.setdefault("urgency_indicators", {})
         # Leave competitors_mentioned as-is from Tier 1 (partial data)
         for comp in result.get("competitors_mentioned", []):
             comp.setdefault("evidence_type", "neutral_mention")
@@ -266,14 +266,19 @@ def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
             comp.setdefault("reason_category", None)
         return result
 
-    # --- Tier 2 succeeded: overlay interpretive fields ---
+    # --- Tier 2 succeeded: overlay CLASSIFY + EXTRACT fields ---
     _TIER2_TOP_LEVEL_KEYS = {
-        "urgency_score", "pain_category", "pain_categories",
+        "pain_categories",
         "sentiment_trajectory", "buyer_authority", "timeline",
         "contract_context", "insider_signals",
-        "would_recommend", "positive_aspects", "feature_gaps",
+        "positive_aspects", "feature_gaps",
+        # New v2 EXTRACT fields
+        "recommendation_language", "pricing_phrases",
+        "event_mentions", "urgency_indicators",
     }
-    for key in _TIER2_TOP_LEVEL_KEYS:
+    # Also accept legacy INFER keys if a v1 Tier 2 model returns them
+    _LEGACY_TIER2_KEYS = {"urgency_score", "pain_category", "would_recommend"}
+    for key in _TIER2_TOP_LEVEL_KEYS | _LEGACY_TIER2_KEYS:
         if key in tier2:
             result[key] = tier2[key]
 
@@ -307,6 +312,95 @@ def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
             merged_comps.append(t1_comp)
 
     result["competitors_mentioned"] = merged_comps
+    return result
+
+
+def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
+    """Layer 3: compute deterministic fields from Layer 1 + Layer 2 extractions.
+
+    Replaces 7 former LLM INFER fields with pipeline-computed values using
+    the declarative Evidence Map. All downstream consumers see the same
+    JSONB paths -- zero breakage.
+    """
+    from ...reasoning.evidence_engine import get_evidence_engine
+
+    engine = get_evidence_engine()
+
+    raw_meta = source_row.get("raw_metadata") or {}
+    if isinstance(raw_meta, str):
+        raw_meta = json.loads(raw_meta)
+    source_weight = float(raw_meta.get("source_weight", 0.7))
+    content_type = source_row.get("content_type") or result.get("content_classification") or "review"
+    rating = float(source_row["rating"]) if source_row.get("rating") is not None else None
+    rating_max = float(source_row.get("rating_max") or 5)
+
+    indicators = result.get("urgency_indicators", {})
+    complaints = result.get("specific_complaints", [])
+    quotable = result.get("quotable_phrases", [])
+    pricing_phrases = result.get("pricing_phrases", [])
+    rec_lang = result.get("recommendation_language", [])
+    events = result.get("event_mentions", [])
+    pain_cats = result.get("pain_categories", [])
+    budget = result.get("budget_signals", {})
+    reviewer = result.get("reviewer_context", {})
+
+    # 1. urgency_score
+    result["urgency_score"] = engine.compute_urgency(
+        indicators, rating, rating_max, content_type, source_weight,
+    )
+
+    # 2. pain_category (backward compat top-level field)
+    primary_pain = "other"
+    if pain_cats:
+        primary_list = [p for p in pain_cats if isinstance(p, dict) and p.get("severity") == "primary"]
+        if primary_list:
+            primary_pain = primary_list[0].get("category", "other")
+        elif isinstance(pain_cats[0], dict):
+            primary_pain = pain_cats[0].get("category", "other")
+    result["pain_category"] = engine.override_pain(primary_pain, complaints, quotable)
+
+    # 3. would_recommend
+    result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
+
+    # 4. sentiment_trajectory.direction = "unknown" per-review (cross-review later)
+    st = result.get("sentiment_trajectory")
+    if not isinstance(st, dict):
+        st = {}
+        result["sentiment_trajectory"] = st
+    st["direction"] = "unknown"
+
+    # 5. sentiment_trajectory.turning_point from event_mentions
+    if events and isinstance(events, list) and len(events) > 0:
+        first = events[0] if isinstance(events[0], dict) else {}
+        event_text = str(first.get("event", "")).strip()
+        timeframe = str(first.get("timeframe", "")).strip()
+        if event_text and timeframe and timeframe.lower() != "null":
+            st["turning_point"] = f"{event_text} ({timeframe})"
+        elif event_text:
+            st["turning_point"] = event_text
+        else:
+            st.setdefault("turning_point", None)
+    else:
+        st.setdefault("turning_point", None)
+
+    # 6. buyer_authority.has_budget_authority
+    ba = result.get("buyer_authority")
+    if not isinstance(ba, dict):
+        ba = {}
+        result["buyer_authority"] = ba
+    ba["has_budget_authority"] = engine.derive_budget_authority(result)
+
+    # 7. contract_context.price_complaint + price_context
+    cc = result.get("contract_context")
+    if not isinstance(cc, dict):
+        cc = {}
+        result["contract_context"] = cc
+    cc["price_complaint"] = engine.derive_price_complaint(result)
+    cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
+
+    # Mark schema version
+    result["enrichment_schema_version"] = 2
+
     return result
 
 
@@ -572,6 +666,7 @@ async def _queue_version_upgrades(pool) -> int:
                     UPDATE b2b_reviews
                     SET enrichment_status = 'pending',
                         enrichment_attempts = 0,
+                        requeue_reason = 'parser_upgrade',
                         low_fidelity = false,
                         low_fidelity_reasons = '[]'::jsonb,
                         low_fidelity_detected_at = NULL,
@@ -605,6 +700,70 @@ async def _queue_version_upgrades(pool) -> int:
         return 0
 
 
+async def _queue_model_upgrades(pool, cfg) -> int:
+    """Reset enrichment_status to 'pending' for reviews enriched with outdated model versions.
+
+    Compares the review's enrichment_model signature against the currently
+    active model configuration.
+    Returns the number of reviews re-queued.
+    """
+    if not cfg.enrichment_auto_requeue_model_upgrades:
+        return 0
+
+    # Build current model signature matching the format used at persist time.
+    # Hybrid rows are stored as "hybrid:{tier1}+{tier2}" (see line ~949).
+    # Single-pass rows store just the model ID.
+    if cfg.enrichment_hybrid_enabled:
+        tier2_model = getattr(cfg, "enrichment_tier2_model", "") or ""
+        tier1_model = cfg.enrichment_tier1_model or ""
+        current_sig = f"hybrid:{tier1_model}+{tier2_model}" if tier2_model else tier1_model
+    else:
+        # Single-pass stores whatever _get_base_enrichment_llm() returns as
+        # model_id (via getattr(llm, "model_id") or getattr(llm, "model")).
+        # Resolve the same way to avoid perpetual drift detection.
+        llm = _get_base_enrichment_llm(cfg.enrichment_local_only)
+        if llm is None:
+            return 0
+        current_sig = getattr(llm, "model_id", None) or getattr(llm, "model", None) or ""
+    if not current_sig:
+        return 0
+
+    try:
+        count = await pool.fetchval(
+            """
+            WITH updated AS (
+                UPDATE b2b_reviews
+                SET enrichment_status = 'pending',
+                    enrichment_attempts = 0,
+                    requeue_reason = 'enrichment_model_outdated',
+                    low_fidelity = false,
+                    low_fidelity_reasons = '[]'::jsonb,
+                    low_fidelity_detected_at = NULL,
+                    enrichment_repair = NULL,
+                    enrichment_repair_status = NULL,
+                    enrichment_repair_attempts = 0,
+                    enrichment_repair_model = NULL,
+                    enrichment_repaired_at = NULL,
+                    enrichment_repair_applied_fields = '[]'::jsonb
+                WHERE enrichment_status IN ('enriched', 'no_signal', 'quarantined')
+                  AND (enrichment_model IS NULL OR enrichment_model != $1)
+                RETURNING 1
+            )
+            SELECT count(*) FROM updated
+            """,
+            current_sig,
+        )
+        if count and count > 0:
+            logger.info(
+                "Re-queued %d reviews for re-enrichment (model drift -> %s)",
+                count, current_sig,
+            )
+        return count
+    except Exception:
+        logger.debug("Model upgrade check skipped", exc_info=True)
+        return 0
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: enrich pending B2B reviews (fallback for anything missed)."""
     cfg = settings.b2b_churn
@@ -619,7 +778,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     exhausted = await _mark_exhausted_pending_failed(pool, cfg.enrichment_max_attempts)
 
     # Auto re-process reviews scraped with outdated parser versions
-    requeued = await _queue_version_upgrades(pool)
+    requeued_parser = await _queue_version_upgrades(pool)
+    requeued_model = await _queue_model_upgrades(pool, cfg)
+    requeued = requeued_parser + requeued_model
 
     task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
     default_max_batch = min(cfg.enrichment_max_per_batch, 500)
@@ -809,6 +970,30 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 _classify_review_async(row, local_only, max_tokens, truncate_length),
                 timeout=120,
             )
+
+        # Layer 3: compute derived fields from indicators (urgency, pain, recommend, etc.)
+        # Hard-fail if compute breaks -- do NOT fall back to model-dependent output.
+        if result:
+            try:
+                result = _compute_derived_fields(result, row)
+            except Exception:
+                logger.warning(
+                    "Evidence engine compute failed for %s -- quarantining to prevent model-dependent output",
+                    review_id, exc_info=True,
+                )
+                await pool.execute(
+                    """
+                    UPDATE b2b_reviews
+                    SET enrichment_status = 'quarantined',
+                        enrichment_attempts = enrichment_attempts + 1,
+                        low_fidelity = true,
+                        low_fidelity_reasons = $2::jsonb
+                    WHERE id = $1
+                    """,
+                    review_id,
+                    json.dumps(["evidence_engine_compute_failure"]),
+                )
+                return "quarantined"
 
         if result and _validate_enrichment(result, row):
             # Extract sentiment_trajectory subfields for indexed columns
@@ -1245,6 +1430,7 @@ async def _classify_review_async(row, local_only: bool, max_tokens: int,
 _KNOWN_PAIN_CATEGORIES = {
     "pricing", "features", "reliability", "support", "integration",
     "performance", "security", "ux", "onboarding", "other",
+    "technical_debt", "contract_lock_in", "data_migration", "api_limitations",
 }
 
 
