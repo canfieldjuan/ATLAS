@@ -123,6 +123,26 @@ class TestBioRegex:
         assert sig is not None
         assert sig.value == "Acme Corp"
 
+    def test_email_provider_rejected(self):
+        # "handle@gmail" — should NOT extract "gmail" as a company name
+        sig = _extract_from_bio_regex("johndoe @ gmail", "bio")
+        assert sig is None or (sig.value and sig.value.lower() != "gmail")
+
+    def test_generic_word_rejected(self):
+        # "I work at support" — "support" is a generic term, not a company
+        sig = _extract_from_bio_regex("I work at support", "bio")
+        assert sig is None or (sig.value and sig.value.lower() != "support")
+
+    def test_entrepreneur_rejected_from_founder(self):
+        # "Founder, entrepreneur" — "entrepreneur" is not a company name
+        sig = _extract_from_bio_regex("Founder, entrepreneur", "bio")
+        assert sig is None or (sig.value and sig.value.lower() != "entrepreneur")
+
+    def test_task_management_rejected(self):
+        # Hardcoded in reject list even without article
+        sig = _extract_from_bio_regex("I work at task management", "bio")
+        assert sig is None or (sig.value and "management" not in sig.value.lower())
+
     def test_former_at(self):
         sig = _extract_from_bio_regex("Former engineer at Meta", "bio")
         assert sig is not None
