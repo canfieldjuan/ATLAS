@@ -157,14 +157,30 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
                         {"role": "system", "content": skill.content},
                         {"role": "user", "content": payload_json},
                     ],
-                    "max_tokens": cfg.enrichment_tier1_max_tokens,
+                    "max_tokens": max(cfg.enrichment_tier1_max_tokens, 4096),
                     "temperature": 0.0,
                     "response_format": {"type": "json_object"},
                 },
             )
             resp.raise_for_status()
-            text = resp.json()["choices"][0]["message"]["content"].strip()
+            body = resp.json()
+            choices = body.get("choices") or []
+            if not choices:
+                logger.warning("OpenRouter returned no choices")
+                return None, model_id
+            msg = choices[0].get("message") or {}
+            text = msg.get("content") or ""
+            # Reasoning models (o1/o3/gpt-oss) may put output in reasoning field
+            if not text and msg.get("reasoning"):
+                # Try to extract JSON from the reasoning
+                reasoning = msg["reasoning"]
+                import re as _re
+                json_match = _re.search(r"\{[\s\S]*\}", reasoning)
+                if json_match:
+                    text = json_match.group(0)
+            text = text.strip()
             if not text:
+                logger.warning("OpenRouter returned empty content")
                 return None, model_id
 
             from ...pipelines.llm import clean_llm_output, parse_json_response
@@ -172,6 +188,7 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
             parsed = parse_json_response(text, recover_truncated=True)
             if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
                 return parsed, model_id
+            logger.warning("OpenRouter tier 1 returned unparseable JSON")
             return None, model_id
     except Exception:
         logger.exception("OpenRouter tier 1 call failed")
