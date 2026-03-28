@@ -1,132 +1,171 @@
 "use client";
 
 import { useRouter } from 'next/navigation'
-import {
-  MessageSquareText,
-  Tag,
-  ShieldAlert,
-  Zap,
-  RefreshCw,
-  Package,
-} from 'lucide-react'
+import { Building2, AlertTriangle, MessageSquareText, Zap, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-} from 'recharts'
 import StatCard from '@/components/StatCard'
+import ChurnChart from '@/components/ChurnChart'
+import PipelineStatusWidget from '@/components/PipelineStatus'
+import ArchetypeBadge from '@/components/ArchetypeBadge'
 import DataTable, { type Column } from '@/components/DataTable'
-import { FilterSelect } from '@/components/FilterBar'
+import UrgencyBadge from '@/components/UrgencyBadge'
 import { PageError } from '@/components/ErrorBoundary'
 import useApiData from '@/lib/hooks/useApiData'
-import useFilterParams from '@/lib/hooks/useFilterParams'
-import useCategories from '@/lib/hooks/useCategories'
 import {
+  fetchSignals,
+  fetchSlowBurnWatchlist,
+  fetchHighIntent,
   fetchPipeline,
-  fetchBrands,
-  fetchSafety,
-  type PipelineStatus,
-  type BrandSummary,
-  type SafetySignal,
 } from '@/lib/api/client'
-
-const PIE_COLORS = ['#22d3ee', '#a78bfa', '#f472b6', '#facc15', '#34d399', '#fb923c']
+import type { ChurnSignal, HighIntentCompany, PipelineStatus } from '@/lib/types'
 
 interface DashboardData {
+  signals: ChurnSignal[]
+  slowBurnSignals: ChurnSignal[]
+  companies: HighIntentCompany[]
   pipeline: PipelineStatus
-  brands: BrandSummary[]
-  safety: SafetySignal[]
-  safetyTotal: number
+  signalSummary: { totalVendors: number; highUrgency: number; totalReviews: number }
 }
 
-const FILTER_CONFIG = {
-  source_category: { type: 'string' as const, label: 'Category' },
+function formatSignalValue(value: number | null, suffix = '') {
+  if (value === null || Number.isNaN(value)) return '--'
+  return `${value.toFixed(1)}${suffix}`
 }
 
-type Filters = {
-  source_category: string
+function formatGrowthRate(value: number | null) {
+  if (value === null || Number.isNaN(value)) return '--'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
+function toIso(value: string | null | undefined): string | null {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function maxIso(values: (string | null | undefined)[]): string | null {
+  const isoValues = values
+    .map((value) => toIso(value))
+    .filter((value): value is string => Boolean(value))
+  if (isoValues.length === 0) return null
+  return isoValues.sort((a, b) => b.localeCompare(a))[0]
 }
 
 export default function Dashboard() {
   const router = useRouter()
-  const { categories: categoryList } = useCategories()
-  const { filters, setFilter } = useFilterParams<Filters>(FILTER_CONFIG)
-  const category = filters.source_category
 
   const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
     async () => {
-      const cat = category || undefined
-      const [pipeline, brandsRes, safetyRes] = await Promise.all([
-        fetchPipeline({ source_category: cat }),
-        fetchBrands({ limit: 10, sort_by: 'review_count', source_category: cat }),
-        fetchSafety({ limit: 5, source_category: cat }),
+      const [sigRes, slowBurnRes, hiRes, pipe] = await Promise.all([
+        fetchSignals({ limit: 20 }),
+        fetchSlowBurnWatchlist(),
+        fetchHighIntent({ limit: 10 }),
+        fetchPipeline(),
       ])
       return {
-        pipeline,
-        brands: brandsRes.brands,
-        safety: safetyRes.signals,
-        safetyTotal: safetyRes.total_flagged,
+        signals: sigRes.signals,
+        slowBurnSignals: slowBurnRes.signals,
+        companies: hiRes.companies,
+        pipeline: pipe,
+        signalSummary: {
+          totalVendors: sigRes.total_vendors ?? sigRes.signals.length,
+          highUrgency: sigRes.high_urgency_count ?? sigRes.signals.filter((s) => s.avg_urgency_score >= 7).length,
+          totalReviews: sigRes.total_signal_reviews ?? 0,
+        },
       }
     },
-    [category],
+    [],
   )
 
-  const pipeline = data?.pipeline
-  const brands = data?.brands ?? []
-  const safety = data?.safety ?? []
+  const signals = data?.signals ?? []
+  const slowBurnSignals = data?.slowBurnSignals ?? []
+  const companies = data?.companies ?? []
+  const pipeline = data?.pipeline ?? null
+  const summary = data?.signalSummary ?? { totalVendors: 0, highUrgency: 0, totalReviews: 0 }
+  const latestSignalComputedAt = maxIso(signals.map((signal) => signal.last_computed_at))
+  const lastEnrichmentAt = toIso(pipeline?.last_enrichment_at)
+  const lastScrapeAt = toIso(pipeline?.last_scrape_at)
+  const freshnessAnchor = maxIso([latestSignalComputedAt, lastEnrichmentAt, lastScrapeAt])
+  const freshnessAgeHours = freshnessAnchor
+    ? (Date.now() - new Date(freshnessAnchor).getTime()) / (1000 * 60 * 60)
+    : null
+  const freshnessState = freshnessAgeHours === null
+    ? 'unknown'
+    : freshnessAgeHours > 24
+      ? 'stale'
+      : 'fresh'
 
-  const totalReviews = pipeline?.total_reviews ?? 0
-  const brandCount = pipeline?.total_brands ?? 0
-  const asinCount = pipeline?.total_asins ?? 0
-  const safetyTotal = data?.safetyTotal ?? 0
-  const targetedForDeep = pipeline?.targeted_for_deep ?? 0
-  const deepEnriched = pipeline?.deep_enriched ?? 0
-
-  // Pipeline progress bars
-  const enrichedPct = pipeline && totalReviews > 0
-    ? Math.round((pipeline.enriched / totalReviews) * 100)
+  const totalReviews = pipeline
+    ? Object.values(pipeline.enrichment_counts).reduce((a, b) => a + b, 0)
     : 0
-  const deepPct = targetedForDeep > 0
-    ? Math.round((deepEnriched / targetedForDeep) * 100)
+  const enrichRate = pipeline
+    ? totalReviews > 0
+      ? Math.round(((pipeline.enrichment_counts['enriched'] ?? 0) / totalReviews) * 100)
+      : 0
     : 0
 
-  // Category pie chart data
-  const categoryData = pipeline
-    ? Object.entries(pipeline.category_counts).map(([name, value]) => ({ name, value }))
-    : []
-
-  // Safety table columns
-  const safetyColumns: Column<SafetySignal>[] = [
+  const companyColumns: Column<HighIntentCompany>[] = [
     {
-      key: 'brand',
-      header: 'Brand',
-      render: (r) => <span className="text-white font-medium">{r.brand}</span>,
+      key: 'company',
+      header: 'Company',
+      render: (r) => <span className="text-white font-medium">{r.company}</span>,
     },
     {
-      key: 'title',
-      header: 'Product',
-      render: (r) => <span className="text-slate-300 truncate max-w-[200px] block">{r.title}</span>,
+      key: 'vendor',
+      header: 'Vendor',
+      render: (r) => <span className="text-slate-300">{r.vendor}</span>,
     },
     {
-      key: 'rating',
-      header: 'Rating',
-      render: (r) => <span className="text-slate-300">{r.rating?.toFixed(1) ?? '--'}</span>,
+      key: 'urgency',
+      header: 'Urgency',
+      render: (r) => <UrgencyBadge score={r.urgency} />,
+      sortable: true,
+      sortValue: (r) => r.urgency,
     },
     {
-      key: 'summary',
-      header: 'Summary',
-      render: (r) => (
-        <span className="text-slate-400 truncate max-w-[300px] block">
-          {r.summary ?? r.review_excerpt ?? '--'}
-        </span>
-      ),
+      key: 'pain',
+      header: 'Pain',
+      render: (r) => <span className="text-slate-400">{r.pain ?? '--'}</span>,
+    },
+    {
+      key: 'seats',
+      header: 'Seats',
+      render: (r) => <span className="text-slate-300">{r.seat_count ?? '--'}</span>,
+      sortable: true,
+      sortValue: (r) => r.seat_count ?? 0,
+    },
+    {
+      key: 'buying_stage',
+      header: 'Stage',
+      render: (r) => {
+        if (!r.buying_stage || r.buying_stage === 'unknown') return <span className="text-slate-500 text-xs">--</span>
+        const colors: Record<string, string> = {
+          active_purchase: 'text-red-400',
+          renewal_decision: 'text-amber-400',
+          evaluation: 'text-cyan-400',
+          post_purchase: 'text-slate-400',
+        }
+        return (
+          <span className={`text-xs font-medium ${colors[r.buying_stage] ?? 'text-slate-400'}`}>
+            {r.buying_stage.replace(/_/g, ' ')}
+          </span>
+        )
+      },
+    },
+    {
+      key: 'contract_end',
+      header: 'Contract End',
+      render: (r) => <span className="text-slate-300 text-xs">{r.contract_end ?? '--'}</span>,
+    },
+    {
+      key: 'dm',
+      header: 'DM',
+      render: (r) =>
+        r.decision_maker ? (
+          <span className="text-cyan-400 text-xs font-medium">Yes</span>
+        ) : (
+          <span className="text-slate-500 text-xs">No</span>
+        ),
     },
   ]
 
@@ -135,29 +174,41 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Consumer Intelligence Overview</h1>
-        <div className="flex items-center gap-3">
-          <FilterSelect
-            label=""
-            value={category}
-            onChange={(v) => setFilter('source_category', v)}
-            options={categoryList.map((c) => ({ value: c, label: c }))}
-            placeholder="All Categories"
-            className="w-48"
-          />
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-            Refresh
-          </button>
-        </div>
+        <h1 className="text-2xl font-bold text-white">Churn Signals Overview</h1>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+      <div className="text-xs">
+        {freshnessAnchor ? (
+          <span className={freshnessState === 'stale' ? 'text-amber-400' : 'text-slate-500'}>
+            Data last updated {new Date(freshnessAnchor).toLocaleString()}
+            {freshnessState === 'stale' ? ' (older than 24h)' : ''}
+          </span>
+        ) : (
+          <span className="text-slate-500">Data freshness timestamp unavailable</span>
+        )}
       </div>
 
-      {/* Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          label="Vendors Tracked"
+          value={summary.totalVendors}
+          icon={<Building2 className="h-5 w-5" />}
+          skeleton={loading}
+        />
+        <StatCard
+          label="High Urgency"
+          value={summary.highUrgency}
+          icon={<AlertTriangle className="h-5 w-5" />}
+          sub="Urgency &ge; 7"
+          skeleton={loading}
+        />
         <StatCard
           label="Total Reviews"
           value={totalReviews.toLocaleString()}
@@ -165,198 +216,127 @@ export default function Dashboard() {
           skeleton={loading}
         />
         <StatCard
-          label="Brands Tracked"
-          value={brandCount.toLocaleString()}
-          icon={<Tag className="h-5 w-5" />}
-          sub={`${asinCount.toLocaleString()} products`}
-          skeleton={loading}
-        />
-        <StatCard
-          label="Safety Signals"
-          value={safetyTotal}
-          icon={<ShieldAlert className="h-5 w-5" />}
-          skeleton={loading}
-        />
-        <StatCard
-          label="First-Pass"
-          value={`${enrichedPct}%`}
-          icon={<Package className="h-5 w-5" />}
-          sub={pipeline ? `${pipeline.enriched.toLocaleString()} of ${totalReviews.toLocaleString()}` : undefined}
-          skeleton={loading}
-        />
-        <StatCard
-          label="Deep Enrichment"
-          value={`${deepPct}%`}
+          label="Enrichment Rate"
+          value={`${enrichRate}%`}
           icon={<Zap className="h-5 w-5" />}
-          sub={targetedForDeep > 0 ? `${deepEnriched.toLocaleString()} of ${targetedForDeep.toLocaleString()} targeted` : undefined}
           skeleton={loading}
         />
       </div>
 
-      {/* Pipeline + Categories */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Pipeline Status */}
         <div className="lg:col-span-2 bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
-          <h3 className="text-sm font-medium text-slate-300 mb-4">Pipeline Status</h3>
+          <h3 className="text-sm font-medium text-slate-300 mb-4">
+            Top Churn Signals by Urgency
+          </h3>
           {loading ? (
-            <div className="space-y-4 animate-pulse">
-              <div className="h-4 w-3/4 bg-slate-700/50 rounded" />
-              <div className="h-4 w-1/2 bg-slate-700/50 rounded" />
+            <div className="h-[300px] flex items-end gap-3 animate-pulse">
+              {[75, 50, 88, 40, 65, 55, 80, 45].map((h, i) => (
+                <div
+                  key={i}
+                  className="flex-1 bg-slate-700/50 rounded-t"
+                  style={{ height: `${h}%` }}
+                />
+              ))}
             </div>
           ) : (
-            <div className="space-y-4">
-              <div>
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>First-pass Enrichment</span>
-                  <span>{enrichedPct}% ({pipeline?.enriched.toLocaleString()} of {totalReviews.toLocaleString()})</span>
-                </div>
-                <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-cyan-500 rounded-full transition-all"
-                    style={{ width: `${enrichedPct}%` }}
-                  />
-                </div>
-              </div>
-              <div>
-                <div className="flex justify-between text-xs text-slate-400 mb-1">
-                  <span>Deep Enrichment</span>
-                  <span>{deepPct}% ({deepEnriched.toLocaleString()} of {targetedForDeep.toLocaleString()} targeted)</span>
-                </div>
-                <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-purple-500 rounded-full transition-all"
-                    style={{ width: `${deepPct}%` }}
-                  />
-                </div>
-              </div>
-              {/* Status breakdown (targeted pool only) */}
-              {pipeline && (
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-                  {Object.entries(pipeline.deep_enrichment_counts)
-                    .filter(([status]) => status !== 'not_applicable')
-                    .sort(([, a], [, b]) => b - a)
-                    .map(([status, count]) => (
-                      <span key={status}>
-                        <span className={
-                          status === 'enriched' ? 'text-purple-400' :
-                          status === 'pending' ? 'text-amber-400' :
-                          status === 'processing' ? 'text-cyan-400' :
-                          status.includes('fail') ? 'text-red-400' :
-                          'text-slate-500'
-                        }>{count.toLocaleString()}</span>
-                        {' '}{status.replace('deep_', '').replaceAll('_', ' ')}
-                      </span>
-                    ))
-                  }
-                </div>
-              )}
-              {pipeline?.last_deep_enrichment_at && (
-                <p className="text-xs text-slate-500">
-                  Last deep enrichment: {new Date(pipeline.last_deep_enrichment_at).toLocaleString()}
-                </p>
-              )}
-            </div>
+            <ChurnChart signals={signals} />
           )}
         </div>
+        <PipelineStatusWidget data={pipeline} />
+      </div>
 
-        {/* Category Breakdown */}
-        <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
-          <h3 className="text-sm font-medium text-slate-300 mb-4">Source Categories</h3>
-          {loading ? (
-            <div className="h-[200px] animate-pulse bg-slate-700/30 rounded" />
-          ) : categoryData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie
-                  data={categoryData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={80}
-                  paddingAngle={3}
-                  dataKey="value"
-                >
-                  {categoryData.map((_, i) => (
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #334155',
-                    borderRadius: 8,
-                    color: '#e2e8f0',
-                    fontSize: 13,
-                  }}
-                  formatter={(value: any) => [value.toLocaleString(), 'Reviews']}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-slate-500 text-sm">No data</p>
-          )}
-          <div className="flex flex-wrap gap-2 mt-2">
-            {categoryData.map((d, i) => (
-              <span key={d.name} className="flex items-center gap-1 text-xs text-slate-400">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
-                />
-                {d.name} ({d.value.toLocaleString()})
-              </span>
+      {(() => {
+        const archetypeCounts: Record<string, number> = {}
+        for (const s of signals) {
+          const arch = s.archetype
+          if (arch) archetypeCounts[arch] = (archetypeCounts[arch] ?? 0) + 1
+        }
+        const sorted = Object.entries(archetypeCounts).sort((a, b) => b[1] - a[1])
+        const classified = sorted.reduce((sum, [, count]) => sum + count, 0)
+        if (sorted.length === 0) return null
+        return (
+          <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
+            <h3 className="text-sm font-medium text-slate-300 mb-4">
+              Churn Pattern Distribution
+              <span className="text-xs text-slate-500 ml-2">({classified} of {signals.length} classified)</span>
+            </h3>
+            <div className="space-y-2.5">
+              {sorted.map(([archetype, count]) => {
+                const pct = Math.round((count / signals.length) * 100)
+                return (
+                  <div key={archetype} className="flex items-center gap-3">
+                    <div className="w-32 shrink-0">
+                      <ArchetypeBadge archetype={archetype} />
+                    </div>
+                    <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="h-full bg-cyan-500/60 rounded-full transition-all"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-slate-400 w-12 text-right">{count} ({pct}%)</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h3 className="text-sm font-medium text-slate-300">Slow-Burn Watchlist</h3>
+          <span className="text-xs text-slate-500">Growth plus support and legacy stress</span>
+        </div>
+        {loading ? (
+          <div className="space-y-3 animate-pulse">
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} className="h-24 rounded-xl bg-slate-800/50" />
             ))}
           </div>
-        </div>
+        ) : slowBurnSignals.length === 0 ? (
+          <div className="text-sm text-slate-500">No slow-burn signal data available yet.</div>
+        ) : (
+          <div className="space-y-3">
+            {slowBurnSignals.map((signal) => (
+              <button
+                key={signal.vendor_name}
+                type="button"
+                onClick={() => router.push(`/vendors/${encodeURIComponent(signal.vendor_name)}`)}
+                className="w-full rounded-xl border border-slate-700/50 bg-slate-950/40 px-4 py-3 text-left transition-colors hover:border-cyan-500/40 hover:bg-slate-900/70"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium text-white">{signal.vendor_name}</div>
+                    <div className="text-xs text-slate-500">{signal.product_category ?? 'Uncategorized'}</div>
+                  </div>
+                  <ArchetypeBadge archetype={signal.archetype} confidence={signal.archetype_confidence} />
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                  <div><div className="text-slate-500">Support</div><div className="text-slate-200">{formatSignalValue(signal.support_sentiment)}</div></div>
+                  <div><div className="text-slate-500">Legacy</div><div className="text-slate-200">{formatSignalValue(signal.legacy_support_score)}</div></div>
+                  <div><div className="text-slate-500">Feature</div><div className="text-slate-200">{formatSignalValue(signal.new_feature_velocity)}</div></div>
+                  <div><div className="text-slate-500">Growth</div><div className="text-slate-200">{formatGrowthRate(signal.employee_growth_rate)}</div></div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Top Brands Chart */}
-      {brands.length > 0 && (
-        <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
-          <h3 className="text-sm font-medium text-slate-300 mb-4">Top Brands by Review Count</h3>
-          {loading ? (
-            <div className="h-[250px] animate-pulse bg-slate-700/30 rounded" />
-          ) : (
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={brands.slice(0, 10)} margin={{ left: 10, bottom: 40 }}>
-                <XAxis
-                  dataKey="brand"
-                  tick={{ fill: '#94a3b8', fontSize: 11 }}
-                  axisLine={{ stroke: '#334155' }}
-                  angle={-35}
-                  textAnchor="end"
-                  interval={0}
-                />
-                <YAxis
-                  tick={{ fill: '#94a3b8', fontSize: 11 }}
-                  axisLine={{ stroke: '#334155' }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1e293b',
-                    border: '1px solid #334155',
-                    borderRadius: 8,
-                    color: '#e2e8f0',
-                    fontSize: 13,
-                  }}
-                />
-                <Bar dataKey="review_count" fill="#22d3ee" radius={[4, 4, 0, 0]} name="Reviews" />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      )}
-
-      {/* Recent Safety Signals */}
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">
-        <h3 className="text-sm font-medium text-slate-300 mb-4">Recent Safety Signals</h3>
+        <h3 className="text-sm font-medium text-slate-300 mb-4">
+          Recent High-Intent Companies
+        </h3>
         {loading ? (
-          <DataTable columns={safetyColumns} data={[]} skeletonRows={5} />
+          <DataTable columns={companyColumns} data={[]} skeletonRows={5} />
         ) : (
           <DataTable
-            columns={safetyColumns}
-            data={safety}
-            onRowClick={(r) => router.push(`/reviews/${r.id}`)}
-            emptyMessage="No safety signals detected"
+            columns={companyColumns}
+            data={companies}
+            onRowClick={(r) => router.push(`/vendors/${encodeURIComponent(r.vendor)}`)}
+            emptyMessage="No high-intent companies detected"
+            emptyAction={{ label: 'Check Pipeline Status', onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }}
           />
         )}
       </div>

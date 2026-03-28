@@ -1,7 +1,42 @@
 import { tryRefreshToken } from '@/lib/auth/AuthContext'
-import { API_BASE } from './config'
+import type {
+  ChurnSignal,
+  ChurnSignalDetail,
+  HighIntentCompany,
+  VendorProfile,
+  VendorHistoryResponse,
+  VendorPeriodComparisonResponse,
+  Report,
+  ReportDetail,
+  ReviewSummary,
+  ReviewDetail,
+  PipelineStatus,
+  AffiliateOpportunity,
+  AffiliatePartner,
+  ClickSummary,
+  Campaign,
+  CampaignStats,
+  VendorTarget,
+  BlogDraftSummary,
+  BlogDraft,
+  BlogEvidence,
+  Prospect,
+  ProspectStats,
+  ReviewQueueDraft,
+  AuditEvent,
+  BriefingDraft,
+} from '@/lib/types'
+import { normalizeReportDetail, normalizeVendorProfile } from '@/lib/reportNormalization'
 
-const BASE = `${API_BASE}/api/v1/consumer/dashboard`
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || ''
+const TENANT_BASE = `${API_BASE}/api/v1/b2b/tenant`
+const AFFILIATES_BASE = `${TENANT_BASE}/affiliates`
+const CAMPAIGNS_BASE = `${API_BASE}/api/v1/b2b/campaigns`
+const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
+const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
+const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
+const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
+const CACHE_BUSTER_PARAM = '_ts'
 
 function maybeFallbackApiPath(url: string): string | null {
   if (!url.includes('/api/v1/')) return null
@@ -16,53 +51,66 @@ async function fetchWithApiFallback(url: string, init?: RequestInit): Promise<Re
   return fetch(fallbackUrl, init)
 }
 
+function freshHeaders(): Record<string, string> {
+  return {
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+  }
+}
+
 function authHeaders(): Record<string, string> {
   const token = (typeof window !== 'undefined' ? localStorage.getItem('atlas_token') : null)
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-function forceLogout(): never {
+function forceLogout() {
   typeof window !== 'undefined' && localStorage.removeItem('atlas_token')
   typeof window !== 'undefined' && localStorage.removeItem('atlas_refresh_token')
-  window.location.href = '/login'
-  throw new Error('Session expired')
+  window.location.href = '/landing'
 }
 
-async function handleResponse<T>(res: Response, retry: () => Promise<Response>): Promise<T> {
+async function handleResponse<T>(res: Response, retryFetch: () => Promise<Response>): Promise<T> {
   if (res.status === 401) {
     const newToken = await tryRefreshToken()
-    if (!newToken) forceLogout()
-    // Retry the original request with the new token
-    const retryRes = await retry()
-    if (retryRes.status === 401) forceLogout()
-    if (!retryRes.ok) {
-      const body = await retryRes.text().catch(() => '')
-      throw new Error(`API ${retryRes.status}: ${body || retryRes.statusText}`)
+    if (!newToken) {
+      forceLogout()
+      throw new Error('Session expired')
     }
-    return retryRes.json()
+    const retry = await retryFetch()
+    if (retry.status === 401) {
+      forceLogout()
+      throw new Error('Session expired')
+    }
+    if (!retry.ok) {
+      const body = await retry.text().catch(() => '')
+      throw new Error(`API ${retry.status}: ${body || retry.statusText}`)
+    }
+    return retry.json()
   }
   if (res.status === 402) {
-    // Payment past due -- redirect to account page for billing fix
     window.location.href = '/account'
-    throw new Error('Payment past due')
+    throw new Error('Payment required')
   }
   if (res.status === 403) {
-    const body = await res.text().catch(() => '')
-    if (body.includes('Trial expired')) {
+    const body = await res.json().catch(() => ({ detail: '' }))
+    if (body.detail?.includes('Trial expired')) {
       window.location.href = '/account'
-      throw new Error('Trial expired')
     }
-    throw new Error(`API 403: ${body || res.statusText}`)
+    throw new Error(body.detail || 'Forbidden')
   }
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+    const body = await res.text()
+    throw new Error(`API ${res.status}: ${body}`)
   }
   return res.json()
 }
 
-async function get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-  const url = new URL(`${BASE}${path}`, window.location.origin)
+// ---------------------------------------------------------------------------
+// Generic fetchers
+// ---------------------------------------------------------------------------
+
+async function get<T>(base: string, path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  const url = new URL(base + path, window.location.origin)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') {
@@ -70,422 +118,468 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
       }
     }
   }
-  const doFetch = () => fetchWithApiFallback(url.toString(), { headers: authHeaders() })
+  url.searchParams.set(CACHE_BUSTER_PARAM, String(Date.now()))
+  const doFetch = () => fetchWithApiFallback(url.toString(), {
+    headers: { ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
+  })
   const res = await doFetch()
   return handleResponse<T>(res, doFetch)
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
-  const doFetch = () =>
-    fetchWithApiFallback(`${BASE}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: body ? JSON.stringify(body) : undefined,
-    })
+async function post<T>(base: string, path: string, body?: unknown): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetchWithApiFallback(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
   const res = await doFetch()
   return handleResponse<T>(res, doFetch)
 }
 
-async function del<T>(path: string): Promise<T> {
-  const doFetch = () =>
-    fetchWithApiFallback(`${BASE}${path}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    })
+async function patch<T>(base: string, path: string, body: unknown): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetchWithApiFallback(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
+    body: JSON.stringify(body),
+  })
   const res = await doFetch()
   return handleResponse<T>(res, doFetch)
 }
 
-// -- Types --
-
-export interface PipelineStatus {
-  enrichment_counts: Record<string, number>
-  deep_enrichment_counts: Record<string, number>
-  category_counts: Record<string, number>
-  total_reviews: number
-  enriched: number
-  deep_enriched: number
-  targeted_for_deep: number
-  total_brands: number
-  total_asins: number
-  last_enrichment_at: string | null
-  last_deep_enrichment_at: string | null
+async function put<T>(base: string, path: string, body: unknown): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetchWithApiFallback(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
+    body: JSON.stringify(body),
+  })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
 }
 
-export interface BrandSummary {
-  brand: string
-  product_count: number
-  review_count: number
-  avg_rating: number | null
-  total_ratings: number | null
-  avg_complaint_score: number | null
-  avg_praise_score: number | null
-  complaint_count: number
-  praise_count: number
-  safety_count: number
-  brand_health: number | null
+async function del<T>(base: string, path: string): Promise<T> {
+  const url = base + path
+  const doFetch = () => fetchWithApiFallback(url, {
+    method: 'DELETE',
+    headers: { ...freshHeaders(), ...authHeaders() },
+    cache: 'no-store',
+  })
+  const res = await doFetch()
+  return handleResponse<T>(res, doFetch)
 }
 
-export interface BrandProduct {
-  asin: string
-  title: string
-  average_rating: number | null
-  rating_number: number
-  price: string | null
-  review_count: number
-  avg_complaint_score: number | null
-  avg_praise_score: number | null
-  complaint_count: number
-  praise_count: number
+// ---------------------------------------------------------------------------
+// Signals
+// ---------------------------------------------------------------------------
+
+export async function fetchSignals(params?: {
+  vendor_name?: string
+  min_urgency?: number
+  category?: string
+  limit?: number
+}) {
+  return get<{
+    signals: ChurnSignal[]
+    count: number
+    total_vendors?: number
+    high_urgency_count?: number
+    total_signal_reviews?: number
+  }>(TENANT_BASE, '/signals', params)
 }
 
-export interface SentimentAspect {
-  aspect: string
-  positive: number
-  negative: number
-  mixed: number
-  neutral: number
+export async function fetchSlowBurnWatchlist(params?: {
+  vendor_name?: string
+  category?: string
+  limit?: number
+}) {
+  return get<{ signals: ChurnSignal[]; count: number }>(TENANT_BASE, '/slow-burn-watchlist', params)
 }
 
-export interface FeatureRequest {
-  request: string
-  count: number
+export async function fetchSignal(vendorName: string, productCategory?: string) {
+  return get<ChurnSignalDetail>(TENANT_BASE, `/signals/${encodeURIComponent(vendorName)}`, {
+    product_category: productCategory,
+  })
 }
 
-export interface CompetitiveFlow {
-  brand: string
-  direction: string
-  count: number
-  avg_rating: number | null
+export async function fetchHighIntent(params?: {
+  vendor_name?: string
+  min_urgency?: number
+  window_days?: number
+  limit?: number
+}) {
+  return get<{ companies: HighIntentCompany[]; count: number }>(TENANT_BASE, '/high-intent', params)
 }
 
-export interface LabelCount {
-  label: string
-  count: number
+export async function fetchVendorProfile(vendorName: string) {
+  const profile = await get<VendorProfile>(TENANT_BASE, `/signals/${encodeURIComponent(vendorName)}`)
+  return normalizeVendorProfile(profile)
 }
 
-export interface FailureAnalysis {
-  failure_count: number
-  top_failure_modes: { mode: string; count: number }[]
-  top_failed_components: { component: string; count: number }[]
-  avg_dollar_lost: number | null
-  total_dollar_lost: number | null
+export async function fetchVendorHistory(vendorName: string, params?: {
+  days?: number
+  limit?: number
+}) {
+  return get<VendorHistoryResponse>(TENANT_BASE, '/vendor-history', {
+    vendor_name: vendorName,
+    ...params,
+  })
 }
 
-export interface ConsiderationEntry {
-  product: string
-  count: number
-  top_reason: string | null
+export async function compareVendorPeriods(vendorName: string, params?: {
+  period_a_days_ago?: number
+  period_b_days_ago?: number
+}) {
+  return get<VendorPeriodComparisonResponse>(TENANT_BASE, '/compare-vendor-periods', {
+    vendor_name: vendorName,
+    ...params,
+  })
 }
 
-export interface PositiveAspect {
-  aspect: string
-  count: number
+export async function fetchReports(params?: {
+  report_type?: string
+  vendor_filter?: string
+  limit?: number
+}) {
+  return get<{ reports: Report[]; count: number }>(TENANT_BASE, '/reports', params)
 }
 
-export interface BrandDetail {
-  brand: string
-  product_count: number
-  total_reviews: number
-  deep_review_count: number
-  avg_rating: number | null
-  brand_health: number | null
-  products: BrandProduct[]
-  sentiment_aspects: SentimentAspect[]
-  top_features: FeatureRequest[]
-  competitive_flows: CompetitiveFlow[]
-  top_positives: PositiveAspect[]
-  consideration_set: ConsiderationEntry[]
-  // Churn signals
-  loyalty_breakdown: LabelCount[]
-  repurchase_breakdown: LabelCount[]
-  replacement_breakdown: LabelCount[]
-  trajectory_breakdown: LabelCount[]
-  switching_barrier: LabelCount[]
-  // Failure analysis
-  failure_analysis: FailureAnalysis
-  // Buyer psychology
-  buyer_profile: {
-    expertise: LabelCount[]
-    budget: LabelCount[]
-    discovery_channel: LabelCount[]
-    frustration: LabelCount[]
-    intensity: LabelCount[]
-    research_depth: LabelCount[]
-    occasion: LabelCount[]
-    household: LabelCount[]
-    buyer_type: LabelCount[]
-    price_sentiment: LabelCount[]
-    professions: { profession: string; count: number }[]
-  }
-  // Engagement signals
-  consequence_breakdown: LabelCount[]
-  delay_breakdown: LabelCount[]
-  ecosystem_lock_in: LabelCount[]
-  amplification_intent: LabelCount[]
-  openness_breakdown: LabelCount[]
-  safety_flagged_count: number
-  // First-pass enrichment
-  first_pass: {
-    enriched_count: number
-    severity_breakdown: LabelCount[]
-    time_to_failure: LabelCount[]
-    workaround_rate: number | null
-    workaround_count: number
-    top_root_causes: { cause: string; count: number }[]
-    top_manufacturing_suggestions: { suggestion: string; count: number }[]
-    top_alternatives_mentioned: { product: string; count: number }[]
-  }
+export async function generateVendorComparisonReport(body: {
+  primary_vendor: string
+  comparison_vendor: string
+  window_days?: number
+  persist?: boolean
+}) {
+  return post<Record<string, unknown>>(TENANT_BASE, '/reports/compare', body)
 }
 
-// -- Brand Comparison Types --
-
-export interface BrandCompareMetrics {
-  product_count: number
-  total_reviews: number
-  deep_review_count: number
-  avg_rating: number | null
-  brand_health: number | null
-  repurchase_pct: number | null
-  safety_flagged_count: number
-  failure_count: number
-  avg_dollar_lost: number | null
-  replacement_breakdown: LabelCount[]
-  trajectory_breakdown: LabelCount[]
-  switching_barrier: LabelCount[]
-  consequence_breakdown: LabelCount[]
-  severity_breakdown: LabelCount[]
-  workaround_rate: number | null
+export async function generateAccountComparisonReport(body: {
+  primary_company: string
+  comparison_company: string
+  window_days?: number
+  persist?: boolean
+}) {
+  return post<Record<string, unknown>>(TENANT_BASE, '/reports/compare-companies', body)
 }
 
-export interface CrossBrandFlow {
-  from_brand: string
-  to_brand: string
-  direction: string
-  count: number
-  avg_rating: number | null
+export async function generateAccountDeepDiveReport(body: {
+  company_name: string
+  window_days?: number
+  persist?: boolean
+}) {
+  return post<Record<string, unknown>>(TENANT_BASE, '/reports/company-deep-dive', body)
 }
 
-export interface SharedFeatureRequest {
-  request: string
-  brands: string[]
-  total_count: number
+export async function fetchReport(reportId: string) {
+  const report = await get<ReportDetail>(TENANT_BASE, `/reports/${reportId}`)
+  return normalizeReportDetail(report)
 }
 
-export interface ConsiderationOverlap {
-  product: string
-  mentioned_by_brands: string[]
-  total_count: number
+export async function fetchReviews(params?: {
+  vendor_name?: string
+  pain_category?: string
+  min_urgency?: number
+  company?: string
+  has_churn_intent?: boolean
+  window_days?: number
+  limit?: number
+}) {
+  return get<{ reviews: ReviewSummary[]; count: number }>(TENANT_BASE, '/reviews', params)
 }
 
-export interface BrandComparison {
-  brands: string[]
-  per_brand: Record<string, BrandCompareMetrics>
-  cross_brand: {
-    competitive_flows: CrossBrandFlow[]
-    shared_feature_requests: SharedFeatureRequest[]
-    consideration_overlap: ConsiderationOverlap[]
-  }
+export async function fetchReview(reviewId: string) {
+  return get<ReviewDetail>(TENANT_BASE, `/reviews/${reviewId}`)
 }
 
-export interface FlowEntry {
-  from_brand: string
-  to_brand: string
-  direction: string
-  count: number
-  avg_rating: number | null
+export async function fetchPipeline() {
+  return get<PipelineStatus>(TENANT_BASE, '/pipeline')
 }
 
-export interface FeatureGapEntry {
-  request: string
-  count: number
-  brands_affected: number
-  brand_list: string[]
-  avg_rating: number | null
+// ---------------------------------------------------------------------------
+// Affiliates
+// ---------------------------------------------------------------------------
+
+export async function fetchAffiliateOpportunities(params?: {
+  min_urgency?: number
+  min_score?: number
+  window_days?: number
+  limit?: number
+  vendor_name?: string
+  dm_only?: boolean
+}) {
+  return get<{ opportunities: AffiliateOpportunity[]; count: number }>(AFFILIATES_BASE, '/opportunities', params)
 }
 
-export interface NegativeAspect {
-  aspect: string
-  negative: number
-  total: number
-  pct_negative: number
-  top_brands: string[]
+export async function fetchAffiliatePartners() {
+  return get<{ partners: AffiliatePartner[]; count: number }>(AFFILIATES_BASE, '/partners')
 }
 
-export interface SafetySignal {
-  id: string
-  asin: string
-  rating: number | null
-  summary: string | null
-  review_excerpt: string | null
-  safety_flag: Record<string, unknown> | null
-  brand: string
-  title: string
-  imported_at: string | null
+export async function fetchClickSummary() {
+  return get<{ clicks: ClickSummary[] }>(AFFILIATES_BASE, '/clicks/summary')
 }
 
-export interface ReviewSummary {
-  id: string
-  asin: string
-  brand: string | null
-  title: string | null
-  rating: number | null
-  root_cause: string | null
-  pain_score: number | null
-  severity: string | null
-  summary: string | null
-  source_category: string | null
-  enrichment_status: string | null
-  deep_enrichment_status: string | null
-  imported_at: string | null
+export async function createAffiliatePartner(body: Omit<AffiliatePartner, 'id' | 'created_at' | 'updated_at'>) {
+  return post<AffiliatePartner>(AFFILIATES_BASE, '/partners', body)
 }
 
-export interface ReviewDetail {
-  id: string
-  asin: string
-  source_category: string | null
-  rating: number | null
-  summary: string | null
-  review_text: string | null
-  reviewer_id: string | null
-  imported_at: string | null
-  enrichment_status: string | null
-  root_cause: string | null
-  severity: string | null
-  pain_score: number | null
-  time_to_failure: string | null
-  workaround_found: boolean | null
-  workaround_text: string | null
-  alternative_mentioned: boolean | null
-  alternative_name: string | null
-  alternative_asin: string | null
-  deep_enrichment_status: string | null
-  deep_enrichment: Record<string, unknown> | null
-  deep_enriched_at: string | null
-  brand: string | null
-  product_title: string | null
-  product_avg_rating: number | null
-  product_total_ratings: number | null
-  product_price: string | null
+export async function updateAffiliatePartner(id: string, body: Partial<AffiliatePartner>) {
+  return patch<AffiliatePartner>(AFFILIATES_BASE, `/partners/${id}`, body)
 }
 
-// -- Fetchers --
-
-export function fetchCategories() {
-  return get<{ categories: string[] }>('/categories')
+export async function deleteAffiliatePartner(id: string) {
+  return del<{ status: string }>(AFFILIATES_BASE, `/partners/${id}`)
 }
 
-export function fetchPipeline(params?: { source_category?: string }) {
-  return get<PipelineStatus>('/pipeline', params as Record<string, string>)
+export async function recordAffiliateClick(partnerId: string, reviewId?: string) {
+  return post<{ status: string }>(AFFILIATES_BASE, '/clicks', { partner_id: partnerId, review_id: reviewId, referrer: 'dashboard' })
 }
 
-export function fetchBrands(params?: {
-  source_category?: string
-  min_reviews?: number
+// ---------------------------------------------------------------------------
+// Campaigns
+// ---------------------------------------------------------------------------
+
+export async function fetchCampaigns(params?: {
+  status?: string
+  company?: string
+  vendor?: string
+  channel?: string
+  limit?: number
+}) {
+  return get<{ campaigns: Campaign[]; count: number }>(CAMPAIGNS_BASE, '', params)
+}
+
+export async function fetchCampaign(id: string) {
+  return get<Campaign>(CAMPAIGNS_BASE, `/${id}`)
+}
+
+export async function fetchCampaignStats() {
+  return get<CampaignStats>(CAMPAIGNS_BASE, '/stats')
+}
+
+export async function generateCampaigns(body?: {
+  vendor_name?: string
+  company_name?: string
+  min_score?: number
+  limit?: number
+  target_mode?: string
+}) {
+  return post<{ generated: number; companies?: number }>(CAMPAIGNS_BASE, '/generate', body ?? {})
+}
+
+export async function approveCampaign(id: string) {
+  return post<{ status: string }>(CAMPAIGNS_BASE, `/${id}/approve`)
+}
+
+export async function updateCampaign(id: string, body: Partial<Pick<Campaign, 'subject' | 'body' | 'cta' | 'status'>>) {
+  return patch<Campaign>(CAMPAIGNS_BASE, `/${id}`, body)
+}
+
+// ---------------------------------------------------------------------------
+// Vendor Targets
+// ---------------------------------------------------------------------------
+
+export async function fetchVendorTargets(params?: {
+  target_mode?: string
+  status?: string
   search?: string
-  sort_by?: string
+  limit?: number
+}) {
+  return get<{ targets: VendorTarget[]; count: number }>(TARGETS_BASE, '', params)
+}
+
+export async function fetchVendorTarget(id: string) {
+  return get<VendorTarget>(TARGETS_BASE, `/${id}`)
+}
+
+export async function createVendorTarget(body: Partial<VendorTarget>) {
+  return post<VendorTarget>(TARGETS_BASE, '', body)
+}
+
+export async function updateVendorTarget(id: string, body: Partial<VendorTarget>) {
+  return put<VendorTarget>(TARGETS_BASE, `/${id}`, body)
+}
+
+export async function claimVendorTarget(id: string) {
+  return post<VendorTarget & { already_claimed?: boolean }>(TARGETS_BASE, `/${id}/claim`)
+}
+
+export async function deleteVendorTarget(id: string) {
+  return del<{ status: string }>(TARGETS_BASE, `/${id}`)
+}
+
+// ---------------------------------------------------------------------------
+// CSV Export
+// ---------------------------------------------------------------------------
+
+export function downloadCsv(
+  path: string,
+  params?: Record<string, string | number | boolean | undefined>,
+) {
+  const url = new URL(TENANT_BASE + path, window.location.origin)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') {
+        url.searchParams.set(k, String(v))
+      }
+    }
+  }
+  const token = (typeof window !== 'undefined' ? localStorage.getItem('atlas_token') : null)
+  if (token) url.searchParams.set('token', token)
+  window.open(url.toString(), '_blank')
+}
+
+export async function generateVendorReport(id: string) {
+  return post<{ status: string; signal_count?: number; high_urgency_count?: number }>(TARGETS_BASE, `/${id}/generate-report`)
+}
+
+// ---------------------------------------------------------------------------
+// Blog Admin (drafts, evidence, publish)
+// ---------------------------------------------------------------------------
+
+export async function fetchBlogDrafts(status?: string) {
+  return get<BlogDraftSummary[]>(BLOG_ADMIN_BASE, '/drafts', { status })
+}
+
+export async function fetchBlogDraft(id: string) {
+  return get<BlogDraft>(BLOG_ADMIN_BASE, `/drafts/${id}`)
+}
+
+export async function fetchBlogEvidence(id: string) {
+  return get<{ reviews: BlogEvidence[]; count: number }>(BLOG_ADMIN_BASE, `/drafts/${id}/evidence`)
+}
+
+export async function publishBlogDraft(id: string) {
+  return post<{ ok: boolean; id: string; slug: string; published_at: string }>(BLOG_ADMIN_BASE, `/drafts/${id}/publish`)
+}
+
+export async function updateBlogDraft(id: string, body: Partial<Pick<BlogDraft, 'title' | 'content' | 'status' | 'reviewer_notes'>>) {
+  return patch<{ ok: boolean; id: string }>(BLOG_ADMIN_BASE, `/drafts/${id}`, body)
+}
+
+// ---------------------------------------------------------------------------
+// Prospects
+// ---------------------------------------------------------------------------
+
+export async function fetchProspects(params?: {
+  company?: string
+  status?: string
+  seniority?: string
   limit?: number
   offset?: number
 }) {
-  return get<{ brands: BrandSummary[]; count: number; total_count: number }>('/brands', params as Record<string, string | number>)
+  return get<{ prospects: Prospect[]; count: number }>(PROSPECTS_BASE, '', params)
 }
 
-export function fetchBrandDetail(name: string) {
-  return get<BrandDetail>(`/brands/${encodeURIComponent(name)}`)
+export async function fetchProspectStats() {
+  return get<ProspectStats>(PROSPECTS_BASE, '/stats')
 }
 
-export function fetchBrandComparison(brands: string[]) {
-  return get<BrandComparison>('/brands/compare', { brands: brands.join(',') })
-}
+// ---------------------------------------------------------------------------
+// Campaign Review Queue (enhanced)
+// ---------------------------------------------------------------------------
 
-export function fetchFlows(params?: {
-  source_category?: string
-  brand?: string
-  direction?: string
-  min_count?: number
-  limit?: number
-}) {
-  return get<{ flows: FlowEntry[]; count: number }>('/flows', params as Record<string, string | number>)
-}
-
-export function fetchFeatures(params?: {
-  source_category?: string
-  brand?: string
-  min_count?: number
-  limit?: number
-}) {
-  return get<{ feature_requests: FeatureGapEntry[]; negative_aspects: NegativeAspect[] }>('/features', params as Record<string, string | number>)
-}
-
-export function fetchSafety(params?: {
-  source_category?: string
-  brand?: string
-  min_rating?: number
-  max_rating?: number
-  limit?: number
-}) {
-  return get<{ signals: SafetySignal[]; count: number; total_flagged: number }>('/safety', params as Record<string, string | number>)
-}
-
-export function fetchReviews(params?: {
-  source_category?: string
-  brand?: string
-  asin?: string
-  min_rating?: number
-  max_rating?: number
-  root_cause?: string
-  has_comparisons?: boolean
-  has_feature_requests?: boolean
-  search?: string
-  severity?: string
-  enrichment_status?: string
-  imported_after?: string
-  imported_before?: string
-  sort_by?: string
+export async function fetchReviewQueue(params?: {
+  status?: string
+  include_prospects?: boolean
   limit?: number
   offset?: number
 }) {
-  return get<{ reviews: ReviewSummary[]; count: number; total_count: number }>('/reviews', params as Record<string, string | number | boolean>)
+  return get<{ drafts: ReviewQueueDraft[]; count: number }>(CAMPAIGNS_BASE, '/review-queue', params)
 }
 
-export function fetchReview(id: string) {
-  return get<ReviewDetail>(`/reviews/${encodeURIComponent(id)}`)
+export async function fetchReviewQueueSummary() {
+  return get<{
+    pending_review: number
+    pending_recipient: number
+    ready_to_send: number
+    suppressed: number
+    oldest_draft_age_hours: number | null
+    by_partner: { partner_name: string; count: number }[]
+  }>(CAMPAIGNS_BASE, '/review-queue/summary')
 }
 
-// -- ASIN Tracking --
+export async function fetchCampaignAuditLog(campaignId: string) {
+  return get<{ count: number; audit_log: AuditEvent[] }>(CAMPAIGNS_BASE, `/${campaignId}/audit-log`)
+}
 
-export interface TrackedAsin {
-  asin: string
+export async function bulkApproveCampaigns(ids: string[], action: 'approve' | 'queue-send' | 'reject') {
+  return post<{ processed: number; failed: { id: string; reason: string }[] }>(CAMPAIGNS_BASE, '/bulk-approve', { campaign_ids: ids, action })
+}
+
+export async function bulkRejectCampaigns(ids: string[], reason?: string) {
+  return post<{ rejected: number; failed: { id: string; reason: string }[] }>(CAMPAIGNS_BASE, '/bulk-reject', { campaign_ids: ids, reason })
+}
+
+// ---------------------------------------------------------------------------
+// Tenant Vendor Tracking (onboarding + scoped data)
+// ---------------------------------------------------------------------------
+
+export interface TrackedVendor {
+  id: string
+  vendor_name: string
+  track_mode: string
   label: string | null
   added_at: string | null
-  title: string | null
-  brand: string | null
-  average_rating: number | null
-  rating_number: number | null
-  price: string | null
+  avg_urgency: number | null
+  churn_intent_count: number | null
+  total_reviews: number | null
+  nps_proxy: number | null
 }
 
-export interface AsinSearchResult {
-  asin: string
-  title: string | null
-  brand: string | null
-  average_rating: number | null
-  rating_number: number | null
-  price: string | null
+export interface VendorSearchResult {
+  vendor_name: string
+  product_category: string | null
+  total_reviews: number | null
+  avg_urgency: number | null
 }
 
-export function fetchTrackedAsins() {
-  return get<{ asins: TrackedAsin[]; count: number }>('/asins')
+export async function searchAvailableVendors(q: string) {
+  return get<{ vendors: VendorSearchResult[]; count: number }>(TENANT_BASE, '/vendors/search', { q })
 }
 
-export function addTrackedAsin(asin: string, label?: string) {
-  return post<{ status: string; asin: string }>('/asins', { asin, label })
+export async function addTrackedVendor(vendor_name: string, track_mode: string = 'own', label: string = '') {
+  return post<TrackedVendor>(TENANT_BASE, '/vendors', { vendor_name, track_mode, label })
 }
 
-export function removeTrackedAsin(asin: string) {
-  return del<{ status: string }>(`/asins/${encodeURIComponent(asin)}`)
+export async function removeTrackedVendor(vendor_name: string) {
+  return del<{ status: string }>(TENANT_BASE, `/vendors/${encodeURIComponent(vendor_name)}`)
 }
 
-export function searchAvailableAsins(q: string, limit = 20) {
-  return get<{ results: AsinSearchResult[] }>('/asins/search', { q, limit })
+export async function listTrackedVendors() {
+  return get<{ vendors: TrackedVendor[]; count: number }>(TENANT_BASE, '/vendors')
+}
+
+// ---------------------------------------------------------------------------
+// Briefing Review Queue (HITL)
+// ---------------------------------------------------------------------------
+
+export async function fetchBriefingReviewQueue(params?: {
+  status?: string
+  limit?: number
+  offset?: number
+}) {
+  return get<{ briefings: BriefingDraft[]; count: number }>(BRIEFINGS_BASE, '/review-queue', params)
+}
+
+export async function fetchBriefingReviewSummary() {
+  return get<{
+    pending_approval: number
+    sent: number
+    rejected: number
+    failed: number
+    oldest_pending_hours: number | null
+  }>(BRIEFINGS_BASE, '/review-queue/summary')
+}
+
+export async function bulkApproveBriefings(ids: string[]) {
+  return post<{ processed: number; failed: { id: string; reason: string }[] }>(BRIEFINGS_BASE, '/bulk-approve', { briefing_ids: ids, action: 'approve' })
+}
+
+export async function bulkRejectBriefings(ids: string[], reason?: string) {
+  return post<{ rejected: number; failed: { id: string; reason: string }[] }>(BRIEFINGS_BASE, '/bulk-reject', { briefing_ids: ids, reason })
 }

@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from 'react'
-import { Robot, ROBOT_DEFS } from '@/lib/robot'
+import { Robot, ROBOT_DEFS } from '../lib/robot'
 
 /**
- * Animated Atlas robot for the blog hero section.
+ * Animated Atlas robot for hero / blog sections.
  * Choreography: walk in from left, wave, settle into idle loop.
  */
 export default function AtlasRobotScene() {

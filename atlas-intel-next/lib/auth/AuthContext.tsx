@@ -28,7 +28,7 @@ export interface User {
   plan_status: string
   asin_limit: number
   trial_ends_at: string | null
-  product: string       // consumer | b2b_retention | b2b_challenger
+  product: string
   vendor_limit: number
 }
 
@@ -75,11 +75,10 @@ let refreshPromise: Promise<string | null> | null = null
  * Returns the new access token on success, or null on failure (caller should logout).
  */
 export async function tryRefreshToken(): Promise<string | null> {
-  // Deduplicate: if a refresh is already in-flight, piggyback on it
   if (refreshPromise) return refreshPromise
 
   refreshPromise = (async () => {
-    const refreshToken = typeof window !== 'undefined' ? (typeof window !== 'undefined' ? localStorage.getItem(REFRESH_KEY) : null) : null
+    const refreshToken = (typeof window !== 'undefined' ? localStorage.getItem(REFRESH_KEY) : null)
     if (!refreshToken) return null
 
     try {
@@ -134,7 +133,6 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       })
       setUser(u)
     } catch {
-      // Access token failed -- try refresh before giving up
       const newToken = await tryRefreshToken()
       if (newToken) {
         setToken(newToken)
@@ -145,7 +143,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
           setUser(u)
           return
         } catch {
-          // Refresh succeeded but /me still failed -- give up
+          // Refresh succeeded but /me still failed
         }
       }
       clearTokens()
@@ -172,7 +170,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   const signup = useCallback(async (email: string, password: string, fullName: string, accountName: string, product?: string) => {
     const res = await apiFetch<{ access_token: string; refresh_token: string }>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, full_name: fullName, account_name: accountName, product: product || 'consumer' }),
+      body: JSON.stringify({ email, password, full_name: fullName, account_name: accountName, product: product || 'b2b_retention' }),
     })
     saveTokens(res.access_token, res.refresh_token)
     await fetchMe(res.access_token)

@@ -3,38 +3,34 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Search, AlertCircle, ShieldCheck, Target, Users } from 'lucide-react'
+import { AlertCircle, ShieldCheck, Target } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '@/lib/auth/AuthContext'
+import AtlasRobotLogo from '@/components/AtlasRobotLogo'
 
 const PRODUCTS = [
   {
-    id: 'consumer',
-    label: 'Amazon Seller Intel',
-    desc: 'Track competitor products, complaints, and feature gaps',
-    icon: Search,
-    color: 'cyan',
-  },
-  {
     id: 'b2b_retention',
     label: 'Vendor Retention',
-    desc: 'Track YOUR vendors to see churn signals and pain trends',
+    desc: 'Monitor YOUR vendors for churn signals, pain trends, and at-risk accounts',
     icon: ShieldCheck,
-    color: 'violet',
+    borderColor: 'rgb(139 92 246 / 0.5)',
+    bgColor: 'rgb(76 29 149 / 0.2)',
   },
   {
     id: 'b2b_challenger',
     label: 'Challenger Lead Gen',
-    desc: 'Track COMPETITOR vendors to find high-intent leads',
+    desc: 'Track COMPETITOR vendors to find high-intent leads ready to switch',
     icon: Target,
-    color: 'amber',
+    borderColor: 'rgb(245 158 11 / 0.5)',
+    bgColor: 'rgb(120 53 15 / 0.2)',
   },
 ] as const
 
 export default function Signup() {
   const { user, signup } = useAuth()
   const router = useRouter()
-  const [product, setProduct] = useState<string>('consumer')
+  const [product, setProduct] = useState<string>('b2b_retention')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
@@ -42,12 +38,7 @@ export default function Signup() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    if (user) {
-      const home = user.product === 'consumer' ? '/' : '/b2b'
-      router.replace(home)
-    }
-  }, [user, router])
+  useEffect(() => { if (user) router.replace("/") }, [user, router])
   if (user) return null
 
   async function handleSubmit(e: FormEvent) {
@@ -60,8 +51,7 @@ export default function Signup() {
     setLoading(true)
     try {
       await signup(email, password, fullName, accountName, product)
-      const dest = product === 'consumer' ? '/onboarding' : '/b2b/onboarding'
-      router.push(dest)
+      router.push('/onboarding')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed')
     } finally {
@@ -70,11 +60,11 @@ export default function Signup() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-8">
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-lg">
         <div className="flex items-center justify-center gap-2 mb-8">
-          <Users className="h-8 w-8 text-cyan-400" />
-          <span className="text-2xl font-bold text-white">Atlas Intelligence</span>
+          <AtlasRobotLogo className="h-8 w-8" />
+          <span className="text-2xl font-bold text-white">Churn Signals</span>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6 space-y-5">
@@ -89,7 +79,7 @@ export default function Signup() {
 
           {/* Product selector */}
           <div className="space-y-2">
-            <label className="block text-sm text-slate-400">Choose your product</label>
+            <label className="block text-sm text-slate-400">Choose your use case</label>
             <div className="grid grid-cols-1 gap-2">
               {PRODUCTS.map(p => {
                 const Icon = p.icon
@@ -102,13 +92,10 @@ export default function Signup() {
                     className={clsx(
                       'flex items-start gap-3 p-3 rounded-lg border text-left transition-colors',
                       selected
-                        ? `border-${p.color}-500/50 bg-${p.color}-900/20`
+                        ? ''
                         : 'border-slate-700/50 bg-slate-900/40 hover:border-slate-600/50',
                     )}
-                    style={selected ? {
-                      borderColor: p.color === 'cyan' ? 'rgb(6 182 212 / 0.5)' : p.color === 'violet' ? 'rgb(139 92 246 / 0.5)' : 'rgb(245 158 11 / 0.5)',
-                      backgroundColor: p.color === 'cyan' ? 'rgb(22 78 99 / 0.2)' : p.color === 'violet' ? 'rgb(76 29 149 / 0.2)' : 'rgb(120 53 15 / 0.2)',
-                    } : undefined}
+                    style={selected ? { borderColor: p.borderColor, backgroundColor: p.bgColor } : undefined}
                   >
                     <Icon className={clsx('h-5 w-5 mt-0.5 shrink-0', selected ? 'text-white' : 'text-slate-500')} />
                     <div>
@@ -177,7 +164,7 @@ export default function Signup() {
             disabled={loading}
             className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-white font-medium transition-colors"
           >
-            {loading ? 'Creating account...' : 'Create account'}
+            {loading ? 'Creating account...' : 'Start Free Trial'}
           </button>
 
           <p className="text-center text-sm text-slate-400">

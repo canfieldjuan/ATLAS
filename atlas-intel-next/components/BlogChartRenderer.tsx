@@ -1,5 +1,3 @@
-"use client";
-
 import {
   BarChart,
   Bar,
@@ -17,7 +15,7 @@ import {
   Line,
   Legend,
 } from 'recharts'
-import type { ChartSpec } from '@/content/blog'
+import type { ChartSpec } from '../content/blog'
 
 const AXIS_TICK = '#94a3b8'
 const GRID_LINE = '#334155'

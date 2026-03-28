@@ -1,7 +1,7 @@
 import { Component, type ReactNode } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 
-/* -- Inline page-level error (used inside each page) -- */
+/* ── Inline page-level error (used inside each page) ── */
 
 export function PageError({
   error,
@@ -30,7 +30,7 @@ export function PageError({
   )
 }
 
-/* -- Top-level error boundary (wraps Routes) -- */
+/* ── Top-level error boundary (wraps Routes) ── */
 
 interface Props {
   children: ReactNode

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from 'react'
-import type { FaqItem } from '@/content/blog'
+import type { FaqItem } from '../content/blog'
 
 interface SeoHeadProps {
   title: string
@@ -67,7 +67,7 @@ export default function SeoHead({ title, description, canonical, ogType = 'artic
     setMeta('og:description', description)
     setMeta('og:url', canonical)
     setMeta('og:type', ogType)
-    setMeta('og:site_name', 'Atlas Intelligence')
+    setMeta('og:site_name', 'Churn Signals')
     setMeta('twitter:card', 'summary_large_image', true)
     setMeta('twitter:title', title, true)
     setMeta('twitter:description', description, true)

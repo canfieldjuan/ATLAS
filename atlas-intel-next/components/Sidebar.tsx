@@ -1,82 +1,54 @@
+"use client";
+
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
-  Tag,
-  Scale,
-  GitCompareArrows,
-  Lightbulb,
-  ShieldAlert,
+  Building2,
   MessageSquareText,
-  Search,
-  X,
-  User,
-  Lock,
-  Activity,
-  Target,
-  TrendingDown,
+  FileBarChart,
+  Crosshair,
+  Shield,
+  Swords,
+  Handshake,
+  Newspaper,
+  FileSearch,
+  MailSearch,
   Users,
-  FileText,
-  Megaphone,
+  LogOut,
+  Lock,
+  X,
 } from 'lucide-react'
-import { clsx } from 'clsx'
+import AtlasRobotLogo from '@/components/AtlasRobotLogo'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { usePlanGate } from '@/lib/hooks/usePlanGate'
+import { clsx } from 'clsx'
 
-const PLAN_BADGES: Record<string, string> = {
-  trial: 'bg-slate-700 text-slate-300',
-  starter: 'bg-cyan-900/50 text-cyan-300',
-  growth: 'bg-violet-900/50 text-violet-300',
-  pro: 'bg-amber-900/50 text-amber-300',
-  b2b_trial: 'bg-slate-700 text-slate-300',
-  b2b_starter: 'bg-cyan-900/50 text-cyan-300',
-  b2b_growth: 'bg-violet-900/50 text-violet-300',
-  b2b_pro: 'bg-amber-900/50 text-amber-300',
-}
-
-interface NavItem {
+interface SidebarLink {
   to: string
   icon: typeof LayoutDashboard
   label: string
-  minPlan?: string
+  gate?: 'campaigns' | 'reports'
 }
 
-const PLAN_ORDER = ['trial', 'starter', 'growth', 'pro']
-const B2B_PLAN_ORDER = ['b2b_trial', 'b2b_starter', 'b2b_growth', 'b2b_pro']
-
-const consumerLinks: NavItem[] = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/brands', icon: Tag, label: 'Brands' },
-  { to: '/compare', icon: Scale, label: 'Compare', minPlan: 'growth' },
-  { to: '/flows', icon: GitCompareArrows, label: 'Competitive Flows', minPlan: 'growth' },
-  { to: '/features', icon: Lightbulb, label: 'Feature Gaps' },
-  { to: '/safety', icon: ShieldAlert, label: 'Safety Signals' },
+const links: SidebarLink[] = [
+  { to: '/', icon: LayoutDashboard, label: 'Overview' },
+  { to: '/vendors', icon: Building2, label: 'Vendors' },
   { to: '/reviews', icon: MessageSquareText, label: 'Reviews' },
+  { to: '/reports', icon: FileBarChart, label: 'Reports', gate: 'reports' },
+  { to: '/leads', icon: Crosshair, label: 'Leads' },
+  { to: '/vendor-targets', icon: Shield, label: 'Targets' },
+  { to: '/challengers', icon: Swords, label: 'Challengers' },
+  { to: '/affiliates', icon: Handshake, label: 'Affiliates' },
+  { to: '/blog', icon: Newspaper, label: 'Blog' },
 ]
 
-const b2bRetentionLinks: NavItem[] = [
-  { to: '/b2b', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/b2b/signals', icon: Activity, label: 'Churn Signals' },
-  { to: '/b2b/displacement', icon: TrendingDown, label: 'Displacement' },
-  { to: '/b2b/reviews', icon: MessageSquareText, label: 'Reviews' },
-  { to: '/b2b/reports', icon: FileText, label: 'Reports', minPlan: 'b2b_starter' },
-  { to: '/b2b/campaigns', icon: Megaphone, label: 'Campaigns', minPlan: 'b2b_growth' },
+const auditLinks: SidebarLink[] = [
+  { to: '/blog-review', icon: FileSearch, label: 'Blog Review' },
+  { to: '/campaign-review', icon: MailSearch, label: 'Campaigns' },
+  { to: '/briefing-review', icon: MailSearch, label: 'Briefings' },
+  { to: '/prospects', icon: Users, label: 'Prospects' },
 ]
-
-const b2bChallengerLinks: NavItem[] = [
-  { to: '/b2b', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/b2b/leads', icon: Target, label: 'Leads' },
-  { to: '/b2b/signals', icon: Activity, label: 'Competitor Gaps' },
-  { to: '/b2b/displacement', icon: TrendingDown, label: 'Displacement' },
-  { to: '/b2b/campaigns', icon: Megaphone, label: 'Campaigns', minPlan: 'b2b_growth' },
-  { to: '/b2b/reports', icon: FileText, label: 'Reports', minPlan: 'b2b_starter' },
-  { to: '/b2b/reviews', icon: MessageSquareText, label: 'Reviews' },
-]
-
-const PRODUCT_TITLES: Record<string, string> = {
-  consumer: 'Consumer Intel',
-  b2b_retention: 'Vendor Intel',
-  b2b_challenger: 'Challenger Intel',
-}
 
 interface SidebarProps {
   open: boolean
@@ -86,19 +58,12 @@ interface SidebarProps {
 export default function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname()
   const { user, logout } = useAuth()
-  const product = user?.product || 'consumer'
-  const isB2B = product === 'b2b_retention' || product === 'b2b_challenger'
-  const planOrder = isB2B ? B2B_PLAN_ORDER : PLAN_ORDER
-  const userPlanIdx = user ? planOrder.indexOf(user.plan) : -1
+  const { canAccessCampaigns, canAccessReports } = usePlanGate()
 
-  const links = product === 'b2b_challenger'
-    ? b2bChallengerLinks
-    : product === 'b2b_retention'
-      ? b2bRetentionLinks
-      : consumerLinks
-
-  const title = PRODUCT_TITLES[product] || 'Consumer Intel'
-  const IconComponent = isB2B ? Users : Search
+  const gateMap: Record<string, boolean> = {
+    campaigns: canAccessCampaigns,
+    reports: canAccessReports,
+  }
 
   return (
     <>
@@ -118,9 +83,9 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       >
         <div className="p-4 border-b border-slate-700/50 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <IconComponent className="h-6 w-6 text-cyan-400" />
+            <AtlasRobotLogo className="h-6 w-6" />
             <span className="text-lg font-semibold text-white">
-              {title}
+              Churn Signals
             </span>
           </div>
           <button
@@ -130,21 +95,19 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
             <X className="h-5 w-5" />
           </button>
         </div>
-        <nav className="flex-1 p-3 space-y-1">
-          {links.map(({ to, icon: Icon, label, minPlan }) => {
-            const locked = minPlan && userPlanIdx < planOrder.indexOf(minPlan)
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
+          {links.map(({ to, icon: Icon, label, gate }) => {
+            const locked = gate ? !gateMap[gate] : false
             return (
               <Link
                 key={to}
-                href={locked ? '#' : to}
-                onClick={e => { if (locked) e.preventDefault(); else onClose() }}
+                href={to}
+                onClick={onClose}
                 className={clsx(
                   'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
-                  locked
-                    ? 'text-slate-600 cursor-not-allowed'
-                    : ((to === '/' || to === '/b2b') ? pathname === to : pathname.startsWith(to))
-                      ? 'bg-cyan-500/10 text-cyan-400'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  (to === '/' ? pathname === to : pathname.startsWith(to))
+                    ? 'bg-cyan-500/10 text-cyan-400'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
                 )}
               >
                 <Icon className="h-4 w-4" />
@@ -153,31 +116,40 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               </Link>
             )
           })}
-        </nav>
 
-        {/* User section */}
+          {/* Audit section */}
+          <div className="pt-3 mt-3 border-t border-slate-700/50">
+            <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+              Audit
+            </span>
+            <div className="mt-1 space-y-1">
+              {auditLinks.map(({ to, icon: Icon, label }) => (
+                <Link
+                  key={to}
+                  href={to}
+                  onClick={onClose}
+                  className={clsx(
+                    'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
+                    pathname.startsWith(to)
+                      ? 'bg-cyan-500/10 text-cyan-400'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </nav>
         {user && (
-          <div className="p-3 border-t border-slate-700/50 space-y-2">
-            <Link
-              href="/account"
-              onClick={onClose}
-              className={clsx(
-                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors',
-                pathname === '/account'
-                  ? 'bg-cyan-500/10 text-cyan-400'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-              )}
-            >
-              <User className="h-4 w-4" />
-              <span className="truncate flex-1">{user.full_name || user.email}</span>
-              <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium', PLAN_BADGES[user.plan] || PLAN_BADGES.trial)}>
-                {user.plan.replace('b2b_', '').toUpperCase()}
-              </span>
-            </Link>
+          <div className="p-3 border-t border-slate-700/50">
+            <Link href="/account" className="block px-3 py-1 mb-2 text-xs text-slate-500 truncate hover:text-slate-300 transition-colors">{user.email}</Link>
             <button
               onClick={logout}
-              className="w-full text-left px-3 py-2 text-xs text-slate-500 hover:text-red-400 transition-colors"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors w-full"
             >
+              <LogOut className="h-4 w-4" />
               Sign out
             </button>
           </div>

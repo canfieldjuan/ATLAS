@@ -3,21 +3,19 @@
 import { useState, useEffect, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Search, AlertCircle } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
 import { useAuth } from '@/lib/auth/AuthContext'
+import AtlasRobotLogo from '@/components/AtlasRobotLogo'
 
 export default function Login() {
-  const { user, login } = useAuth()
   const router = useRouter()
+  const { user, login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const isB2B = user?.product === 'b2b_retention' || user?.product === 'b2b_challenger'
-  useEffect(() => {
-    if (user) router.replace(isB2B ? '/b2b' : '/')
-  }, [user, isB2B, router])
+  useEffect(() => { if (user) router.replace("/") }, [user, router])
   if (user) return null
 
   async function handleSubmit(e: FormEvent) {
@@ -26,7 +24,6 @@ export default function Login() {
     setLoading(true)
     try {
       await login(email, password)
-      // Redirect handled by the useEffect guard above after user state updates
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
@@ -35,11 +32,11 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="flex items-center justify-center gap-2 mb-8">
-          <Search className="h-8 w-8 text-cyan-400" />
-          <span className="text-2xl font-bold text-white">Consumer Intel</span>
+          <AtlasRobotLogo className="h-8 w-8" />
+          <span className="text-2xl font-bold text-white">Churn Signals</span>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6 space-y-4">
@@ -74,6 +71,12 @@ export default function Login() {
               className="w-full px-3 py-2 bg-slate-900/60 border border-slate-600/50 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
               placeholder="********"
             />
+          </div>
+
+          <div className="flex justify-end">
+            <Link href="/forgot-password" className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+              Forgot password?
+            </Link>
           </div>
 
           <button

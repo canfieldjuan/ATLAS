@@ -1,0 +1,13 @@
+export const REPORT_TYPE_COLORS: Record<string, string> = {
+  weekly_churn_feed: 'bg-cyan-500/20 text-cyan-400',
+  vendor_scorecard: 'bg-violet-500/20 text-violet-400',
+  displacement_report: 'bg-amber-500/20 text-amber-400',
+  category_overview: 'bg-emerald-500/20 text-emerald-400',
+  exploratory_overview: 'bg-slate-500/20 text-slate-300',
+  vendor_comparison: 'bg-fuchsia-500/20 text-fuchsia-300',
+  account_comparison: 'bg-rose-500/20 text-rose-300',
+  account_deep_dive: 'bg-pink-500/20 text-pink-300',
+  vendor_retention: 'bg-orange-500/20 text-orange-400',
+  challenger_intel: 'bg-purple-500/20 text-purple-400',
+  battle_card: 'bg-red-500/20 text-red-400',
+}

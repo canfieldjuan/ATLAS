@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import gsap from 'gsap'
-import { Robot, ROBOT_DEFS } from '@/lib/robot'
+import { Robot, ROBOT_DEFS } from '../lib/robot'
 
 const GROUND_Y = 362
 const ROBOT_SCALE = 0.92
@@ -118,7 +118,7 @@ export default function AtlasHeroScene({
     <div className="w-full max-w-[900px] mx-auto">
       <svg
         ref={svgRef}
-        viewBox="0 0 900 440"
+        viewBox="0 150 900 290"
         className="w-full h-auto"
         aria-label="Animated Atlas robot scene"
       >

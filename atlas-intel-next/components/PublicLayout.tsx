@@ -5,11 +5,29 @@ import { usePathname } from 'next/navigation'
 import AtlasRobotLogo from '@/components/AtlasRobotLogo'
 
 const NAV_LINKS = [
-  { label: 'Blog', href: '/blog' },
+  { label: 'Blog', to: '/blog' },
 ]
 
-export default function PublicLayout({ children }: { children: React.ReactNode }) {
+type Props = {
+  children: React.ReactNode
+  /** "report" strips Blog/Sign-in, changes CTA to "Get Weekly Reports" */
+  variant?: 'default' | 'report'
+  /** Called when the report-variant CTA is clicked (wires to Stripe checkout) */
+  onCtaClick?: () => void
+}
+
+export default function PublicLayout({ children, variant = 'default', onCtaClick }: Props) {
   const pathname = usePathname()
+  const isReport = variant === 'report'
+
+  const reportCta = isReport && onCtaClick ? (
+    <button
+      onClick={onCtaClick}
+      className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors cursor-pointer"
+    >
+      Get Weekly Reports
+    </button>
+  ) : null
 
   return (
     <div className="min-h-screen bg-slate-900 text-white flex flex-col">
@@ -18,14 +36,14 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
         <div className="flex items-center gap-6">
           <Link href="/landing" className="flex items-center gap-2">
             <AtlasRobotLogo className="h-7 w-7" />
-            <span className="text-xl font-bold">Atlas Intelligence</span>
+            <span className="text-xl font-bold">Churn Signals</span>
           </Link>
-          {NAV_LINKS.map(link => (
+          {!isReport && NAV_LINKS.map(link => (
             <Link
-              key={link.href}
-              href={link.href}
+              key={link.to}
+              href={link.to}
               className={`text-sm font-medium transition-colors ${
-                pathname.startsWith(link.href)
+                pathname.startsWith(link.to)
                   ? 'text-white'
                   : 'text-slate-400 hover:text-white'
               }`}
@@ -35,15 +53,20 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
           ))}
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/login" className="text-sm text-slate-400 hover:text-white transition-colors">
-            Sign in
-          </Link>
-          <Link
-            href="/signup?product=consumer"
-            className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
-          >
-            Start Free Trial
-          </Link>
+          {!isReport && (
+            <Link href="/login" className="text-sm text-slate-400 hover:text-white transition-colors">
+              Sign in
+            </Link>
+          )}
+          {reportCta}
+          {!isReport && !reportCta && (
+            <a
+              href="/signup"
+              className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
+            >
+              Start Free Trial
+            </a>
+          )}
         </div>
       </nav>
 
@@ -55,12 +78,24 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
         <div className="max-w-6xl mx-auto px-6 flex items-center justify-between text-sm text-slate-500">
           <div className="flex items-center gap-2">
             <AtlasRobotLogo className="h-4 w-4" />
-            <span>Atlas Intelligence</span>
+            <span>Churn Signals</span>
           </div>
           <div className="flex items-center gap-4">
-            <Link href="/blog" className="hover:text-slate-300 transition-colors">Blog</Link>
-            <Link href="/login" className="hover:text-slate-300 transition-colors">Sign in</Link>
-            <Link href="/signup?product=consumer" className="hover:text-slate-300 transition-colors">Sign up</Link>
+            {!isReport && (
+              <>
+                <Link href="/blog" className="hover:text-slate-300 transition-colors">Blog</Link>
+                <Link href="/login" className="hover:text-slate-300 transition-colors">Sign in</Link>
+              </>
+            )}
+            {isReport ? (
+              onCtaClick && (
+                <button onClick={onCtaClick} className="hover:text-slate-300 transition-colors cursor-pointer">
+                  Get Weekly Reports
+                </button>
+              )
+            ) : (
+              <a href="/signup" className="hover:text-slate-300 transition-colors">Sign up</a>
+            )}
           </div>
         </div>
       </footer>
