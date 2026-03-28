@@ -262,9 +262,53 @@ class TestGuardrails:
         assert exc is not None
         assert exc.reason == "domain_like"
 
+    def test_domain_like_bypassed_for_direct_signals(self):
+        # kore.ai / Purplle.com are real brand names declared by the reviewer
+        exc = _apply_guardrails("kore.ai", "HubSpot", trust_direct=True)
+        assert exc is None
+
+    def test_domain_like_bypassed_for_dotcom(self):
+        exc = _apply_guardrails("Purplle.com", "HubSpot", trust_direct=True)
+        assert exc is None
+
+    def test_vendor_still_blocked_even_with_trust_direct(self):
+        # trust_direct only skips domain_like — vendor check still applies
+        exc = _apply_guardrails("kore.ai", "kore.ai", trust_direct=True)
+        assert exc is not None
+        assert exc.reason == "incumbent_vendor"
+
     def test_valid_passes(self):
         exc = _apply_guardrails("Acme Corp", "HubSpot")
         assert exc is None
+
+    def test_domain_company_from_reviewer_field_resolves(self):
+        # reviewer_company_field signals get trust_direct=True in resolve_review
+        result = resolve_review(
+            {"reviewer_company": "kore.ai", "source": "trustradius",
+             "review_text": "great product", "reviewer_title": None,
+             "raw_metadata": {}, "enrichment": None},
+            vendor_name="Zendesk",
+        )
+        assert result.resolved_company_name == "kore.ai"
+        assert result.confidence_label == "high"
+
+    def test_domain_company_from_github_profile_resolves(self):
+        # github_profile_company signals also get trust_direct=True
+        result = resolve_review(
+            {"reviewer_company": None, "source": "github",
+             "review_text": "switched away", "reviewer_title": None,
+             "raw_metadata": {}, "enrichment": None,
+             "_gh_profile": {"company": "sandeza.ai"}},
+            vendor_name="Jira",
+        )
+        assert result.resolved_company_name == "sandeza.ai"
+        assert result.confidence_label in ("medium", "high")
+
+    def test_domain_like_default_still_blocked(self):
+        # Without trust_direct, domain_like check applies (default behaviour unchanged)
+        exc = _apply_guardrails("kore.ai", "Zendesk", trust_direct=False)
+        assert exc is not None
+        assert exc.reason == "domain_like"
 
 
 # -- Confidence Model -------------------------------------------------------
