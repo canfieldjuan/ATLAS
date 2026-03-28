@@ -451,6 +451,9 @@ def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict
         for comp in competitors
     )
     return {
+        "intent_to_leave_signal": bool(churn.get("intent_to_leave")),
+        "actively_evaluating_signal": bool(churn.get("actively_evaluating")),
+        "migration_in_progress_signal": bool(churn.get("migration_in_progress")),
         "explicit_cancel_language": bool(churn.get("intent_to_leave")) and _contains_any(
             review_blob, ("cancel", "not renewing", "terminate", "ending our contract")
         ),
@@ -462,6 +465,28 @@ def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict
         "comparison_shopping_language": _contains_any(review_blob, ("vs ", "alternative", "which should", "looking for options")),
         "named_alternative_with_reason": named_alt_with_reason,
         "frustration_without_alternative": bool(complaints) and not competitors,
+        "price_pressure_language": bool(result.get("pricing_phrases")) or _contains_any(
+            review_blob + " " + price_text,
+            (
+                "price increase",
+                "pricing policy",
+                "too expensive",
+                "costs will constantly increase",
+                "forced to change provider",
+                "unjustified expenses",
+            ),
+        ),
+        "reconsideration_language": _contains_any(
+            review_blob,
+            (
+                "reconsidering",
+                "considering changing",
+                "considering switching",
+                "considering swtiching",
+                "forced to change provider",
+                "considering another tool",
+            ),
+        ),
         "dollar_amount_mentioned": bool(budget.get("annual_spend_estimate") or budget.get("price_per_seat")) or "$" in price_text,
         "timeline_mentioned": bool(
             churn.get("renewal_timing")
@@ -513,15 +538,44 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     rating = float(source_row["rating"]) if source_row.get("rating") is not None else None
     rating_max = float(source_row.get("rating_max") or 5)
 
-    indicators = result.get("urgency_indicators", {})
     complaints = result.get("specific_complaints", [])
     quotable = result.get("quotable_phrases", [])
     pricing_phrases = result.get("pricing_phrases", [])
     rec_lang = result.get("recommendation_language", [])
     events = result.get("event_mentions", [])
-    pain_cats = result.get("pain_categories", [])
     budget = result.get("budget_signals", {})
     reviewer = result.get("reviewer_context", {})
+
+    # 0. deterministic replacements for deprecated Tier 2 classify path
+    result["pain_categories"] = _derive_pain_categories(result)
+    result["competitors_mentioned"] = _derive_competitor_annotations(result, source_row)
+
+    ba = result.get("buyer_authority")
+    if not isinstance(ba, dict):
+        ba = {}
+        result["buyer_authority"] = ba
+    role_type, executive_sponsor_mentioned, buying_stage = _derive_buyer_authority_fields(
+        result, source_row
+    )
+    ba["role_type"] = role_type
+    ba["executive_sponsor_mentioned"] = executive_sponsor_mentioned
+    ba["buying_stage"] = buying_stage
+
+    timeline = result.get("timeline")
+    if not isinstance(timeline, dict):
+        timeline = {}
+        result["timeline"] = timeline
+    timeline["decision_timeline"] = _derive_decision_timeline(result)
+
+    cc = result.get("contract_context")
+    if not isinstance(cc, dict):
+        cc = {}
+        result["contract_context"] = cc
+    cc["contract_value_signal"] = _derive_contract_value_signal(result)
+    result["urgency_indicators"] = _derive_urgency_indicators(result, source_row)
+
+    indicators = result.get("urgency_indicators", {})
+    pain_cats = result.get("pain_categories", [])
 
     # 1. urgency_score
     result["urgency_score"] = engine.compute_urgency(
@@ -563,39 +617,11 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
         st.setdefault("turning_point", None)
 
     # 6. buyer_authority.has_budget_authority
-    ba = result.get("buyer_authority")
-    if not isinstance(ba, dict):
-        ba = {}
-        result["buyer_authority"] = ba
     ba["has_budget_authority"] = engine.derive_budget_authority(result)
 
     # 7. contract_context.price_complaint + price_context
-    cc = result.get("contract_context")
-    if not isinstance(cc, dict):
-        cc = {}
-        result["contract_context"] = cc
     cc["price_complaint"] = engine.derive_price_complaint(result)
     cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
-
-    # 8. deterministic replacements for deprecated Tier 2 classify path
-    result["pain_categories"] = _derive_pain_categories(result)
-    result["competitors_mentioned"] = _derive_competitor_annotations(result, source_row)
-
-    role_type, executive_sponsor_mentioned, buying_stage = _derive_buyer_authority_fields(
-        result, source_row
-    )
-    ba["role_type"] = role_type
-    ba["executive_sponsor_mentioned"] = executive_sponsor_mentioned
-    ba["buying_stage"] = buying_stage
-
-    timeline = result.get("timeline")
-    if not isinstance(timeline, dict):
-        timeline = {}
-        result["timeline"] = timeline
-    timeline["decision_timeline"] = _derive_decision_timeline(result)
-
-    cc["contract_value_signal"] = _derive_contract_value_signal(result)
-    result["urgency_indicators"] = _derive_urgency_indicators(result, source_row)
 
     # Mark schema version
     result["enrichment_schema_version"] = 3

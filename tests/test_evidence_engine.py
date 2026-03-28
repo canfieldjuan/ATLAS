@@ -49,7 +49,8 @@ class TestUrgencyScoring:
             {"frustration_without_alternative": True},
             rating=None, rating_max=5, content_type="review", source_weight=0.7,
         )
-        assert score == 1.0
+        # frustration_without_alternative = 1.5 in current YAML
+        assert score == 1.5
 
     def test_rating_floor_one_star(self, engine):
         score = engine.compute_urgency({}, rating=1.0, rating_max=5.0, content_type="review", source_weight=0.7)
@@ -62,16 +63,16 @@ class TestUrgencyScoring:
     def test_rating_floor_does_not_lower_score(self, engine):
         indicators = {"explicit_cancel_language": True, "active_evaluation_language": True}
         score = engine.compute_urgency(indicators, rating=2.0, rating_max=5.0, content_type="review", source_weight=0.7)
-        # 3.0 + 2.5 = 5.5, floor is 2.0 -- should keep 5.5
-        assert score == 5.5
+        # 3.0 + 2.0 = 5.0, floor is 2.0 -- should keep 5.0
+        assert score == 5.0
 
     def test_comment_adjustment(self, engine):
         score = engine.compute_urgency(
             {"frustration_without_alternative": True},
             rating=None, rating_max=5, content_type="comment", source_weight=0.7,
         )
-        # 1.0 - 1.0 = 0.0
-        assert score == 0.0
+        # 1.5 - 1.0 = 0.5
+        assert score == 0.5
 
     def test_low_source_weight_gate(self, engine):
         indicators = {"explicit_cancel_language": True, "active_migration_language": True}

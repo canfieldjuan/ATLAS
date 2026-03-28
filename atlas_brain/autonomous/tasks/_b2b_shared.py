@@ -4072,14 +4072,32 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
             vendor_name,
             COUNT(DISTINCT id)::int AS signal_count,
             ROUND(
-                COUNT(DISTINCT CASE WHEN enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned' = 'true'
-                         THEN id END)::numeric
+                COUNT(DISTINCT CASE
+                    WHEN (enrichment->'insider_signals'->>'departures_mentioned')::boolean = true
+                      OR (enrichment->'insider_signals'->'talent_drain'->>'departures_mentioned')::boolean = true
+                    THEN id END)::numeric
                 / NULLIF(COUNT(DISTINCT id), 0)::numeric,
                 4
             ) AS talent_drain_rate,
-            jsonb_agg(DISTINCT
-                enrichment->'insider_signals'->'org_health'
-            ) FILTER (WHERE enrichment->'insider_signals'->'org_health' IS NOT NULL) AS org_health_array,
+            -- v2 flattened insider fields (with v1 nested fallback)
+            jsonb_agg(DISTINCT jsonb_build_object(
+                'bureaucracy_level', COALESCE(
+                    enrichment->'insider_signals'->>'bureaucracy_level',
+                    enrichment->'insider_signals'->'org_health'->>'bureaucracy_level'
+                ),
+                'leadership_quality', COALESCE(
+                    enrichment->'insider_signals'->>'leadership_quality',
+                    enrichment->'insider_signals'->'org_health'->>'leadership_quality'
+                ),
+                'innovation_climate', COALESCE(
+                    enrichment->'insider_signals'->>'innovation_climate',
+                    enrichment->'insider_signals'->'org_health'->>'innovation_climate'
+                ),
+                'morale', COALESCE(
+                    enrichment->'insider_signals'->>'morale',
+                    enrichment->'insider_signals'->'talent_drain'->>'morale'
+                )
+            )) FILTER (WHERE enrichment->'insider_signals' IS NOT NULL) AS org_health_array,
             jsonb_agg(
                 jsonb_build_object(
                     'quote', ph.value,
@@ -4888,10 +4906,48 @@ async def _fetch_turning_points(pool, window_days: int) -> list[dict[str, Any]]:
         window_days,
         sources,
     )
-    return [
+    results = [
         {"vendor": r["vendor_name"], "trigger": r["turning_point"], "mentions": r["cnt"]}
         for r in rows
     ]
+
+    # Supplement with v2 event_mentions for richer temporal data
+    event_rows = await pool.fetch(
+        f"""
+        SELECT vendor_name,
+            ev.value->>'event' AS event_text,
+            ev.value->>'timeframe' AS timeframe,
+            count(*) AS cnt
+        FROM b2b_reviews
+        CROSS JOIN LATERAL jsonb_array_elements(
+            COALESCE(enrichment->'event_mentions', '[]'::jsonb)
+        ) AS ev(value)
+        WHERE {filters}
+          AND jsonb_array_length(COALESCE(enrichment->'event_mentions', '[]'::jsonb)) > 0
+        GROUP BY vendor_name, ev.value->>'event', ev.value->>'timeframe'
+        HAVING count(*) >= 2
+        ORDER BY cnt DESC
+        """,
+        window_days,
+        sources,
+    )
+    seen_triggers = {(r["vendor"], r["trigger"]) for r in results}
+    for r in event_rows:
+        trigger = r["event_text"] or ""
+        if not trigger:
+            continue
+        if r["timeframe"]:
+            trigger = f"{trigger} ({r['timeframe']})"
+        if (r["vendor_name"], trigger) not in seen_triggers:
+            seen_triggers.add((r["vendor_name"], trigger))
+            results.append({
+                "vendor": r["vendor_name"],
+                "trigger": trigger,
+                "mentions": r["cnt"],
+            })
+
+    results.sort(key=lambda x: x.get("mentions", 0), reverse=True)
+    return results
 
 
 async def _fetch_review_text_aggregates(pool, window_days: int) -> tuple[list[dict], list[dict]]:
