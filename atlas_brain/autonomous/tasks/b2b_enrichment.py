@@ -1389,7 +1389,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
             return False
 
-        # Tier 2: conditional — only fire when tier 1 left extraction gaps
+        # Tier 2: conditional -- only fire when tier 1 left extraction gaps
         tier2 = None
         tier2_model = None
         if _tier1_has_extraction_gaps(tier1):
