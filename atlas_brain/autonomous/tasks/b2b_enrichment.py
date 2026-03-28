@@ -196,19 +196,26 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
 
 
 def _tier1_has_extraction_gaps(tier1: dict) -> bool:
-    """Check if tier 1 left gaps that tier 2 should fill."""
+    """Check if tier 1 left gaps that tier 2 should fill.
+
+    Tier 2 adds: pain_categories, competitor classification, buyer_authority,
+    sentiment_trajectory. These are ALWAYS missing from tier 1 (by design).
+    So we only trigger tier 2 when tier 1 missed verbatim extractions that
+    indicate the review has substance worth classifying.
+    """
     complaints = tier1.get("specific_complaints") or []
     quotes = tier1.get("quotable_phrases") or []
     competitors = tier1.get("competitors_mentioned") or []
     pricing = tier1.get("pricing_phrases") or []
     rec_lang = tier1.get("recommendation_language") or []
-    # If the review has churn signals but no verbatim evidence, tier 2 should fill
     churn = tier1.get("churn_signals") or {}
     has_churn = any(bool(v) for v in churn.values())
     has_evidence = bool(complaints or quotes or competitors or pricing or rec_lang)
-    # Also fire if pain classification is missing
-    pain_cats = tier1.get("pain_categories") or []
-    return (has_churn and not has_evidence) or not pain_cats
+    # Tier 2 fires when the review has substance worth classifying:
+    # 1. Any churn signal or negative evidence -> need pain classification
+    # 2. Competitors mentioned -> need evidence_type + displacement scoring
+    # Skip tier 2 ONLY for purely positive reviews with zero signals
+    return has_churn or has_evidence
 
 
 async def _call_vllm_tier2(
