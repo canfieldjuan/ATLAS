@@ -13,11 +13,13 @@ Resolution priority:
 
 from __future__ import annotations
 
+import html as _html
 import json
 import logging
 import re
 from dataclasses import dataclass, field as dc_field
 from typing import Any
+from urllib.parse import urlparse
 
 from ...services.company_normalization import normalize_company_name
 
@@ -511,12 +513,59 @@ def resolve_review(
 _HN_USER_API = "https://hacker-news.firebaseio.com/v0/user/{username}.json"
 _GITHUB_USER_API = "https://api.github.com/users/{username}"
 
+# Domains that are platforms/tools, not company identifiers
+_PLATFORM_DOMAINS = frozenset({
+    "github.com", "gitlab.com", "bitbucket.org",
+    "twitter.com", "x.com", "linkedin.com", "facebook.com", "instagram.com",
+    "youtube.com", "keybase.io", "medium.com", "substack.com", "notion.so",
+    "t.co", "bit.ly", "tinyurl.com", "ycombinator.com", "news.ycombinator.com",
+    "stackoverflow.com", "reddit.com", "quora.com", "producthunt.com",
+    "google.com", "apple.com", "microsoft.com", "amazon.com", "cloudflare.com",
+    "oreilly.com", "npmjs.com", "pypi.org", "rubygems.org",
+})
+
+
+def _domain_to_company_candidate(url: str) -> str | None:
+    """Extract a company name candidate from a URL.
+
+    Returns the SLD (second-level domain) capitalised, or None if the URL
+    points to a known platform, a personal-looking domain, or is too short.
+
+    Examples:
+        https://stripe.com   -> "Stripe"
+        https://webiphany.com -> "Webiphany"
+        https://twitter.com  -> None  (platform)
+        https://metachris.com -> None (looks personal)
+    """
+    try:
+        parsed = urlparse(url)
+        host = (parsed.netloc or parsed.path).lower().split(":")[0]
+    except Exception:
+        return None
+
+    host = re.sub(r"^www\.", "", host)
+    if not host or host in _PLATFORM_DOMAINS:
+        return None
+
+    # Extract SLD (e.g. "stripe" from "stripe.com")
+    parts = host.split(".")
+    name = parts[0] if parts else ""
+    if len(name) < 3:
+        return None
+
+    # Skip if the name looks like a personal handle (email-like chars, digits only)
+    if re.match(r"^[0-9]+$", name):
+        return None
+
+    return name.capitalize()
+
 
 async def fetch_hn_profile(username: str, http_client: Any = None) -> dict[str, str]:
-    """Fetch HackerNews user profile. Returns {about, company_from_about}.
+    """Fetch HackerNews user profile. Returns {about, company_from_about, profile_urls}.
 
-    HN API is public, no auth needed. The 'about' field contains free-text
-    bio that often has company affiliation.
+    HN API is public, no auth needed. The 'about' field is HTML with entities
+    (e.g. &#x2F; for /) — we decode entities before stripping tags so that
+    URLs and bio text are fully readable for regex and domain extraction.
     """
     if not username or not username.strip():
         return {}
@@ -531,14 +580,21 @@ async def fetch_hn_profile(username: str, http_client: Any = None) -> dict[str, 
         data = resp.json()
         if not isinstance(data, dict):
             return {}
-        about = (data.get("about") or "").strip()
-        if not about:
+        about_raw = (data.get("about") or "").strip()
+        if not about_raw:
             return {}
-        # Strip HTML tags from HN about field
-        about_clean = re.sub(r"<[^>]+>", " ", about)
+        # Decode HTML entities FIRST (&#x2F; -> /, &amp; -> &, etc.)
+        # Must happen before tag stripping so URLs become parseable.
+        about_decoded = _html.unescape(about_raw)
+        # Extract URLs from decoded text before removing tags
+        profile_urls = re.findall(r'https?://[^\s<>"\']+', about_decoded)
+        # Strip HTML tags, collapse whitespace
+        about_clean = re.sub(r"<[^>]+>", " ", about_decoded)
         about_clean = re.sub(r"\s+", " ", about_clean).strip()
-        result: dict[str, str] = {"about": about_clean}
-        # Try to extract company from about
+        result: dict = {"about": about_clean}
+        if profile_urls:
+            result["profile_urls"] = profile_urls[:5]
+        # Try to extract company from bio text
         sig = _extract_from_bio_regex(about_clean, "hn_profile_about")
         if sig:
             result["company_from_about"] = sig.value
@@ -593,7 +649,13 @@ async def fetch_github_profile(username: str, http_client: Any = None) -> dict[s
 
 
 def extract_from_hn_profile(profile: dict[str, str]) -> ResolutionSignal | None:
-    """Extract company signal from a fetched HN profile."""
+    """Extract company signal from a fetched HN profile.
+
+    Priority:
+      1. company_from_about — bio regex matched a company name in the about text
+      2. bio regex re-run on about (redundant guard, handles edge cases)
+      3. profile_urls — domain of first non-platform URL in the about field
+    """
     company = (profile.get("company_from_about") or "").strip()
     if company:
         return ResolutionSignal(
@@ -602,7 +664,7 @@ def extract_from_hn_profile(profile: dict[str, str]) -> ResolutionSignal | None:
             confidence=0.65,
             source_field="hn_user_profile.about",
         )
-    # Try bio regex on the about text directly
+    # Re-run bio regex on cleaned about text
     about = (profile.get("about") or "").strip()
     if about:
         sig = _extract_from_bio_regex(about, "hn_user_profile.about")
@@ -610,6 +672,18 @@ def extract_from_hn_profile(profile: dict[str, str]) -> ResolutionSignal | None:
             sig.confidence = 0.6
             sig.signal_type = "hn_profile_about"
             return sig
+    # Fall back: try to derive a company name from profile URLs in the about field.
+    # Many HN users list their company website (e.g. https://stripe.com) without
+    # any textual "at X" marker.
+    for url in (profile.get("profile_urls") or []):
+        candidate = _domain_to_company_candidate(url)
+        if candidate:
+            return ResolutionSignal(
+                signal_type="hn_profile_url_domain",
+                value=candidate,
+                confidence=0.45,
+                source_field="hn_user_profile.about_urls",
+            )
     return None
 
 
