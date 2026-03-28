@@ -50,17 +50,17 @@ enrichment:
     description: "Override 'other' pain_category using keyword scan"
     trigger: {field: pain_category, eq: other}
     keyword_map:
-      pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, fees, subscription, invoice, invoiced, billing, billed, charged, charge, refund, cost increase, price increase, pay for every, paying for, paid for, invested, overpay, nickel and dime, hidden cost, hidden fee, sticker shock, renewal cost, renewal price, per seat, per user, add-on cost, upsell, price hike, price jump, not worth the price, too much money, waste of money, money pit]
-      support: [support, response time, ticket, customer service, helpdesk, wait time, unresponsive]
+      pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, fees, subscription, invoice, invoiced, billing, billed, charged, charge, refund, cost increase, price increase, pay for every, paying for, paid for, invested, overpay, nickel and dime, hidden cost, hidden fee, sticker shock, renewal cost, renewal price, per seat, per user, add-on cost, upsell, price hike, price jump, not worth the price, too much money, waste of money, money pit, rates, rate increase, not transparent about, deceptive pricing, bait and switch]
+      support: [support, response time, ticket, customer service, helpdesk, wait time, unresponsive, no help, unhelpful, ignored, no response, ghosted, runaround, passed around, escalation, complaint, complaints team]
       reliability: [downtime, outage, crash, bug, unstable, unreliable, broken, error]
       ux: [clunky, unintuitive, confusing, ui, ux, user interface, learning curve, ugly, dated, clumsy]
       performance: [slow, latency, performance, speed, loading, lag, timeout]
       integration: [integration, connector, webhook, incompatible, sync, interop]
       security: [security, breach, vulnerability, compliance, gdpr, soc2, encryption, audit]
       onboarding: [onboarding, setup, implementation, getting started, documentation, tutorial]
-      features: [feature, missing, roadmap, functionality, capability, wishlist, lacking]
+      features: [feature, missing, roadmap, functionality, capability, wishlist, lacking, calendar, scheduling, customization, workflow, template, automation, notification, dashboard, reporting, analytics, export]
       technical_debt: [technical debt, legacy, outdated codebase, deprecated, spaghetti, refactor, tech debt]
-      contract_lock_in: [lock-in, locked in, exit cost, switching cost, vendor lock, contract trap, penalty, cancel, cancellation, terminate, termination, auto renew, automatic renewal, renewed without notice, notice period, contract term, billing dispute, runaround]
+      contract_lock_in: [lock-in, locked in, exit cost, switching cost, vendor lock, contract trap, penalty, cancel, cancellation, terminate, termination, auto renew, automatic renewal, renewed without notice, notice period, contract term, billing dispute, runaround, unsubscribe, delete my account, close my account, deactivate, cannot cancel, won't let me cancel, impossible to cancel, trying to cancel]
       data_migration: [data migration, export, portability, data export, migrate data, data transfer, import]
       api_limitations: [api limit, rate limit, api limitation, missing endpoint, api documentation, throttle, api quota]
     scan_fields: [specific_complaints, quotable_phrases, pricing_phrases, feature_gaps, recommendation_language]
