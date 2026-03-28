@@ -20,6 +20,19 @@ from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_account_resolution")
 
+_PROFILE_URL_TEMPLATES = {
+    "hackernews": "https://news.ycombinator.com/user?id={username}",
+    "github": "https://github.com/{username}",
+    "reddit": "https://www.reddit.com/user/{username}",
+}
+
+
+def _build_author_profile_url(source: str, username: str) -> str | None:
+    template = _PROFILE_URL_TEMPLATES.get(source)
+    if template and username:
+        return template.format(username=username)
+    return None
+
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task: resolve anonymous review authors to named companies."""
@@ -59,7 +72,42 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not rows:
         return {"_skip_synthesis": "No reviews pending resolution"}
 
-    from ...services.b2b.account_resolver import resolve_review
+    from ...services.b2b.account_resolver import (
+        extract_from_github_profile,
+        extract_from_hn_profile,
+        fetch_github_profile,
+        fetch_hn_profile,
+        resolve_review,
+    )
+
+    # Pre-fetch profiles for HN and GitHub reviews
+    import httpx
+
+    hn_reviews = [r for r in rows if (r["source"] or "") == "hackernews" and r["reviewer_name"]]
+    gh_reviews = [r for r in rows if (r["source"] or "") == "github" and r["reviewer_name"]]
+    profile_cache: dict[str, dict] = {}
+
+    if hn_reviews or gh_reviews:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            for r in hn_reviews[:50]:
+                username = r["reviewer_name"]
+                if username and username not in profile_cache:
+                    profile = await fetch_hn_profile(username, http)
+                    if profile:
+                        profile_cache[f"hn:{username}"] = profile
+            for r in gh_reviews[:50]:
+                username = r["reviewer_name"]
+                if username and username not in profile_cache:
+                    profile = await fetch_github_profile(username, http)
+                    if profile:
+                        profile_cache[f"gh:{username}"] = profile
+
+        logger.info(
+            "Fetched %d profiles (HN=%d, GH=%d)",
+            len(profile_cache),
+            sum(1 for k in profile_cache if k.startswith("hn:")),
+            sum(1 for k in profile_cache if k.startswith("gh:")),
+        )
 
     # Build vendor blocklist
     vendor_names = {r["vendor_name"] for r in rows if r["vendor_name"]}
@@ -89,6 +137,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         vendor = review_dict.get("vendor_name") or ""
         blocked = blocked_by_vendor.get(vendor, set())
+        source = (review_dict.get("source") or "").lower()
+        username = (review_dict.get("reviewer_name") or "").strip()
+
+        # Inject fetched profile data as extra signals
+        if source == "hackernews" and username:
+            hn_profile = profile_cache.get(f"hn:{username}")
+            if hn_profile:
+                review_dict["_hn_profile"] = hn_profile
+        elif source == "github" and username:
+            gh_profile = profile_cache.get(f"gh:{username}")
+            if gh_profile:
+                review_dict["_gh_profile"] = gh_profile
 
         try:
             result = resolve_review(
@@ -147,7 +207,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 row["source"],
                 row["source_url"],
                 row["reviewer_name"],
-                None,  # author_profile_url -- future enhancement
+                _build_author_profile_url(source, username),
                 row["reviewer_company"],
                 result.resolved_company_name,
                 result.normalized_company_name,

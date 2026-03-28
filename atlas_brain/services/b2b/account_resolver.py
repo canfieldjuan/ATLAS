@@ -452,6 +452,17 @@ def resolve_review(
         extractors.extend(_extract_from_producthunt_metadata(review))
     elif source == "hackernews":
         extractors.extend(_extract_from_hackernews_metadata(review))
+        # HN profile data injected by task
+        hn_profile = review.get("_hn_profile")
+        if isinstance(hn_profile, dict):
+            sig = extract_from_hn_profile(hn_profile)
+            if sig:
+                extractors.append(sig)
+    elif source == "github":
+        # GitHub profile data injected by task
+        gh_profile = review.get("_gh_profile")
+        if isinstance(gh_profile, dict):
+            extractors.extend(extract_from_github_profile(gh_profile))
     # Priority 4: Enrichment company_name (low confidence, LLM-derived)
     extractors.append(_extract_from_enrichment(review))
 
@@ -491,3 +502,135 @@ def resolve_review(
         signals=raw_signals,
         excluded_candidates=excluded,
     )
+
+
+# ---------------------------------------------------------------------------
+# Async profile fetchers (called by task before sync resolver)
+# ---------------------------------------------------------------------------
+
+_HN_USER_API = "https://hacker-news.firebaseio.com/v0/user/{username}.json"
+_GITHUB_USER_API = "https://api.github.com/users/{username}"
+
+
+async def fetch_hn_profile(username: str, http_client: Any = None) -> dict[str, str]:
+    """Fetch HackerNews user profile. Returns {about, company_from_about}.
+
+    HN API is public, no auth needed. The 'about' field contains free-text
+    bio that often has company affiliation.
+    """
+    if not username or not username.strip():
+        return {}
+    import httpx
+    client = http_client or httpx.AsyncClient(timeout=10.0)
+    close_after = http_client is None
+    try:
+        url = _HN_USER_API.format(username=username.strip())
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            return {}
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {}
+        about = (data.get("about") or "").strip()
+        if not about:
+            return {}
+        # Strip HTML tags from HN about field
+        about_clean = re.sub(r"<[^>]+>", " ", about)
+        about_clean = re.sub(r"\s+", " ", about_clean).strip()
+        result: dict[str, str] = {"about": about_clean}
+        # Try to extract company from about
+        sig = _extract_from_bio_regex(about_clean, "hn_profile_about")
+        if sig:
+            result["company_from_about"] = sig.value
+        return result
+    except Exception:
+        logger.debug("HN profile fetch failed for %s", username, exc_info=True)
+        return {}
+    finally:
+        if close_after:
+            await client.aclose()
+
+
+async def fetch_github_profile(username: str, http_client: Any = None) -> dict[str, str]:
+    """Fetch GitHub user profile. Returns {company, bio, blog}.
+
+    GitHub API is public (60 req/hr unauthenticated). The 'company' field
+    is explicitly set by users and is the strongest signal.
+    """
+    if not username or not username.strip():
+        return {}
+    import httpx
+    client = http_client or httpx.AsyncClient(timeout=10.0)
+    close_after = http_client is None
+    try:
+        url = _GITHUB_USER_API.format(username=username.strip())
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            return {}
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {}
+        result: dict[str, str] = {}
+        company = (data.get("company") or "").strip()
+        # GitHub company field often starts with @ for org handles
+        if company:
+            company = company.lstrip("@").strip()
+            if company:
+                result["company"] = company
+        bio = (data.get("bio") or "").strip()
+        if bio:
+            result["bio"] = bio
+        blog = (data.get("blog") or "").strip()
+        if blog:
+            result["blog"] = blog
+        return result
+    except Exception:
+        logger.debug("GitHub profile fetch failed for %s", username, exc_info=True)
+        return {}
+    finally:
+        if close_after:
+            await client.aclose()
+
+
+def extract_from_hn_profile(profile: dict[str, str]) -> ResolutionSignal | None:
+    """Extract company signal from a fetched HN profile."""
+    company = (profile.get("company_from_about") or "").strip()
+    if company:
+        return ResolutionSignal(
+            signal_type="hn_profile_about",
+            value=company,
+            confidence=0.65,
+            source_field="hn_user_profile.about",
+        )
+    # Try bio regex on the about text directly
+    about = (profile.get("about") or "").strip()
+    if about:
+        sig = _extract_from_bio_regex(about, "hn_user_profile.about")
+        if sig:
+            sig.confidence = 0.6
+            sig.signal_type = "hn_profile_about"
+            return sig
+    return None
+
+
+def extract_from_github_profile(profile: dict[str, str]) -> list[ResolutionSignal]:
+    """Extract company signals from a fetched GitHub profile."""
+    signals: list[ResolutionSignal] = []
+    # GitHub company field is the strongest signal
+    company = (profile.get("company") or "").strip()
+    if company:
+        signals.append(ResolutionSignal(
+            signal_type="github_profile_company",
+            value=company,
+            confidence=0.8,
+            source_field="github_user_profile.company",
+        ))
+    # Bio might also contain employer info
+    bio = (profile.get("bio") or "").strip()
+    if bio:
+        sig = _extract_from_bio_regex(bio, "github_user_profile.bio")
+        if sig:
+            sig.confidence = 0.6
+            sig.signal_type = "github_profile_bio"
+            signals.append(sig)
+    return signals
