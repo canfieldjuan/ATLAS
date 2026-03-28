@@ -135,6 +135,28 @@ _ROLE_WORDS = frozenset({
     "ceo", "cto", "cio", "cfo", "coo", "vp", "svp", "evp",
 })
 
+# Terms that are definitively NOT company names regardless of extraction context.
+# Exact-match against the cleaned, lowercased capture.
+_REJECT_COMPANY_TERMS = frozenset({
+    # Email providers (captured by handle_at_company pattern)
+    "gmail", "yahoo", "hotmail", "outlook", "proton", "icloud", "aol",
+    # Generic single-word captures from work_at_company / employment_claim
+    "support", "work", "tasks", "accounting", "email", "meetings",
+    "ticketing", "data", "reports", "tech", "them", "it", "hr",
+    "business", "company", "team", "organization", "department", "dept",
+    "school", "university", "startup", "agency", "firm", "corp", "inc",
+    # Generic multi-word phrases that slip through
+    "email marketing", "various purposes", "customer support",
+    "project management", "task management", "ticket management",
+    "workflow management", "thought management", "customer relationship management",
+    "automated project management", "advanced use cases",
+    "all our hr materials", "all our employee-related information",
+    "warrants the cost", "is expiring",
+    "meetings and scheduling", "my new company",
+    # Founder pattern false positives
+    "entrepreneur", "freelancer", "self-employed", "indie hacker",
+})
+
 
 # ---------------------------------------------------------------------------
 # Extraction helpers
@@ -161,7 +183,7 @@ def _extract_from_bio_regex(text: str, field_name: str) -> ResolutionSignal | No
         m = pattern.search(text)
         if m:
             raw = _clean_extracted_name(m.group(1))
-            if raw and len(raw) >= 2:
+            if raw and len(raw) >= 2 and raw.lower() not in _REJECT_COMPANY_TERMS:
                 return ResolutionSignal(
                     signal_type=signal_type,
                     value=raw,
