@@ -97,6 +97,32 @@ class TestBioRegex:
         sig = _extract_from_bio_regex("we are for open source projects", "bio")
         assert sig is None or sig.value != "open source projects"
 
+    def test_article_a_not_extracted(self):
+        # "I work at a large tech company" — should NOT extract "a large tech company"
+        sig = _extract_from_bio_regex("I work at a large tech company", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("a "))
+
+    def test_article_an_not_extracted(self):
+        # "I work for an IT company" — should NOT extract "an IT company"
+        sig = _extract_from_bio_regex("I work for an IT company", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("an "))
+
+    def test_article_the_not_extracted(self):
+        # "I work at the business development team" — should NOT extract "the business..."
+        sig = _extract_from_bio_regex("I work at the business development team", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("the "))
+
+    def test_possessive_our_not_extracted(self):
+        # "we are at our main office" — should NOT extract "our main office"
+        sig = _extract_from_bio_regex("we are at our main office", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("our "))
+
+    def test_company_name_with_a_prefix_still_works(self):
+        # "Acme" starts with 'A' but is NOT "a " (article) — must still resolve
+        sig = _extract_from_bio_regex("I work at Acme Corp", "bio")
+        assert sig is not None
+        assert sig.value == "Acme Corp"
+
     def test_former_at(self):
         sig = _extract_from_bio_regex("Former engineer at Meta", "bio")
         assert sig is not None
