@@ -7,6 +7,7 @@ and backfills reviewer_company on b2b_reviews for high/medium confidence.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -82,34 +83,54 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         resolve_review,
     )
 
-    # Pre-fetch profiles for HN and GitHub reviews
+    # Pre-fetch profiles for HN and GitHub reviews (parallel, semaphore-limited)
     import httpx
 
     max_fetches = getattr(cfg, "account_resolution_max_profile_fetches", 50)
+    fetch_concurrency = getattr(cfg, "account_resolution_profile_fetch_concurrency", 10)
+    fetch_timeout = getattr(cfg, "account_resolution_profile_fetch_timeout", 5.0)
+
     hn_reviews = [r for r in rows if (r["source"] or "") == "hackernews" and r["reviewer_name"]]
     gh_reviews = [r for r in rows if (r["source"] or "") == "github" and r["reviewer_name"]]
     profile_cache: dict[str, dict] = {}
 
     if hn_reviews or gh_reviews:
-        async with httpx.AsyncClient(timeout=10.0) as http:
-            for r in hn_reviews[:max_fetches]:
-                username = r["reviewer_name"]
-                if username and username not in profile_cache:
+        # Deduplicate usernames before launching coroutines
+        hn_usernames = list(dict.fromkeys(
+            r["reviewer_name"] for r in hn_reviews[:max_fetches] if r["reviewer_name"]
+        ))
+        gh_usernames = list(dict.fromkeys(
+            r["reviewer_name"] for r in gh_reviews[:max_fetches] if r["reviewer_name"]
+        ))
+
+        async with httpx.AsyncClient(timeout=fetch_timeout) as http:
+            sem = asyncio.Semaphore(fetch_concurrency)
+
+            async def _fetch_hn(username: str) -> None:
+                async with sem:
                     profile = await fetch_hn_profile(username, http)
                     if profile:
                         profile_cache[f"hn:{username}"] = profile
-            for r in gh_reviews[:max_fetches]:
-                username = r["reviewer_name"]
-                if username and username not in profile_cache:
+
+            async def _fetch_gh(username: str) -> None:
+                async with sem:
                     profile = await fetch_github_profile(username, http)
                     if profile:
                         profile_cache[f"gh:{username}"] = profile
 
+            await asyncio.gather(
+                *[_fetch_hn(u) for u in hn_usernames],
+                *[_fetch_gh(u) for u in gh_usernames],
+                return_exceptions=True,
+            )
+
         logger.info(
-            "Fetched %d profiles (HN=%d, GH=%d)",
+            "Fetched %d profiles (HN=%d, GH=%d) concurrency=%d timeout=%.1fs",
             len(profile_cache),
             sum(1 for k in profile_cache if k.startswith("hn:")),
             sum(1 for k in profile_cache if k.startswith("gh:")),
+            fetch_concurrency,
+            fetch_timeout,
         )
 
     # Build vendor blocklist
