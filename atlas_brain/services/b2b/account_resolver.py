@@ -349,8 +349,17 @@ def _apply_guardrails(
     candidate: str,
     vendor_name: str,
     blocked_names: set[str] | None = None,
+    *,
+    trust_direct: bool = False,
 ) -> ExcludedCandidate | None:
-    """Check if a candidate should be excluded. Returns None if it passes."""
+    """Check if a candidate should be excluded. Returns None if it passes.
+
+    trust_direct=True skips the domain_like check for signals that come
+    directly from the reviewer (reviewer_company_field, github_profile_company).
+    Companies like 'kore.ai' or 'Purplle.com' are real brand names and should
+    not be blocked when the reviewer explicitly declared them.
+    All other checks (vendor match, blocked, generic, too_short) still apply.
+    """
     if not candidate or not candidate.strip():
         return ExcludedCandidate(name=candidate or "", reason="empty")
 
@@ -378,9 +387,10 @@ def _apply_guardrails(
     if len(normalized) < 2:
         return ExcludedCandidate(name=candidate, reason="too_short")
 
-    # Looks like a domain
-    if re.match(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+$", normalized) and " " not in normalized:
-        return ExcludedCandidate(name=candidate, reason="domain_like")
+    # Looks like a domain — skipped for direct reviewer declarations
+    if not trust_direct:
+        if re.match(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+$", normalized) and " " not in normalized:
+            return ExcludedCandidate(name=candidate, reason="domain_like")
 
     return None
 
@@ -472,9 +482,15 @@ def resolve_review(
     raw_signals = [s for s in extractors if s is not None]
 
     # Apply guardrails to each signal
+    # Signals from direct reviewer declarations bypass the domain_like check
+    # because brands like 'kore.ai' or 'Purplle.com' are real company names.
+    _TRUST_DIRECT_TYPES = {"reviewer_company_field", "github_profile_company"}
     passing: list[ResolutionSignal] = []
     for sig in raw_signals:
-        exclusion = _apply_guardrails(sig.value, vendor_name, blocked_names)
+        exclusion = _apply_guardrails(
+            sig.value, vendor_name, blocked_names,
+            trust_direct=sig.signal_type in _TRUST_DIRECT_TYPES,
+        )
         if exclusion:
             excluded.append(exclusion)
         else:
