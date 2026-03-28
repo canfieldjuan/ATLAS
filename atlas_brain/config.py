@@ -2293,9 +2293,9 @@ class B2BChurnConfig(BaseSettings):
     )
     # Account resolution
     account_resolution_batch_size: int = Field(
-        default=100,
+        default=1000,
         ge=1,
-        le=1000,
+        le=5000,
         description="Max reviews to resolve per batch in account resolution task",
     )
     account_resolution_backfill_min_confidence: str = Field(
