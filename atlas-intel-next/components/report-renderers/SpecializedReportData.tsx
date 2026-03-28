@@ -37,6 +37,7 @@ export const SPECIALIZED_REPORT_TYPES = [
   'account_comparison',
   'weekly_churn_feed',
   'vendor_scorecard',
+  'displacement_report',
 ] as const
 
 export function isSpecializedReportType(reportType: string): boolean {
@@ -973,6 +974,264 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
   )
 }
 
+// ---- Displacement Report ----
+
+interface DisplacementMeta {
+  total_flows?: number | null
+  total_mentions?: number | null
+  dominant_driver?: string | null
+  pricing_pct?: number | null
+  most_displaced_vendor?: string | null
+  biggest_winner?: string | null
+}
+
+interface DisplacementVendorRow {
+  vendor?: string | null
+  net_flow?: number | null
+  outbound_mentions?: number | null
+  inbound_mentions?: number | null
+  top_destination?: string | null
+  top_source?: string | null
+  top_driver?: string | null
+}
+
+interface DisplacementBattle {
+  from_vendor?: string | null
+  to_vendor?: string | null
+  mention_count?: number | null
+  primary_driver?: string | null
+  signal_strength?: string | null
+  confidence_score?: number | null
+  key_quote?: string | null
+  battle_conclusion?: string | null
+  durability?: string | null
+  source_archetype?: string | null
+  target_archetype?: string | null
+}
+
+interface DriverSummaryRow {
+  driver?: string | null
+  mentions?: number | null
+  pct?: number | null
+  flow_count?: number | null
+}
+
+interface DisplacementReportData {
+  meta?: DisplacementMeta | null
+  market_losers?: DisplacementVendorRow[] | null
+  market_winners?: DisplacementVendorRow[] | null
+  top_battles?: DisplacementBattle[] | null
+  driver_summary?: DriverSummaryRow[] | null
+}
+
+function signalColor(strength: string | null | undefined): string {
+  const s = (strength ?? '').toLowerCase()
+  if (s === 'very_high' || s === 'high') return 'text-red-400'
+  if (s === 'medium') return 'text-amber-400'
+  return 'text-slate-400'
+}
+
+function driverLabel(d: string | null | undefined): string {
+  return (d ?? 'unknown').replace(/_/g, ' ')
+}
+
+function DriverBadge({ driver }: { driver: string | null | undefined }) {
+  if (!driver) return null
+  const colors: Record<string, string> = {
+    pricing: 'bg-red-900/40 text-red-300',
+    price: 'bg-red-900/40 text-red-300',
+    features: 'bg-blue-900/40 text-blue-300',
+    feature: 'bg-blue-900/40 text-blue-300',
+    support: 'bg-yellow-900/40 text-yellow-300',
+    integration: 'bg-purple-900/40 text-purple-300',
+    usability: 'bg-green-900/40 text-green-300',
+    performance: 'bg-cyan-900/40 text-cyan-300',
+  }
+  const key = driver.toLowerCase().split('_')[0]
+  const cls = colors[key] ?? 'bg-slate-800 text-slate-300'
+  return (
+    <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap', cls)}>
+      {driverLabel(driver)}
+    </span>
+  )
+}
+
+function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
+  const meta = (data.meta ?? {}) as DisplacementMeta
+  const losers: DisplacementVendorRow[] = Array.isArray(data.market_losers) ? (data.market_losers as DisplacementVendorRow[]) : []
+  const winners: DisplacementVendorRow[] = Array.isArray(data.market_winners) ? (data.market_winners as DisplacementVendorRow[]) : []
+  const battles: DisplacementBattle[] = Array.isArray(data.top_battles) ? (data.top_battles as DisplacementBattle[]) : []
+  const drivers: DriverSummaryRow[] = Array.isArray(data.driver_summary) ? (data.driver_summary as DriverSummaryRow[]) : []
+
+  const totalMentions = typeof meta.total_mentions === 'number' ? meta.total_mentions : null
+  const pricingPct = typeof meta.pricing_pct === 'number' ? `${(meta.pricing_pct * 100).toFixed(0)}%` : null
+
+  return (
+    <div className="space-y-5 min-w-0 [overflow-wrap:anywhere]">
+      {/* Headline stat strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Flows Tracked', value: meta.total_flows },
+          { label: 'Total Mentions', value: totalMentions },
+          { label: 'Top Driver', value: driverLabel(meta.dominant_driver) },
+          { label: 'Pricing Share', value: pricingPct },
+        ].map(({ label, value }) =>
+          value != null ? (
+            <div key={label} className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3 text-center">
+              <p className="text-xs text-slate-400 mb-1">{label}</p>
+              <p className="text-lg font-semibold text-white leading-tight">{String(value)}</p>
+            </div>
+          ) : null,
+        )}
+      </div>
+
+      {/* Market leaderboard: losers + winners side by side */}
+      {(losers.length > 0 || winners.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Losers */}
+          {losers.length > 0 && (
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <h3 className="flex items-center gap-1.5 text-sm font-medium text-red-400 mb-3">
+                <TrendingDown className="h-4 w-4" /> Market Losers
+              </h3>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-500 border-b border-slate-700/50">
+                    <th className="text-left pb-1.5 font-normal">Vendor</th>
+                    <th className="text-right pb-1.5 font-normal">Net</th>
+                    <th className="text-left pb-1.5 font-normal pl-3">To</th>
+                    <th className="text-left pb-1.5 font-normal pl-2">Driver</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {losers.map((row, i) => (
+                    <tr key={i} className="py-1">
+                      <td className="py-1.5 text-slate-200 max-w-[6rem] truncate pr-2">{row.vendor ?? '—'}</td>
+                      <td className="py-1.5 text-right text-red-400 font-medium whitespace-nowrap">
+                        {typeof row.net_flow === 'number' ? `${row.net_flow > 0 ? '+' : ''}${row.net_flow}` : '—'}
+                      </td>
+                      <td className="py-1.5 pl-3 text-slate-400 max-w-[5rem] truncate">{row.top_destination ?? '—'}</td>
+                      <td className="py-1.5 pl-2">
+                        <DriverBadge driver={row.top_driver} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Winners */}
+          {winners.length > 0 && (
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <h3 className="flex items-center gap-1.5 text-sm font-medium text-green-400 mb-3">
+                <Zap className="h-4 w-4" /> Market Winners
+              </h3>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-500 border-b border-slate-700/50">
+                    <th className="text-left pb-1.5 font-normal">Vendor</th>
+                    <th className="text-right pb-1.5 font-normal">Net</th>
+                    <th className="text-left pb-1.5 font-normal pl-3">From</th>
+                    <th className="text-left pb-1.5 font-normal pl-2">Driver</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {winners.map((row, i) => (
+                    <tr key={i} className="py-1">
+                      <td className="py-1.5 text-slate-200 max-w-[6rem] truncate pr-2">{row.vendor ?? '—'}</td>
+                      <td className="py-1.5 text-right text-green-400 font-medium whitespace-nowrap">
+                        {typeof row.net_flow === 'number' ? `+${row.net_flow}` : '—'}
+                      </td>
+                      <td className="py-1.5 pl-3 text-slate-400 max-w-[5rem] truncate">{row.top_source ?? '—'}</td>
+                      <td className="py-1.5 pl-2">
+                        <DriverBadge driver={row.top_driver} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Driver breakdown */}
+      {drivers.length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Churn Drivers</h3>
+          <div className="space-y-2">
+            {drivers.map((d, i) => {
+              const pct = typeof d.pct === 'number' ? d.pct : 0
+              const barWidth = `${Math.min(pct * 100, 100).toFixed(1)}%`
+              return (
+                <div key={i} className="flex items-center gap-3 text-xs">
+                  <span className="w-32 text-slate-300 shrink-0 capitalize">{driverLabel(d.driver)}</span>
+                  <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="h-2 rounded-full bg-cyan-500/70"
+                      style={{ width: barWidth }}
+                    />
+                  </div>
+                  <span className="w-10 text-right text-slate-400 shrink-0">{(pct * 100).toFixed(0)}%</span>
+                  {d.mentions != null && (
+                    <span className="text-slate-600 shrink-0">{d.mentions}m</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Top battles */}
+      {battles.length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-300 mb-3">
+            <Swords className="h-4 w-4 text-amber-400" /> Top Battles
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {battles.map((b, i) => (
+              <div key={i} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-2">
+                {/* Header: from → to */}
+                <div className="flex items-center gap-1.5 text-sm font-medium flex-wrap">
+                  <span className="text-red-300">{b.from_vendor ?? '?'}</span>
+                  <span className="text-slate-500">→</span>
+                  <span className="text-green-300">{b.to_vendor ?? '?'}</span>
+                </div>
+                {/* Chips row */}
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  {b.mention_count != null && (
+                    <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 text-xs">{b.mention_count} mentions</span>
+                  )}
+                  {b.signal_strength && (
+                    <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium', signalColor(b.signal_strength))}>
+                      {b.signal_strength.replace(/_/g, ' ')}
+                    </span>
+                  )}
+                  <DriverBadge driver={b.primary_driver} />
+                </div>
+                {/* Quote */}
+                {b.key_quote && (
+                  <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/40 pl-2 break-words whitespace-pre-wrap">
+                    "{b.key_quote}"
+                  </blockquote>
+                )}
+                {/* Conclusion */}
+                {b.battle_conclusion && (
+                  <p className="text-xs text-slate-300 leading-relaxed">{b.battle_conclusion}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- Vendor Scorecard ----
+
 function VendorScorecardDetail({ items }: { items: VendorScorecardViewModel[] }) {
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
@@ -1015,5 +1274,6 @@ export function SpecializedReportData({
   }
   if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} />
   if (reportType === 'vendor_scorecard') return <VendorScorecardDetail items={toVendorScorecards(normalizedValue)} />
+  if (reportType === 'displacement_report') return <DisplacementReportDetail data={normalized} />
   return null
 }
