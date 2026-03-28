@@ -155,6 +155,8 @@ _REJECT_COMPANY_TERMS = frozenset({
     "meetings and scheduling", "my new company",
     # Founder pattern false positives
     "entrepreneur", "freelancer", "self-employed", "indie hacker",
+    # Reddit flair false positives
+    "moderator", "mod", "admin", "helper", "verified",
 })
 
 
