@@ -11,6 +11,7 @@ from atlas_brain.services.b2b.account_resolver import (
     _apply_guardrails,
     _clean_extracted_name,
     _compute_confidence,
+    _domain_to_company_candidate,
     _extract_from_bio_regex,
     _extract_from_enrichment,
     _extract_from_hackernews_metadata,
@@ -534,3 +535,60 @@ class TestHNProfile:
         result = resolve_review(review, vendor_name="Jira")
         assert result.resolved_company_name == "Shopify"
         assert result.confidence_label in ("medium", "high")
+
+    def test_profile_url_domain_fallback(self):
+        # No bio text, but profile has a company URL
+        profile = {"about": "https://stripe.com", "profile_urls": ["https://stripe.com"]}
+        sig = extract_from_hn_profile(profile)
+        assert sig is not None
+        assert sig.value == "Stripe"
+        assert sig.signal_type == "hn_profile_url_domain"
+        assert sig.confidence == 0.45
+
+    def test_profile_url_skips_platforms(self):
+        # Twitter/GitHub URLs should not produce company signals
+        profile = {
+            "about": "https://twitter.com/foo https://github.com/foo",
+            "profile_urls": ["https://twitter.com/foo", "https://github.com/foo"],
+        }
+        sig = extract_from_hn_profile(profile)
+        assert sig is None
+
+    def test_profile_url_prefers_bio_over_url(self):
+        # bio regex match should win over URL domain fallback
+        profile = {
+            "about": "Engineer at Stripe",
+            "company_from_about": "Stripe",
+            "profile_urls": ["https://someotherdomain.com"],
+        }
+        sig = extract_from_hn_profile(profile)
+        assert sig is not None
+        assert sig.value == "Stripe"
+        assert sig.signal_type == "hn_profile_about"
+
+
+# -- Domain to Company Candidate -------------------------------------------
+
+
+class TestDomainToCompanyCandidate:
+
+    def test_simple_domain(self):
+        assert _domain_to_company_candidate("https://stripe.com") == "Stripe"
+
+    def test_strips_www(self):
+        assert _domain_to_company_candidate("https://www.webiphany.com") == "Webiphany"
+
+    def test_platform_returns_none(self):
+        assert _domain_to_company_candidate("https://github.com/user") is None
+        assert _domain_to_company_candidate("https://twitter.com/user") is None
+        assert _domain_to_company_candidate("https://linkedin.com/in/user") is None
+
+    def test_too_short_returns_none(self):
+        assert _domain_to_company_candidate("https://ai.com") is None  # "ai" < 3 chars
+
+    def test_digits_only_returns_none(self):
+        assert _domain_to_company_candidate("https://123.com") is None
+
+    def test_capitalises(self):
+        result = _domain_to_company_candidate("https://acmecorp.io")
+        assert result == "Acmecorp"

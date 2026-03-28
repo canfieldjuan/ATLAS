@@ -83,19 +83,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Pre-fetch profiles for HN and GitHub reviews
     import httpx
 
+    max_fetches = getattr(cfg, "account_resolution_max_profile_fetches", 50)
     hn_reviews = [r for r in rows if (r["source"] or "") == "hackernews" and r["reviewer_name"]]
     gh_reviews = [r for r in rows if (r["source"] or "") == "github" and r["reviewer_name"]]
     profile_cache: dict[str, dict] = {}
 
     if hn_reviews or gh_reviews:
         async with httpx.AsyncClient(timeout=10.0) as http:
-            for r in hn_reviews[:50]:
+            for r in hn_reviews[:max_fetches]:
                 username = r["reviewer_name"]
                 if username and username not in profile_cache:
                     profile = await fetch_hn_profile(username, http)
                     if profile:
                         profile_cache[f"hn:{username}"] = profile
-            for r in gh_reviews[:50]:
+            for r in gh_reviews[:max_fetches]:
                 username = r["reviewer_name"]
                 if username and username not in profile_cache:
                     profile = await fetch_github_profile(username, http)

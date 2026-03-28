@@ -2306,6 +2306,12 @@ class B2BChurnConfig(BaseSettings):
         default=600,
         description="Account resolution task polling interval (seconds)",
     )
+    account_resolution_max_profile_fetches: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Max profile fetches per batch (HN + GitHub combined). GitHub free tier allows 60 req/hr.",
+    )
 
     enrichment_repair_enabled: bool = Field(
         default=False,
