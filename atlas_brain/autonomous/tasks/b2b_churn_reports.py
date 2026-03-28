@@ -647,6 +647,7 @@ async def _build_deterministic_report_bundle(
         _build_deterministic_displacement_map,
         _build_deterministic_vendor_feed,
         _build_deterministic_vendor_scorecards,
+        _build_vendor_deep_dives,
         _compute_evidence_confidence,
         _fetch_latest_evidence_vault,
         _structure_displacement_report,
@@ -807,11 +808,25 @@ async def _build_deterministic_report_bundle(
             cat_entry["market_durability"] = conclusion.get("durability_assessment", "")
             cat_entry["market_confidence"] = council.get("confidence", 0)
             cat_entry["market_insights"] = conclusion.get("key_insights", [])
+    vendor_deep_dives = _build_vendor_deep_dives(
+        vendor_scores,
+        pain_lookup=lookups["pain_lookup"],
+        competitor_lookup=lookups["competitor_lookup"],
+        feature_gap_lookup=lookups["feature_gap_lookup"],
+        quote_lookup=lookups["quote_lookup"],
+        company_lookup=lookups["company_lookup"],
+        dm_lookup=lookups["dm_lookup"],
+        price_lookup=lookups["price_lookup"],
+        sentiment_lookup=lookups["sentiment_lookup"],
+        buyer_auth_lookup=lookups.get("buyer_auth_lookup"),
+        reasoning_lookup=reasoning_lookup,
+    )
     return {
         "weekly_churn_feed": deterministic_weekly_feed,
         "vendor_scorecards": deterministic_vendor_scorecards,
         "displacement_map": deterministic_displacement_map,
         "category_insights": deterministic_category_overview,
+        "vendor_deep_dives": vendor_deep_dives,
         "reasoning_lookup": reasoning_lookup,
         "xv_lookup": xv_lookup,
         "synthesis_views": synthesis_views,
@@ -855,6 +870,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _build_deterministic_vendor_feed,
         _build_deterministic_vendor_scorecards,
         _build_scorecard_locked_facts,
+        _build_vendor_deep_dives,
         _structure_displacement_report,
         _build_pain_lookup,
         _build_competitor_lookup,
@@ -1003,6 +1019,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     deterministic_vendor_scorecards = bundle["vendor_scorecards"]
     deterministic_displacement_map = bundle["displacement_map"]
     deterministic_category_overview = bundle["category_insights"]
+    vendor_deep_dives = bundle["vendor_deep_dives"]
     logger.info(
         "Reconstructed reasoning for %d vendors from b2b_churn_signals",
         len(reasoning_lookup),
@@ -1092,6 +1109,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ("vendor_scorecard", deterministic_vendor_scorecards),
         ("displacement_report", _structure_displacement_report(deterministic_displacement_map)),
         ("category_overview", deterministic_category_overview),
+        ("vendor_deep_dive", vendor_deep_dives),
     ]
 
     base_data_density = {

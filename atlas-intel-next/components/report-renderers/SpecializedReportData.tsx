@@ -38,6 +38,8 @@ export const SPECIALIZED_REPORT_TYPES = [
   'weekly_churn_feed',
   'vendor_scorecard',
   'displacement_report',
+  'category_overview',
+  'vendor_deep_dive',
 ] as const
 
 export function isSpecializedReportType(reportType: string): boolean {
@@ -931,45 +933,219 @@ function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewM
 
 function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[] }) {
   return (
-    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
-      {items.map((item, index) => (
-        <SectionCard
-          key={`${item.vendor ?? 'feed'}-${index}`}
-          title={item.vendor ?? 'Vendor'}
-          icon={<TrendingDown className="h-4 w-4 text-red-400" />}
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-            <MetricRow label="Category" value={item.category} />
-            <MetricRow label="Pressure" value={item.churn_pressure_score != null ? Math.round(item.churn_pressure_score) : '--'} color="text-red-400 font-bold" />
-            <MetricRow label="Urgency" value={item.avg_urgency} />
-            <MetricRow label="Reviews" value={item.total_reviews} />
-          </div>
-          {item.key_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mb-3 break-words whitespace-pre-wrap">"{item.key_quote}"</blockquote>}
-          {item.action_recommendation && <p className="text-sm text-cyan-300 mb-3">{item.action_recommendation}</p>}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {item.pain_breakdown.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-slate-400 mb-2">Pain Breakdown</p>
-                <div className="space-y-1">
-                  {item.pain_breakdown.slice(0, 5).map((pain, painIndex) => (
-                    <MetricRow key={painIndex} label={pain.category ?? pain.feature ?? ''} value={pain.count ?? pain.mentions} />
-                  ))}
-                </div>
+    <div className="space-y-3 min-w-0 [overflow-wrap:anywhere]">
+      {items.map((item, index) => {
+        const maxPain = Number(item.pain_breakdown[0]?.count ?? item.pain_breakdown[0]?.mentions ?? 1)
+        return (
+          <div
+            key={`${item.vendor ?? 'feed'}-${index}`}
+            className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-2.5"
+          >
+            {/* Header row */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+                <TrendingDown className="h-4 w-4 text-red-400 shrink-0" />
+                {item.vendor ?? 'Vendor'}
+              </h3>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                {item.category && <span className="text-slate-400 whitespace-nowrap">{item.category}</span>}
+                {item.churn_pressure_score != null && (
+                  <span className="text-red-400 font-bold whitespace-nowrap">{Math.round(item.churn_pressure_score)} pressure</span>
+                )}
+                {item.avg_urgency != null && <span className="text-amber-400 whitespace-nowrap">{item.avg_urgency} urgency</span>}
+                {item.total_reviews != null && <span className="text-slate-500 whitespace-nowrap">{item.total_reviews} reviews</span>}
+              </div>
+            </div>
+
+            {/* Action recommendation */}
+            {item.action_recommendation && (
+              <p className="text-xs text-cyan-300 leading-relaxed">{item.action_recommendation}</p>
+            )}
+
+            {/* Pain + Displacement side by side */}
+            {(item.pain_breakdown.length > 0 || item.top_displacement_targets.length > 0) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {item.pain_breakdown.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Pain Breakdown</p>
+                    <div className="space-y-1.5">
+                      {item.pain_breakdown.slice(0, 5).map((pain, j) => {
+                        const label = (pain.category ?? pain.feature ?? '').replace(/_/g, ' ')
+                        const count = Number(pain.count ?? pain.mentions ?? 0)
+                        const pct = maxPain > 0 ? Math.min((count / maxPain) * 100, 100) : 0
+                        return (
+                          <div key={j} className="flex items-center gap-2 text-xs">
+                            <span className="w-28 text-slate-300 shrink-0 capitalize truncate">{label}</span>
+                            <div className="flex-1 bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                              <div className="h-1.5 rounded-full bg-red-500/60" style={{ width: `${pct}%` }} />
+                            </div>
+                            <span className="text-slate-500 shrink-0 w-8 text-right">{count}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {item.top_displacement_targets.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Displacement Targets</p>
+                    <div className="space-y-1">
+                      {item.top_displacement_targets.slice(0, 5).map((t: CompetitorDifferentiatorViewModel, j: number) => (
+                        <div key={j} className="flex items-center justify-between text-xs">
+                          <span className="text-green-400">{t.competitor ?? '—'}</span>
+                          <span className="text-slate-500">{t.mentions ?? t.count ?? '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-            {item.top_displacement_targets.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-slate-400 mb-2">Top Displacement Targets</p>
-                <div className="space-y-1">
-                  {item.top_displacement_targets.slice(0, 5).map((target: CompetitorDifferentiatorViewModel, targetIndex: number) => (
-                    <MetricRow key={targetIndex} label={target.competitor ?? ''} value={target.mentions ?? target.count} />
-                  ))}
-                </div>
-              </div>
+
+            {/* Key quote */}
+            {item.key_quote && (
+              <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/30 pl-2 break-words">
+                "{item.key_quote}"
+              </blockquote>
             )}
           </div>
-        </SectionCard>
-      ))}
+        )
+      })}
+    </div>
+  )
+}
+
+// ---- Category Overview ----
+
+interface CategoryOverviewItem {
+  category?: string | null
+  highest_churn_risk?: string | null
+  emerging_challenger?: string | null
+  dominant_pain?: string | null
+  market_shift_signal?: string | null
+  market_loser?: string | null
+  market_winner?: string | null
+  market_regime?: string | null
+  market_insights?: unknown
+  vendor_rankings?: Array<{ vendor?: string | null; churn_pressure_score?: number | null; churn_signal_density?: number | null; risk_level?: string | null }>
+  top_feature_gaps?: Array<{ feature?: string | null; mentions?: number | null }>
+  case_studies?: Array<{ vendor?: string | null; quote?: string | null; company?: string | null }>
+}
+
+function extractInsightText(item: unknown): string {
+  if (typeof item === 'string') return item
+  if (item && typeof item === 'object') {
+    const r = item as Record<string, unknown>
+    return String(r.insight ?? r.text ?? r.summary ?? r.signal ?? '')
+  }
+  return ''
+}
+
+function CategoryOverviewDetail({ items }: { items: CategoryOverviewItem[] }) {
+  if (items.length === 0) return <p className="text-slate-500 text-sm">No categories found.</p>
+
+  return (
+    <div className="space-y-4 min-w-0">
+      {/* Summary table */}
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 overflow-x-auto">
+        <table className="w-full text-xs min-w-[600px]">
+          <thead>
+            <tr className="text-slate-500 border-b border-slate-700/50 text-left">
+              <th className="pb-2 font-normal pr-4">Category</th>
+              <th className="pb-2 font-normal pr-3">Top Pain</th>
+              <th className="pb-2 font-normal pr-3">At Risk</th>
+              <th className="pb-2 font-normal pr-3">Challenger</th>
+              <th className="pb-2 font-normal pr-3">Regime</th>
+              <th className="pb-2 font-normal">Signal</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/60">
+            {items.map((item, i) => (
+              <tr key={i} className="hover:bg-slate-800/20 transition-colors">
+                <td className="py-1.5 pr-4 text-slate-200 font-medium whitespace-nowrap">{item.category ?? '—'}</td>
+                <td className="py-1.5 pr-3">
+                  {item.dominant_pain
+                    ? <DriverBadge driver={item.dominant_pain} />
+                    : <span className="text-slate-500">—</span>}
+                </td>
+                <td className="py-1.5 pr-3 text-red-400 whitespace-nowrap">{item.highest_churn_risk ?? item.market_loser ?? '—'}</td>
+                <td className="py-1.5 pr-3 text-green-400 whitespace-nowrap">{item.emerging_challenger ?? item.market_winner ?? '—'}</td>
+                <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap capitalize">
+                  {typeof item.market_regime === 'string' ? item.market_regime.replace(/_/g, ' ') : '—'}
+                </td>
+                <td className="py-1.5 text-slate-400 max-w-[18rem]">
+                  <span className="line-clamp-2">{item.market_shift_signal ?? '—'}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Per-category detail panels */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {items.map((item, i) => {
+          const rankings = item.vendor_rankings ?? []
+          const gaps = item.top_feature_gaps ?? []
+          const study = item.case_studies?.[0]
+          const insights = Array.isArray(item.market_insights) ? item.market_insights : []
+
+          return (
+            <div key={i} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-3 space-y-2.5">
+              <h3 className="text-sm font-semibold text-slate-200">{item.category ?? 'Category'}</h3>
+
+              {rankings.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Vendor Risk</p>
+                  <div className="space-y-0.5">
+                    {rankings.slice(0, 5).map((vr, j) => (
+                      <div key={j} className="flex items-center justify-between text-xs">
+                        <span className={riskColor(vr.risk_level ?? '')}>{vr.vendor ?? '—'}</span>
+                        <span className="text-slate-600">{vr.churn_pressure_score ?? vr.churn_signal_density ?? '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {gaps.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Top Gaps</p>
+                  <div className="flex flex-wrap gap-1">
+                    {gaps.slice(0, 4).map((g, j) => (
+                      <span key={j} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-xs">
+                        {g.feature ?? '?'}{g.mentions != null ? ` ·${g.mentions}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {insights.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Insights</p>
+                  <ul className="space-y-0.5">
+                    {insights.slice(0, 3).map((ins, j) => {
+                      const txt = extractInsightText(ins)
+                      return txt ? (
+                        <li key={j} className="text-xs text-slate-400 line-clamp-2">{txt}</li>
+                      ) : null
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              {study?.quote && (
+                <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/30 pl-2 line-clamp-3">
+                  "{study.quote}"
+                  {study.company && <span className="not-italic text-slate-600"> — {study.company}</span>}
+                </blockquote>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -1232,27 +1408,83 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
 
 // ---- Vendor Scorecard ----
 
+function parseCompetitor(threat: string | null | undefined): string {
+  if (!threat) return '—'
+  return threat.replace(/\s*\(\d+\s*mentions?\)/i, '').trim() || '—'
+}
+
+function formatSentiment(s: string | null | undefined): string {
+  if (!s) return '—'
+  const lower = s.toLowerCase()
+  if (lower === 'consistently_negative') return 'neg'
+  if (lower === 'consistently_positive') return 'pos'
+  if (lower === 'mostly_negative') return 'mostly neg'
+  if (lower === 'mostly_positive') return 'mostly pos'
+  return s.replace(/_/g, ' ')
+}
+
+function sentimentColor(s: string | null | undefined): string {
+  if (!s) return 'text-slate-400'
+  const lower = s.toLowerCase()
+  if (lower.includes('negative')) return 'text-red-400'
+  if (lower.includes('positive')) return 'text-green-400'
+  if (lower.includes('improving')) return 'text-cyan-400'
+  return 'text-slate-400'
+}
+
+function signalDensityColor(v: number | null | undefined): string {
+  if (v == null) return 'text-slate-400'
+  if (v >= 20) return 'text-red-400 font-medium'
+  if (v >= 12) return 'text-amber-400'
+  return 'text-green-400'
+}
+
+function urgencyColor(v: number | null | undefined): string {
+  if (v == null) return 'text-slate-400'
+  if (v >= 3.5) return 'text-red-400'
+  if (v >= 2.5) return 'text-amber-400'
+  return 'text-slate-300'
+}
+
 function VendorScorecardDetail({ items }: { items: VendorScorecardViewModel[] }) {
   return (
-    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
-      {items.map((item, index) => (
-        <SectionCard
-          key={`${item.vendor ?? 'scorecard'}-${index}`}
-          title={item.vendor ?? 'Vendor'}
-          icon={<Shield className="h-4 w-4 text-cyan-400" />}
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <MetricRow label="Reviews" value={item.total_reviews} />
-            <MetricRow label="Signal Density" value={item.churn_signal_density} />
-            <MetricRow label="Avg Urgency" value={item.avg_urgency} />
-            <MetricRow label="Recommend Ratio" value={item.recommend_ratio} />
-            <MetricRow label="Top Pain" value={item.top_pain} />
-            <MetricRow label="Competitor Threat" value={item.top_competitor_threat} />
-            <MetricRow label="Trend" value={item.trend} />
-            <MetricRow label="Sentiment" value={item.sentiment_direction} />
-          </div>
-        </SectionCard>
-      ))}
+    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 overflow-x-auto min-w-0">
+      <table className="w-full text-xs min-w-[640px]">
+        <thead>
+          <tr className="text-slate-500 border-b border-slate-700/50 text-left">
+            <th className="pb-2 font-normal pr-4">Vendor</th>
+            <th className="pb-2 font-normal pr-3 text-right">Reviews</th>
+            <th className="pb-2 font-normal pr-3 text-right">Signal</th>
+            <th className="pb-2 font-normal pr-3 text-right">Urgency</th>
+            <th className="pb-2 font-normal pr-3">Top Pain</th>
+            <th className="pb-2 font-normal pr-3">Competitor</th>
+            <th className="pb-2 font-normal pr-3">Trend</th>
+            <th className="pb-2 font-normal">Sentiment</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-800/60">
+          {items.map((item, i) => (
+            <tr key={i} className="hover:bg-slate-800/20 transition-colors">
+              <td className="py-1.5 pr-4 text-slate-200 font-medium whitespace-nowrap">{item.vendor ?? '—'}</td>
+              <td className="py-1.5 pr-3 text-right text-slate-300">{item.total_reviews ?? '—'}</td>
+              <td className={clsx('py-1.5 pr-3 text-right', signalDensityColor(item.churn_signal_density))}>
+                {item.churn_signal_density ?? '—'}
+              </td>
+              <td className={clsx('py-1.5 pr-3 text-right', urgencyColor(item.avg_urgency))}>
+                {item.avg_urgency ?? '—'}
+              </td>
+              <td className="py-1.5 pr-3">
+                {item.top_pain ? <DriverBadge driver={item.top_pain} /> : <span className="text-slate-500">—</span>}
+              </td>
+              <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap">{parseCompetitor(item.top_competitor_threat)}</td>
+              <td className="py-1.5 pr-3 text-slate-400 capitalize whitespace-nowrap">{item.trend ?? '—'}</td>
+              <td className={clsx('py-1.5 whitespace-nowrap', sentimentColor(item.sentiment_direction))}>
+                {formatSentiment(item.sentiment_direction)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -1275,5 +1507,13 @@ export function SpecializedReportData({
   if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} />
   if (reportType === 'vendor_scorecard') return <VendorScorecardDetail items={toVendorScorecards(normalizedValue)} />
   if (reportType === 'displacement_report') return <DisplacementReportDetail data={normalized} />
+  if (reportType === 'category_overview') {
+    const items: CategoryOverviewItem[] = Array.isArray(normalizedValue)
+      ? (normalizedValue as CategoryOverviewItem[])
+      : Array.isArray(normalized.category_overview)
+        ? (normalized.category_overview as CategoryOverviewItem[])
+        : []
+    return <CategoryOverviewDetail items={items} />
+  }
   return null
 }

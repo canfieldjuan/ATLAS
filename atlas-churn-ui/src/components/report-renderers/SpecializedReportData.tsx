@@ -37,6 +37,9 @@ export const SPECIALIZED_REPORT_TYPES = [
   'account_comparison',
   'weekly_churn_feed',
   'vendor_scorecard',
+  'displacement_report',
+  'category_overview',
+  'vendor_deep_dive',
 ] as const
 
 export function isSpecializedReportType(reportType: string): boolean {
@@ -930,70 +933,798 @@ function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewM
 
 function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[] }) {
   return (
-    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
-      {items.map((item, index) => (
-        <SectionCard
-          key={`${item.vendor ?? 'feed'}-${index}`}
-          title={item.vendor ?? 'Vendor'}
-          icon={<TrendingDown className="h-4 w-4 text-red-400" />}
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-            <MetricRow label="Category" value={item.category} />
-            <MetricRow label="Pressure" value={item.churn_pressure_score != null ? Math.round(item.churn_pressure_score) : '--'} color="text-red-400 font-bold" />
-            <MetricRow label="Urgency" value={item.avg_urgency} />
-            <MetricRow label="Reviews" value={item.total_reviews} />
-          </div>
-          {item.key_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mb-3 break-words whitespace-pre-wrap">"{item.key_quote}"</blockquote>}
-          {item.action_recommendation && <p className="text-sm text-cyan-300 mb-3">{item.action_recommendation}</p>}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {item.pain_breakdown.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-slate-400 mb-2">Pain Breakdown</p>
-                <div className="space-y-1">
-                  {item.pain_breakdown.slice(0, 5).map((pain, painIndex) => (
-                    <MetricRow key={painIndex} label={pain.category ?? pain.feature ?? ''} value={pain.count ?? pain.mentions} />
-                  ))}
-                </div>
+    <div className="space-y-3 min-w-0 [overflow-wrap:anywhere]">
+      {items.map((item, index) => {
+        const maxPain = Number(item.pain_breakdown[0]?.count ?? item.pain_breakdown[0]?.mentions ?? 1)
+        return (
+          <div
+            key={`${item.vendor ?? 'feed'}-${index}`}
+            className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-2.5"
+          >
+            {/* Header row */}
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+                <TrendingDown className="h-4 w-4 text-red-400 shrink-0" />
+                {item.vendor ?? 'Vendor'}
+              </h3>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                {item.category && <span className="text-slate-400 whitespace-nowrap">{item.category}</span>}
+                {item.churn_pressure_score != null && (
+                  <span className="text-red-400 font-bold whitespace-nowrap">{Math.round(item.churn_pressure_score)} pressure</span>
+                )}
+                {item.avg_urgency != null && <span className="text-amber-400 whitespace-nowrap">{item.avg_urgency} urgency</span>}
+                {item.total_reviews != null && <span className="text-slate-500 whitespace-nowrap">{item.total_reviews} reviews</span>}
+              </div>
+            </div>
+
+            {/* Action recommendation */}
+            {item.action_recommendation && (
+              <p className="text-xs text-cyan-300 leading-relaxed">{item.action_recommendation}</p>
+            )}
+
+            {/* Pain + Displacement side by side */}
+            {(item.pain_breakdown.length > 0 || item.top_displacement_targets.length > 0) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {item.pain_breakdown.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Pain Breakdown</p>
+                    <div className="space-y-1.5">
+                      {item.pain_breakdown.slice(0, 5).map((pain, j) => {
+                        const label = (pain.category ?? pain.feature ?? '').replace(/_/g, ' ')
+                        const count = Number(pain.count ?? pain.mentions ?? 0)
+                        const pct = maxPain > 0 ? Math.min((count / maxPain) * 100, 100) : 0
+                        return (
+                          <div key={j} className="flex items-center gap-2 text-xs">
+                            <span className="w-28 text-slate-300 shrink-0 capitalize truncate">{label}</span>
+                            <div className="flex-1 bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                              <div className="h-1.5 rounded-full bg-red-500/60" style={{ width: `${pct}%` }} />
+                            </div>
+                            <span className="text-slate-500 shrink-0 w-8 text-right">{count}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {item.top_displacement_targets.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Displacement Targets</p>
+                    <div className="space-y-1">
+                      {item.top_displacement_targets.slice(0, 5).map((t: CompetitorDifferentiatorViewModel, j: number) => (
+                        <div key={j} className="flex items-center justify-between text-xs">
+                          <span className="text-green-400">{t.competitor ?? '—'}</span>
+                          <span className="text-slate-500">{t.mentions ?? t.count ?? '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
-            {item.top_displacement_targets.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-slate-400 mb-2">Top Displacement Targets</p>
-                <div className="space-y-1">
-                  {item.top_displacement_targets.slice(0, 5).map((target: CompetitorDifferentiatorViewModel, targetIndex: number) => (
-                    <MetricRow key={targetIndex} label={target.competitor ?? ''} value={target.mentions ?? target.count} />
-                  ))}
-                </div>
-              </div>
+
+            {/* Key quote */}
+            {item.key_quote && (
+              <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/30 pl-2 break-words">
+                "{item.key_quote}"
+              </blockquote>
             )}
           </div>
-        </SectionCard>
-      ))}
+        )
+      })}
     </div>
   )
 }
 
+// ---- Vendor Deep Dive ----
+
+interface DeepDiveVendor {
+  vendor?: string | null
+  category?: string | null
+  total_reviews?: number | null
+  churn_signal_density?: number | null
+  churn_pressure_score?: number | null
+  avg_urgency?: number | null
+  risk_level?: string | null
+  sentiment_direction?: string | null
+  trend?: string | null
+  archetype?: string | null
+  archetype_confidence?: number | null
+  dm_churn_rate?: number | null
+  price_complaint_rate?: number | null
+  dominant_buyer_role?: string | null
+  pain_breakdown?: Array<{ category?: string | null; count?: number | null; pct?: number | null }>
+  displacement_targets?: Array<{ vendor?: string | null; mention_count?: number | null; primary_driver?: string | null }>
+  feature_gaps?: Array<{ feature?: string | null; mentions?: number | null }>
+  industry_distribution?: Array<{ industry?: string | null; count?: number | null }>
+  company_size_distribution?: Array<{ size?: string | null; count?: number | null }>
+  case_studies?: Array<{ quote?: string | null; company?: string | null; urgency?: number | null; title?: string | null }>
+  sentiment_breakdown?: { positive?: number | null; negative?: number | null; neutral?: number | null }
+}
+
+import { useState } from 'react'
+
+function VendorDeepDiveDetail({ items }: { items: DeepDiveVendor[] }) {
+  const [selected, setSelected] = useState(0)
+  if (items.length === 0) return <p className="text-slate-500 text-sm">No vendor data found.</p>
+
+  const v = items[selected]
+  const pains = v.pain_breakdown ?? []
+  const maxPain = Number(pains[0]?.count ?? 1)
+  const targets = v.displacement_targets ?? []
+  const maxTarget = Number(targets[0]?.mention_count ?? 1)
+  const gaps = v.feature_gaps ?? []
+  const industries = v.industry_distribution ?? []
+  const sizes = v.company_size_distribution ?? []
+  const studies = v.case_studies ?? []
+  const sent = v.sentiment_breakdown ?? {}
+  const sentTotal = (sent.positive ?? 0) + (sent.negative ?? 0) + (sent.neutral ?? 0)
+
+  return (
+    <div className="space-y-4 min-w-0">
+      {/* Vendor picker */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <select
+          value={selected}
+          onChange={e => setSelected(Number(e.target.value))}
+          className="bg-slate-800 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-cyan-500"
+        >
+          {items.map((item, i) => (
+            <option key={i} value={i}>
+              {item.vendor ?? `Vendor ${i + 1}`}
+              {item.risk_level ? ` — ${item.risk_level}` : ''}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-slate-500">{items.length} vendors · sorted by churn pressure</span>
+      </div>
+
+      {/* Vendor header */}
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-100">{v.vendor ?? '—'}</h2>
+            <p className="text-xs text-slate-400 mt-0.5">{v.category ?? '—'}</p>
+          </div>
+          <div className="flex flex-wrap gap-2 items-center">
+            {v.risk_level && (
+              <span className={clsx(
+                'px-2 py-0.5 rounded text-xs font-semibold',
+                v.risk_level === 'high' ? 'bg-red-900/50 text-red-300' :
+                v.risk_level === 'medium' ? 'bg-amber-900/50 text-amber-300' :
+                'bg-green-900/50 text-green-300'
+              )}>
+                {v.risk_level} risk
+              </span>
+            )}
+            {v.archetype && (
+              <span className="px-2 py-0.5 rounded bg-purple-900/40 text-purple-300 text-xs">
+                {v.archetype.replace(/_/g, ' ')}
+                {v.archetype_confidence != null ? ` · ${(v.archetype_confidence * 100).toFixed(0)}%` : ''}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Stat strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Pressure', value: v.churn_pressure_score != null ? `${Math.round(v.churn_pressure_score)}/100` : null, color: 'text-red-400' },
+            { label: 'Signal Density', value: v.churn_signal_density != null ? `${v.churn_signal_density}%` : null, color: 'text-amber-400' },
+            { label: 'Avg Urgency', value: v.avg_urgency, color: 'text-orange-400' },
+            { label: 'Reviews', value: v.total_reviews, color: 'text-slate-300' },
+          ].map(({ label, value, color }) => value != null ? (
+            <div key={label} className="bg-slate-800/60 rounded-lg p-2.5 text-center">
+              <p className="text-xs text-slate-500 mb-1">{label}</p>
+              <p className={clsx('text-base font-semibold', color)}>{String(value)}</p>
+            </div>
+          ) : null)}
+        </div>
+
+        {/* Secondary metrics row */}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-slate-400">
+          {v.dm_churn_rate != null && <span>DM churn: <span className="text-slate-200">{(v.dm_churn_rate * 100).toFixed(0)}%</span></span>}
+          {v.price_complaint_rate != null && <span>Price complaints: <span className="text-slate-200">{(v.price_complaint_rate * 100).toFixed(0)}%</span></span>}
+          {v.sentiment_direction && <span>Sentiment: <span className="text-slate-200">{v.sentiment_direction.replace(/_/g, ' ')}</span></span>}
+          {v.trend && <span>Trend: <span className="text-slate-200">{v.trend}</span></span>}
+          {v.dominant_buyer_role && <span>Buyer role: <span className="text-slate-200">{v.dominant_buyer_role}</span></span>}
+        </div>
+      </div>
+
+      {/* Pain + Displacement */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {pains.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Pain Breakdown</h3>
+            <div className="space-y-2">
+              {pains.map((p, i) => {
+                const label = (p.category ?? '').replace(/_/g, ' ')
+                const count = Number(p.count ?? 0)
+                const pct = maxPain > 0 ? Math.min((count / maxPain) * 100, 100) : 0
+                return (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-32 text-slate-300 shrink-0 capitalize truncate">{label}</span>
+                    <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div className="h-2 rounded-full bg-red-500/60" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="w-16 text-right text-slate-400 shrink-0">
+                      {count}{p.pct != null ? ` · ${(p.pct * 100).toFixed(0)}%` : ''}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {targets.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Displacement Targets</h3>
+            <div className="space-y-2">
+              {targets.map((t, i) => {
+                const count = Number(t.mention_count ?? 0)
+                const pct = maxTarget > 0 ? Math.min((count / maxTarget) * 100, 100) : 0
+                return (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-28 text-green-400 shrink-0 truncate">{t.vendor ?? '—'}</span>
+                    <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div className="h-2 rounded-full bg-green-500/50" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-slate-500 shrink-0 w-8 text-right">{count}</span>
+                    {t.primary_driver && <DriverBadge driver={t.primary_driver} />}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Feature gaps + Customer profile */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {gaps.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Feature Gaps</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {gaps.map((g, i) => (
+                <span key={i} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-xs">
+                  {g.feature ?? '?'}{g.mentions != null ? <span className="text-slate-500"> ·{g.mentions}</span> : null}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(industries.length > 0 || sizes.length > 0) && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Customer Profile</h3>
+            {industries.length > 0 && (
+              <div className="mb-2">
+                <p className="text-xs text-slate-500 mb-1">Industries</p>
+                <div className="flex flex-wrap gap-1">
+                  {industries.slice(0, 5).map((ind, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-xs capitalize">
+                      {ind.industry ?? '?'}{ind.count != null ? ` ·${ind.count}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {sizes.length > 0 && (
+              <div>
+                <p className="text-xs text-slate-500 mb-1">Company Size</p>
+                <div className="flex flex-wrap gap-1">
+                  {sizes.map((sz, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-xs">
+                      {sz.size ?? '?'}{sz.count != null ? ` ·${sz.count}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Sentiment breakdown */}
+      {sentTotal > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Sentiment Distribution</h3>
+          <div className="flex gap-2 text-xs items-center">
+            {[
+              { label: 'Positive', count: sent.positive ?? 0, cls: 'bg-green-500/60' },
+              { label: 'Neutral', count: sent.neutral ?? 0, cls: 'bg-slate-600' },
+              { label: 'Negative', count: sent.negative ?? 0, cls: 'bg-red-500/60' },
+            ].map(({ label, count, cls }) => {
+              const pct = sentTotal > 0 ? (count / sentTotal) * 100 : 0
+              return (
+                <div key={label} className="flex-1">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-slate-400">{label}</span>
+                    <span className="text-slate-300">{pct.toFixed(0)}%</span>
+                  </div>
+                  <div className="bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div className={clsx('h-2 rounded-full', cls)} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Case studies */}
+      {studies.length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-3">
+            <MessageSquareQuote className="h-4 w-4 text-cyan-400" /> Customer Quotes
+          </h3>
+          <div className="space-y-3">
+            {studies.map((s, i) => (
+              <div key={i} className="border-l-2 border-cyan-500/30 pl-3">
+                <blockquote className="text-xs text-slate-300 italic break-words">"{s.quote}"</blockquote>
+                <p className="text-xs text-slate-500 mt-1">
+                  {s.company ?? 'Anonymous'}
+                  {s.title ? ` · ${s.title}` : ''}
+                  {s.urgency ? ` · urgency ${s.urgency}` : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- Category Overview ----
+
+interface CategoryOverviewItem {
+  category?: string | null
+  highest_churn_risk?: string | null
+  emerging_challenger?: string | null
+  dominant_pain?: string | null
+  market_shift_signal?: string | null
+  market_loser?: string | null
+  market_winner?: string | null
+  market_regime?: string | null
+  market_insights?: unknown
+  vendor_rankings?: Array<{ vendor?: string | null; churn_pressure_score?: number | null; churn_signal_density?: number | null; risk_level?: string | null }>
+  top_feature_gaps?: Array<{ feature?: string | null; mentions?: number | null }>
+  case_studies?: Array<{ vendor?: string | null; quote?: string | null; company?: string | null }>
+}
+
+function extractInsightText(item: unknown): string {
+  if (typeof item === 'string') return item
+  if (item && typeof item === 'object') {
+    const r = item as Record<string, unknown>
+    return String(r.insight ?? r.text ?? r.summary ?? r.signal ?? '')
+  }
+  return ''
+}
+
+function CategoryOverviewDetail({ items }: { items: CategoryOverviewItem[] }) {
+  if (items.length === 0) return <p className="text-slate-500 text-sm">No categories found.</p>
+
+  return (
+    <div className="space-y-4 min-w-0">
+      {/* Summary table */}
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 overflow-x-auto">
+        <table className="w-full text-xs min-w-[600px]">
+          <thead>
+            <tr className="text-slate-500 border-b border-slate-700/50 text-left">
+              <th className="pb-2 font-normal pr-4">Category</th>
+              <th className="pb-2 font-normal pr-3">Top Pain</th>
+              <th className="pb-2 font-normal pr-3">At Risk</th>
+              <th className="pb-2 font-normal pr-3">Challenger</th>
+              <th className="pb-2 font-normal pr-3">Regime</th>
+              <th className="pb-2 font-normal">Signal</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/60">
+            {items.map((item, i) => (
+              <tr key={i} className="hover:bg-slate-800/20 transition-colors">
+                <td className="py-1.5 pr-4 text-slate-200 font-medium whitespace-nowrap">{item.category ?? '—'}</td>
+                <td className="py-1.5 pr-3">
+                  {item.dominant_pain
+                    ? <DriverBadge driver={item.dominant_pain} />
+                    : <span className="text-slate-500">—</span>}
+                </td>
+                <td className="py-1.5 pr-3 text-red-400 whitespace-nowrap">{item.highest_churn_risk ?? item.market_loser ?? '—'}</td>
+                <td className="py-1.5 pr-3 text-green-400 whitespace-nowrap">{item.emerging_challenger ?? item.market_winner ?? '—'}</td>
+                <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap capitalize">
+                  {typeof item.market_regime === 'string' ? item.market_regime.replace(/_/g, ' ') : '—'}
+                </td>
+                <td className="py-1.5 text-slate-400 max-w-[18rem]">
+                  <span className="line-clamp-2">{item.market_shift_signal ?? '—'}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Per-category detail panels */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {items.map((item, i) => {
+          const rankings = item.vendor_rankings ?? []
+          const gaps = item.top_feature_gaps ?? []
+          const study = item.case_studies?.[0]
+          const insights = Array.isArray(item.market_insights) ? item.market_insights : []
+
+          return (
+            <div key={i} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-3 space-y-2.5">
+              <h3 className="text-sm font-semibold text-slate-200">{item.category ?? 'Category'}</h3>
+
+              {rankings.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Vendor Risk</p>
+                  <div className="space-y-0.5">
+                    {rankings.slice(0, 5).map((vr, j) => (
+                      <div key={j} className="flex items-center justify-between text-xs">
+                        <span className={riskColor(vr.risk_level ?? '')}>{vr.vendor ?? '—'}</span>
+                        <span className="text-slate-600">{vr.churn_pressure_score ?? vr.churn_signal_density ?? '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {gaps.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Top Gaps</p>
+                  <div className="flex flex-wrap gap-1">
+                    {gaps.slice(0, 4).map((g, j) => (
+                      <span key={j} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-xs">
+                        {g.feature ?? '?'}{g.mentions != null ? ` ·${g.mentions}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {insights.length > 0 && (
+                <div>
+                  <p className="text-xs text-slate-500 mb-1">Insights</p>
+                  <ul className="space-y-0.5">
+                    {insights.slice(0, 3).map((ins, j) => {
+                      const txt = extractInsightText(ins)
+                      return txt ? (
+                        <li key={j} className="text-xs text-slate-400 line-clamp-2">{txt}</li>
+                      ) : null
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              {study?.quote && (
+                <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/30 pl-2 line-clamp-3">
+                  "{study.quote}"
+                  {study.company && <span className="not-italic text-slate-600"> — {study.company}</span>}
+                </blockquote>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ---- Displacement Report ----
+
+interface DisplacementMeta {
+  total_flows?: number | null
+  total_mentions?: number | null
+  dominant_driver?: string | null
+  pricing_pct?: number | null
+  most_displaced_vendor?: string | null
+  biggest_winner?: string | null
+}
+
+interface DisplacementVendorRow {
+  vendor?: string | null
+  net_flow?: number | null
+  outbound_mentions?: number | null
+  inbound_mentions?: number | null
+  top_destination?: string | null
+  top_source?: string | null
+  top_driver?: string | null
+}
+
+interface DisplacementBattle {
+  from_vendor?: string | null
+  to_vendor?: string | null
+  mention_count?: number | null
+  primary_driver?: string | null
+  signal_strength?: string | null
+  confidence_score?: number | null
+  key_quote?: string | null
+  battle_conclusion?: string | null
+  durability?: string | null
+  source_archetype?: string | null
+  target_archetype?: string | null
+}
+
+interface DriverSummaryRow {
+  driver?: string | null
+  mentions?: number | null
+  pct?: number | null
+  flow_count?: number | null
+}
+
+function signalColor(strength: string | null | undefined): string {
+  const s = (strength ?? '').toLowerCase()
+  if (s === 'very_high' || s === 'high') return 'text-red-400'
+  if (s === 'medium') return 'text-amber-400'
+  return 'text-slate-400'
+}
+
+function driverLabel(d: string | null | undefined): string {
+  return (d ?? 'unknown').replace(/_/g, ' ')
+}
+
+function DriverBadge({ driver }: { driver: string | null | undefined }) {
+  if (!driver) return null
+  const colors: Record<string, string> = {
+    pricing: 'bg-red-900/40 text-red-300',
+    price: 'bg-red-900/40 text-red-300',
+    features: 'bg-blue-900/40 text-blue-300',
+    feature: 'bg-blue-900/40 text-blue-300',
+    support: 'bg-yellow-900/40 text-yellow-300',
+    integration: 'bg-purple-900/40 text-purple-300',
+    usability: 'bg-green-900/40 text-green-300',
+    performance: 'bg-cyan-900/40 text-cyan-300',
+  }
+  const key = driver.toLowerCase().split('_')[0]
+  const cls = colors[key] ?? 'bg-slate-800 text-slate-300'
+  return (
+    <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium whitespace-nowrap', cls)}>
+      {driverLabel(driver)}
+    </span>
+  )
+}
+
+function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
+  const meta = (data.meta ?? {}) as DisplacementMeta
+  const losers: DisplacementVendorRow[] = Array.isArray(data.market_losers) ? (data.market_losers as DisplacementVendorRow[]) : []
+  const winners: DisplacementVendorRow[] = Array.isArray(data.market_winners) ? (data.market_winners as DisplacementVendorRow[]) : []
+  const battles: DisplacementBattle[] = Array.isArray(data.top_battles) ? (data.top_battles as DisplacementBattle[]) : []
+  const drivers: DriverSummaryRow[] = Array.isArray(data.driver_summary) ? (data.driver_summary as DriverSummaryRow[]) : []
+
+  const totalMentions = typeof meta.total_mentions === 'number' ? meta.total_mentions : null
+  const pricingPct = typeof meta.pricing_pct === 'number' ? `${(meta.pricing_pct * 100).toFixed(0)}%` : null
+
+  return (
+    <div className="space-y-5 min-w-0 [overflow-wrap:anywhere]">
+      {/* Headline stat strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Flows Tracked', value: meta.total_flows },
+          { label: 'Total Mentions', value: totalMentions },
+          { label: 'Top Driver', value: driverLabel(meta.dominant_driver) },
+          { label: 'Pricing Share', value: pricingPct },
+        ].map(({ label, value }) =>
+          value != null ? (
+            <div key={label} className="bg-slate-800/60 border border-slate-700/50 rounded-lg p-3 text-center">
+              <p className="text-xs text-slate-400 mb-1">{label}</p>
+              <p className="text-lg font-semibold text-white leading-tight">{String(value)}</p>
+            </div>
+          ) : null,
+        )}
+      </div>
+
+      {/* Market leaderboard: losers + winners side by side */}
+      {(losers.length > 0 || winners.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {losers.length > 0 && (
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <h3 className="flex items-center gap-1.5 text-sm font-medium text-red-400 mb-3">
+                <TrendingDown className="h-4 w-4" /> Market Losers
+              </h3>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-500 border-b border-slate-700/50">
+                    <th className="text-left pb-1.5 font-normal">Vendor</th>
+                    <th className="text-right pb-1.5 font-normal">Net</th>
+                    <th className="text-left pb-1.5 font-normal pl-3">To</th>
+                    <th className="text-left pb-1.5 font-normal pl-2">Driver</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {losers.map((row, i) => (
+                    <tr key={i}>
+                      <td className="py-1.5 text-slate-200 max-w-[6rem] truncate pr-2">{row.vendor ?? '—'}</td>
+                      <td className="py-1.5 text-right text-red-400 font-medium whitespace-nowrap">
+                        {typeof row.net_flow === 'number' ? `${row.net_flow > 0 ? '+' : ''}${row.net_flow}` : '—'}
+                      </td>
+                      <td className="py-1.5 pl-3 text-slate-400 max-w-[5rem] truncate">{row.top_destination ?? '—'}</td>
+                      <td className="py-1.5 pl-2"><DriverBadge driver={row.top_driver} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {winners.length > 0 && (
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <h3 className="flex items-center gap-1.5 text-sm font-medium text-green-400 mb-3">
+                <Zap className="h-4 w-4" /> Market Winners
+              </h3>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-500 border-b border-slate-700/50">
+                    <th className="text-left pb-1.5 font-normal">Vendor</th>
+                    <th className="text-right pb-1.5 font-normal">Net</th>
+                    <th className="text-left pb-1.5 font-normal pl-3">From</th>
+                    <th className="text-left pb-1.5 font-normal pl-2">Driver</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {winners.map((row, i) => (
+                    <tr key={i}>
+                      <td className="py-1.5 text-slate-200 max-w-[6rem] truncate pr-2">{row.vendor ?? '—'}</td>
+                      <td className="py-1.5 text-right text-green-400 font-medium whitespace-nowrap">
+                        {typeof row.net_flow === 'number' ? `+${row.net_flow}` : '—'}
+                      </td>
+                      <td className="py-1.5 pl-3 text-slate-400 max-w-[5rem] truncate">{row.top_source ?? '—'}</td>
+                      <td className="py-1.5 pl-2"><DriverBadge driver={row.top_driver} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Driver breakdown */}
+      {drivers.length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Churn Drivers</h3>
+          <div className="space-y-2">
+            {drivers.map((d, i) => {
+              const pct = typeof d.pct === 'number' ? d.pct : 0
+              const barWidth = `${Math.min(pct * 100, 100).toFixed(1)}%`
+              return (
+                <div key={i} className="flex items-center gap-3 text-xs">
+                  <span className="w-32 text-slate-300 shrink-0 capitalize">{driverLabel(d.driver)}</span>
+                  <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div className="h-2 rounded-full bg-cyan-500/70" style={{ width: barWidth }} />
+                  </div>
+                  <span className="w-10 text-right text-slate-400 shrink-0">{(pct * 100).toFixed(0)}%</span>
+                  {d.mentions != null && (
+                    <span className="text-slate-600 shrink-0">{d.mentions}m</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Top battles */}
+      {battles.length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="flex items-center gap-1.5 text-sm font-medium text-slate-300 mb-3">
+            <Swords className="h-4 w-4 text-amber-400" /> Top Battles
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {battles.map((b, i) => (
+              <div key={i} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-sm font-medium flex-wrap">
+                  <span className="text-red-300">{b.from_vendor ?? '?'}</span>
+                  <span className="text-slate-500">→</span>
+                  <span className="text-green-300">{b.to_vendor ?? '?'}</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  {b.mention_count != null && (
+                    <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 text-xs">{b.mention_count} mentions</span>
+                  )}
+                  {b.signal_strength && (
+                    <span className={clsx('px-1.5 py-0.5 rounded text-xs font-medium', signalColor(b.signal_strength))}>
+                      {b.signal_strength.replace(/_/g, ' ')}
+                    </span>
+                  )}
+                  <DriverBadge driver={b.primary_driver} />
+                </div>
+                {b.key_quote && (
+                  <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/40 pl-2 break-words whitespace-pre-wrap">
+                    "{b.key_quote}"
+                  </blockquote>
+                )}
+                {b.battle_conclusion && (
+                  <p className="text-xs text-slate-300 leading-relaxed">{b.battle_conclusion}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---- Vendor Scorecard ----
+
+function parseCompetitor(threat: string | null | undefined): string {
+  if (!threat) return '—'
+  return threat.replace(/\s*\(\d+\s*mentions?\)/i, '').trim() || '—'
+}
+
+function formatSentiment(s: string | null | undefined): string {
+  if (!s) return '—'
+  const lower = s.toLowerCase()
+  if (lower === 'consistently_negative') return 'neg'
+  if (lower === 'consistently_positive') return 'pos'
+  if (lower === 'mostly_negative') return 'mostly neg'
+  if (lower === 'mostly_positive') return 'mostly pos'
+  return s.replace(/_/g, ' ')
+}
+
+function sentimentColor(s: string | null | undefined): string {
+  if (!s) return 'text-slate-400'
+  const lower = s.toLowerCase()
+  if (lower.includes('negative')) return 'text-red-400'
+  if (lower.includes('positive')) return 'text-green-400'
+  if (lower.includes('improving')) return 'text-cyan-400'
+  return 'text-slate-400'
+}
+
+function signalDensityColor(v: number | null | undefined): string {
+  if (v == null) return 'text-slate-400'
+  if (v >= 20) return 'text-red-400 font-medium'
+  if (v >= 12) return 'text-amber-400'
+  return 'text-green-400'
+}
+
+function urgencyColor(v: number | null | undefined): string {
+  if (v == null) return 'text-slate-400'
+  if (v >= 3.5) return 'text-red-400'
+  if (v >= 2.5) return 'text-amber-400'
+  return 'text-slate-300'
+}
+
 function VendorScorecardDetail({ items }: { items: VendorScorecardViewModel[] }) {
   return (
-    <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
-      {items.map((item, index) => (
-        <SectionCard
-          key={`${item.vendor ?? 'scorecard'}-${index}`}
-          title={item.vendor ?? 'Vendor'}
-          icon={<Shield className="h-4 w-4 text-cyan-400" />}
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <MetricRow label="Reviews" value={item.total_reviews} />
-            <MetricRow label="Signal Density" value={item.churn_signal_density} />
-            <MetricRow label="Avg Urgency" value={item.avg_urgency} />
-            <MetricRow label="Recommend Ratio" value={item.recommend_ratio} />
-            <MetricRow label="Top Pain" value={item.top_pain} />
-            <MetricRow label="Competitor Threat" value={item.top_competitor_threat} />
-            <MetricRow label="Trend" value={item.trend} />
-            <MetricRow label="Sentiment" value={item.sentiment_direction} />
-          </div>
-        </SectionCard>
-      ))}
+    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 overflow-x-auto min-w-0">
+      <table className="w-full text-xs min-w-[640px]">
+        <thead>
+          <tr className="text-slate-500 border-b border-slate-700/50 text-left">
+            <th className="pb-2 font-normal pr-4">Vendor</th>
+            <th className="pb-2 font-normal pr-3 text-right">Reviews</th>
+            <th className="pb-2 font-normal pr-3 text-right">Signal</th>
+            <th className="pb-2 font-normal pr-3 text-right">Urgency</th>
+            <th className="pb-2 font-normal pr-3">Top Pain</th>
+            <th className="pb-2 font-normal pr-3">Competitor</th>
+            <th className="pb-2 font-normal pr-3">Trend</th>
+            <th className="pb-2 font-normal">Sentiment</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-800/60">
+          {items.map((item, i) => (
+            <tr key={i} className="hover:bg-slate-800/20 transition-colors">
+              <td className="py-1.5 pr-4 text-slate-200 font-medium whitespace-nowrap">{item.vendor ?? '—'}</td>
+              <td className="py-1.5 pr-3 text-right text-slate-300">{item.total_reviews ?? '—'}</td>
+              <td className={clsx('py-1.5 pr-3 text-right', signalDensityColor(item.churn_signal_density))}>
+                {item.churn_signal_density ?? '—'}
+              </td>
+              <td className={clsx('py-1.5 pr-3 text-right', urgencyColor(item.avg_urgency))}>
+                {item.avg_urgency ?? '—'}
+              </td>
+              <td className="py-1.5 pr-3">
+                {item.top_pain ? <DriverBadge driver={item.top_pain} /> : <span className="text-slate-500">—</span>}
+              </td>
+              <td className="py-1.5 pr-3 text-slate-400 whitespace-nowrap">{parseCompetitor(item.top_competitor_threat)}</td>
+              <td className="py-1.5 pr-3 text-slate-400 capitalize whitespace-nowrap">{item.trend ?? '—'}</td>
+              <td className={clsx('py-1.5 whitespace-nowrap', sentimentColor(item.sentiment_direction))}>
+                {formatSentiment(item.sentiment_direction)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -1015,5 +1746,20 @@ export function SpecializedReportData({
   }
   if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} />
   if (reportType === 'vendor_scorecard') return <VendorScorecardDetail items={toVendorScorecards(normalizedValue)} />
+  if (reportType === 'displacement_report') return <DisplacementReportDetail data={normalized} />
+  if (reportType === 'vendor_deep_dive') {
+    const items: DeepDiveVendor[] = Array.isArray(normalizedValue)
+      ? (normalizedValue as DeepDiveVendor[])
+      : []
+    return <VendorDeepDiveDetail items={items} />
+  }
+  if (reportType === 'category_overview') {
+    const items: CategoryOverviewItem[] = Array.isArray(normalizedValue)
+      ? (normalizedValue as CategoryOverviewItem[])
+      : Array.isArray(normalized.category_overview)
+        ? (normalized.category_overview as CategoryOverviewItem[])
+        : []
+    return <CategoryOverviewDetail items={items} />
+  }
   return null
 }
