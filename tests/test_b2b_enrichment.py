@@ -152,7 +152,10 @@ async def test_enrich_rows_uses_configured_concurrency(monkeypatch):
         enrichment_max_tokens=2048,
         review_truncate_length=3000,
     )
-    pool = SimpleNamespace(fetchval=AsyncMock(return_value=0))
+    pool = SimpleNamespace(
+        fetchval=AsyncMock(return_value=0),
+        fetch=AsyncMock(return_value=[{"enrichment_status": "enriched", "ct": 5}]),
+    )
 
     result = await b2b_enrichment._enrich_rows(rows, cfg, pool)
 
@@ -504,7 +507,10 @@ async def test_enrich_rows_counts_quarantined(monkeypatch):
         enrichment_max_tokens=2048,
         review_truncate_length=3000,
     )
-    pool = SimpleNamespace(fetchval=AsyncMock(return_value=0))
+    pool = SimpleNamespace(
+        fetchval=AsyncMock(return_value=0),
+        fetch=AsyncMock(return_value=[{"enrichment_status": "quarantined", "ct": 3}]),
+    )
 
     result = await b2b_enrichment._enrich_rows(rows, cfg, pool)
 
