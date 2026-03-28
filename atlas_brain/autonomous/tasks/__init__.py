@@ -54,6 +54,7 @@ _BUILTIN_TASKS = [
     ("falsification_check", "run", "falsification_check"),
     ("knowledge_graph_sync", "run", "knowledge_graph_sync"),
     ("ecosystem_analysis", "run", "ecosystem_analysis"),
+    ("b2b_account_resolution", "run", "b2b_account_resolution"),
 ]
 
 

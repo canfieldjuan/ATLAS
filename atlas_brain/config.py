@@ -2291,6 +2291,22 @@ class B2BChurnConfig(BaseSettings):
         le=60.0,
         description="HTTP connect timeout for Tier 1 vLLM extraction requests",
     )
+    # Account resolution
+    account_resolution_batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Max reviews to resolve per batch in account resolution task",
+    )
+    account_resolution_backfill_min_confidence: str = Field(
+        default="medium",
+        description="Minimum confidence label to backfill reviewer_company (high/medium/low)",
+    )
+    account_resolution_interval_seconds: int = Field(
+        default=600,
+        description="Account resolution task polling interval (seconds)",
+    )
+
     enrichment_repair_enabled: bool = Field(
         default=False,
         description="Enable structural repair pass for already-enriched B2B reviews",

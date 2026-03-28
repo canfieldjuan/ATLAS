@@ -245,6 +245,16 @@ register_pipeline(PipelineConfig(
             interval_config_key="b2b_churn.enrichment_repair_interval_seconds",
         ),
         TaskDef(
+            name="b2b_account_resolution",
+            module="b2b_account_resolution",
+            schedule_type="interval",
+            interval_seconds=None,
+            timeout_seconds=300,
+            description="Resolve anonymous B2B reviewers to named companies using multi-signal evidence",
+            metadata={"builtin_handler": "b2b_account_resolution"},
+            interval_config_key="b2b_churn.account_resolution_interval_seconds",
+        ),
+        TaskDef(
             name="b2b_churn_intelligence",
             module="b2b_churn_intelligence",
             schedule_type="cron",
