@@ -560,7 +560,12 @@ def _domain_to_company_candidate(url: str) -> str | None:
     return name.capitalize()
 
 
-async def fetch_hn_profile(username: str, http_client: Any = None) -> dict[str, str]:
+async def fetch_hn_profile(
+    username: str,
+    http_client: Any = None,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, str]:
     """Fetch HackerNews user profile. Returns {about, company_from_about, profile_urls}.
 
     HN API is public, no auth needed. The 'about' field is HTML with entities
@@ -570,7 +575,7 @@ async def fetch_hn_profile(username: str, http_client: Any = None) -> dict[str, 
     if not username or not username.strip():
         return {}
     import httpx
-    client = http_client or httpx.AsyncClient(timeout=10.0)
+    client = http_client or httpx.AsyncClient(timeout=timeout)
     close_after = http_client is None
     try:
         url = _HN_USER_API.format(username=username.strip())
@@ -607,7 +612,12 @@ async def fetch_hn_profile(username: str, http_client: Any = None) -> dict[str, 
             await client.aclose()
 
 
-async def fetch_github_profile(username: str, http_client: Any = None) -> dict[str, str]:
+async def fetch_github_profile(
+    username: str,
+    http_client: Any = None,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, str]:
     """Fetch GitHub user profile. Returns {company, bio, blog}.
 
     GitHub API is public (60 req/hr unauthenticated). The 'company' field
@@ -616,7 +626,7 @@ async def fetch_github_profile(username: str, http_client: Any = None) -> dict[s
     if not username or not username.strip():
         return {}
     import httpx
-    client = http_client or httpx.AsyncClient(timeout=10.0)
+    client = http_client or httpx.AsyncClient(timeout=timeout)
     close_after = http_client is None
     try:
         url = _GITHUB_USER_API.format(username=username.strip())

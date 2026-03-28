@@ -2312,6 +2312,18 @@ class B2BChurnConfig(BaseSettings):
         le=200,
         description="Max profile fetches per batch (HN + GitHub combined). GitHub free tier allows 60 req/hr.",
     )
+    account_resolution_profile_fetch_concurrency: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max concurrent HN/GitHub profile fetches. 10 concurrent × 5s timeout ≈ 25s for 50 profiles.",
+    )
+    account_resolution_profile_fetch_timeout: float = Field(
+        default=5.0,
+        ge=0.5,
+        le=30.0,
+        description="Per-request timeout (seconds) for HN and GitHub profile fetches.",
+    )
 
     enrichment_repair_enabled: bool = Field(
         default=False,
