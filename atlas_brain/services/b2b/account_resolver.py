@@ -88,10 +88,13 @@ _BIO_COMPANY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
     # "I work at Acme" / "I work for Acme" / "we are at Acme" / "we use this at Acme"
     # NOTE: `work|worked` allows `at|for`; `am|was|are|use\s+\w+` only allows `at`
-    # to prevent false positives like "we use X for task management" → "task management"
+    # to prevent false positives like "we use X for task management" → "task management".
+    # Negative lookahead blocks article+determiner phrases like "a company that...",
+    # "an IT department", "the business", "our team" — these are descriptions, not names.
     (re.compile(
         r"\b(?:I|we)\s+"
         r"(?:(?:work|worked)\s+(?:at|for)|(?:am|was|are|use\s+\w+(?:\s+\w+)?)\s+at)\s+"
+        r"(?!a\s|an\s|the\s|my\s|our\s|your\s|their\s|this\s|that\s|some\s|any\s)"
         r"([A-Z][A-Za-z0-9\s&.'-]{2,40}?)(?:\s*[,.(|]|\s+and\b|\s+but\b|\s+since|\s+for\s+\d|\s*$)",
         re.IGNORECASE,
     ), "work_at_company"),

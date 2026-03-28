@@ -35,6 +35,94 @@ def _build_author_profile_url(source: str, username: str) -> str | None:
     return None
 
 
+async def _propagate_user_resolutions(pool: Any, backfill_labels: set) -> int:
+    """Propagate high/medium confidence resolutions to same-user unresolved reviews.
+
+    If reviewer 'johndoe' has a high-confidence resolution for company 'Stripe'
+    on one review, their other unresolved reviews on the same source are
+    updated with the same company at slightly lower propagated confidence.
+    Skips '[deleted]' accounts (shared username on Reddit deleted posts).
+    """
+    resolved_users = await pool.fetch("""
+        SELECT DISTINCT ON (r.source, r.reviewer_name)
+               r.source,
+               r.reviewer_name,
+               ar.resolved_company_name,
+               ar.normalized_company_name,
+               ar.confidence_score,
+               ar.confidence_label,
+               ar.resolution_method
+        FROM b2b_reviews r
+        JOIN b2b_account_resolution ar ON ar.review_id = r.id
+        WHERE ar.resolution_status = 'resolved'
+          AND ar.confidence_label IN ('high', 'medium')
+          AND r.reviewer_name IS NOT NULL
+          AND r.reviewer_name NOT IN ('[deleted]', '', 'deleted')
+        ORDER BY r.source, r.reviewer_name, ar.confidence_score DESC
+    """)
+
+    propagated = 0
+    for user in resolved_users:
+        unresolved = await pool.fetch("""
+            SELECT r.id AS review_id, r.reviewer_company, ar.id AS ar_id
+            FROM b2b_reviews r
+            JOIN b2b_account_resolution ar ON ar.review_id = r.id
+            WHERE r.source = $1
+              AND r.reviewer_name = $2
+              AND ar.resolution_status = 'unresolved'
+        """, user["source"], user["reviewer_name"])
+
+        if not unresolved:
+            continue
+
+        prop_score = round(min(float(user["confidence_score"]) * 0.85, 0.75), 2)
+        prop_label = "medium" if prop_score >= 0.6 else "low"
+        evidence = json.dumps({
+            "signals": [{
+                "type": "username_propagation",
+                "value": user["resolved_company_name"],
+                "confidence": prop_score,
+                "source_field": f"reviewer_name:{user['reviewer_name']}",
+                "propagated_from_method": user["resolution_method"],
+            }],
+            "excluded_candidates": [],
+        })
+
+        for review in unresolved:
+            try:
+                await pool.execute("""
+                    UPDATE b2b_account_resolution
+                    SET resolved_company_name = $2,
+                        normalized_company_name = $3,
+                        confidence_score = $4,
+                        confidence_label = $5,
+                        resolution_method = 'username_propagation',
+                        resolution_evidence = $6::jsonb,
+                        resolution_status = 'resolved',
+                        resolved_at = NOW()
+                    WHERE id = $1
+                """, review["ar_id"], user["resolved_company_name"],
+                    user["normalized_company_name"],
+                    prop_score, prop_label, evidence)
+                propagated += 1
+
+                if prop_label in backfill_labels and not (review["reviewer_company"] or "").strip():
+                    await pool.execute("""
+                        UPDATE b2b_reviews
+                        SET reviewer_company = $2,
+                            reviewer_company_norm = $3
+                        WHERE id = $1
+                          AND (reviewer_company IS NULL OR reviewer_company = '')
+                    """, review["review_id"], user["resolved_company_name"],
+                        user["normalized_company_name"])
+            except Exception:
+                logger.warning(
+                    "Username propagation failed for %s", review["ar_id"], exc_info=True,
+                )
+
+    return propagated
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task: resolve anonymous review authors to named companies."""
     cfg = settings.b2b_churn
@@ -292,12 +380,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     row["id"], exc_info=True,
                 )
 
+    # Username propagation: if a reviewer has a high/medium resolution elsewhere,
+    # propagate that company to their other unresolved reviews (same source + username).
+    # Skips [deleted] accounts (shared username across multiple Reddit users).
+    propagated_count = 0
+    try:
+        propagated_count = await _propagate_user_resolutions(pool, backfill_labels)
+    except Exception:
+        logger.warning("Username propagation failed", exc_info=True)
+
     elapsed = round(time.monotonic() - t0, 1)
     logger.info(
         "Account resolution: %d resolved, %d unresolved, %d backfilled, "
-        "%d errors (high=%d med=%d low=%d) %.1fs",
+        "%d propagated, %d errors (high=%d med=%d low=%d) %.1fs",
         resolved_count, unresolved_count, backfilled_count,
-        errors, high_count, medium_count, low_count, elapsed,
+        propagated_count, errors, high_count, medium_count, low_count, elapsed,
     )
 
     return {
@@ -306,6 +403,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "resolved": resolved_count,
         "unresolved": unresolved_count,
         "backfilled": backfilled_count,
+        "propagated": propagated_count,
         "high_confidence": high_count,
         "medium_confidence": medium_count,
         "low_confidence": low_count,
