@@ -2267,6 +2267,24 @@ class B2BChurnConfig(BaseSettings):
         le=600.0,
         description="HTTP timeout for Tier 1 vLLM extraction requests",
     )
+    enrichment_tier2_vllm_url: str = Field(
+        default="",
+        description="vLLM server URL for Tier 2 extraction (empty = reuse Tier 1 URL)",
+    )
+    enrichment_tier2_model: str = Field(
+        default="",
+        description="Model for Tier 2 extraction (empty = reuse Tier 1 model)",
+    )
+    enrichment_tier2_max_tokens: int = Field(
+        default=1536,
+        description="Max output tokens for Tier 2 vLLM extraction",
+    )
+    enrichment_tier2_timeout_seconds: float = Field(
+        default=60.0,
+        ge=5.0,
+        le=600.0,
+        description="HTTP timeout for Tier 2 vLLM extraction requests",
+    )
     enrichment_tier1_connect_timeout_seconds: float = Field(
         default=10.0,
         ge=1.0,

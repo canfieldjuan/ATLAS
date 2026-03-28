@@ -127,6 +127,74 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
         return None, None
 
 
+async def _call_vllm_tier2(
+    tier1_result: dict,
+    row: dict,
+    cfg: Any,
+    client: Any,
+    truncate_length: int,
+) -> tuple[dict | None, str | None]:
+    """Tier 2 extraction: classify + extract via local vLLM.
+
+    Receives Tier 1 output as context so it can reference extracted complaints
+    and quotes when classifying pain and detecting indicators.
+    Returns (result_dict, model_id) or (None, None) on failure.
+    """
+    from ...skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found")
+        return None, None
+
+    tier2_model = cfg.enrichment_tier2_model or cfg.enrichment_tier1_model
+    payload = _build_classify_payload(row, truncate_length)
+    # Inject Tier 1 extractions for Tier 2 to reference
+    payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
+    payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
+    payload_json = json.dumps(payload)
+
+    try:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": tier2_model,
+                "messages": [
+                    {"role": "system", "content": skill.content},
+                    {"role": "user", "content": payload_json},
+                ],
+                "max_tokens": cfg.enrichment_tier2_max_tokens,
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"},
+            },
+        )
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+        if not text:
+            return None, tier2_model
+
+        from ...pipelines.llm import clean_llm_output, parse_json_response
+        text = clean_llm_output(text)
+        parsed = parse_json_response(text, recover_truncated=True)
+        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+            return parsed, tier2_model
+        return None, tier2_model
+    except Exception:
+        logger.warning("Tier 2 vLLM call failed", exc_info=True)
+        return None, None
+
+
+def _get_tier2_client(cfg: Any) -> Any:
+    """Get or create the httpx client for Tier 2 vLLM."""
+    tier2_url = cfg.enrichment_tier2_vllm_url or cfg.enrichment_tier1_vllm_url
+    timeout = cfg.enrichment_tier2_timeout_seconds
+    # Reuse the Tier 1 client if same URL
+    if tier2_url == cfg.enrichment_tier1_vllm_url:
+        return _get_tier1_client(cfg)
+    import httpx
+    return httpx.AsyncClient(base_url=tier2_url, timeout=timeout)
+
+
 def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
     """Merge Tier 1 + Tier 2 deterministic extraction into a single 47-field JSONB.
 
@@ -1207,7 +1275,9 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         payload = _build_classify_payload(row, truncate_length)
         payload_json = json.dumps(payload)
         client = _get_tier1_client(cfg)
-        tier1, model_id = await asyncio.wait_for(
+
+        # Tier 1: deterministic extraction (base fields)
+        tier1, tier1_model = await asyncio.wait_for(
             _call_vllm_tier1(payload_json, cfg, client),
             timeout=full_extraction_timeout,
         )
@@ -1215,7 +1285,20 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             logger.debug("Tier 1 returned None for %s, deferring to next cycle", review_id)
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
             return False
-        result = _merge_tier1_tier2(tier1, None)
+
+        # Tier 2: classify + extract (new fields, receives Tier 1 context)
+        tier2_client = _get_tier2_client(cfg)
+        tier2, tier2_model = await asyncio.wait_for(
+            _call_vllm_tier2(tier1, row, cfg, tier2_client, truncate_length),
+            timeout=full_extraction_timeout,
+        )
+        if tier2 is not None:
+            model_id = f"hybrid:{tier1_model}+{tier2_model}"
+        else:
+            logger.info("Tier 2 failed for %s, proceeding with Tier 1 only", review_id)
+            model_id = tier1_model or ""
+
+        result = _merge_tier1_tier2(tier1, tier2)
 
         # Layer 3: compute derived fields from indicators (urgency, pain, recommend, etc.)
         # Hard-fail if compute breaks -- do NOT fall back to model-dependent output.
