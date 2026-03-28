@@ -63,7 +63,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         LEFT JOIN b2b_account_resolution ar ON ar.review_id = r.id
         WHERE r.enrichment_status = 'enriched'
           AND ar.id IS NULL
-        ORDER BY r.enriched_at DESC
+        ORDER BY
+            CASE WHEN (r.reviewer_company IS NOT NULL AND r.reviewer_company != '') THEN 0 ELSE 1 END,
+            r.enriched_at DESC
         LIMIT $1
         """,
         batch_size,
