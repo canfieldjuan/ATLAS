@@ -179,6 +179,17 @@ class EvidenceEngine:
 
         if negative_hits > 0 and negative_hits >= positive_hits:
             return False
+        # If rating is very low, a single positive phrase is likely sarcasm
+        # -- require 2+ positive hits to override a clearly negative rating
+        fallback = cfg.get("rating_fallback", {})
+        if (
+            positive_hits == 1
+            and negative_hits == 0
+            and rating is not None
+            and rating_max > 0
+            and (rating / rating_max) <= fallback.get("false_below", 0.3)
+        ):
+            return False
         if positive_hits > 0 and positive_hits > negative_hits:
             return True
 

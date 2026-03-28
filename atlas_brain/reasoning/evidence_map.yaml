@@ -50,7 +50,7 @@ enrichment:
     description: "Override 'other' pain_category using keyword scan"
     trigger: {field: pain_category, eq: other}
     keyword_map:
-      pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, fees, subscription, invoice, invoiced, billing, billed, charged, charge, refund, cost increase, price increase]
+      pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, fees, subscription, invoice, invoiced, billing, billed, charged, charge, refund, cost increase, price increase, pay for every, paying for, paid for, invested, overpay, nickel and dime, hidden cost, hidden fee, sticker shock, renewal cost, renewal price, per seat, per user, add-on cost, upsell, price hike, price jump, not worth the price, too much money, waste of money, money pit]
       support: [support, response time, ticket, customer service, helpdesk, wait time, unresponsive]
       reliability: [downtime, outage, crash, bug, unstable, unreliable, broken, error]
       ux: [clunky, unintuitive, confusing, ui, ux, user interface, learning curve, ugly, dated, clumsy]
@@ -77,9 +77,14 @@ enrichment:
       - "\\bwould not recommend\\b"
       - "\\bcannot recommend\\b"
       - "\\bdon'?t recommend\\b"
+      - "\\bdo not recommend\\b"
+      - "\\bnot recommend\\b"
+      - "\\bnever recommend\\b"
       - "\\bstay away\\b"
       - "\\bavoid\\b"
       - "\\bnot worth\\b"
+      - "\\bwouldn'?t recommend\\b"
+      - "\\bwaste of\\b"
     scan_field: recommendation_language
     rating_fallback:
       true_above: 0.7
