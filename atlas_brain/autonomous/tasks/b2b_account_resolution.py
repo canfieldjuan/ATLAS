@@ -78,12 +78,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...services.b2b.account_resolver import (
         extract_from_github_profile,
         extract_from_hn_profile,
+        extract_from_reddit_profile,
         fetch_github_profile,
         fetch_hn_profile,
+        fetch_reddit_profile,
         resolve_review,
     )
 
-    # Pre-fetch profiles for HN and GitHub reviews (parallel, semaphore-limited)
+    # Pre-fetch profiles for HN, GitHub, and Reddit reviews (parallel, semaphore-limited)
     import httpx
 
     max_fetches = getattr(cfg, "account_resolution_max_profile_fetches", 50)
@@ -92,15 +94,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     hn_reviews = [r for r in rows if (r["source"] or "") == "hackernews" and r["reviewer_name"]]
     gh_reviews = [r for r in rows if (r["source"] or "") == "github" and r["reviewer_name"]]
+    reddit_reviews = [r for r in rows if (r["source"] or "") == "reddit" and r["reviewer_name"]]
     profile_cache: dict[str, dict] = {}
 
-    if hn_reviews or gh_reviews:
+    if hn_reviews or gh_reviews or reddit_reviews:
         # Deduplicate usernames before launching coroutines
         hn_usernames = list(dict.fromkeys(
             r["reviewer_name"] for r in hn_reviews[:max_fetches] if r["reviewer_name"]
         ))
         gh_usernames = list(dict.fromkeys(
             r["reviewer_name"] for r in gh_reviews[:max_fetches] if r["reviewer_name"]
+        ))
+        reddit_usernames = list(dict.fromkeys(
+            r["reviewer_name"] for r in reddit_reviews[:max_fetches] if r["reviewer_name"]
         ))
 
         async with httpx.AsyncClient(timeout=fetch_timeout) as http:
@@ -118,17 +124,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     if profile:
                         profile_cache[f"gh:{username}"] = profile
 
+            async def _fetch_reddit(username: str) -> None:
+                async with sem:
+                    profile = await fetch_reddit_profile(username, http)
+                    if profile:
+                        profile_cache[f"reddit:{username}"] = profile
+
             await asyncio.gather(
                 *[_fetch_hn(u) for u in hn_usernames],
                 *[_fetch_gh(u) for u in gh_usernames],
+                *[_fetch_reddit(u) for u in reddit_usernames],
                 return_exceptions=True,
             )
 
         logger.info(
-            "Fetched %d profiles (HN=%d, GH=%d) concurrency=%d timeout=%.1fs",
+            "Fetched %d profiles (HN=%d, GH=%d, Reddit=%d) concurrency=%d timeout=%.1fs",
             len(profile_cache),
             sum(1 for k in profile_cache if k.startswith("hn:")),
             sum(1 for k in profile_cache if k.startswith("gh:")),
+            sum(1 for k in profile_cache if k.startswith("reddit:")),
             fetch_concurrency,
             fetch_timeout,
         )
@@ -173,6 +187,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             gh_profile = profile_cache.get(f"gh:{username}")
             if gh_profile:
                 review_dict["_gh_profile"] = gh_profile
+        elif source == "reddit" and username:
+            reddit_profile = profile_cache.get(f"reddit:{username}")
+            if reddit_profile:
+                review_dict["_reddit_profile"] = reddit_profile
 
         try:
             result = resolve_review(
