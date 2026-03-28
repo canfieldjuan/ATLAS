@@ -127,6 +127,73 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
         return None, None
 
 
+async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, str | None]:
+    """Tier 1 extraction via OpenRouter (cloud model, no guided_json)."""
+    import httpx
+    from ...skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
+        return None, None
+
+    api_key = cfg.openrouter_api_key
+    if not api_key:
+        logger.warning("OpenRouter API key not configured for enrichment")
+        return None, None
+
+    model_id = cfg.enrichment_openrouter_model or "openai/gpt-oss-120b"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_id,
+                    "messages": [
+                        {"role": "system", "content": skill.content},
+                        {"role": "user", "content": payload_json},
+                    ],
+                    "max_tokens": cfg.enrichment_tier1_max_tokens,
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"].strip()
+            if not text:
+                return None, model_id
+
+            from ...pipelines.llm import clean_llm_output, parse_json_response
+            text = clean_llm_output(text)
+            parsed = parse_json_response(text, recover_truncated=True)
+            if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                return parsed, model_id
+            return None, model_id
+    except Exception:
+        logger.exception("OpenRouter tier 1 call failed")
+        return None, None
+
+
+def _tier1_has_extraction_gaps(tier1: dict) -> bool:
+    """Check if tier 1 left gaps that tier 2 should fill."""
+    complaints = tier1.get("specific_complaints") or []
+    quotes = tier1.get("quotable_phrases") or []
+    competitors = tier1.get("competitors_mentioned") or []
+    pricing = tier1.get("pricing_phrases") or []
+    rec_lang = tier1.get("recommendation_language") or []
+    # If the review has churn signals but no verbatim evidence, tier 2 should fill
+    churn = tier1.get("churn_signals") or {}
+    has_churn = any(bool(v) for v in churn.values())
+    has_evidence = bool(complaints or quotes or competitors or pricing or rec_lang)
+    # Also fire if pain classification is missing
+    pain_cats = tier1.get("pain_categories") or []
+    return (has_churn and not has_evidence) or not pain_cats
+
+
 async def _call_vllm_tier2(
     tier1_result: dict,
     row: dict,
@@ -1277,25 +1344,39 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         client = _get_tier1_client(cfg)
 
         # Tier 1: deterministic extraction (base fields)
-        tier1, tier1_model = await asyncio.wait_for(
-            _call_vllm_tier1(payload_json, cfg, client),
-            timeout=full_extraction_timeout,
+        # Use OpenRouter if configured and not forced local-only, otherwise local vLLM
+        use_openrouter = (
+            not local_only
+            and bool(cfg.enrichment_openrouter_model)
+            and bool(cfg.openrouter_api_key)
         )
+        if use_openrouter:
+            tier1, tier1_model = await asyncio.wait_for(
+                _call_openrouter_tier1(payload_json, cfg),
+                timeout=full_extraction_timeout,
+            )
+        else:
+            tier1, tier1_model = await asyncio.wait_for(
+                _call_vllm_tier1(payload_json, cfg, client),
+                timeout=full_extraction_timeout,
+            )
         if tier1 is None:
             logger.debug("Tier 1 returned None for %s, deferring to next cycle", review_id)
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
             return False
 
-        # Tier 2: classify + extract (new fields, receives Tier 1 context)
-        tier2_client = _get_tier2_client(cfg)
-        tier2, tier2_model = await asyncio.wait_for(
-            _call_vllm_tier2(tier1, row, cfg, tier2_client, truncate_length),
-            timeout=full_extraction_timeout,
-        )
+        # Tier 2: conditional — only fire when tier 1 left extraction gaps
+        tier2 = None
+        tier2_model = None
+        if _tier1_has_extraction_gaps(tier1):
+            tier2_client = _get_tier2_client(cfg)
+            tier2, tier2_model = await asyncio.wait_for(
+                _call_vllm_tier2(tier1, row, cfg, tier2_client, truncate_length),
+                timeout=full_extraction_timeout,
+            )
         if tier2 is not None:
             model_id = f"hybrid:{tier1_model}+{tier2_model}"
         else:
-            logger.info("Tier 2 failed for %s, proceeding with Tier 1 only", review_id)
             model_id = tier1_model or ""
 
         result = _merge_tier1_tier2(tier1, tier2)
