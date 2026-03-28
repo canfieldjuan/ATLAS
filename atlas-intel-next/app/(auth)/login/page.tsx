@@ -15,7 +15,7 @@ export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => { if (user) router.replace("/") }, [user, router])
+  useEffect(() => { if (user) router.replace("/dashboard") }, [user, router])
   if (user) return null
 
   async function handleSubmit(e: FormEvent) {
