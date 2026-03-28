@@ -23,6 +23,7 @@ from atlas_brain.services.b2b.account_resolver import (
     _extract_from_title_bio,
     extract_from_github_profile,
     extract_from_hn_profile,
+    extract_from_reddit_profile,
     resolve_review,
 )
 
@@ -67,6 +68,34 @@ class TestBioRegex:
         assert sig is not None
         assert sig.value == "Google"
         assert sig.signal_type == "work_at_company"
+
+    def test_i_work_for(self):
+        sig = _extract_from_bio_regex("I work for Stripe", "bio")
+        assert sig is not None
+        assert sig.value == "Stripe"
+        assert sig.signal_type == "work_at_company"
+
+    def test_use_at_company(self):
+        # "we use X at Company" is valid
+        sig = _extract_from_bio_regex("we use this at Datadog", "bio")
+        assert sig is not None
+        assert sig.value == "Datadog"
+        assert sig.signal_type == "work_at_company"
+
+    def test_use_for_not_extracted(self):
+        # "we use X for task management" — should NOT extract "task management"
+        sig = _extract_from_bio_regex("we use Workday for task management", "bio")
+        assert sig is None or sig.value != "task management"
+
+    def test_use_for_project_management_not_extracted(self):
+        # false positive guard: "we use X for project management"
+        sig = _extract_from_bio_regex("we use Jira for project management", "bio")
+        assert sig is None or sig.value != "project management"
+
+    def test_are_for_not_extracted(self):
+        # "we are for open source" — should NOT extract "open source"
+        sig = _extract_from_bio_regex("we are for open source projects", "bio")
+        assert sig is None or sig.value != "open source projects"
 
     def test_former_at(self):
         sig = _extract_from_bio_regex("Former engineer at Meta", "bio")
@@ -486,6 +515,23 @@ class TestReviewTextExtraction:
         assert len(signals) >= 1
         assert any(s.value == "Stripe" for s in signals)
 
+    def test_review_text_use_for_not_a_company(self):
+        # "we use X for task management" — should not extract "task management" as a company
+        review = {
+            "summary": "",
+            "review_text": "We use Workday for task management and it has been slow",
+        }
+        signals = _extract_from_review_text(review)
+        assert not any(s.value == "task management" for s in signals)
+
+    def test_review_text_use_for_project_management_not_extracted(self):
+        review = {
+            "summary": "Switched from Jira",
+            "review_text": "We use Linear for project management but the API is lacking",
+        }
+        signals = _extract_from_review_text(review)
+        assert not any(s.value == "project management" for s in signals)
+
     def test_no_company_in_text(self):
         review = {
             "summary": "bad product",
@@ -636,3 +682,56 @@ class TestDomainToCompanyCandidate:
     def test_capitalises(self):
         result = _domain_to_company_candidate("https://acmecorp.io")
         assert result == "Acmecorp"
+
+
+# -- Reddit Profile Extraction -----------------------------------------------
+
+
+class TestRedditProfile:
+
+    def test_bio_with_company(self):
+        profile = {"bio": "Senior Engineer at Cloudflare. I like distributed systems."}
+        sig = extract_from_reddit_profile(profile)
+        assert sig is not None
+        assert sig.value == "Cloudflare"
+        assert sig.signal_type == "reddit_profile_bio"
+        assert sig.confidence == 0.55
+
+    def test_bio_work_for(self):
+        profile = {"bio": "I work for Stripe, building payment infrastructure"}
+        sig = extract_from_reddit_profile(profile)
+        assert sig is not None
+        assert sig.value == "Stripe"
+
+    def test_bio_url_domain_fallback(self):
+        # No bio text pattern match, but has company URL
+        profile = {"bio": "Check out my work", "profile_urls": ["https://datadog.com"]}
+        sig = extract_from_reddit_profile(profile)
+        # bio "Check out my work" won't match → falls back to URL domain
+        assert sig is not None
+        assert sig.value == "Datadog"
+        assert sig.signal_type == "reddit_profile_url_domain"
+        assert sig.confidence == 0.4
+
+    def test_empty_profile(self):
+        sig = extract_from_reddit_profile({})
+        assert sig is None
+
+    def test_platform_url_skipped(self):
+        profile = {"bio": "just a regular dev", "profile_urls": ["https://github.com/user"]}
+        sig = extract_from_reddit_profile(profile)
+        assert sig is None
+
+    def test_resolve_with_reddit_profile(self):
+        review = {
+            "reviewer_company": None,
+            "reviewer_title": None,
+            "source": "reddit",
+            "review_text": "This tool is too expensive",
+            "raw_metadata": {},
+            "enrichment": None,
+            "_reddit_profile": {"bio": "DevOps Engineer at HashiCorp"},
+        }
+        result = resolve_review(review, vendor_name="Terraform Cloud")
+        assert result.resolved_company_name == "HashiCorp"
+        assert result.confidence_label in ("medium", "high")

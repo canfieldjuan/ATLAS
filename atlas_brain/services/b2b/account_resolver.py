@@ -86,9 +86,12 @@ _BIO_COMPANY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         re.IGNORECASE,
     ), "title_at_company"),
 
-    # "I work at Acme" / "we are at Acme" / "we use this at Acme"
+    # "I work at Acme" / "I work for Acme" / "we are at Acme" / "we use this at Acme"
+    # NOTE: `work|worked` allows `at|for`; `am|was|are|use\s+\w+` only allows `at`
+    # to prevent false positives like "we use X for task management" → "task management"
     (re.compile(
-        r"\b(?:I|we)\s+(?:work|worked|am|was|are|use\s+\w+)\s+(?:at|for|with)\s+"
+        r"\b(?:I|we)\s+"
+        r"(?:(?:work|worked)\s+(?:at|for)|(?:am|was|are|use\s+\w+(?:\s+\w+)?)\s+at)\s+"
         r"([A-Z][A-Za-z0-9\s&.'-]{2,40}?)(?:\s*[,.(|]|\s+and\b|\s+but\b|\s+since|\s+for\s+\d|\s*$)",
         re.IGNORECASE,
     ), "work_at_company"),
@@ -458,6 +461,12 @@ def resolve_review(
     source = (review.get("source") or "").lower()
     if source == "reddit":
         extractors.extend(_extract_from_reddit_metadata(review))
+        # Reddit profile data injected by task
+        reddit_profile = review.get("_reddit_profile")
+        if isinstance(reddit_profile, dict):
+            sig = extract_from_reddit_profile(reddit_profile)
+            if sig:
+                extractors.append(sig)
     elif source == "quora":
         extractors.extend(_extract_from_quora_metadata(review))
     elif source == "producthunt":
@@ -528,6 +537,8 @@ def resolve_review(
 
 _HN_USER_API = "https://hacker-news.firebaseio.com/v0/user/{username}.json"
 _GITHUB_USER_API = "https://api.github.com/users/{username}"
+_REDDIT_USER_API = "https://www.reddit.com/user/{username}/about.json"
+_REDDIT_USER_AGENT = "python:atlas.b2b.resolver:v1.0 (by /u/atlas_bot)"
 
 # Domains that are platforms/tools, not company identifiers
 _PLATFORM_DOMAINS = frozenset({
@@ -734,3 +745,79 @@ def extract_from_github_profile(profile: dict[str, str]) -> list[ResolutionSigna
             sig.signal_type = "github_profile_bio"
             signals.append(sig)
     return signals
+
+
+async def fetch_reddit_profile(
+    username: str,
+    http_client: Any = None,
+    *,
+    timeout: float = 10.0,
+) -> dict[str, str]:
+    """Fetch Reddit user profile. Returns {bio, profile_urls}.
+
+    Reddit public API — no auth required. Sets a descriptive User-Agent to
+    comply with Reddit's API terms (otherwise returns 429/403).
+    Respects Reddit's rate limit; callers should use a semaphore.
+    """
+    if not username or not username.strip():
+        return {}
+    import httpx
+    headers = {"User-Agent": _REDDIT_USER_AGENT}
+    client = http_client or httpx.AsyncClient(timeout=timeout, headers=headers)
+    close_after = http_client is None
+    try:
+        url = _REDDIT_USER_API.format(username=username.strip())
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            return {}
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {}
+        user_data = data.get("data") or {}
+        result: dict[str, str] = {}
+        # Public description lives under subreddit (user's profile page)
+        subreddit = user_data.get("subreddit") or {}
+        bio_raw = (subreddit.get("public_description") or "").strip()
+        if bio_raw:
+            # Decode HTML entities, strip tags
+            bio_decoded = _html.unescape(bio_raw)
+            profile_urls = re.findall(r'https?://[^\s<>"\']+', bio_decoded)
+            bio_clean = re.sub(r"<[^>]+>", " ", bio_decoded)
+            bio_clean = re.sub(r"\s+", " ", bio_clean).strip()
+            if bio_clean:
+                result["bio"] = bio_clean
+            if profile_urls:
+                result["profile_urls"] = profile_urls[:5]
+        return result
+    except Exception:
+        logger.debug("Reddit profile fetch failed for %s", username, exc_info=True)
+        return {}
+    finally:
+        if close_after:
+            await client.aclose()
+
+
+def extract_from_reddit_profile(profile: dict[str, str]) -> ResolutionSignal | None:
+    """Extract company signal from a fetched Reddit profile.
+
+    Priority:
+      1. Bio regex match on public_description text
+      2. Domain of first non-platform URL in bio
+    """
+    bio = (profile.get("bio") or "").strip()
+    if bio:
+        sig = _extract_from_bio_regex(bio, "reddit_user_profile.bio")
+        if sig:
+            sig.confidence = 0.55
+            sig.signal_type = "reddit_profile_bio"
+            return sig
+    for url in (profile.get("profile_urls") or []):
+        candidate = _domain_to_company_candidate(url)
+        if candidate:
+            return ResolutionSignal(
+                signal_type="reddit_profile_url_domain",
+                value=candidate,
+                confidence=0.4,
+                source_field="reddit_user_profile.bio_urls",
+            )
+    return None
