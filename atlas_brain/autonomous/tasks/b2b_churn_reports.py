@@ -18,7 +18,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ._b2b_shared import _timing_summary_payload
+from ._b2b_shared import _timing_summary_payload, _build_inbound_displacement_lookup
 
 logger = logging.getLogger("atlas.tasks.b2b_churn_reports")
 
@@ -598,8 +598,13 @@ def _attach_context_to_deterministic_reports(
         battle = xv_lookup.get("battles", {}).get(pair)
         if battle:
             bc = battle.get("conclusion", {})
-            edge["battle_conclusion"] = bc.get("conclusion", "")
-            edge["durability"] = bc.get("durability_assessment", "")
+            # Only attach when from_vendor is the battle loser: the conclusion prose
+            # describes why the loser's customers are flowing to the winner, so it
+            # is only coherent on the directed edge where the loser is the source.
+            battle_loser = (bc.get("loser") or "").strip().lower()
+            if not battle_loser or edge["from_vendor"].strip().lower() == battle_loser:
+                edge["battle_conclusion"] = bc.get("conclusion", "")
+                edge["durability"] = bc.get("durability_assessment", "")
 
     return len(attached_vendors)
 
@@ -644,6 +649,7 @@ async def _build_deterministic_report_bundle(
         _build_deterministic_vendor_scorecards,
         _compute_evidence_confidence,
         _fetch_latest_evidence_vault,
+        _structure_displacement_report,
     )
     from .b2b_churn_intelligence import (
         reconstruct_cross_vendor_lookup,
@@ -849,6 +855,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _build_deterministic_vendor_feed,
         _build_deterministic_vendor_scorecards,
         _build_scorecard_locked_facts,
+        _structure_displacement_report,
         _build_pain_lookup,
         _build_competitor_lookup,
         _build_feature_gap_lookup,
@@ -1083,7 +1090,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     report_types = [
         ("weekly_churn_feed", deterministic_weekly_feed),
         ("vendor_scorecard", deterministic_vendor_scorecards),
-        ("displacement_report", deterministic_displacement_map),
+        ("displacement_report", _structure_displacement_report(deterministic_displacement_map)),
         ("category_overview", deterministic_category_overview),
     ]
 

@@ -2098,7 +2098,7 @@ def _classify_trend(
     return "stable"
 
 
-def _infer_driver_from_reasons(reasons: list[str], fallback: str = "other") -> str:
+def _infer_driver_from_reasons(reasons: list[str], fallback: str | None = None) -> str | None:
     """Classify a driver label from competitor-reason text."""
     for reason in reasons:
         normalized = _normalize_displacement_driver_label(reason)
@@ -2606,8 +2606,8 @@ def _build_validated_executive_summary(
         # Sentence 3: driver distribution (weighted by mention count)
         driver_counts: dict[str, int] = {}
         for e in disp:
-            d = e.get("primary_driver", "other")
-            if d.lower() != "other":
+            d = e.get("primary_driver") or None
+            if d and d.lower() != "other":
                 driver_counts[d] = driver_counts.get(d, 0) + e.get("mention_count", 0)
         if driver_counts and total_mentions:
             ranked_drivers = sorted(driver_counts.items(), key=lambda x: -x[1])
@@ -2810,7 +2810,7 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
         f"""
         SELECT source, count(*) AS cnt,
             count(*) FILTER (
-                WHERE (enrichment->>'urgency_score')::int >= 7
+                WHERE (enrichment->>'urgency_score')::numeric >= 7
             ) AS high_urgency
         FROM b2b_reviews
         WHERE {filters}
@@ -2907,7 +2907,8 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
     rows = await pool.fetch(
         f"""
         WITH review_scores AS (
-            SELECT vendor_name, product_category,
+            SELECT vendor_name,
+                MODE() WITHIN GROUP (ORDER BY product_category) AS product_category,
                 count(*) AS total_reviews,
                 count(*) FILTER (
                     WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
@@ -2980,7 +2981,7 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
                 ) AS has_recommendation_language_count
             FROM b2b_reviews
             WHERE {filters}
-            GROUP BY vendor_name, product_category
+            GROUP BY vendor_name
             HAVING count(*) >= $2
         )
         SELECT rs.*,
@@ -3114,38 +3115,50 @@ async def _fetch_vendor_churn_scores_from_signals(
 async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days: int) -> list[dict[str, Any]]:
     """Companies showing high churn intent -- the money feed."""
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=2, source_param=3)
+    filters = _eligible_review_filters(window_param=2, source_param=3, alias="r")
     rows = await pool.fetch(
         f"""
-        SELECT id AS review_id, source,
-            reviewer_company, vendor_name, product_category,
-            reviewer_title,
-            company_size_raw,
-            COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
-            enrichment->'reviewer_context'->>'role_level' AS role_level,
-            (enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
-            (enrichment->>'urgency_score')::numeric AS urgency,
-            enrichment->>'pain_category' AS pain,
-            enrichment->'competitors_mentioned' AS alternatives,
-            enrichment->'quotable_phrases' AS quotes,
-            enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
-            enrichment->'budget_signals'->>'seat_count' AS seat_count,
-            enrichment->'timeline'->>'contract_end' AS contract_end,
-            enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
-            relevance_score,
-            author_churn_score,
+        SELECT r.id AS review_id, r.source,
+            COALESCE(ar.resolved_company_name, r.reviewer_company) AS reviewer_company,
+            r.reviewer_company AS raw_reviewer_company,
+            ar.confidence_label AS resolution_confidence,
+            r.vendor_name, r.product_category,
+            r.reviewer_title,
+            r.company_size_raw,
+            COALESCE(poc.industry, r.reviewer_industry,
+                     r.enrichment->'reviewer_context'->>'industry') AS industry,
+            poc.employee_count AS verified_employee_count,
+            poc.country AS company_country,
+            poc.domain AS company_domain,
+            poc.annual_revenue_range AS revenue_range,
+            r.enrichment->'reviewer_context'->>'role_level' AS role_level,
+            (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
+            (r.enrichment->>'urgency_score')::numeric AS urgency,
+            r.enrichment->>'pain_category' AS pain,
+            r.enrichment->'competitors_mentioned' AS alternatives,
+            r.enrichment->'quotable_phrases' AS quotes,
+            r.enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
+            r.enrichment->'budget_signals'->>'seat_count' AS seat_count,
+            r.enrichment->'timeline'->>'contract_end' AS contract_end,
+            r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+            r.relevance_score,
+            r.author_churn_score,
             -- v2 urgency indicators for richer account intelligence
-            (enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
-            (enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
-            (enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
-            (enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
-        FROM b2b_reviews
+            (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
+            (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
+            (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
+            (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
+        FROM b2b_reviews r
+        LEFT JOIN b2b_account_resolution ar
+            ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+        LEFT JOIN prospect_org_cache poc
+            ON poc.company_name_norm = ar.normalized_company_name
         WHERE {filters}
-          AND (enrichment->>'urgency_score')::numeric >= $1
-          AND reviewer_company IS NOT NULL AND reviewer_company != ''
-          AND COALESCE(relevance_score, 0.5) >= 0.3
-        ORDER BY (enrichment->>'urgency_score')::numeric
-                 * (0.7 + 0.3 * COALESCE(relevance_score, 0.5)) DESC
+          AND (r.enrichment->>'urgency_score')::numeric >= $1
+          AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
+          AND COALESCE(r.relevance_score, 0.5) >= 0.3
+        ORDER BY (r.enrichment->>'urgency_score')::numeric
+                 * (0.7 + 0.3 * COALESCE(r.relevance_score, 0.5)) DESC
         """,
         urgency_threshold,
         window_days,
@@ -3178,11 +3191,17 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
                 pass
         results.append({
             "company": r["reviewer_company"],
+            "raw_company": r["raw_reviewer_company"],
+            "resolution_confidence": r["resolution_confidence"],
             "vendor": r["vendor_name"],
             "category": r["product_category"],
             "title": r["reviewer_title"],
             "company_size": r["company_size_raw"],
             "industry": r["industry"],
+            "verified_employee_count": r["verified_employee_count"],
+            "company_country": r["company_country"],
+            "company_domain": r["company_domain"],
+            "revenue_range": r["revenue_range"],
             "role_level": r["role_level"],
             "decision_maker": r["is_dm"],
             "urgency": urgency,
@@ -3223,13 +3242,21 @@ async def _fetch_existing_company_signals(
                r.reviewer_title,
                r.company_size_raw,
                COALESCE(
+                   poc.industry,
                    r.reviewer_industry,
                    r.enrichment->'reviewer_context'->>'industry'
                ) AS industry,
+               poc.employee_count AS verified_employee_count,
+               poc.country AS company_country,
+               poc.domain AS company_domain,
                r.enrichment->'competitors_mentioned' AS alternatives,
                r.enrichment->'quotable_phrases' AS quotes
         FROM b2b_company_signals cs
         LEFT JOIN b2b_reviews r ON r.id = cs.review_id
+        LEFT JOIN b2b_account_resolution ar
+            ON ar.review_id = cs.review_id AND ar.resolution_status = 'resolved'
+        LEFT JOIN prospect_org_cache poc
+            ON poc.company_name_norm = ar.normalized_company_name
         WHERE cs.last_seen_at >= NOW() - make_interval(days => $1)
         ORDER BY cs.vendor_name, cs.urgency_score DESC NULLS LAST, cs.last_seen_at DESC
         """,
@@ -3258,6 +3285,9 @@ async def _fetch_existing_company_signals(
             "title": row.get("reviewer_title"),
             "company_size": row.get("company_size_raw"),
             "industry": row.get("industry"),
+            "verified_employee_count": row.get("verified_employee_count"),
+            "company_country": row.get("company_country"),
+            "company_domain": row.get("company_domain"),
             "alternatives": _safe_json(row.get("alternatives"), default=[]),
             "quotes": _safe_json(row.get("quotes"), default=[]),
         })
@@ -3768,18 +3798,78 @@ async def _fetch_buyer_profile_provenance(
 
 
 async def _fetch_pain_distribution(pool, window_days: int) -> list[dict[str, Any]]:
-    """What's driving churn per vendor."""
+    """What's driving churn per vendor.
+
+    Uses the multi-label pain_categories array when present (primary=1.0,
+    secondary=0.4, minor=0.1 weights) so that secondary signals are counted
+    rather than dropped.  Falls back to the singular pain_category field for
+    reviews that pre-date the multi-label schema.
+    """
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=2)
     rows = await pool.fetch(
         f"""
+        WITH base AS (
+            SELECT vendor_name,
+                   (enrichment->>'urgency_score')::numeric AS urgency,
+                   enrichment->'pain_categories'           AS cats,
+                   enrichment->>'pain_category'            AS fallback_pain,
+                   enrichment->>'pain_cluster'             AS pain_cluster
+            FROM b2b_reviews
+            WHERE {filters}
+        ),
+        pain_labels AS (
+            -- Multi-label path: unnest pain_categories array with severity weights.
+            -- When a label is 'other' and pain_cluster is set, substitute the cluster
+            -- name so reports show e.g. 'product_stagnation' instead of 'other'.
+            SELECT b.vendor_name,
+                   b.urgency,
+                   CASE
+                       WHEN p.value->>'category' = 'other' AND b.pain_cluster IS NOT NULL
+                       THEN b.pain_cluster
+                       WHEN p.value->>'category' = 'other'
+                       THEN 'general_dissatisfaction'
+                       ELSE p.value->>'category'
+                   END AS pain,
+                   CASE p.value->>'severity'
+                       WHEN 'primary'   THEN 1.0
+                       WHEN 'secondary' THEN 0.4
+                       WHEN 'minor'     THEN 0.1
+                       ELSE 1.0
+                   END AS weight
+            FROM base b
+            CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(b.cats, '[]'::jsonb)
+            ) AS p(value)
+            WHERE jsonb_array_length(COALESCE(b.cats, '[]'::jsonb)) > 0
+              AND p.value->>'category' IS NOT NULL
+              AND p.value->>'category' != ''
+
+            UNION ALL
+
+            -- Fallback: reviews with no pain_categories array.
+            -- Same cluster substitution for 'other'.
+            SELECT b.vendor_name,
+                   b.urgency,
+                   CASE
+                       WHEN b.fallback_pain = 'other' AND b.pain_cluster IS NOT NULL
+                       THEN b.pain_cluster
+                       WHEN b.fallback_pain = 'other'
+                       THEN 'general_dissatisfaction'
+                       ELSE b.fallback_pain
+                   END AS pain,
+                   1.0 AS weight
+            FROM base b
+            WHERE jsonb_array_length(COALESCE(b.cats, '[]'::jsonb)) = 0
+              AND b.fallback_pain IS NOT NULL
+              AND b.fallback_pain != ''
+        )
         SELECT vendor_name,
-            enrichment->>'pain_category' AS pain,
-            count(*) AS complaint_count,
-            avg((enrichment->>'urgency_score')::numeric) AS avg_urgency
-        FROM b2b_reviews
-        WHERE {filters}
-        GROUP BY vendor_name, enrichment->>'pain_category'
+               pain,
+               round(sum(weight)::numeric, 1) AS complaint_count,
+               avg(urgency)                   AS avg_urgency
+        FROM pain_labels
+        GROUP BY vendor_name, pain
         ORDER BY complaint_count DESC
         """,
         window_days,
@@ -3789,7 +3879,7 @@ async def _fetch_pain_distribution(pool, window_days: int) -> list[dict[str, Any
         {
             "vendor": r["vendor_name"],
             "pain": r["pain"],
-            "complaint_count": r["complaint_count"],
+            "complaint_count": float(r["complaint_count"]),
             "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] else 0,
         }
         for r in rows
@@ -4390,7 +4480,7 @@ def _normalize_displacement_driver_label(value: Any) -> str:
         return "performance"
     if any(token in lower for token in ("migrat", "import", "export")):
         return "migration"
-    return text
+    return ""
 
 
 def _competitive_disp_from_dynamics(
@@ -4605,6 +4695,9 @@ def _merge_pain_lookup_with_evidence_vault(
             key = str(item.get("key") or "").strip().lower()
             if not key:
                 continue
+            # Map legacy 'other' vault entries to general_dissatisfaction
+            if key == "other":
+                key = "general_dissatisfaction"
             metrics = item.get("supporting_metrics") or {}
             vault_entries.append({
                 "category": key,
@@ -4846,6 +4939,7 @@ async def _fetch_sentiment_trajectory(pool, window_days: int) -> list[dict[str, 
         FROM b2b_reviews
         WHERE {filters}
           AND sentiment_direction IS NOT NULL
+          AND sentiment_direction != 'unknown'
         GROUP BY vendor_name, sentiment_direction
         ORDER BY cnt DESC
         """,
@@ -5040,22 +5134,55 @@ async def _fetch_department_distribution(pool, window_days: int) -> list[dict[st
 
 
 async def _fetch_company_size_distribution(pool, window_days: int) -> list[dict[str, Any]]:
-    """Count reviews per normalized company-size segment per vendor."""
+    """Count reviews per normalized company-size segment per vendor.
+
+    Segment source priority:
+      1. Enrichment LLM label (startup/smb/mid_market/enterprise) when not 'unknown'
+      2. Apollo-verified employee_count bucket via account resolution
+    """
     sources = _intelligence_source_allowlist()
-    filters = _eligible_review_filters(window_param=1, source_param=2)
+    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
     rows = await pool.fetch(
         f"""
-        SELECT vendor_name,
-            enrichment->'reviewer_context'->>'company_size_segment' AS segment,
+        SELECT r.vendor_name,
+            COALESCE(
+                NULLIF(NULLIF(r.enrichment->'reviewer_context'->>'company_size_segment', 'unknown'), ''),
+                CASE
+                    WHEN poc.employee_count >= 1001 THEN 'enterprise'
+                    WHEN poc.employee_count >= 201  THEN 'mid_market'
+                    WHEN poc.employee_count >= 11   THEN 'smb'
+                    WHEN poc.employee_count >= 1    THEN 'startup'
+                END
+            ) AS segment,
             count(*) AS review_count,
             count(*) FILTER (
-                WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                WHERE (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
             ) AS churning_count
-        FROM b2b_reviews
+        FROM b2b_reviews r
+        LEFT JOIN b2b_account_resolution ar
+            ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+        LEFT JOIN prospect_org_cache poc
+            ON poc.company_name_norm = ar.normalized_company_name
         WHERE {filters}
-          AND enrichment->'reviewer_context'->>'company_size_segment' IS NOT NULL
-          AND enrichment->'reviewer_context'->>'company_size_segment' NOT IN ('', 'unknown')
-        GROUP BY vendor_name, enrichment->'reviewer_context'->>'company_size_segment'
+        GROUP BY r.vendor_name,
+            COALESCE(
+                NULLIF(NULLIF(r.enrichment->'reviewer_context'->>'company_size_segment', 'unknown'), ''),
+                CASE
+                    WHEN poc.employee_count >= 1001 THEN 'enterprise'
+                    WHEN poc.employee_count >= 201  THEN 'mid_market'
+                    WHEN poc.employee_count >= 11   THEN 'smb'
+                    WHEN poc.employee_count >= 1    THEN 'startup'
+                END
+            )
+        HAVING COALESCE(
+                NULLIF(NULLIF(r.enrichment->'reviewer_context'->>'company_size_segment', 'unknown'), ''),
+                CASE
+                    WHEN poc.employee_count >= 1001 THEN 'enterprise'
+                    WHEN poc.employee_count >= 201  THEN 'mid_market'
+                    WHEN poc.employee_count >= 11   THEN 'smb'
+                    WHEN poc.employee_count >= 1    THEN 'startup'
+                END
+            ) IS NOT NULL
         ORDER BY review_count DESC
         """,
         window_days,
@@ -7430,7 +7557,7 @@ def build_displacement_dynamics(
     # --- Edge metrics (from persisted displacement edges) ---
     edge_metrics = {
         "mention_count": eg.get("mention_count") or 0,
-        "primary_driver": eg.get("primary_driver"),
+        "primary_driver": eg.get("primary_driver") if eg.get("primary_driver") != "other" else None,
         "signal_strength": eg.get("signal_strength"),
         "key_quote": eg.get("key_quote"),
         "confidence_score": _sf(eg.get("confidence_score")),
@@ -8813,7 +8940,8 @@ def _build_deterministic_displacement_map(
                     key=lambda x: (x[1], canonical_priority.get(x[0], 0)),
                 )[0]
             else:
-                driver = max(reason_cats.items(), key=lambda x: x[1])[0]
+                # All keys failed normalization — try keyword inference on raw keys
+                driver = _infer_driver_from_reasons(list(reason_cats.keys()))
         else:
             reasons = reason_lookup.get((vendor, competitor), [])
             driver = _infer_driver_from_reasons(reasons)
@@ -8863,6 +8991,157 @@ def _build_deterministic_displacement_map(
         results.append(edge_entry)
     results.sort(key=lambda x: x["mention_count"], reverse=True)
     return results[:limit]
+
+
+def _structure_displacement_report(flows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Wrap the flat flow list into a narrative-first report structure.
+
+    Sections:
+      market_losers   -- vendors bleeding the most customers (net outbound)
+      market_winners  -- vendors gaining the most customers (net inbound)
+      top_battles     -- highest-signal flows, with battle_conclusion when available
+      driver_summary  -- what's driving displacement across all flows
+      meta            -- headline numbers
+      flows           -- full sorted list preserved for backward compat
+    """
+    if not flows:
+        return {
+            "market_losers": [],
+            "market_winners": [],
+            "top_battles": [],
+            "driver_summary": [],
+            "meta": {
+                "total_flows": 0,
+                "total_mentions": 0,
+                "dominant_driver": None,
+                "most_displaced_vendor": None,
+                "biggest_winner": None,
+            },
+            "flows": [],
+        }
+
+    # --- Compute per-vendor net flow ---
+    inbound: dict[str, int] = {}
+    outbound: dict[str, int] = {}
+    # top destination/source and driver per vendor
+    out_flows: dict[str, list[dict]] = {}
+    in_flows: dict[str, list[dict]] = {}
+    driver_mentions: dict[str, int] = {}
+    driver_flow_count: dict[str, int] = {}
+
+    for f in flows:
+        fv = f.get("from_vendor", "")
+        tv = f.get("to_vendor", "")
+        mc = int(f.get("mention_count") or 0)
+        drv = f.get("primary_driver") or "unspecified"
+
+        outbound[fv] = outbound.get(fv, 0) + mc
+        inbound[tv] = inbound.get(tv, 0) + mc
+        out_flows.setdefault(fv, []).append(f)
+        in_flows.setdefault(tv, []).append(f)
+        driver_mentions[drv] = driver_mentions.get(drv, 0) + mc
+        driver_flow_count[drv] = driver_flow_count.get(drv, 0) + 1
+
+    all_vendors = set(inbound) | set(outbound)
+    net = {v: inbound.get(v, 0) - outbound.get(v, 0) for v in all_vendors}
+    total_mentions = sum(f.get("mention_count", 0) for f in flows)
+
+    def _top_driver_for(flow_list: list[dict]) -> str | None:
+        counts: dict[str, int] = {}
+        for f in flow_list:
+            d = f.get("primary_driver") or "unspecified"
+            counts[d] = counts.get(d, 0) + int(f.get("mention_count") or 0)
+        return max(counts, key=lambda x: counts[x]) if counts else None
+
+    # --- Market losers (most net-negative vendors) ---
+    losers = sorted(
+        [(v, n) for v, n in net.items() if n < 0],
+        key=lambda x: x[1],
+    )[:10]
+    market_losers = []
+    for vendor, net_flow in losers:
+        vout = sorted(out_flows.get(vendor, []), key=lambda x: x.get("mention_count", 0), reverse=True)
+        market_losers.append({
+            "vendor": vendor,
+            "net_flow": net_flow,
+            "outbound_mentions": outbound.get(vendor, 0),
+            "inbound_mentions": inbound.get(vendor, 0),
+            "top_destination": vout[0]["to_vendor"] if vout else None,
+            "top_driver": _top_driver_for(out_flows.get(vendor, [])),
+        })
+
+    # --- Market winners (most net-positive vendors) ---
+    winners = sorted(
+        [(v, n) for v, n in net.items() if n > 0],
+        key=lambda x: -x[1],
+    )[:10]
+    market_winners = []
+    for vendor, net_flow in winners:
+        vin = sorted(in_flows.get(vendor, []), key=lambda x: x.get("mention_count", 0), reverse=True)
+        market_winners.append({
+            "vendor": vendor,
+            "net_flow": net_flow,
+            "outbound_mentions": outbound.get(vendor, 0),
+            "inbound_mentions": inbound.get(vendor, 0),
+            "top_source": vin[0]["from_vendor"] if vin else None,
+            "top_driver": _top_driver_for(in_flows.get(vendor, [])),
+        })
+
+    # --- Top battles: flows with battle_conclusion first, then high-signal remainder ---
+    with_battle = [f for f in flows if f.get("battle_conclusion")]
+    without_battle = [f for f in flows if not f.get("battle_conclusion")]
+    # Sort each group by signal quality: strong > moderate > emerging, then mention_count
+    _strength_rank = {"strong": 3, "moderate": 2, "emerging": 1}
+    def _battle_sort(f: dict) -> tuple:
+        return (
+            -_strength_rank.get(f.get("signal_strength", ""), 0),
+            -int(f.get("mention_count") or 0),
+        )
+    top_battles = sorted(with_battle, key=_battle_sort)[:8]
+    if len(top_battles) < 8:
+        needed = 8 - len(top_battles)
+        top_battles += sorted(without_battle, key=_battle_sort)[:needed]
+
+    # Keep only the fields useful for narrative display; drop raw ids
+    _battle_keep = {
+        "from_vendor", "to_vendor", "mention_count", "primary_driver",
+        "signal_strength", "confidence_score", "key_quote",
+        "battle_conclusion", "durability", "source_archetype", "target_archetype",
+    }
+    top_battles = [{k: v for k, v in f.items() if k in _battle_keep} for f in top_battles]
+
+    # --- Driver summary ---
+    driver_summary = []
+    for drv, mentions in sorted(driver_mentions.items(), key=lambda x: -x[1]):
+        pct = round(mentions * 100 / total_mentions) if total_mentions else 0
+        driver_summary.append({
+            "driver": drv,
+            "mentions": mentions,
+            "pct": pct,
+            "flow_count": driver_flow_count.get(drv, 0),
+        })
+
+    dominant_driver = driver_summary[0]["driver"] if driver_summary else None
+    most_displaced = market_losers[0]["vendor"] if market_losers else None
+    biggest_winner = market_winners[0]["vendor"] if market_winners else None
+
+    return {
+        "market_losers": market_losers,
+        "market_winners": market_winners,
+        "top_battles": top_battles,
+        "driver_summary": driver_summary,
+        "meta": {
+            "total_flows": len(flows),
+            "total_mentions": total_mentions,
+            "dominant_driver": dominant_driver,
+            "pricing_pct": next(
+                (d["pct"] for d in driver_summary if d["driver"] == "pricing"), 0
+            ),
+            "most_displaced_vendor": most_displaced,
+            "biggest_winner": biggest_winner,
+        },
+        "flows": flows,
+    }
 
 
 def _build_deterministic_vendor_scorecards(
