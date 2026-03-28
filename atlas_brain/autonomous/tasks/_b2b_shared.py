@@ -9498,6 +9498,178 @@ def _build_deterministic_vendor_scorecards(
     return results[:limit]
 
 
+def _build_vendor_deep_dives(
+    vendor_scores: list[dict[str, Any]],
+    *,
+    pain_lookup: dict[str, list[dict]],
+    competitor_lookup: dict[str, list[dict]],
+    feature_gap_lookup: dict[str, list[dict]],
+    quote_lookup: dict[str, list],
+    company_lookup: dict[str, list[dict]],
+    dm_lookup: dict[str, float],
+    price_lookup: dict[str, float],
+    sentiment_lookup: dict[str, dict[str, int]],
+    buyer_auth_lookup: dict[str, dict] | None = None,
+    reasoning_lookup: dict[str, dict] | None = None,
+    limit: int = 60,
+) -> list[dict[str, Any]]:
+    """Build comprehensive per-vendor deep dive reports, sorted by churn pressure."""
+    _rl = reasoning_lookup or {}
+    _ba = buyer_auth_lookup or {}
+    results: list[dict[str, Any]] = []
+
+    for row in vendor_scores:
+        v = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not v:
+            continue
+
+        total_reviews = int(row.get("total_reviews") or 0)
+        churn_intent = int(row.get("churn_intent") or 0)
+        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
+        dm_rate = float(dm_lookup.get(v, 0))
+        pr_rate = float(price_lookup.get(v, 0))
+        comp_entries = competitor_lookup.get(v, [])
+        disp_mentions = sum(int(c.get("mentions") or 0) for c in comp_entries)
+        _rc = _rl.get(v, {})
+
+        pressure = _compute_churn_pressure_score(
+            churn_density=churn_density,
+            avg_urgency=avg_urgency,
+            dm_churn_rate=dm_rate,
+            displacement_mention_count=disp_mentions,
+            price_complaint_rate=pr_rate,
+            total_reviews=total_reviews,
+            archetype=_rc.get("archetype"),
+        )
+        risk_level = _rc.get("risk_level") or (
+            "high" if pressure >= 70 else ("medium" if pressure >= 40 else "low")
+        )
+
+        # Pain breakdown
+        pains = pain_lookup.get(v, [])
+        total_pain = sum(int(p.get("count") or 0) for p in pains)
+        pain_breakdown = sorted(
+            [
+                {
+                    "category": p.get("category") or p.get("key") or "unknown",
+                    "count": int(p.get("count") or 0),
+                    "pct": round(int(p.get("count") or 0) / max(total_pain, 1), 3),
+                }
+                for p in pains
+                if p.get("category") or p.get("key")
+            ],
+            key=lambda x: -x["count"],
+        )[:10]
+
+        # Displacement targets
+        displacement_targets = sorted(
+            [
+                {
+                    "vendor": c.get("competitor", ""),
+                    "mention_count": int(c.get("mentions") or c.get("mention_count") or 0),
+                    "primary_driver": c.get("primary_driver"),
+                }
+                for c in comp_entries
+                if c.get("competitor")
+            ],
+            key=lambda x: -x["mention_count"],
+        )[:12]
+
+        # Feature gaps
+        feature_gaps = sorted(
+            [
+                {
+                    "feature": g.get("feature") or g.get("gap") or "",
+                    "mentions": int(g.get("count") or g.get("mentions") or 0),
+                }
+                for g in feature_gap_lookup.get(v, [])
+                if g.get("feature") or g.get("gap")
+            ],
+            key=lambda x: -x["mentions"],
+        )[:10]
+
+        # Customer profile
+        companies = company_lookup.get(v, [])
+        ind_counts: dict[str, int] = {}
+        size_counts: dict[str, int] = {}
+        for c in companies:
+            if not isinstance(c, dict):
+                continue
+            ind = c.get("industry")
+            if ind and ind != "unknown":
+                ind_counts[ind] = ind_counts.get(ind, 0) + 1
+            sz = c.get("company_size")
+            if sz:
+                size_counts[sz] = size_counts.get(sz, 0) + 1
+        industry_distribution = sorted(
+            [{"industry": k, "count": n} for k, n in ind_counts.items()],
+            key=lambda x: -x["count"],
+        )[:8]
+        size_distribution = sorted(
+            [{"size": k, "count": n} for k, n in size_counts.items()],
+            key=lambda x: -x["count"],
+        )[:6]
+
+        # Case studies
+        raw_quotes = quote_lookup.get(v, [])
+        case_studies: list[dict[str, Any]] = []
+        for q in raw_quotes:
+            if isinstance(q, dict):
+                case_studies.append({
+                    "quote": str(q.get("quote") or q.get("text") or "")[:300],
+                    "company": q.get("company", "Anonymous"),
+                    "urgency": float(q.get("urgency") or 0),
+                    "title": q.get("title"),
+                })
+            elif isinstance(q, str):
+                case_studies.append({
+                    "quote": q[:300],
+                    "company": "Anonymous",
+                    "urgency": 0.0,
+                    "title": None,
+                })
+        case_studies.sort(key=lambda x: -x["urgency"])
+
+        # Sentiment breakdown
+        sent = sentiment_lookup.get(v, {})
+
+        # Buyer role
+        ba = _ba.get(v, {})
+        dominant_buyer_role = ba.get("dominant_role") if isinstance(ba, dict) else None
+
+        results.append({
+            "vendor": v,
+            "category": row.get("product_category") or "Unknown",
+            "total_reviews": total_reviews,
+            "churn_signal_density": churn_density,
+            "churn_pressure_score": round(pressure, 1),
+            "avg_urgency": avg_urgency,
+            "risk_level": risk_level,
+            "sentiment_direction": _rc.get("sentiment_direction") or "",
+            "trend": _rc.get("trend") or "",
+            "archetype": _rc.get("archetype"),
+            "archetype_confidence": _rc.get("confidence"),
+            "dm_churn_rate": round(dm_rate, 3),
+            "price_complaint_rate": round(pr_rate, 3),
+            "dominant_buyer_role": dominant_buyer_role,
+            "pain_breakdown": pain_breakdown,
+            "displacement_targets": displacement_targets,
+            "feature_gaps": feature_gaps,
+            "industry_distribution": industry_distribution,
+            "company_size_distribution": size_distribution,
+            "case_studies": case_studies[:5],
+            "sentiment_breakdown": {
+                "positive": int(sent.get("positive") or 0),
+                "negative": int(sent.get("negative") or 0),
+                "neutral": int(sent.get("neutral") or 0),
+            },
+        })
+
+    results.sort(key=lambda x: -x["churn_pressure_score"])
+    return results[:limit]
+
+
 def _build_deterministic_category_overview(
     vendor_scores: list[dict[str, Any]],
     *,
