@@ -234,7 +234,7 @@ def _blog_category_reasoning_stats(category_reasoning: dict[str, Any] | None) ->
 
 _CTA_CONFIG: dict[str, dict[str, str]] = {
     "vendor_showdown":       {"report_type": "vendor_comparison", "button_text": "Download the full benchmark report"},
-    "vendor_deep_dive":      {"report_type": "vendor_scorecard",  "button_text": "Get the exclusive deep dive report"},
+    "vendor_deep_dive":      {"report_type": "vendor_deep_dive",  "button_text": "Get the exclusive deep dive report"},
     "churn_report":          {"report_type": "weekly_churn_feed", "button_text": "See which vendors are most at risk"},
     "vendor_alternative":    {"report_type": "battle_card",       "button_text": "Compare alternatives side by side"},
     "market_landscape":      {"report_type": "category_overview", "button_text": "Get the full industry report"},
@@ -3014,34 +3014,44 @@ async def _fetch_negative_quotes(
     sources: list[str], limit: int = 9,
 ) -> list[dict[str, Any]]:
     """High-urgency enriched reviews (negative signal)."""
+    _quote_cols = """
+        r.review_text, r.vendor_name, r.reviewer_title, r.rating,
+        r.enrichment->>'urgency_score' AS urgency,
+        r.source,
+        COALESCE(ar.resolved_company_name, r.reviewer_company) AS company,
+        r.company_size_raw,
+        COALESCE(poc.industry, r.reviewer_industry) AS industry,
+        poc.employee_count AS verified_employee_count,
+        poc.country AS company_country
+    """
+    _quote_joins = """
+        LEFT JOIN b2b_account_resolution ar
+            ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+        LEFT JOIN prospect_org_cache poc
+            ON poc.company_name_norm = ar.normalized_company_name
+    """
     if vendor_name:
         rows = await pool.fetch(
-            """
-            SELECT review_text, vendor_name, reviewer_title, rating,
-                   enrichment->>'urgency_score' AS urgency,
-                   source, reviewer_company, company_size_raw,
-                   reviewer_industry
-            FROM b2b_reviews
-            WHERE vendor_name = $1
-              AND enrichment_status = 'enriched'
-              AND source = ANY($2)
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            f"""
+            SELECT {_quote_cols}
+            FROM b2b_reviews r {_quote_joins}
+            WHERE r.vendor_name = $1
+              AND r.enrichment_status = 'enriched'
+              AND r.source = ANY($2)
+            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT $3
             """,
             vendor_name, sources, limit,
         )
     elif category:
         rows = await pool.fetch(
-            """
-            SELECT review_text, vendor_name, reviewer_title, rating,
-                   enrichment->>'urgency_score' AS urgency,
-                   source, reviewer_company, company_size_raw,
-                   reviewer_industry
-            FROM b2b_reviews
-            WHERE product_category = $1
-              AND enrichment_status = 'enriched'
-              AND source = ANY($2)
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
+            f"""
+            SELECT {_quote_cols}
+            FROM b2b_reviews r {_quote_joins}
+            WHERE r.product_category = $1
+              AND r.enrichment_status = 'enriched'
+              AND r.source = ANY($2)
+            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT $3
             """,
             category, sources, limit,
@@ -3061,9 +3071,11 @@ async def _fetch_negative_quotes(
             "vendor": r["vendor_name"],
             "urgency": urg,
             "role": r["reviewer_title"],
-            "company": r["reviewer_company"],
+            "company": r["company"],
             "company_size": r["company_size_raw"],
-            "industry": r["reviewer_industry"],
+            "industry": r["industry"],
+            "verified_employee_count": r["verified_employee_count"],
+            "company_country": r["company_country"],
             "source_name": r["source"],
             "sentiment": "negative",
         })
@@ -3075,36 +3087,47 @@ async def _fetch_positive_quotes(
     sources: list[str], limit: int = 6,
 ) -> list[dict[str, Any]]:
     """High-rated reviews from raw columns (no enrichment required)."""
+    _pos_cols = """
+        COALESCE(r.pros, r.review_text) AS text, r.vendor_name,
+        r.reviewer_title, r.rating, r.source,
+        COALESCE(ar.resolved_company_name, r.reviewer_company) AS company,
+        r.company_size_raw,
+        COALESCE(poc.industry, r.reviewer_industry) AS industry,
+        poc.employee_count AS verified_employee_count,
+        poc.country AS company_country
+    """
+    _pos_joins = """
+        LEFT JOIN b2b_account_resolution ar
+            ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+        LEFT JOIN prospect_org_cache poc
+            ON poc.company_name_norm = ar.normalized_company_name
+    """
     if vendor_name:
         rows = await pool.fetch(
-            """
-            SELECT COALESCE(pros, review_text) AS text, vendor_name,
-                   reviewer_title, rating, source, reviewer_company,
-                   company_size_raw, reviewer_industry
-            FROM b2b_reviews
-            WHERE vendor_name = $1
-              AND rating >= 4
-              AND source = ANY($2)
-              AND COALESCE(pros, review_text) IS NOT NULL
-              AND LENGTH(COALESCE(pros, review_text)) > 20
-            ORDER BY rating DESC, imported_at DESC
+            f"""
+            SELECT {_pos_cols}
+            FROM b2b_reviews r {_pos_joins}
+            WHERE r.vendor_name = $1
+              AND r.rating >= 4
+              AND r.source = ANY($2)
+              AND COALESCE(r.pros, r.review_text) IS NOT NULL
+              AND LENGTH(COALESCE(r.pros, r.review_text)) > 20
+            ORDER BY r.rating DESC, r.imported_at DESC
             LIMIT $3
             """,
             vendor_name, sources, limit,
         )
     elif category:
         rows = await pool.fetch(
-            """
-            SELECT COALESCE(pros, review_text) AS text, vendor_name,
-                   reviewer_title, rating, source, reviewer_company,
-                   company_size_raw, reviewer_industry
-            FROM b2b_reviews
-            WHERE product_category = $1
-              AND rating >= 4
-              AND source = ANY($2)
-              AND COALESCE(pros, review_text) IS NOT NULL
-              AND LENGTH(COALESCE(pros, review_text)) > 20
-            ORDER BY rating DESC, imported_at DESC
+            f"""
+            SELECT {_pos_cols}
+            FROM b2b_reviews r {_pos_joins}
+            WHERE r.product_category = $1
+              AND r.rating >= 4
+              AND r.source = ANY($2)
+              AND COALESCE(r.pros, r.review_text) IS NOT NULL
+              AND LENGTH(COALESCE(r.pros, r.review_text)) > 20
+            ORDER BY r.rating DESC, r.imported_at DESC
             LIMIT $3
             """,
             category, sources, limit,
@@ -3119,9 +3142,11 @@ async def _fetch_positive_quotes(
             "vendor": r["vendor_name"],
             "urgency": 0.0,
             "role": r["reviewer_title"],
-            "company": r["reviewer_company"],
+            "company": r["company"],
             "company_size": r["company_size_raw"],
-            "industry": r["reviewer_industry"],
+            "industry": r["industry"],
+            "verified_employee_count": r["verified_employee_count"],
+            "company_country": r["company_country"],
             "source_name": r["source"],
             "sentiment": "positive",
         })
