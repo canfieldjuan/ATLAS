@@ -16,18 +16,23 @@ enrichment:
     description: "Compute urgency_score (0-10) from boolean indicator flags"
     weights:
       # Tier A: Hard churn signals
+      intent_to_leave_signal: 2.0
+      migration_in_progress_signal: 2.5
       explicit_cancel_language: 3.0
       active_migration_language: 2.5
-      active_evaluation_language: 2.5
       completed_switch_language: 3.0
       # Tier B: Moderate signals
+      actively_evaluating_signal: 1.5
+      active_evaluation_language: 2.0
       comparison_shopping_language: 2.0
       named_alternative_with_reason: 2.0
+      price_pressure_language: 1.5
+      reconsideration_language: 1.5
       # Tier C: Supporting signals
-      frustration_without_alternative: 1.0
-      dollar_amount_mentioned: 1.0
+      frustration_without_alternative: 1.5
+      dollar_amount_mentioned: 0.5
       timeline_mentioned: 1.5
-      decision_maker_language: 1.0
+      decision_maker_language: 1.5
     rating_floors:
       - max_normalized_rating: 0.2
         min_score: 3.0
@@ -45,7 +50,7 @@ enrichment:
     description: "Override 'other' pain_category using keyword scan"
     trigger: {field: pain_category, eq: other}
     keyword_map:
-      pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, subscription]
+      pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, fees, subscription, invoice, invoiced, billing, billed, charged, charge, refund, cost increase, price increase]
       support: [support, response time, ticket, customer service, helpdesk, wait time, unresponsive]
       reliability: [downtime, outage, crash, bug, unstable, unreliable, broken, error]
       ux: [clunky, unintuitive, confusing, ui, ux, user interface, learning curve, ugly, dated, clumsy]
@@ -55,10 +60,10 @@ enrichment:
       onboarding: [onboarding, setup, implementation, getting started, documentation, tutorial]
       features: [feature, missing, roadmap, functionality, capability, wishlist, lacking]
       technical_debt: [technical debt, legacy, outdated codebase, deprecated, spaghetti, refactor, tech debt]
-      contract_lock_in: [lock-in, locked in, exit cost, switching cost, vendor lock, contract trap, penalty]
+      contract_lock_in: [lock-in, locked in, exit cost, switching cost, vendor lock, contract trap, penalty, cancel, cancellation, terminate, termination, auto renew, automatic renewal, renewed without notice, notice period, contract term, billing dispute, runaround]
       data_migration: [data migration, export, portability, data export, migrate data, data transfer, import]
       api_limitations: [api limit, rate limit, api limitation, missing endpoint, api documentation, throttle, api quota]
-    scan_fields: [specific_complaints, quotable_phrases]
+    scan_fields: [specific_complaints, quotable_phrases, pricing_phrases, feature_gaps, recommendation_language]
     fallback: other
 
   recommend_derivation:

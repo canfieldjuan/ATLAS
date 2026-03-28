@@ -2305,6 +2305,12 @@ class B2BChurnConfig(BaseSettings):
         default="",
         description="Local vLLM model for structural repair pass",
     )
+    enrichment_repair_max_tokens: int = Field(
+        default=512,
+        ge=64,
+        le=4096,
+        description="Max completion tokens for the narrow field-repair extraction pass",
+    )
     enrichment_repair_min_urgency: int = Field(
         default=3,
         ge=0,

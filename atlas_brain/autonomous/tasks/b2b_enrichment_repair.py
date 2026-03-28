@@ -7,11 +7,26 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...pipelines.llm import call_llm_with_skill, parse_json_response
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from . import b2b_enrichment as base_enrichment
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment_repair")
+
+_REPAIR_JSON_SCHEMA: dict[str, Any] = {
+    "title": "b2b_churn_repair_extraction",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "competitors_mentioned": {"type": "array"},
+        "specific_complaints": {"type": "array"},
+        "pricing_phrases": {"type": "array"},
+        "recommendation_language": {"type": "array"},
+        "feature_gaps": {"type": "array"},
+        "event_mentions": {"type": "array"},
+    },
+}
 
 
 def _shadow_quarantine_reasons(row: dict[str, Any]) -> list[str]:
@@ -24,7 +39,7 @@ def _shadow_quarantine_reasons(row: dict[str, Any]) -> list[str]:
 async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> str:
     review_id = row["id"]
     baseline = base_enrichment._coerce_json_dict(row.get("enrichment"))
-    if not baseline or not base_enrichment._has_structural_gap(baseline):
+    if not baseline or not base_enrichment._needs_field_repair(baseline, row):
         await pool.execute(
             """
             UPDATE b2b_reviews
@@ -39,33 +54,13 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
         )
         return "shadowed"
 
-    repair_model = str(cfg.enrichment_repair_model or cfg.enrichment_tier1_model or "").strip()
-    repair_cfg = type(
-        "RepairCfg",
-        (),
-        {
-            "enrichment_tier1_model": repair_model,
-            "enrichment_tier1_vllm_url": cfg.enrichment_tier1_vllm_url,
-            "enrichment_tier1_timeout_seconds": cfg.enrichment_tier1_timeout_seconds,
-            "enrichment_tier1_connect_timeout_seconds": cfg.enrichment_tier1_connect_timeout_seconds,
-            "enrichment_tier1_max_tokens": cfg.enrichment_tier1_max_tokens,
-        },
-    )()
+    repair_model = str(cfg.enrichment_repair_model or "").strip()
     try:
-        payload = base_enrichment._build_classify_payload(row, cfg.review_truncate_length)
-        payload_json = json.dumps(payload)
-        client = base_enrichment._get_tier1_client(repair_cfg)
-        tier1_result, model_id = await asyncio.wait_for(
-            base_enrichment._call_vllm_tier1(payload_json, repair_cfg, client),
+        payload = _build_repair_payload(row, baseline, cfg.review_truncate_length)
+        repair_result, model_id = await asyncio.wait_for(
+            _call_repair_extractor(payload, repair_model, cfg),
             timeout=cfg.enrichment_full_extraction_timeout_seconds,
         )
-        if tier1_result is None:
-            repair_result = None
-        else:
-            repair_result = base_enrichment._compute_derived_fields(
-                base_enrichment._merge_tier1_tier2(tier1_result, None),
-                row,
-            )
     except Exception:
         logger.exception("Repair call failed for review %s", review_id)
         repair_result, model_id = None, None
@@ -86,12 +81,23 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
         )
         return "failed"
 
-    promoted, applied_fields = base_enrichment._apply_structural_repair(
+    promoted, applied_fields = base_enrichment._apply_field_repair(
         baseline,
         repair_result,
     )
     repaired_at = datetime.now(timezone.utc)
+    if applied_fields:
+        promoted = base_enrichment._compute_derived_fields(promoted, row)
     if applied_fields and base_enrichment._validate_enrichment(promoted, row):
+        low_fidelity_reasons = (
+            base_enrichment._detect_low_fidelity_reasons(row, promoted)
+            if cfg.enrichment_low_fidelity_enabled
+            else []
+        )
+        if not low_fidelity_reasons and base_enrichment._is_no_signal_result(promoted, row):
+            target_status = "no_signal"
+        else:
+            target_status = "quarantined" if low_fidelity_reasons else "enriched"
         await pool.execute(
             """
             UPDATE b2b_reviews
@@ -102,7 +108,11 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
                 enrichment_repair_attempts = enrichment_repair_attempts + 1,
                 enrichment_repair_model = $4,
                 enrichment_repaired_at = $5,
-                enrichment_repair_applied_fields = $6::jsonb
+                enrichment_repair_applied_fields = $6::jsonb,
+                enrichment_status = $7,
+                low_fidelity = $8,
+                low_fidelity_reasons = $9::jsonb,
+                low_fidelity_detected_at = $10
             WHERE id = $1
             """,
             review_id,
@@ -111,6 +121,10 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
             model_id,
             repaired_at,
             json.dumps(applied_fields),
+            target_status,
+            bool(low_fidelity_reasons),
+            json.dumps(low_fidelity_reasons),
+            repaired_at if low_fidelity_reasons else None,
         )
         return "promoted"
 
@@ -183,6 +197,52 @@ async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
         return 0
 
 
+def _build_repair_payload(row: dict[str, Any], baseline: dict[str, Any], review_truncate_length: int) -> dict[str, Any]:
+    def _truncate(value: Any) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        return text[: int(review_truncate_length)] if review_truncate_length > 0 else text
+
+    target_fields = base_enrichment._repair_target_fields(baseline, row)
+    current_extraction = {
+        field: baseline.get(field) or []
+        for field in target_fields
+    }
+    return {
+        "vendor_name": row.get("vendor_name"),
+        "summary": _truncate(row.get("summary")),
+        "review_text": _truncate(row.get("review_text")),
+        "target_fields": target_fields,
+        "current_extraction": current_extraction,
+    }
+
+
+async def _call_repair_extractor(payload: dict[str, Any], model_id: str, cfg) -> tuple[dict | None, str | None]:
+    try:
+        response = await asyncio.to_thread(
+            call_llm_with_skill,
+            "digest/b2b_churn_repair_extraction",
+            json.dumps(payload, ensure_ascii=True),
+            max_tokens=cfg.enrichment_repair_max_tokens,
+            temperature=0.0,
+            guided_json=_REPAIR_JSON_SCHEMA,
+            response_format={"type": "json_object"},
+            workload="openrouter",
+            try_openrouter=True,
+            openrouter_model=model_id,
+        )
+        if not response:
+            return None, model_id
+        parsed = parse_json_response(response, recover_truncated=True)
+        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+            return parsed, model_id
+        return None, model_id
+    except Exception:
+        logger.exception("Repair extractor call failed")
+        return None, None
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     cfg = settings.b2b_churn
     if not cfg.enabled:
@@ -222,25 +282,42 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     failed = 0
     rounds = 0
     while rounds < max_rounds:
+        trusted_sources = list(base_enrichment._trusted_repair_sources())
         rows = await pool.fetch(
             """
             WITH batch AS (
                 SELECT id
                 FROM b2b_reviews
-                WHERE enrichment_status = 'enriched'
+                WHERE enrichment_status IN ('enriched', 'no_signal')
                   AND COALESCE(low_fidelity, false) = false
                   AND enrichment IS NOT NULL
                   AND enrichment_repair_attempts < $1
                   AND (enrichment_repair_status IS NULL OR enrichment_repair_status = 'failed')
                   AND (
-                    COALESCE((enrichment->>'urgency_score')::numeric, 0) >= $3
-                    OR COALESCE(enrichment->'churn_signals'->>'intent_to_leave', 'false') = 'true'
-                    OR COALESCE(enrichment->'churn_signals'->>'actively_evaluating', 'false') = 'true'
-                  )
-                  AND (
-                    COALESCE(enrichment->'buyer_authority'->>'role_type', 'unknown') = 'unknown'
-                    OR COALESCE(enrichment->'timeline'->>'decision_timeline', 'unknown') = 'unknown'
-                    OR COALESCE(enrichment->'contract_context'->>'contract_value_signal', 'unknown') = 'unknown'
+                    (
+                      COALESCE(enrichment->>'pain_category', 'other') = 'other'
+                      AND review_text ~* '(cancel|cancellation|billing dispute|refund denied|runaround|automatic renewal|auto renew|renewed without notice|charged|invoiced|price increase|overcharg)'
+                    )
+                    OR (
+                      COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) = 0
+                      AND review_text ~* '(switched to|moved to|replaced with|evaluating|looking at|considering|alternative to|[[:<:]]vs[[:>:]])'
+                    )
+                    OR (
+                      COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) = 0
+                      AND review_text ~* '(billing|invoice|invoiced|charged|refund|renewal|price increase|cost increase|automatic renewal|auto renew|overcharg)'
+                    )
+                    OR (
+                      COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) = 0
+                      AND review_text ~* '(cancel|cancellation|billing dispute|charged after cancellation|refund denied|runaround|automatic renewal|auto renew|renewed without notice)'
+                    )
+                    OR (
+                      enrichment_status = 'no_signal'
+                      AND (
+                        cardinality($3::text[]) = 0
+                        OR lower(source) = ANY($3::text[])
+                      )
+                      AND review_text ~* '(cancel|cancellation|billing|invoice|charged|refund|automatic renewal|auto renew|switched to|moved to|considering|evaluating|replaced with)'
+                    )
                   )
                 ORDER BY enriched_at DESC NULLS LAST, id
                 LIMIT $2
@@ -259,7 +336,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             """,
             cfg.enrichment_repair_max_attempts,
             max_batch,
-            cfg.enrichment_repair_min_urgency,
+            trusted_sources,
         )
         if not rows:
             break

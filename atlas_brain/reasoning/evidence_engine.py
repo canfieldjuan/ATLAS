@@ -113,6 +113,9 @@ class EvidenceEngine:
         pain_category: str,
         specific_complaints: list[str],
         quotable_phrases: list[str] | None = None,
+        pricing_phrases: list[str] | None = None,
+        feature_gaps: list[str] | None = None,
+        recommendation_language: list[str] | None = None,
     ) -> str:
         """Override 'other' pain_category using keyword scan."""
         cfg = self._enrichment.get("pain_override", {})
@@ -128,6 +131,12 @@ class EvidenceEngine:
             texts.extend(specific_complaints or [])
         if "quotable_phrases" in scan_fields:
             texts.extend(quotable_phrases or [])
+        if "pricing_phrases" in scan_fields:
+            texts.extend(pricing_phrases or [])
+        if "feature_gaps" in scan_fields:
+            texts.extend(feature_gaps or [])
+        if "recommendation_language" in scan_fields:
+            texts.extend(recommendation_language or [])
 
         if not texts:
             return cfg.get("fallback", "other")

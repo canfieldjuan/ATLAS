@@ -211,7 +211,11 @@ def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
 
 
 _PAIN_KEYWORDS = {
-    "pricing": ("price", "pricing", "cost", "expensive", "overpriced", "value", "renewal"),
+    "pricing": (
+        "price", "pricing", "cost", "expensive", "overpriced", "value", "renewal",
+        "invoice", "invoiced", "billing", "billed", "charged", "charge", "overcharge",
+        "fee", "fees", "refund", "cost increase", "price increase",
+    ),
     "support": ("support", "ticket", "response", "customer service", "escalat"),
     "features": ("feature", "functionality", "capability", "missing"),
     "ux": ("ui", "ux", "interface", "clunky", "usability", "navigation"),
@@ -221,7 +225,12 @@ _PAIN_KEYWORDS = {
     "security": ("security", "permission", "access control", "compliance", "sso", "mfa"),
     "onboarding": ("onboarding", "setup", "implementation", "training", "adoption"),
     "technical_debt": ("technical debt", "legacy", "outdated", "deprecated", "workaround"),
-    "contract_lock_in": ("lock-in", "locked in", "vendor lock", "multi-year", "exit fee"),
+    "contract_lock_in": (
+        "lock-in", "locked in", "vendor lock", "multi-year", "exit fee", "cancel",
+        "cancellation", "terminate", "termination", "auto renew", "automatic renewal",
+        "renewed without notice", "notice period", "contract term", "contract trap",
+        "billing dispute", "runaround",
+    ),
     "data_migration": ("migration", "migrate", "import", "export", "data transfer"),
     "api_limitations": ("api", "webhook", "sdk", "rate limit", "endpoint"),
 }
@@ -281,6 +290,67 @@ def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
         if category != categories[0]["category"]:
             categories.append({"category": category, "severity": "secondary"})
     return categories
+
+
+_COMPETITOR_RECOVERY_PATTERNS = (
+    r"\b(?:switched to|moved to|replaced with|migrating to|migration to)\s+([A-Z][A-Za-z0-9.&+/\-]*(?:\s+[A-Z][A-Za-z0-9.&+/\-]*){0,3})",
+    r"\b(?:evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)\s+([A-Z][A-Za-z0-9.&+/\-]*(?:\s+[A-Z][A-Za-z0-9.&+/\-]*){0,3})",
+)
+
+_COMPETITOR_RECOVERY_BLOCKLIST = {
+    "a", "an", "the", "another tool", "another vendor", "other tool", "other vendor",
+    "new tool", "new vendor", "options", "alternative", "alternatives",
+    "alternative platform", "alternative platforms", "crm",
+}
+
+_GENERIC_COMPETITOR_TOKENS = {
+    "alternative", "alternatives", "platform", "platforms", "tool", "tools",
+    "vendor", "vendors", "software", "solutions", "solution", "service",
+    "services", "system", "systems", "crm", "suite", "app", "apps",
+}
+
+
+def _recover_competitor_mentions(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = [
+        dict(comp) for comp in (result.get("competitors_mentioned") or [])
+        if isinstance(comp, dict) and str(comp.get("name") or "").strip()
+    ]
+    if not existing and not any(source_row.get(field) for field in ("summary", "review_text", "pros", "cons")):
+        return existing
+
+    incumbent_norm = normalize_company_name(str(source_row.get("vendor_name") or "")) or ""
+    seen = {
+        (normalize_company_name(str(comp.get("name") or "")) or str(comp.get("name") or "").strip().lower()): comp
+        for comp in existing
+    }
+
+    recovery_blob = " ".join(
+        [str(source_row.get(field) or "") for field in ("summary", "review_text", "pros", "cons")]
+        + _normalize_text_list(result.get("quotable_phrases"))
+    )
+
+    for pattern in _COMPETITOR_RECOVERY_PATTERNS:
+        for match in re.finditer(pattern, recovery_blob):
+            candidate = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9.]+$", "", match.group(1).strip())
+            if not candidate:
+                continue
+            normalized = normalize_company_name(candidate) or candidate.lower()
+            if not normalized or normalized == incumbent_norm:
+                continue
+            if normalized in _COMPETITOR_RECOVERY_BLOCKLIST:
+                continue
+            generic_tokens = [
+                token.lower()
+                for token in re.findall(r"[A-Za-z0-9]+", candidate)
+                if token
+            ]
+            if generic_tokens and all(token in _GENERIC_COMPETITOR_TOKENS for token in generic_tokens):
+                continue
+            if normalized in seen:
+                continue
+            seen[normalized] = {"name": candidate}
+
+    return list(seen.values())
 
 
 def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -444,6 +514,7 @@ def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict
         str(source_row.get(field) or "")
         for field in ("summary", "review_text", "pros", "cons")
     ).lower()
+    pricing_phrases = result.get("pricing_phrases") or []
     price_text = " ".join(_normalize_text_list(result.get("pricing_phrases"))).lower()
     recommendation_text = " ".join(_normalize_text_list(result.get("recommendation_language"))).lower()
     named_alt_with_reason = any(
@@ -548,6 +619,7 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
 
     # 0. deterministic replacements for deprecated Tier 2 classify path
     result["pain_categories"] = _derive_pain_categories(result)
+    result["competitors_mentioned"] = _recover_competitor_mentions(result, source_row)
     result["competitors_mentioned"] = _derive_competitor_annotations(result, source_row)
 
     ba = result.get("buyer_authority")
@@ -590,7 +662,14 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
             primary_pain = primary_list[0].get("category", "other")
         elif isinstance(pain_cats[0], dict):
             primary_pain = pain_cats[0].get("category", "other")
-    result["pain_category"] = engine.override_pain(primary_pain, complaints, quotable)
+    result["pain_category"] = engine.override_pain(
+        primary_pain,
+        complaints,
+        quotable,
+        _normalize_text_list(result.get("pricing_phrases")),
+        _normalize_text_list(result.get("feature_gaps")),
+        _normalize_text_list(result.get("recommendation_language")),
+    )
 
     # 3. would_recommend
     result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
@@ -1763,6 +1842,89 @@ def _coerce_json_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+_REPAIR_NEGATIVE_PATTERNS = (
+    "cancel", "cancellation", "billing dispute", "refund denied", "runaround",
+    "automatic renewal", "auto renew", "renewed without notice", "charged",
+    "invoiced", "price increase", "overcharged", "switching cost",
+)
+_REPAIR_COMPETITOR_PATTERNS = (
+    "switched to", "moved to", "replaced with", "evaluating", "looking at",
+    "considering", "alternative to", " vs ",
+)
+_REPAIR_PRICING_PATTERNS = (
+    "billing", "invoice", "invoiced", "charged", "refund", "renewal",
+    "price increase", "cost increase", "automatic renewal", "auto renew",
+    "overcharged",
+)
+_REPAIR_RECOMMEND_PATTERNS = (
+    "would not recommend", "wouldn't recommend", "do not recommend",
+    "don't recommend", "stay away", "avoid", "not worth", "cannot recommend",
+)
+_REPAIR_FEATURE_GAP_PATTERNS = (
+    "missing", "lacks", "lacking", "wish it had", "wish they had",
+    "need better", "needs better", "needs more", "could use", "limited",
+)
+
+
+def _trusted_repair_sources() -> set[str]:
+    return {
+        source.strip().lower()
+        for source in str(settings.b2b_churn.enrichment_priority_sources or "").split(",")
+        if source.strip()
+    }
+
+
+def _repair_text_blob(source_row: dict[str, Any]) -> str:
+    return " ".join(
+        str(source_row.get(field) or "")
+        for field in ("summary", "review_text", "pros", "cons")
+    ).lower()
+
+
+def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
+    targets: list[str] = []
+    def _add_target(field: str) -> None:
+        if field not in targets:
+            targets.append(field)
+
+    review_blob = _repair_text_blob(source_row)
+    source = str(source_row.get("source") or "").strip().lower()
+    status = str(source_row.get("enrichment_status") or "").strip().lower()
+
+    complaints = _normalize_text_list(result.get("specific_complaints"))
+    pricing_phrases = _normalize_text_list(result.get("pricing_phrases"))
+    recommendation_language = _normalize_text_list(result.get("recommendation_language"))
+    feature_gaps = _normalize_text_list(result.get("feature_gaps"))
+    event_mentions = result.get("event_mentions") or []
+    competitors = result.get("competitors_mentioned") or []
+
+    if str(result.get("pain_category") or "").strip().lower() == "other" and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
+        for field in ("specific_complaints", "pricing_phrases", "recommendation_language"):
+            _add_target(field)
+    if not competitors and _contains_any(review_blob, _REPAIR_COMPETITOR_PATTERNS):
+        _add_target("competitors_mentioned")
+    if not pricing_phrases and _contains_any(review_blob, _REPAIR_PRICING_PATTERNS):
+        _add_target("pricing_phrases")
+    if not complaints and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
+        _add_target("specific_complaints")
+    if not recommendation_language and _contains_any(review_blob, _REPAIR_RECOMMEND_PATTERNS):
+        _add_target("recommendation_language")
+    if not feature_gaps and _contains_any(review_blob, _REPAIR_FEATURE_GAP_PATTERNS):
+        _add_target("feature_gaps")
+    if not event_mentions and _contains_any(review_blob, ("renewal", "migration", "switched", "price increase", "invoice")):
+        _add_target("event_mentions")
+    if status == "no_signal" and source in _trusted_repair_sources() and _contains_any(
+        review_blob, _REPAIR_NEGATIVE_PATTERNS + _REPAIR_COMPETITOR_PATTERNS
+    ):
+        for field in ("specific_complaints", "pricing_phrases", "competitors_mentioned", "recommendation_language"):
+            _add_target(field)
+    return targets
+
+
+def _needs_field_repair(result: dict[str, Any], source_row: dict[str, Any]) -> bool:
+    return bool(_repair_target_fields(result, source_row))
+
+
 def _has_structural_gap(result: dict[str, Any]) -> bool:
     buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
     timeline = _coerce_json_dict(result.get("timeline"))
@@ -1809,6 +1971,104 @@ def _apply_structural_repair(
             applied.append(f"contract_context.{field}")
     if any(field.startswith("contract_context.") for field in applied):
         merged["contract_context"] = contract
+
+    return merged, applied
+
+
+def _apply_field_repair(
+    baseline: dict[str, Any],
+    repair: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    merged = json.loads(json.dumps(baseline))
+    applied: list[str] = []
+
+    for field in ("specific_complaints", "pricing_phrases", "recommendation_language", "feature_gaps"):
+        existing_items = _normalize_text_list(merged.get(field))
+        repair_items = _normalize_text_list(repair.get(field))
+        seen = {item.strip().lower() for item in existing_items if item.strip()}
+        appended = False
+        for item in repair_items:
+            key = item.strip().lower()
+            if key and key not in seen:
+                existing_items.append(item)
+                seen.add(key)
+                appended = True
+        if appended:
+            merged[field] = existing_items
+            applied.append(field)
+
+    existing_events = []
+    seen_events: set[tuple[str, str]] = set()
+    for event in merged.get("event_mentions") or []:
+        if not isinstance(event, dict):
+            continue
+        key = (
+            str(event.get("event") or "").strip().lower(),
+            str(event.get("timeframe") or "").strip().lower(),
+        )
+        if key not in seen_events:
+            existing_events.append(dict(event))
+            seen_events.add(key)
+    event_added = False
+    for event in repair.get("event_mentions") or []:
+        if not isinstance(event, dict):
+            continue
+        key = (
+            str(event.get("event") or "").strip().lower(),
+            str(event.get("timeframe") or "").strip().lower(),
+        )
+        if key[0] and key not in seen_events:
+            existing_events.append(dict(event))
+            seen_events.add(key)
+            event_added = True
+    if event_added:
+        merged["event_mentions"] = existing_events
+        applied.append("event_mentions")
+
+    existing_competitors = []
+    seen_competitors: dict[str, dict[str, Any]] = {}
+    for comp in merged.get("competitors_mentioned") or []:
+        if not isinstance(comp, dict):
+            continue
+        name = str(comp.get("name") or "").strip()
+        if not name:
+            continue
+        key = normalize_company_name(name) or name.lower()
+        clone = dict(comp)
+        existing_competitors.append(clone)
+        seen_competitors[key] = clone
+    competitor_changed = False
+    for comp in repair.get("competitors_mentioned") or []:
+        if not isinstance(comp, dict):
+            continue
+        name = str(comp.get("name") or "").strip()
+        if not name:
+            continue
+        key = normalize_company_name(name) or name.lower()
+        if key in seen_competitors:
+            target = seen_competitors[key]
+            for field in ("reason_detail",):
+                if not str(target.get(field) or "").strip() and str(comp.get(field) or "").strip():
+                    target[field] = comp.get(field)
+                    competitor_changed = True
+            existing_features = _normalize_text_list(target.get("features"))
+            feature_seen = {item.strip().lower() for item in existing_features if item.strip()}
+            for item in _normalize_text_list(comp.get("features")):
+                key_feature = item.strip().lower()
+                if key_feature and key_feature not in feature_seen:
+                    existing_features.append(item)
+                    feature_seen.add(key_feature)
+                    competitor_changed = True
+            if existing_features:
+                target["features"] = existing_features
+            continue
+        clone = dict(comp)
+        existing_competitors.append(clone)
+        seen_competitors[key] = clone
+        competitor_changed = True
+    if competitor_changed:
+        merged["competitors_mentioned"] = existing_competitors
+        applied.append("competitors_mentioned")
 
     return merged, applied
 
