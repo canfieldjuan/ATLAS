@@ -20,6 +20,8 @@ from atlas_brain.services.b2b.account_resolver import (
     _extract_from_review_text,
     _extract_from_reviewer_company,
     _extract_from_title_bio,
+    extract_from_github_profile,
+    extract_from_hn_profile,
     resolve_review,
 )
 
@@ -446,3 +448,89 @@ class TestReviewTextExtraction:
         }
         signals = _extract_from_review_text(review)
         assert len(signals) == 0
+
+
+# -- GitHub Profile Extraction ----------------------------------------------
+
+
+class TestGitHubProfile:
+
+    def test_company_field(self):
+        profile = {"company": "Stripe"}
+        signals = extract_from_github_profile(profile)
+        assert len(signals) >= 1
+        company_sigs = [s for s in signals if s.signal_type == "github_profile_company"]
+        assert len(company_sigs) == 1
+        assert company_sigs[0].value == "Stripe"
+        assert company_sigs[0].confidence == 0.8
+
+    def test_company_with_at_prefix(self):
+        profile = {"company": "@google"}
+        signals = extract_from_github_profile(profile)
+        company_sigs = [s for s in signals if s.signal_type == "github_profile_company"]
+        assert len(company_sigs) == 1
+        # @ prefix stripped by the fetcher, not the extractor
+        assert "google" in company_sigs[0].value.lower()
+
+    def test_bio_only(self):
+        profile = {"bio": "Senior Engineer at Datadog"}
+        signals = extract_from_github_profile(profile)
+        assert len(signals) >= 1
+        assert signals[0].signal_type == "github_profile_bio"
+
+    def test_empty_profile(self):
+        profile = {}
+        signals = extract_from_github_profile(profile)
+        assert len(signals) == 0
+
+    def test_resolve_with_github_profile(self):
+        review = {
+            "reviewer_company": None,
+            "reviewer_title": None,
+            "source": "github",
+            "review_text": "this library has issues",
+            "raw_metadata": {},
+            "enrichment": None,
+            "_gh_profile": {"company": "Netflix"},
+        }
+        result = resolve_review(review, vendor_name="Jira")
+        assert result.resolved_company_name == "Netflix"
+        assert result.confidence_label == "high"
+
+
+# -- HN Profile Extraction -------------------------------------------------
+
+
+class TestHNProfile:
+
+    def test_about_with_company(self):
+        profile = {"about": "CTO at Cloudflare. I build things.", "company_from_about": "Cloudflare"}
+        sig = extract_from_hn_profile(profile)
+        assert sig is not None
+        assert sig.value == "Cloudflare"
+        assert sig.signal_type == "hn_profile_about"
+
+    def test_about_regex_fallback(self):
+        profile = {"about": "I work at Google, building infrastructure"}
+        sig = extract_from_hn_profile(profile)
+        assert sig is not None
+        assert sig.value == "Google"
+
+    def test_empty_profile(self):
+        profile = {}
+        sig = extract_from_hn_profile(profile)
+        assert sig is None
+
+    def test_resolve_with_hn_profile(self):
+        review = {
+            "reviewer_company": None,
+            "reviewer_title": None,
+            "source": "hackernews",
+            "review_text": "overpriced tool",
+            "raw_metadata": {},
+            "enrichment": None,
+            "_hn_profile": {"about": "Staff Engineer at Shopify", "company_from_about": "Shopify"},
+        }
+        result = resolve_review(review, vendor_name="Jira")
+        assert result.resolved_company_name == "Shopify"
+        assert result.confidence_label in ("medium", "high")
