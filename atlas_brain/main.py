@@ -135,6 +135,13 @@ async def lifespan(app: FastAPI):
     # via voice/pipeline.py. These can be added later if centralized
     # STT/TTS management is needed.
 
+    # Validate evidence engine (early fail if YAML missing/broken)
+    try:
+        from .reasoning.evidence_engine import get_evidence_engine
+        get_evidence_engine()
+    except Exception as e:
+        logger.warning("Evidence engine startup validation failed: %s", e)
+
     # Load default LLM if configured
     if settings.load_llm_on_startup:
         try:

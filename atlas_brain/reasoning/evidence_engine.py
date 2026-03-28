@@ -9,6 +9,7 @@ machinery with zero hardcoded thresholds or domain knowledge.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass, field as dc_field
@@ -45,7 +46,10 @@ class EvidenceEngine:
     def __init__(self, map_path: str | Path | None = None) -> None:
         path = Path(map_path) if map_path else _DEFAULT_MAP_PATH
         with open(path) as f:
-            self._rules: dict[str, Any] = yaml.safe_load(f)
+            raw_bytes = f.read()
+        self._rules: dict[str, Any] = yaml.safe_load(raw_bytes)
+        self.map_hash: str = hashlib.sha256(raw_bytes.encode()).hexdigest()[:16]
+        self.map_path: str = str(path)
         self._enrichment = self._rules.get("enrichment", {})
         self._conclusions = self._rules.get("conclusions", {})
         self._suppression = self._rules.get("suppression", {})
@@ -436,8 +440,26 @@ def get_evidence_engine(map_path: str | Path | None = None) -> EvidenceEngine:
     if _engine is not None and _engine_path == resolved:
         return _engine
 
-    _engine = EvidenceEngine(resolved)
+    try:
+        _engine = EvidenceEngine(resolved)
+    except FileNotFoundError:
+        if resolved != str(_DEFAULT_MAP_PATH):
+            logger.error(
+                "Evidence map not found at configured path %s, falling back to default",
+                resolved,
+            )
+            resolved = str(_DEFAULT_MAP_PATH)
+            _engine = EvidenceEngine(resolved)
+        else:
+            raise
     _engine_path = resolved
+    logger.info(
+        "Evidence engine loaded: %s (hash=%s, %d enrichment rules, %d conclusions)",
+        resolved,
+        _engine.map_hash,
+        len(_engine._enrichment),
+        len(_engine._conclusions),
+    )
     return _engine
 
 

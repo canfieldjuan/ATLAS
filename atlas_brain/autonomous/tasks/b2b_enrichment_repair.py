@@ -362,3 +362,97 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "orphaned_recovered": orphaned,
         "_skip_synthesis": "B2B enrichment repair complete",
     }
+
+
+# ---------------------------------------------------------------------------
+# Quarantine retry: re-derive reviews that failed evidence engine compute
+# ---------------------------------------------------------------------------
+
+_RETRYABLE_QUARANTINE_REASONS = frozenset({
+    "evidence_engine_compute_failure",
+})
+
+
+async def retry_quarantined_reviews(
+    pool,
+    *,
+    limit: int = 100,
+) -> dict[str, int]:
+    """Re-attempt derivation on quarantined reviews where the root cause
+    was an evidence engine failure (likely a bug that has since been fixed).
+
+    Skips the LLM call entirely -- the tier-1 extraction is already in
+    the JSONB.  Only re-runs ``_compute_derived_fields()`` and validation.
+
+    Returns counts of recovered, still_failed, skipped reviews.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT id, enrichment, source, rating, rating_max,
+               review_text, summary, pros, cons,
+               vendor_name, reviewer_company, raw_metadata,
+               low_fidelity_reasons
+        FROM b2b_reviews
+        WHERE enrichment_status = 'quarantined'
+          AND enrichment IS NOT NULL
+          AND (enrichment->>'enrichment_schema_version')::int >= 1
+        ORDER BY created_at DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+
+    recovered = 0
+    still_failed = 0
+    skipped = 0
+
+    for row in rows:
+        reasons = row.get("low_fidelity_reasons") or []
+        if isinstance(reasons, str):
+            try:
+                reasons = json.loads(reasons)
+            except Exception:
+                reasons = []
+
+        retryable = any(r in _RETRYABLE_QUARANTINE_REASONS for r in reasons)
+        if not retryable:
+            skipped += 1
+            continue
+
+        enrichment = base_enrichment._coerce_json_dict(row.get("enrichment"))
+        if not enrichment:
+            skipped += 1
+            continue
+
+        try:
+            enrichment = base_enrichment._compute_derived_fields(enrichment, dict(row))
+            valid = base_enrichment._validate_enrichment(enrichment)
+            if not valid:
+                still_failed += 1
+                continue
+
+            await pool.execute(
+                """
+                UPDATE b2b_reviews
+                SET enrichment = $2::jsonb,
+                    enrichment_status = 'enriched',
+                    enriched_at = NOW(),
+                    low_fidelity = false,
+                    low_fidelity_reasons = '[]'::jsonb
+                WHERE id = $1
+                """,
+                row["id"],
+                json.dumps(enrichment, default=str),
+            )
+            recovered += 1
+            logger.info("Quarantine retry: recovered %s", row["id"])
+
+        except Exception:
+            still_failed += 1
+            logger.debug("Quarantine retry: still failing for %s", row["id"], exc_info=True)
+
+    logger.info(
+        "Quarantine retry: recovered=%d, still_failed=%d, skipped=%d (of %d)",
+        recovered, still_failed, skipped, len(rows),
+    )
+    return {"recovered": recovered, "still_failed": still_failed, "skipped": skipped}

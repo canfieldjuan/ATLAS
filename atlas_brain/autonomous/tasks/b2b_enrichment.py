@@ -702,8 +702,9 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     cc["price_complaint"] = engine.derive_price_complaint(result)
     cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
 
-    # Mark schema version
+    # Mark schema version + evidence map hash for recomputation tracking
     result["enrichment_schema_version"] = 3
+    result["evidence_map_hash"] = engine.map_hash
 
     return result
 
