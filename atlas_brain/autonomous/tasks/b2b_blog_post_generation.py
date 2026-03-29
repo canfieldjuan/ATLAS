@@ -1863,7 +1863,7 @@ async def _select_topic(
     _exclude_vendors = exclude_vendors or set()
     _exclude_types = exclude_types or {}
     best = None
-    for slug, score, topic_type, ctx in candidates:
+    for score, topic_type, ctx in candidates:
         # Skip vendors already used in this run
         vks = _vendor_keys(ctx)
         if vks & _exclude_vendors:
@@ -1871,16 +1871,16 @@ async def _select_topic(
         # Skip topic types that hit the per-run cap
         if _exclude_types.get(topic_type, 0) >= _max_per_type:
             continue
-        best = (slug, score, topic_type, ctx)
+        best = (score, topic_type, ctx)
         break
 
     if best is None:
         return None
     logger.info(
         "Selected B2B topic: %s (score=%.1f, slug=%s)",
-        best[2], best[1], best[3].get("slug"),
+        best[1], best[0], best[2].get("slug"),
     )
-    return best[2], best[3]
+    return best[1], best[2]
 
 
 async def _find_vendor_alternative_candidates(pool) -> list[dict[str, Any]]:
