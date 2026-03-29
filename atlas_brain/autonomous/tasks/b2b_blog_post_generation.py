@@ -4367,6 +4367,7 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
             "migrations": src.get("count", 1) if isinstance(src, dict) else 1,
         }
         for src in switched_from[:8]
+        if (src.get("vendor", "") if isinstance(src, dict) else str(src)).lower().strip() != vendor.lower().strip()
     ]
 
     charts = []
