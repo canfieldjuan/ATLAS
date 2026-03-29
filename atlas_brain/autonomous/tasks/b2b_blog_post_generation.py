@@ -79,8 +79,11 @@ _VENDORISH_SKIP_WORDS = frozenset(
         "About", "Since", "Until", "During", "However", "Although",
         # Document structure words
         "Introduction", "Conclusion", "Overview", "Analysis", "Guide",
-        "Report", "Summary", "Review", "Section", "Chart", "Table",
-        "Source", "Note", "Key", "Figure", "Methodology",
+        "Report", "Summary", "Review", "Reviews", "Reviewers", "Reviewer",
+        "Section", "Chart", "Table", "Source", "Sources",
+        "Note", "Key", "Figure", "Methodology", "Decision",
+        "Rating", "Ratings", "Platform", "Platforms", "Price", "Pricing",
+        "Feature", "Features", "Support", "Integration", "Performance",
         # Time/date words
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
