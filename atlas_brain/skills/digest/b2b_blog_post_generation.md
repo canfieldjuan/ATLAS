@@ -168,6 +168,11 @@ Return valid JSON with exactly these keys:
 14. **Support and policy claims**: When discussing vendor support, policies, or enforcement practices, attribute claims to reviewer experiences rather than presenting them as vendor policy.
 15. **Sample size context**: When `data_context.data_quality` is present, incorporate the confidence level naturally. For "low" confidence, explicitly note the small sample size as a limitation.
 16. **Market regime**: When `data_context.market_regime` is present, use it as category context for category and churn-focused posts. Frame it as intelligence context, not causal proof.
+17. **Data scope transparency**: Each chart has a `data_labels` array showing exactly what entities appear in that chart. When writing about data that comes from a rendered chart (e.g. migration sources, pain categories), only name the entities in `data_labels` as "top" or "most common" sources. If broader data_context or section key_stats reference additional vendors not in the chart, you MAY mention them -- but you MUST label the scope:
+    - Good: "In the charted migration data, WooCommerce appears most often. Broader displacement signals also mention BigCommerce and Magento as evaluation alternatives."
+    - Good: "Across the full review set, reviewers also cite WordPress as a switching trigger."
+    - Bad: "The most common migration sources include BigCommerce and Magento" (when they are not in the rendered chart).
+    - Rule: strongest claim language ("most common", "top sources", "primary", "where users come from") must match the chart's `data_labels`. Broader context uses hedged language ("also mention", "broader signals suggest", "displacement data includes").
 
 ## Linking Rules
 

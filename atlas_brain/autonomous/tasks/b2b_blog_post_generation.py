@@ -45,6 +45,7 @@ _CRITICAL_BLOG_WARNINGS = {
     "review_period_not_explicitly_mentioned",
     "methodology_disclaimer_missing_self_selected",
     "unsupported_data_claim",
+    "chart_scope_ambiguity",
 }
 _DATA_CLAIM_MARKERS = (
     "most common",
@@ -712,6 +713,34 @@ def _apply_blog_quality_gate(
     for claim in unsupported[:3]:
         warnings.append(f"unsupported_data_claim:{claim}")
 
+    # Chart-scope ambiguity: strongest claim phrases must match chart data_labels
+    _CHART_SCOPE_PHRASES = (
+        "most common source", "top migration source", "top source",
+        "primary source", "where users come from", "where teams come from",
+        "most common migration",
+    )
+    chart_labels_lower: set[str] = set()
+    for chart in blueprint.charts:
+        for row in chart.data:
+            if isinstance(row, dict):
+                for vk in ("name", "label", "category"):
+                    v = str(row.get(vk) or "").strip()
+                    if v:
+                        chart_labels_lower.add(v.lower())
+    if chart_labels_lower:
+        sentences = re.split(r'(?<=[.!?])\s+|\n+', body)
+        for sentence in sentences:
+            s_lower = sentence.lower()
+            if not any(phrase in s_lower for phrase in _CHART_SCOPE_PHRASES):
+                continue
+            # Check if sentence names a vendor NOT in chart labels
+            for v in (ctx.get("_known_vendors") or []):
+                if len(v) > 2 and v.lower() in s_lower and v.lower() not in chart_labels_lower:
+                    warnings.append(
+                        f"chart_scope_ambiguity:{v}: {sentence.strip()[:100]}"
+                    )
+                    break
+
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
     report = {
         "score": score,
@@ -733,6 +762,17 @@ def _quality_feedback(report: dict[str, Any]) -> list[str]:
             feedback.append("Fix: Explicitly state the exact review period from data_context.review_period.")
         elif warning == "methodology_disclaimer_missing_self_selected":
             feedback.append("Fix: Include a plain-language methodology line that reviewers are self-selected and signals reflect perception.")
+        elif str(warning).startswith("chart_scope_ambiguity:"):
+            feedback.append(
+                "Fix: Differentiate charted source data from broader displacement/evaluation signals. "
+                "Use 'most common' and 'top sources' only for vendors visible in the chart's data_labels. "
+                "For vendors from broader data_context, use hedged language like 'broader displacement signals also mention' or 'evaluation alternatives include'."
+            )
+        elif str(warning).startswith("unsupported_data_claim:"):
+            feedback.append(
+                "Fix: A data claim references a vendor not present in any chart or data_context. "
+                "Either remove the claim or reword to cite the actual data source."
+            )
         else:
             feedback.append(f"Improve: {warning}")
     return feedback[:8]
@@ -5567,6 +5607,10 @@ def _generate_content(
                 "chart_id": c.chart_id,
                 "chart_type": c.chart_type,
                 "title": c.title,
+                "data_labels": [
+                    str(row.get("name") or row.get("label") or row.get("category") or "")
+                    for row in c.data if isinstance(row, dict)
+                ][:10],
             }
             for c in blueprint.charts
         ],
