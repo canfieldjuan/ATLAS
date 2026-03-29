@@ -441,8 +441,11 @@ def _apply_blog_quality_gate(
     if removed_quotes > 0:
         fixes_applied.append(f"removed_unmatched_quotes:{removed_quotes}")
 
-    if len(body.strip()) < 1500:
-        warnings.append("content_too_short_for_decision_depth")
+    word_count = len(body.split())
+    if word_count < 2000:
+        blocking_issues.append(f"content_too_short:{word_count}_words_need_2000")
+    elif word_count < 2500:
+        warnings.append("content_below_seo_target_2500_words")
 
     chart_ids = [c.chart_id for c in blueprint.charts]
     chart_mentions = re.findall(r"\{\{chart:([a-zA-Z0-9\-_]+)\}\}", body)
@@ -638,13 +641,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     max_posts = max(1, cfg.blog_post_max_per_run)
     results: list[dict[str, Any]] = []
+    # Track vendors and topic types across iterations to prevent dominance
+    run_seen_vendors: set[str] = set()
+    run_seen_types: dict[str, int] = {}
 
     # Regeneration mode: re-process existing drafts through fixed pipeline
     if cfg.blog_post_regenerate_mode:
         return await _regenerate_existing_posts(pool, llm, cfg, task, max_posts)
 
     for i in range(max_posts):
-        topic = await _select_topic(pool, max_posts)
+        topic = await _select_topic(
+            pool, max_posts,
+            exclude_vendors=run_seen_vendors,
+            exclude_types=run_seen_types,
+        )
         if topic is None:
             logger.info("No more viable B2B topics after %d posts", i)
             break
@@ -702,6 +712,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "slug": blueprint.slug,
             "charts": n_charts,
         })
+        # Track for cross-iteration diversity
+        for vk in ("vendor", "vendor_a", "vendor_b", "from_vendor"):
+            v = str(topic_ctx.get(vk) or "").lower().strip()
+            if v:
+                run_seen_vendors.add(v)
+        run_seen_types[topic_type] = run_seen_types.get(topic_type, 0) + 1
 
     if not results:
         return {"_skip_synthesis": "No B2B blog posts generated this run"}
@@ -1569,7 +1585,13 @@ async def _rerank_topic_candidates_with_reasoning(
     return reranked
 
 
-async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]] | None:
+async def _select_topic(
+    pool,
+    max_per_run: int = 1,
+    *,
+    exclude_vendors: set[str] | None = None,
+    exclude_types: dict[str, int] | None = None,
+) -> tuple[str, dict[str, Any]] | None:
     """Score candidates and pick the best unwritten B2B topic."""
     today = date.today()
     month_suffix = today.strftime("%Y-%m")
@@ -1812,25 +1834,29 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
         [(c[1], c[2].get("slug", "?"), f"{c[0]:.0f}") for c in candidates[:5]],
     )
 
-    # --- Dedup layer 3: one vendor per run (pick highest-scoring topic) ---
-    # Also enforce topic type diversity: max 2 of the same type per run.
-    seen_vendors: set[str] = set()
+    # --- Dedup layer 3: cross-iteration vendor + type diversity ---
+    _max_per_type = 2
+    _exclude_vendors = exclude_vendors or set()
+    _exclude_types = exclude_types or {}
     best = None
-    for c in candidates:
-        vks = _vendor_keys(c[2])
-        if vks & seen_vendors:
+    for slug, score, topic_type, ctx in candidates:
+        # Skip vendors already used in this run
+        vks = _vendor_keys(ctx)
+        if vks & _exclude_vendors:
             continue
-        seen_vendors |= vks
-        if best is None:
-            best = c
+        # Skip topic types that hit the per-run cap
+        if _exclude_types.get(topic_type, 0) >= _max_per_type:
+            continue
+        best = (slug, score, topic_type, ctx)
+        break
 
     if best is None:
         return None
     logger.info(
         "Selected B2B topic: %s (score=%.1f, slug=%s)",
-        best[1], best[0], best[2].get("slug"),
+        best[2], best[1], best[3].get("slug"),
     )
-    return best[1], best[2]
+    return best[2], best[3]
 
 
 async def _find_vendor_alternative_candidates(pool) -> list[dict[str, Any]]:
@@ -5252,7 +5278,7 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
     return PostBlueprint(
         topic_type="best_fit_guide",
         slug=ctx["slug"],
-        suggested_title=f"Best {category} for Your Team Size: A Guide Based on {ctx['total_reviews']} Reviews",
+        suggested_title=f"Best {category} Tools in 2026: {ctx['vendor_count']} Vendors Compared Across {ctx['total_reviews']} Reviews",
         tags=[category.lower(), "buyers-guide", "comparison", "honest-review", "team-size"],
         data_context={**data.get("data_context", {}), "category": category},
         sections=sections,
