@@ -19,9 +19,11 @@ async def search_reviews(
     vendor_name: Optional[str] = None,
     pain_category: Optional[str] = None,
     min_urgency: Optional[float] = None,
+    min_relevance: Optional[float] = None,
     company: Optional[str] = None,
     has_churn_intent: Optional[bool] = None,
     content_type: Optional[str] = None,
+    exclude_low_fidelity: bool = False,
     window_days: int = 30,
     limit: int = 20,
 ) -> str:
@@ -30,10 +32,12 @@ async def search_reviews(
 
     vendor_name: Filter by vendor (partial match, case-insensitive)
     pain_category: Filter by pain category (exact match)
-    min_urgency: Minimum urgency score
+    min_urgency: Minimum urgency score (0-10)
+    min_relevance: Minimum relevance score (0-1); filters low-signal social posts
     company: Filter by reviewer company (partial match)
     has_churn_intent: Filter by churn intent flag
     content_type: Filter by content type -- one of: review, community_discussion, comment, insider_account
+    exclude_low_fidelity: When true, exclude reviews flagged as low quality by the enrichment pipeline
     window_days: How far back to look in days (default 30)
     limit: Maximum results (default 20, cap 100)
     """
@@ -41,6 +45,8 @@ async def search_reviews(
     window_days = max(1, min(window_days, 3650))
     if min_urgency is not None:
         min_urgency = max(0.0, min(min_urgency, 10.0))
+    if min_relevance is not None:
+        min_relevance = max(0.0, min(min_relevance, 1.0))
     try:
         pool = get_pool()
         if not pool.is_initialized:
@@ -79,6 +85,14 @@ async def search_reviews(
             params.append(has_churn_intent)
             idx += 1
 
+        if min_relevance is not None:
+            conditions.append(f"COALESCE(relevance_score, 0.5) >= ${idx}")
+            params.append(min_relevance)
+            idx += 1
+
+        if exclude_low_fidelity:
+            conditions.append("(low_fidelity IS NULL OR low_fidelity = false)")
+
         if content_type:
             conditions.append(f"content_type = ${idx}")
             params.append(content_type)
@@ -100,7 +114,9 @@ async def search_reviews(
                    (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
                    enriched_at, reviewer_title, company_size_raw,
                    COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
-                   content_type, thread_id
+                   content_type, thread_id,
+                   relevance_score, author_churn_score,
+                   low_fidelity, low_fidelity_reasons
             FROM b2b_reviews
             WHERE {where}
             ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -126,6 +142,10 @@ async def search_reviews(
                 "industry": r["industry"],
                 "content_type": r["content_type"],
                 "thread_id": r["thread_id"],
+                "relevance_score": float(r["relevance_score"]) if r["relevance_score"] is not None else None,
+                "author_churn_score": float(r["author_churn_score"]) if r["author_churn_score"] is not None else None,
+                "low_fidelity": bool(r["low_fidelity"]) if r["low_fidelity"] is not None else False,
+                "low_fidelity_reasons": _safe_json(r["low_fidelity_reasons"]) or [],
             }
             for r in rows
         ]
@@ -190,6 +210,10 @@ async def get_review(review_id: str) -> str:
             "enrichment": _safe_json(row["enrichment"]),
             "enrichment_status": row["enrichment_status"],
             "enriched_at": row["enriched_at"],
+            "relevance_score": float(row["relevance_score"]) if row["relevance_score"] is not None else None,
+            "author_churn_score": float(row["author_churn_score"]) if row["author_churn_score"] is not None else None,
+            "low_fidelity": bool(row["low_fidelity"]) if row["low_fidelity"] is not None else False,
+            "low_fidelity_reasons": _safe_json(row["low_fidelity_reasons"]) or [],
         }
         review = await _apply_field_overrides(pool, "review", str(row["id"]), review)
 

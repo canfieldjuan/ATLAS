@@ -144,12 +144,18 @@ The `name` field is the merge key with Tier 1. Include the exact same competitor
 
 Classify the review's complaints into pain categories. Use `tier1_specific_complaints` and `tier1_quotable_phrases` as your primary evidence.
 
-- **category**: One of: `pricing`, `features`, `reliability`, `support`, `integration`, `performance`, `security`, `ux`, `onboarding`, `other`.
+- **category**: One of: `pricing`, `features`, `reliability`, `support`, `integration`, `performance`, `security`, `ux`, `onboarding`, `technical_debt`, `contract_lock_in`, `data_migration`, `api_limitations`, `outcome_gap`, `admin_burden`, `ai_hallucination`, `integration_debt`, `other`.
 - **severity**: `primary` (root cause), `secondary` (contributing), `minor` (passing mention).
+
+Category definitions for the less obvious values:
+- **outcome_gap**: Product fails to deliver promised business outcomes or ROI. Examples: "can't show any ROI", "metrics haven't improved", "promised capabilities don't work in practice".
+- **admin_burden**: Excessive admin overhead, complex configuration, high ongoing maintenance cost. Distinct from ux -- this is about the operational cost of ownership, not day-to-day usability. Examples: "takes a dedicated admin", "constant reconfiguration after updates", "too much babysitting required".
+- **ai_hallucination**: AI features produce unreliable, inaccurate, or fabricated outputs. Use only when reviewer specifically cites the AI component as wrong or untrustworthy. Examples: "AI makes up features", "AI summaries are wrong", "can't trust AI recommendations".
+- **integration_debt**: Brittle integrations that break frequently or have high ongoing maintenance cost. Distinct from integration (missing integrations) -- integration_debt is about maintaining integrations that nominally exist. Examples: "integrations break with every update", "API rate limits block automation", "months spent fixing broken syncs".
 
 Rules:
 - First entry must have severity "primary".
-- "other" ONLY when no complaint maps to any of the 9 named categories.
+- "other" ONLY when no complaint maps to any of the 17 named categories.
 - When `tier1_specific_complaints` is empty and review has no complaints, return empty array `[]`.
 - Pain linked to switching/evaluation language wins tiebreakers.
 - Pricing beats others only when dollar amounts or "too expensive" are stated.

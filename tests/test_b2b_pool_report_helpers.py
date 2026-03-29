@@ -524,6 +524,51 @@ def test_deterministic_displacement_map_normalizes_primary_driver_labels():
     ]
 
 
+def test_deterministic_displacement_map_uses_synthesis_views_for_source_wedge():
+    class _FakeWedge:
+        def __init__(self, value):
+            self.value = value
+
+    class _FakeView:
+        def __init__(self, wedge_value):
+            self.primary_wedge = _FakeWedge(wedge_value)
+            self.schema_version = "v2.3"
+
+        def section(self, name):
+            assert name == "causal_narrative"
+            return {"primary_wedge": self.primary_wedge.value}
+
+        def confidence(self, section):
+            assert section == "causal_narrative"
+            return "medium"
+
+        def falsification_conditions(self):
+            return []
+
+        @property
+        def confidence_limits(self):
+            return []
+
+    results = mod._build_deterministic_displacement_map(
+        competitive_disp=[
+            {
+                "vendor": "Intercom",
+                "competitor": "Asana",
+                "mention_count": 3,
+                "explicit_switches": 0,
+                "active_evaluations": 1,
+                "implied_preferences": 0,
+                "reason_categories": {"pricing": 1},
+            }
+        ],
+        competitor_reasons=[],
+        quote_lookup={},
+        synthesis_views={"Intercom": _FakeView("category_disruption")},
+    )
+
+    assert results[0]["signal_strength"] == "moderate"
+
+
 @pytest.mark.asyncio
 async def test_head_to_head_uses_dynamics_counts_and_companies():
     review_a = uuid4()

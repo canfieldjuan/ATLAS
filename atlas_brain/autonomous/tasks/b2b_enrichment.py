@@ -286,6 +286,83 @@ def _get_tier2_client(cfg: Any) -> Any:
     return httpx.AsyncClient(base_url=tier2_url, timeout=timeout)
 
 
+async def _call_openrouter_tier2(
+    tier1_result: dict,
+    row: dict,
+    cfg: Any,
+    truncate_length: int,
+) -> tuple[dict | None, str | None]:
+    """Tier 2 extraction via OpenRouter (cloud model).
+
+    Mirrors _call_openrouter_tier1 but uses the tier2 skill and injects
+    Tier 1 extractions for context so the model can classify pain categories
+    and evidence types against already-extracted complaints and quotes.
+    """
+    import httpx
+    from ...skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found for OpenRouter tier 2")
+        return None, None
+
+    api_key = cfg.openrouter_api_key
+    if not api_key:
+        logger.warning("OpenRouter API key not configured for tier 2 enrichment")
+        return None, None
+
+    model_id = (
+        cfg.enrichment_tier2_openrouter_model
+        or cfg.enrichment_openrouter_model
+        or "anthropic/claude-haiku-4-5"
+    )
+    payload = _build_classify_payload(row, truncate_length)
+    payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
+    payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
+    payload_json = json.dumps(payload)
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.enrichment_tier2_timeout_seconds, connect=10.0)) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_id,
+                    "messages": [
+                        {"role": "system", "content": skill.content},
+                        {"role": "user", "content": payload_json},
+                    ],
+                    "max_tokens": cfg.enrichment_tier2_max_tokens,
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            choices = body.get("choices") or []
+            if not choices:
+                logger.warning("OpenRouter tier 2 returned no choices")
+                return None, model_id
+            text = (choices[0].get("message") or {}).get("content") or ""
+            text = text.strip()
+            if not text:
+                logger.warning("OpenRouter tier 2 returned empty content")
+                return None, model_id
+            from ...pipelines.llm import clean_llm_output, parse_json_response
+            text = clean_llm_output(text)
+            parsed = parse_json_response(text, recover_truncated=True)
+            if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                return parsed, model_id
+            logger.warning("OpenRouter tier 2 returned unparseable JSON")
+            return None, model_id
+    except Exception:
+        logger.warning("OpenRouter tier 2 call failed", exc_info=True)
+        return None, None
+
+
 def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
     """Merge Tier 1 + Tier 2 deterministic extraction into a single 47-field JSONB.
 
@@ -833,12 +910,29 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     # 3. would_recommend
     result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
 
-    # 4. sentiment_trajectory.direction = "unknown" per-review (cross-review later)
+    # 4. sentiment_trajectory.direction — derived deterministically from rating,
+    #    churn signals, and would_recommend. "declining" / "improving" require
+    #    multi-review time context and are left for future cross-review jobs;
+    #    per-review we classify as positive, negative, or unknown.
     st = result.get("sentiment_trajectory")
     if not isinstance(st, dict):
         st = {}
         result["sentiment_trajectory"] = st
-    st["direction"] = "unknown"
+    rating_norm = (rating / rating_max) if rating is not None and rating_max else None
+    churn_signals_raw = result.get("churn_signals") or {}
+    intent_to_leave = bool(churn_signals_raw.get("intent_to_leave")) if isinstance(churn_signals_raw, dict) else False
+    would_rec = result.get("would_recommend")
+    if rating_norm is not None:
+        if rating_norm <= 0.4 or (rating_norm <= 0.6 and intent_to_leave):
+            st["direction"] = "consistently_negative"
+        elif rating_norm >= 0.8 and would_rec is True:
+            st["direction"] = "stable_positive"
+        elif rating_norm >= 0.7 and would_rec is not False:
+            st["direction"] = "stable_positive"
+        else:
+            st["direction"] = "unknown"
+    else:
+        st["direction"] = "unknown"
 
     # 5. sentiment_trajectory.turning_point from event_mentions
     if events and isinstance(events, list) and len(events) > 0:
@@ -1393,11 +1487,17 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         tier2 = None
         tier2_model = None
         if _tier1_has_extraction_gaps(tier1):
-            tier2_client = _get_tier2_client(cfg)
-            tier2, tier2_model = await asyncio.wait_for(
-                _call_vllm_tier2(tier1, row, cfg, tier2_client, truncate_length),
-                timeout=full_extraction_timeout,
-            )
+            if use_openrouter:
+                tier2, tier2_model = await asyncio.wait_for(
+                    _call_openrouter_tier2(tier1, row, cfg, truncate_length),
+                    timeout=full_extraction_timeout,
+                )
+            else:
+                tier2_client = _get_tier2_client(cfg)
+                tier2, tier2_model = await asyncio.wait_for(
+                    _call_vllm_tier2(tier1, row, cfg, tier2_client, truncate_length),
+                    timeout=full_extraction_timeout,
+                )
         if tier2 is not None:
             model_id = f"hybrid:{tier1_model}+{tier2_model}"
         else:
@@ -1757,7 +1857,11 @@ _KNOWN_PAIN_CATEGORIES = {
 
 
 def _coerce_bool(value: Any) -> bool | None:
-    """Coerce a value to bool. Returns None if unrecognizable."""
+    """Coerce a value to bool. Returns None if unrecognizable.
+    None/null is treated as False (absence of signal).
+    """
+    if value is None:
+        return False
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -1765,7 +1869,7 @@ def _coerce_bool(value: Any) -> bool | None:
     if isinstance(value, str):
         if value.lower() in ("true", "yes", "1"):
             return True
-        if value.lower() in ("false", "no", "0"):
+        if value.lower() in ("false", "no", "0", "null", "none"):
             return False
     return None
 

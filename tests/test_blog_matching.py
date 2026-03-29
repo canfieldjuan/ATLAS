@@ -1,6 +1,9 @@
 import pytest
 
-from atlas_brain.autonomous.tasks._blog_matching import fetch_relevant_blog_posts
+from atlas_brain.autonomous.tasks._blog_matching import (
+    fetch_relevant_blog_posts,
+    _role_topic_boosts,
+)
 
 
 class _Pool:
@@ -183,3 +186,157 @@ async def test_blog_matching_orders_recent_drafts_by_created_at_when_enabled():
     )
 
     assert "COALESCE(published_at, created_at) DESC" in pool.last_query
+
+
+# ---------------------------------------------------------------------------
+# Role-boost tests
+# ---------------------------------------------------------------------------
+
+def test_role_topic_boosts_cfo_prefers_pricing():
+    boosts = _role_topic_boosts("CFO")
+    assert boosts.get("pricing_reality_check", 0) >= 3
+
+
+def test_role_topic_boosts_cto_prefers_migration():
+    boosts = _role_topic_boosts("CTO / Head of Engineering")
+    assert boosts.get("migration_guide", 0) >= 3
+
+
+def test_role_topic_boosts_none_returns_empty():
+    assert _role_topic_boosts(None) == {}
+
+
+def test_role_topic_boosts_unknown_role_returns_empty():
+    assert _role_topic_boosts("Barista") == {}
+
+
+@pytest.mark.asyncio
+async def test_contact_role_boosts_matching_post_above_unrelated():
+    """A pricing post ranks first for a VP Finance even when a vendor-name match exists."""
+    rows = [
+        {
+            "title": "Zendesk vs Freshdesk",
+            "slug": "zendesk-vs-freshdesk-2026-03",
+            "topic_type": "vendor_showdown",
+            "status": "published",
+            "tags": ["customer-support"],
+            "data_context": {"topic_ctx": {"vendor_a": "Zendesk", "vendor_b": "Freshdesk"}},
+        },
+        {
+            "title": "The Real Cost of Zendesk",
+            "slug": "real-cost-of-zendesk-2026-03",
+            "topic_type": "pricing_reality_check",
+            "status": "published",
+            "tags": ["customer-support", "pricing"],
+            "data_context": {"pain_distribution": "pricing"},
+        },
+    ]
+    # "VP Finance": "finance" is a substring → matches finance keyword → pricing boost +3
+    # pricing_reality_check: vendor name match (+3) + role boost (+3) = 6
+    # vendor_showdown: vendor name match (+3) only = 3
+    posts = await fetch_relevant_blog_posts(
+        _Pool(rows),
+        pipeline="b2b",
+        vendor_name="Zendesk",
+        contact_role="VP Finance",
+        limit=3,
+    )
+
+    assert len(posts) == 2
+    # Finance role should boost pricing_reality_check above vendor_showdown
+    assert posts[0]["topic_type"] == "pricing_reality_check"
+
+
+@pytest.mark.asyncio
+async def test_no_contact_role_does_not_change_ranking():
+    """Without a contact_role, the standard scoring order is preserved."""
+    rows = [
+        {
+            "title": "Zendesk Migration Guide",
+            "slug": "zendesk-migration-guide-2026-03",
+            "topic_type": "migration_guide",
+            "status": "published",
+            "tags": ["customer-support"],
+            "data_context": {},
+        },
+        {
+            "title": "Zendesk vs Freshdesk",
+            "slug": "zendesk-vs-freshdesk-2026-03",
+            "topic_type": "vendor_showdown",
+            "status": "published",
+            "tags": ["customer-support"],
+            "data_context": {"topic_ctx": {"vendor_a": "Zendesk", "vendor_b": "Freshdesk"}},
+        },
+    ]
+    # alternative_vendor match (+5) beats plain name match (+3), so showdown wins
+    posts_no_role = await fetch_relevant_blog_posts(
+        _Pool(rows),
+        pipeline="b2b",
+        vendor_name="Zendesk",
+        alternative_vendors=["Freshdesk"],
+        contact_role=None,
+        limit=3,
+    )
+    assert posts_no_role[0]["topic_type"] == "vendor_showdown"
+
+
+# ---------------------------------------------------------------------------
+# Diminishing-returns pain scoring tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_diminishing_returns_multi_pain_post_scores_higher():
+    """A post matching 2 pains should outscore a post matching only 1."""
+    rows = [
+        {
+            "title": "Zendesk Pricing Problems",
+            "slug": "zendesk-pricing-2026-03",
+            "topic_type": "pricing_reality_check",
+            "status": "published",
+            "tags": ["pricing", "customer-support"],
+            "data_context": {"pain_distribution": "pricing support"},
+        },
+        {
+            "title": "Zendesk Support Issues",
+            "slug": "zendesk-support-2026-03",
+            "topic_type": "churn_report",
+            "status": "published",
+            "tags": ["support", "customer-support"],
+            "data_context": {"pain_distribution": "support"},
+        },
+    ]
+    # First post matches both "pricing" and "support" (score 4+2=6)
+    # Second post matches only "support" (score 4)
+    posts = await fetch_relevant_blog_posts(
+        _Pool(rows),
+        pipeline="b2b",
+        pain_categories=["pricing", "support"],
+        limit=3,
+    )
+
+    assert len(posts) == 2
+    assert posts[0]["url"].endswith("/blog/zendesk-pricing-2026-03")
+
+
+@pytest.mark.asyncio
+async def test_single_pain_match_without_break():
+    """Passing many pains does not break when only one matches (no break regression)."""
+    rows = [
+        {
+            "title": "Zendesk Migration Guide",
+            "slug": "zendesk-migration-2026-03",
+            "topic_type": "migration_guide",
+            "status": "published",
+            "tags": ["migration"],
+            "data_context": {},
+        },
+    ]
+    posts = await fetch_relevant_blog_posts(
+        _Pool(rows),
+        pipeline="b2b",
+        vendor_name="Zendesk",
+        pain_categories=["pricing", "support", "features", "onboarding"],
+        limit=3,
+    )
+    # Should still return the post (vendor name match) without raising
+    assert len(posts) == 1

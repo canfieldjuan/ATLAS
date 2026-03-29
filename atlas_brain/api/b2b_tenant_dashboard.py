@@ -1436,9 +1436,11 @@ async def list_tenant_reports(
             "COALESCE((intelligence_data->>'data_stale')::boolean, false) = false"
         )
 
+    _REPORT_TYPE_ALIASES = {"challenger_intel": "challenger_brief"}
     if report_type:
+        resolved_type = _REPORT_TYPE_ALIASES.get(report_type, report_type)
         conditions.append(f"report_type = ${idx}")
-        params.append(report_type)
+        params.append(resolved_type)
         idx += 1
 
     if vendor_filter:
@@ -1453,7 +1455,7 @@ async def list_tenant_reports(
     rows = await pool.fetch(
         f"""
         SELECT id, report_date, report_type, executive_summary,
-               vendor_filter, status, created_at,
+               vendor_filter, category_filter, status, created_at,
                CASE
                  WHEN report_type = 'battle_card'
                  THEN COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
@@ -1479,6 +1481,7 @@ async def list_tenant_reports(
             "report_type": r["report_type"],
             "executive_summary": r["executive_summary"],
             "vendor_filter": r["vendor_filter"],
+            "category_filter": r["category_filter"],
             "status": r["status"],
             "quality_status": r["quality_status"],
             "quality_score": r["quality_score"],

@@ -216,7 +216,13 @@ Extract the reviewer's company name ONLY when explicitly stated in the review te
 - If reviewer_company is already provided in the input and is not empty, use that value
 
 ### pain_category
-One of: pricing, features, reliability, support, integration, performance, security, ux, onboarding, technical_debt, contract_lock_in, data_migration, api_limitations, other. Pick the PRIMARY driver of dissatisfaction -- the root cause that, if fixed, would retain the customer. When multiple pains co-occur, apply these tiebreakers: (1) the pain explicitly linked to switching/evaluation language wins; (2) pricing beats other categories only when dollar amounts or "too expensive" are stated; (3) "other" is a last resort -- prefer a specific category even if the fit is imperfect. For comparison/evaluation posts where no pain is expressed, use "features" (the reviewer is comparing capabilities).
+One of: pricing, features, reliability, support, integration, performance, security, ux, onboarding, technical_debt, contract_lock_in, data_migration, api_limitations, outcome_gap, admin_burden, ai_hallucination, integration_debt, other. Pick the PRIMARY driver of dissatisfaction -- the root cause that, if fixed, would retain the customer. When multiple pains co-occur, apply these tiebreakers: (1) the pain explicitly linked to switching/evaluation language wins; (2) pricing beats other categories only when dollar amounts or "too expensive" are stated; (3) "other" is a last resort -- prefer a specific category even if the fit is imperfect. For comparison/evaluation posts where no pain is expressed, use "features" (the reviewer is comparing capabilities).
+
+Category definitions for the less obvious values:
+- **outcome_gap**: The product fails to deliver the promised business outcome or ROI. The reviewer invested in the product expecting measurable results (pipeline growth, time saved, fewer errors) and those results did not materialize. Examples: "We can't show any ROI from this tool", "the outcomes we were promised never happened", "metrics haven't improved after 2 years".
+- **admin_burden**: Excessive administration overhead required to keep the product running. Configuration is complex, ongoing maintenance is high, or the product demands constant babysitting. Distinct from ux (which is about usability) -- admin_burden is about the operational cost of ownership. Examples: "takes a dedicated admin just to maintain it", "every update requires hours of reconfiguration", "constant manual cleanup required".
+- **ai_hallucination**: AI-powered features produce unreliable, inaccurate, or fabricated outputs. The reviewer specifically cites the AI component as broken, wrong, or untrustworthy. Examples: "the AI assistant makes up features that don't exist", "AI summaries are consistently wrong", "can't trust the AI recommendations".
+- **integration_debt**: Integrations are brittle, break frequently, or impose a high ongoing maintenance burden. Distinct from integration (missing integrations) -- integration_debt is about the cost of maintaining integrations that nominally exist. Examples: "our integrations break with every update", "API rate limits make automation impossible", "spent 3 months fixing a broken Salesforce sync".
 
 ### competitors_mentioned
 Only include ACTUAL product/vendor names explicitly mentioned in the review text. Never invent or assume competitors.
@@ -280,7 +286,7 @@ EXACT text from the review. Must be verbatim. Pick 1-3 phrases that best demonst
 Array of specific product features or capabilities of this competitor that the reviewer cited as attractive. Extract only features explicitly mentioned in the review text (e.g., "workflow builder", "free tier", "better API docs"). Empty array if no specific features mentioned. Never invent features.
 
 ### pain_categories
-Array of `{category, severity}` objects ranking ALL pains mentioned in the review. Categories use the same values as `pain_category`. Set `pain_category` (singular) to `pain_categories[0].category` for backward compatibility.
+Array of `{category, severity}` objects ranking ALL pains mentioned in the review. Categories use the same values as `pain_category` (pricing, features, reliability, support, integration, performance, security, ux, onboarding, technical_debt, contract_lock_in, data_migration, api_limitations, outcome_gap, admin_burden, ai_hallucination, integration_debt, other). Set `pain_category` (singular) to `pain_categories[0].category` for backward compatibility.
 - **severity "primary"**: Root cause of dissatisfaction, the thing that would make them leave
 - **severity "secondary"**: Contributing factor, mentioned alongside primary
 - **severity "minor"**: Mentioned in passing, not a driver of dissatisfaction

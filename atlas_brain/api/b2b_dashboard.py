@@ -180,6 +180,7 @@ async def list_signals(
                snap.new_feature_velocity AS new_feature_velocity,
                snap.employee_growth_rate AS employee_growth_rate,
                sig.archetype, sig.archetype_confidence, sig.reasoning_mode,
+               sig.reasoning_risk_level, sig.keyword_spike_count, sig.insider_signal_count,
                sig.last_computed_at
         FROM b2b_churn_signals sig
         LEFT JOIN LATERAL (
@@ -227,6 +228,9 @@ async def list_signals(
             "archetype": r["archetype"],
             "archetype_confidence": _safe_float(r["archetype_confidence"]),
             "reasoning_mode": r["reasoning_mode"],
+            "reasoning_risk_level": r["reasoning_risk_level"],
+            "keyword_spike_count": r["keyword_spike_count"],
+            "insider_signal_count": r["insider_signal_count"],
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
         }
         for r in rows
@@ -292,6 +296,7 @@ async def list_slow_burn_watchlist(
                    snap.new_feature_velocity AS new_feature_velocity,
                    snap.employee_growth_rate AS employee_growth_rate,
                    sig.archetype, sig.archetype_confidence, sig.reasoning_mode,
+                   sig.reasoning_risk_level, sig.keyword_spike_count, sig.insider_signal_count,
                    sig.last_computed_at,
                    ROW_NUMBER() OVER (
                        PARTITION BY sig.vendor_name
@@ -317,6 +322,7 @@ async def list_slow_burn_watchlist(
                support_sentiment, legacy_support_score,
                new_feature_velocity, employee_growth_rate,
                archetype, archetype_confidence, reasoning_mode,
+               reasoning_risk_level, keyword_spike_count, insider_signal_count,
                last_computed_at
         FROM ranked_signals
         WHERE vendor_row_rank = 1
@@ -350,6 +356,9 @@ async def list_slow_burn_watchlist(
                 "archetype": r["archetype"],
                 "archetype_confidence": _safe_float(r["archetype_confidence"]),
                 "reasoning_mode": r["reasoning_mode"],
+                "reasoning_risk_level": r["reasoning_risk_level"],
+                "keyword_spike_count": r["keyword_spike_count"],
+                "insider_signal_count": r["insider_signal_count"],
                 "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
             }
             for r in rows
@@ -469,6 +478,17 @@ async def get_signal(
         "archetype_confidence": _safe_float(row.get("archetype_confidence")),
         "reasoning_mode": row.get("reasoning_mode"),
         "falsification_conditions": _safe_json(row.get("falsification_conditions")),
+        "reasoning_risk_level": row.get("reasoning_risk_level"),
+        "reasoning_executive_summary": row.get("reasoning_executive_summary"),
+        "reasoning_key_signals": _safe_json(row.get("reasoning_key_signals")),
+        "reasoning_uncertainty_sources": _safe_json(row.get("reasoning_uncertainty_sources")),
+        "insider_signal_count": row.get("insider_signal_count"),
+        "insider_org_health_summary": row.get("insider_org_health_summary"),
+        "insider_talent_drain_rate": _safe_float(row.get("insider_talent_drain_rate")),
+        "insider_quotable_evidence": _safe_json(row.get("insider_quotable_evidence")),
+        "keyword_spike_count": row.get("keyword_spike_count"),
+        "keyword_spike_keywords": _safe_json(row.get("keyword_spike_keywords")),
+        "keyword_trend_summary": row.get("keyword_trend_summary"),
         "last_computed_at": str(row["last_computed_at"]) if row["last_computed_at"] else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }
@@ -607,18 +627,32 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
 
     hi_rows = await pool.fetch(
         f"""
-        SELECT reviewer_company,
-               (enrichment->>'urgency_score')::numeric AS urgency,
-               enrichment->>'pain_category' AS pain,
-               reviewer_title, company_size_raw,
-               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-        FROM b2b_reviews
-        WHERE vendor_name ILIKE '%' || $1 || '%'
-          AND enrichment_status = 'enriched'
-          AND (enrichment->>'urgency_score')::numeric >= 7
-          AND reviewer_company IS NOT NULL AND reviewer_company != ''
-          AND {_suppress_predicate('review')}
-        ORDER BY (enrichment->>'urgency_score')::numeric DESC
+        SELECT COALESCE(ar.display_name, ar.input_company_name, r.reviewer_company) AS reviewer_company,
+               (r.enrichment->>'urgency_score')::numeric AS urgency,
+               r.enrichment->>'pain_category' AS pain,
+               r.reviewer_title, r.company_size_raw,
+               COALESCE(poc.industry, r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
+               poc.founded_year,
+               poc.total_funding,
+               poc.latest_funding_stage,
+               poc.headcount_growth_6m,
+               poc.headcount_growth_12m,
+               poc.headcount_growth_24m,
+               poc.publicly_traded_exchange,
+               poc.publicly_traded_symbol,
+               poc.short_description AS company_description
+        FROM b2b_reviews r
+        LEFT JOIN b2b_account_resolution ar
+            ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+        LEFT JOIN prospect_org_cache poc
+            ON poc.company_name_norm = ar.normalized_company_name
+        WHERE r.vendor_name ILIKE '%' || $1 || '%'
+          AND r.enrichment_status = 'enriched'
+          AND (r.enrichment->>'urgency_score')::numeric >= 7
+          AND COALESCE(ar.display_name, ar.input_company_name, r.reviewer_company) IS NOT NULL
+          AND COALESCE(ar.display_name, ar.input_company_name, r.reviewer_company) != ''
+          AND {_suppress_predicate('review', 'r.id', 'r.source', 'r.vendor_name')}
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
         LIMIT 5
         """,
         vname,
@@ -663,6 +697,17 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
             "archetype_confidence": _safe_float(signal_row.get("archetype_confidence")),
             "reasoning_mode": signal_row.get("reasoning_mode"),
             "falsification_conditions": _safe_json(signal_row.get("falsification_conditions")),
+            "reasoning_risk_level": signal_row.get("reasoning_risk_level"),
+            "reasoning_executive_summary": signal_row.get("reasoning_executive_summary"),
+            "reasoning_key_signals": _safe_json(signal_row.get("reasoning_key_signals")),
+            "reasoning_uncertainty_sources": _safe_json(signal_row.get("reasoning_uncertainty_sources")),
+            "insider_signal_count": signal_row.get("insider_signal_count"),
+            "insider_org_health_summary": signal_row.get("insider_org_health_summary"),
+            "insider_talent_drain_rate": _safe_float(signal_row.get("insider_talent_drain_rate")),
+            "insider_quotable_evidence": _safe_json(signal_row.get("insider_quotable_evidence")),
+            "keyword_spike_count": signal_row.get("keyword_spike_count"),
+            "keyword_spike_keywords": _safe_json(signal_row.get("keyword_spike_keywords")),
+            "keyword_trend_summary": signal_row.get("keyword_trend_summary"),
             "last_computed_at": str(signal_row["last_computed_at"]) if signal_row["last_computed_at"] else None,
         }
         sig = await _apply_field_overrides(pool, "churn_signal", str(signal_row["id"]), sig)
@@ -684,6 +729,15 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
             "title": r["reviewer_title"],
             "company_size": r["company_size_raw"],
             "industry": r["industry"],
+            "founded_year": r["founded_year"],
+            "total_funding": r["total_funding"],
+            "funding_stage": r["latest_funding_stage"],
+            "headcount_growth_6m": _safe_float(r["headcount_growth_6m"]),
+            "headcount_growth_12m": _safe_float(r["headcount_growth_12m"]),
+            "headcount_growth_24m": _safe_float(r["headcount_growth_24m"]),
+            "publicly_traded": r["publicly_traded_exchange"] or None,
+            "ticker": r["publicly_traded_symbol"] or None,
+            "company_description": r["company_description"],
         }
         for r in hi_rows
     ]
@@ -714,7 +768,13 @@ VALID_REPORT_TYPES = (
     "battle_card",
     "accounts_in_motion",
     "challenger_brief",
+    "vendor_deep_dive",
 )
+
+# challenger_intel is the UI-facing alias for the challenger_brief report type
+_REPORT_TYPE_ALIASES: dict[str, str] = {
+    "challenger_intel": "challenger_brief",
+}
 
 
 @router.post("/reports/compare")
@@ -983,8 +1043,9 @@ async def list_reports(
         idx += 1
 
     if report_type:
+        resolved_type = _REPORT_TYPE_ALIASES.get(report_type, report_type)
         conditions.append(f"report_type = ${idx}")
-        params.append(report_type)
+        params.append(resolved_type)
         idx += 1
 
     if vendor_filter:
@@ -1160,8 +1221,10 @@ async def search_reviews(
     vendor_name: Optional[str] = Query(None),
     pain_category: Optional[str] = Query(None),
     min_urgency: Optional[float] = Query(None, ge=0, le=10),
+    min_relevance: Optional[float] = Query(None, ge=0, le=1),
     company: Optional[str] = Query(None),
     has_churn_intent: Optional[bool] = Query(None),
+    exclude_low_fidelity: bool = Query(False),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
     user: AuthUser | None = Depends(optional_auth),
@@ -1206,6 +1269,14 @@ async def search_reviews(
         params.append(has_churn_intent)
         idx += 1
 
+    if min_relevance is not None:
+        conditions.append(f"COALESCE(relevance_score, 0.5) >= ${idx}")
+        params.append(min_relevance)
+        idx += 1
+
+    if exclude_low_fidelity:
+        conditions.append("(low_fidelity IS NULL OR low_fidelity = false)")
+
     conditions.append(_suppress_predicate('review'))
     capped = min(limit, 100)
     params.append(capped)
@@ -1227,7 +1298,9 @@ async def search_reviews(
                enrichment->'positive_aspects' AS positive_raw,
                enrichment->'specific_complaints' AS complaints_raw,
                enriched_at, reviewer_title, company_size_raw,
-               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
+               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
+               relevance_score, author_churn_score,
+               low_fidelity, low_fidelity_reasons
         FROM b2b_reviews
         WHERE {where}
         ORDER BY (enrichment->>'urgency_score')::numeric DESC
@@ -1260,6 +1333,10 @@ async def search_reviews(
             "reviewer_title": r["reviewer_title"],
             "company_size": r["company_size_raw"],
             "industry": r["industry"],
+            "relevance_score": _safe_float(r["relevance_score"]),
+            "author_churn_score": _safe_float(r["author_churn_score"]),
+            "low_fidelity": bool(r["low_fidelity"]) if r["low_fidelity"] is not None else False,
+            "low_fidelity_reasons": _safe_json(r["low_fidelity_reasons"]) or [],
         }
         for r in rows
     ]
@@ -3596,6 +3673,8 @@ async def export_signals(
                snap.legacy_support_score AS legacy_support_score,
                snap.new_feature_velocity AS new_feature_velocity,
                snap.employee_growth_rate AS employee_growth_rate,
+               sig.archetype, sig.archetype_confidence, sig.reasoning_risk_level,
+               sig.keyword_spike_count, sig.insider_signal_count,
                sig.last_computed_at
         FROM b2b_churn_signals sig
         LEFT JOIN LATERAL (
@@ -3628,6 +3707,11 @@ async def export_signals(
             "legacy_support_score": _safe_float(r["legacy_support_score"], ""),
             "new_feature_velocity": _safe_float(r["new_feature_velocity"], ""),
             "employee_growth_rate": _safe_float(r["employee_growth_rate"], ""),
+            "archetype": r["archetype"] or "",
+            "archetype_confidence": _safe_float(r["archetype_confidence"], ""),
+            "reasoning_risk_level": r["reasoning_risk_level"] or "",
+            "keyword_spike_count": r["keyword_spike_count"] if r["keyword_spike_count"] is not None else "",
+            "insider_signal_count": r["insider_signal_count"] if r["insider_signal_count"] is not None else "",
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else "",
         }
         for r in rows

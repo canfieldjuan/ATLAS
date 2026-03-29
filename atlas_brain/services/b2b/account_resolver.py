@@ -100,14 +100,32 @@ _BIO_COMPANY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ), "work_at_company"),
 
     # "Engineer @ Stripe"
+    # Negative lookahead blocks conjunctions/pronouns/prepositions/past-tense
+    # verbs that appear in conversational text — e.g. "working @ mentioned on a
+    # card" or "dev @ all the things".
     (re.compile(
-        r"\b\w+(?:\s+\w+){0,2}\s*@\s*([A-Z][A-Za-z0-9\s&.'-]{2,30}?)(?:\s*[,.(|]|\s*$)",
+        r"\b\w+(?:\s+\w+){0,2}\s*@\s*"
+        r"(?!(?:and|or|but|so|yet|nor|all|both|many|most|some|any|just|also|even|"
+        r"like|this|that|these|those|on|in|by|for|with|from|about|over|under)\b"
+        r"|(?:I|we|you|they|he|she|it)\b"
+        r"|(?:my|our|your|their|its|the|a|an)\s"
+        r"|(?:mentioned|posted|listed|shown|updated|added|removed|found|used|"
+        r"seen|noted|linked|tagged|created|deleted|moved|shared)\b)"
+        r"([A-Z][A-Za-z0-9\s&.'-]{2,30}?)(?:\s*[,.(|]|\s*$)",
         re.IGNORECASE,
     ), "handle_at_company"),
 
     # "Founder, Acme Inc" / "Co-founder, Acme"
+    # Negative lookahead prevents capturing sentence continuations like
+    # "Founder, and like many of you..." or "Owner, I've been using this..."
     (re.compile(
         r"\b(?:Founder|Co-?founder|Owner)\s*[,;:]\s+"
+        r"(?!(?:and|or|but|so|yet|nor|for|although|because|while|when|if|as|that|"
+        r"which|who|where|what|though|unless|until|since)\b"
+        r"|(?:I|i'm|i've|i'll|i'd|we|you|they|he|she|it)\b"
+        r"|(?:my|our|your|their|its|this|that|these|those|all|many|most|some|any|"
+        r"no|not|just|also|even|like|very|more|less|too)\b"
+        r"|(?:a|an|the)\s)"
         r"([A-Z][A-Za-z0-9\s&.'-]{2,40}?)(?:\s*[,.(|]|\s*$)",
         re.IGNORECASE,
     ), "founder_of_company"),
@@ -151,10 +169,19 @@ _REJECT_COMPANY_TERMS = frozenset({
     "workflow management", "thought management", "customer relationship management",
     "automated project management", "advanced use cases",
     "all our hr materials", "all our employee-related information",
+    "all of our daily communication", "all of our hr materials",
     "warrants the cost", "is expiring",
     "meetings and scheduling", "my new company",
-    # Founder pattern false positives
+    "daily communication", "daily standup", "daily standups",
+    "basically everything", "almost everything", "pretty much everything",
+    "all the things", "all things considered",
+    "various tools", "various platforms", "many tools", "many platforms",
+    "adopted salesforce", "replaced by", "switching from", "migrating to",
+    "automation", "integrations", "workflows", "processes",
+    "multiple projects", "multiple teams", "multiple departments",
+    # Founder pattern false positives (sentence continuations)
     "entrepreneur", "freelancer", "self-employed", "indie hacker",
+    "many of you", "like many of you",
     # Reddit flair false positives
     "moderator", "mod", "admin", "helper", "verified",
 })
@@ -174,6 +201,10 @@ def _clean_extracted_name(raw: str) -> str:
     name = " ".join(words).strip()
     # Remove trailing punctuation
     name = re.sub(r"[,;:.|-]+$", "", name).strip()
+    # Reject if too many words — real company names are rarely > 6 words.
+    # Anything longer is almost certainly a sentence fragment.
+    if len(name.split()) > 6:
+        return ""
     return name
 
 

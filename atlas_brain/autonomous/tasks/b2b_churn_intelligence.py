@@ -757,7 +757,11 @@ async def persist_single_vendor_reasoning(
         SET archetype = $2,
             archetype_confidence = $3,
             reasoning_mode = $4,
-            falsification_conditions = $5
+            falsification_conditions = $5,
+            reasoning_risk_level = $6,
+            reasoning_executive_summary = $7,
+            reasoning_key_signals = $8,
+            reasoning_uncertainty_sources = $9
         WHERE vendor_name = $1
         """,
         vendor_name,
@@ -765,6 +769,10 @@ async def persist_single_vendor_reasoning(
         reasoning_result.confidence,
         reasoning_result.mode,
         json.dumps(conclusion.get("falsification_conditions", [])),
+        conclusion.get("risk_level"),
+        conclusion.get("executive_summary"),
+        json.dumps(conclusion.get("key_signals", [])),
+        json.dumps(conclusion.get("uncertainty_sources", [])),
     )
 
 
@@ -963,6 +971,38 @@ async def reconstruct_reasoning_lookup(
             "falsification_conditions": _json_list_or_default(r["falsification_conditions"]),
             "uncertainty_sources": _json_list_or_default(r["reasoning_uncertainty_sources"]),
         }
+
+    # Fallback: for vendors absent from churn_signals (or missing archetype),
+    # pull synthesis_wedge from b2b_reasoning_synthesis (schema v2.2+).
+    # This keeps the two tasks in sync even when synthesis runs before intelligence.
+    synth_rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (vendor_name)
+               vendor_name,
+               synthesis->>'synthesis_wedge'       AS synthesis_wedge,
+               synthesis->>'synthesis_wedge_label' AS synthesis_wedge_label
+        FROM b2b_reasoning_synthesis
+        WHERE as_of_date >= $1
+          AND synthesis->>'synthesis_wedge' IS NOT NULL
+          AND synthesis->>'synthesis_wedge' != ''
+        ORDER BY vendor_name, as_of_date DESC
+        """,
+        as_of,
+    )
+    for r in synth_rows:
+        vname = r["vendor_name"]
+        if vname not in lookup:
+            lookup[vname] = {
+                "archetype": r["synthesis_wedge"],
+                "confidence": 0.0,
+                "mode": "synthesis_fallback",
+                "risk_level": "",
+                "executive_summary": "",
+                "key_signals": [],
+                "falsification_conditions": [],
+                "uncertainty_sources": [],
+            }
+
     return lookup
 
 
@@ -1609,7 +1649,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     prior_limit = cfg.prior_reports_limit
     today = date.today()
     from ...pipelines.llm import get_pipeline_llm as _get_plm
-    _ci_llm = _get_plm(workload="vllm")
+    _llm_workload = cfg.intelligence_llm_backend if cfg.intelligence_llm_backend in ("vllm", "anthropic", "auto") else "vllm"
+    _ci_llm = _get_plm(workload=_llm_workload)
     span = tracer.start_span(
         span_name="b2b.churn_intelligence.run",
         operation_type="intelligence",
@@ -2156,10 +2197,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         )
                         conclusion = sr.conclusion or {}
                         reasoning_lookup[vname] = {
-                            "archetype": conclusion.get("archetype", ""),
+                            "archetype": conclusion.get("archetype") or None,
                             "confidence": sr.confidence,
-                            "risk_level": conclusion.get("risk_level", ""),
-                            "executive_summary": conclusion.get("executive_summary", ""),
+                            "risk_level": conclusion.get("risk_level") or None,
+                            "executive_summary": conclusion.get("executive_summary") or None,
                             "key_signals": conclusion.get("key_signals", []),
                             "falsification_conditions": conclusion.get("falsification_conditions", []),
                             "uncertainty_sources": conclusion.get("uncertainty_sources", []),
@@ -2787,16 +2828,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     else {}
                 )
                 _battle_map[(vs[0], vs[1])] = conclusion
-                # Invert winner/loser for the reverse direction so the
-                # battle summary is coherent with from_vendor/to_vendor framing
-                if conclusion:
-                    _battle_map[(vs[1], vs[0])] = {
-                        **conclusion,
-                        "winner": conclusion.get("loser"),
-                        "loser": conclusion.get("winner"),
-                    }
-                else:
-                    _battle_map[(vs[1], vs[0])] = conclusion
+                # Do NOT map the reverse direction: the conclusion prose is
+                # generated for (vs[0], vs[1]) specifically and would be
+                # misleading if attached to the opposite directed edge.
 
         # Build and persist per unique pair
         _all_pairs: set[tuple[str, str]] = set()
@@ -3314,10 +3348,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     _uuid.UUID(rid) for rid in prov.get("sample_review_ids", [])
                     if rid
                 ]
-                confidence = _compute_evidence_confidence(
+                confidence = min(_compute_evidence_confidence(
                     prov["mention_count"],
                     prov.get("source_distribution", {}),
-                )
+                ), 1.0)
+                raw_avg_rating = prov.get("avg_rating")
+                avg_rating = min(float(raw_avg_rating), 9.99) if raw_avg_rating is not None else None
                 await conn.execute(
                     """
                     INSERT INTO b2b_vendor_pain_points (
@@ -3346,7 +3382,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     prov.get("secondary_count", 0),
                     prov.get("minor_count", 0),
                     prov.get("avg_urgency"),
-                    prov.get("avg_rating"),
+                    avg_rating,
                     json.dumps(prov.get("source_distribution", {})),
                     sample_ids,
                     confidence,
@@ -4021,7 +4057,7 @@ async def _upsert_churn_signals(
                           $34, $35, $36, $37,
                           $38, $39, $40, $41,
                           $42)
-                ON CONFLICT (vendor_name, COALESCE(product_category, '')) DO UPDATE SET
+                ON CONFLICT (vendor_name) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
                     churn_intent_count = EXCLUDED.churn_intent_count,
@@ -4053,14 +4089,14 @@ async def _upsert_churn_signals(
                     insider_org_health_summary = EXCLUDED.insider_org_health_summary,
                     insider_talent_drain_rate = EXCLUDED.insider_talent_drain_rate,
                     insider_quotable_evidence = EXCLUDED.insider_quotable_evidence,
-                    archetype = EXCLUDED.archetype,
-                    archetype_confidence = EXCLUDED.archetype_confidence,
-                    reasoning_mode = EXCLUDED.reasoning_mode,
-                    falsification_conditions = EXCLUDED.falsification_conditions,
-                    reasoning_risk_level = EXCLUDED.reasoning_risk_level,
-                    reasoning_executive_summary = EXCLUDED.reasoning_executive_summary,
-                    reasoning_key_signals = EXCLUDED.reasoning_key_signals,
-                    reasoning_uncertainty_sources = EXCLUDED.reasoning_uncertainty_sources,
+                    archetype = COALESCE(EXCLUDED.archetype, b2b_churn_signals.archetype),
+                    archetype_confidence = COALESCE(EXCLUDED.archetype_confidence, b2b_churn_signals.archetype_confidence),
+                    reasoning_mode = COALESCE(EXCLUDED.reasoning_mode, b2b_churn_signals.reasoning_mode),
+                    falsification_conditions = COALESCE(EXCLUDED.falsification_conditions, b2b_churn_signals.falsification_conditions),
+                    reasoning_risk_level = COALESCE(EXCLUDED.reasoning_risk_level, b2b_churn_signals.reasoning_risk_level),
+                    reasoning_executive_summary = COALESCE(EXCLUDED.reasoning_executive_summary, b2b_churn_signals.reasoning_executive_summary),
+                    reasoning_key_signals = COALESCE(EXCLUDED.reasoning_key_signals, b2b_churn_signals.reasoning_key_signals),
+                    reasoning_uncertainty_sources = COALESCE(EXCLUDED.reasoning_uncertainty_sources, b2b_churn_signals.reasoning_uncertainty_sources),
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
