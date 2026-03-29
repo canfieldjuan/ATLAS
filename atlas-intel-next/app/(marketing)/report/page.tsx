@@ -284,6 +284,12 @@ function ReportView({ data }: { data: ReportData }) {
   const namedAccountCount = Number(b.named_account_count) || asArray(b.named_accounts).length
   const featureGaps = asArray(b.top_feature_gaps)
   const painLabels = asRecord(b.pain_labels) as Record<string, string>
+  const timingSummary = firstStringValue(b.timing_summary) || ''
+  const priorityTriggers = asArray(b.priority_timing_triggers)
+  const buyerProfiles = asArray(b.buyer_profiles).filter(isRecord)
+  const crossVendorConclusions = asArray(b.cross_vendor_conclusions).filter(isRecord)
+  const segIntel = asRecord(b.segment_intelligence)
+  const topSegments = asArray(segIntel.top_segments).filter(isRecord)
 
   return (
     <PublicLayout variant="report" onCtaClick={() => setShowPricing(true)}>
@@ -421,6 +427,116 @@ function ReportView({ data }: { data: ReportData }) {
             </div>
           )}
         </div>
+
+        {/* Segment Intelligence */}
+        {topSegments.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 mb-6">
+            <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-4">Segments Switching</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-slate-400 border-b border-slate-700">
+                    <th className="text-left pb-2 font-medium">Role</th>
+                    <th className="text-left pb-2 font-medium">Stage</th>
+                    <th className="text-left pb-2 font-medium">Top Pain</th>
+                    <th className="text-right pb-2 font-medium">Signals</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topSegments.slice(0, 4).map((seg, i: number) => (
+                    <tr key={i} className="border-b border-slate-800 last:border-0">
+                      <td className="py-2 text-slate-300 capitalize">{String(seg.role_type || '').replace(/_/g, ' ')}</td>
+                      <td className="py-2 text-slate-400 capitalize">{String(seg.top_buying_stage || '').replace(/_/g, ' ')}</td>
+                      <td className="py-2 text-slate-400">{String(seg.top_pain || '')}</td>
+                      <td className="py-2 text-right text-slate-400">{Number(seg.review_count || 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Timing Window */}
+        {(timingSummary || priorityTriggers.length > 0) && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 mb-6">
+            <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-3">Timing Window</h3>
+            {timingSummary && (
+              <p className="text-sm text-slate-300 mb-3">{timingSummary}</p>
+            )}
+            {priorityTriggers.length > 0 && (
+              <ul className="space-y-1">
+                {priorityTriggers.slice(0, 3).map((t, i: number) => (
+                  <li key={i} className="text-sm text-slate-400 flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5">--</span>
+                    {typeof t === 'string' ? t : firstStringValue(t) || ''}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Competitive Intel */}
+        {crossVendorConclusions.filter(c => String(c.analysis_type) === 'pairwise_battle').slice(0, 2).length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 mb-6">
+            <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-4">Competitive Intel</h3>
+            <div className="space-y-4">
+              {crossVendorConclusions
+                .filter(c => String(c.analysis_type) === 'pairwise_battle')
+                .slice(0, 2)
+                .map((c, i: number) => {
+                  const vendors = asArray(c.vendors)
+                  const vs = vendors.map(v => String(v)).filter(Boolean).join(' vs ')
+                  const conf = Number(c.confidence_score || c.confidence || 0)
+                  const confLabel = conf >= 0.7 ? 'High' : conf >= 0.4 ? 'Medium' : 'Low'
+                  const confColor = conf >= 0.7 ? 'text-emerald-400' : conf >= 0.4 ? 'text-amber-400' : 'text-slate-400'
+                  return (
+                    <div key={i} className="border-l-2 border-cyan-500/40 pl-3">
+                      {vs && <div className="text-xs font-medium text-slate-300 mb-1">{vs}</div>}
+                      <p className="text-sm text-slate-400 mb-1">
+                        {firstStringValue(c.conclusion) || firstStringValue(c.summary) || ''}
+                      </p>
+                      <span className={`text-xs font-medium ${confColor}`}>{confLabel} confidence</span>
+                    </div>
+                  )
+                })}
+            </div>
+          </div>
+        )}
+
+        {/* Who Is Evaluating */}
+        {buyerProfiles.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 mb-6">
+            <h3 className="text-sm font-medium text-cyan-400 uppercase tracking-wider mb-4">Who Is Evaluating</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-slate-400 border-b border-slate-700">
+                    <th className="text-left pb-2 font-medium">Role</th>
+                    <th className="text-left pb-2 font-medium">Stage</th>
+                    <th className="text-right pb-2 font-medium">Urgency</th>
+                    <th className="text-right pb-2 font-medium">Signals</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {buyerProfiles.slice(0, 4).map((bp, i: number) => {
+                    const urgency = Number(bp.avg_urgency || 0)
+                    const urgencyColor = urgency >= 7 ? 'text-red-400' : urgency >= 4 ? 'text-amber-400' : 'text-emerald-400'
+                    return (
+                      <tr key={i} className="border-b border-slate-800 last:border-0">
+                        <td className="py-2 text-slate-300 capitalize">{String(bp.role_type || '').replace(/_/g, ' ')}</td>
+                        <td className="py-2 text-slate-400 capitalize">{String(bp.buying_stage || '').replace(/_/g, ' ')}</td>
+                        <td className={`py-2 text-right font-medium ${urgencyColor}`}>{urgency.toFixed(1)}</td>
+                        <td className="py-2 text-right text-slate-400">{Number(bp.review_count || 0)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Customer Quotes */}
         {evidence.length > 0 && (

@@ -1,4 +1,5 @@
 import type {
+  AccountPressureMetricsViewModel,
   ActiveEvaluationDeadlineViewModel,
   AccountsInMotionAccountViewModel,
   AccountsInMotionViewModel,
@@ -27,7 +28,9 @@ import type {
   ResourceAsymmetryViewModel,
   SwitchingTriggerViewModel,
   TalkTrackViewModel,
+  TimingMetricsViewModel,
   TrendAnalysisViewModel,
+  VendorDeepDiveViewModel,
   VendorScorecardViewModel,
   WeeklyChurnFeedItemViewModel,
   WeaknessAnalysisItemViewModel,
@@ -192,6 +195,10 @@ function toCategoryCouncil(value: unknown): CategoryCouncilViewModel | null {
     category: asString(obj.category),
     conclusion: asString(obj.conclusion),
     confidence: asNumber(obj.confidence) ?? null,
+    market_regime: asString(obj.market_regime),
+    winner: asString(obj.winner),
+    loser: asString(obj.loser),
+    durability: asString(obj.durability),
     key_insights: toKeyInsights(obj.key_insights),
   }
 }
@@ -203,6 +210,10 @@ function toActiveEvaluationDeadlines(value: unknown): ActiveEvaluationDeadlineVi
     contract_end: asString(item.contract_end),
     evaluation_deadline: asString(item.evaluation_deadline),
     urgency: asNumber(item.urgency) ?? null,
+    buying_stage: asString(item.buying_stage),
+    role: asString(item.role),
+    pain: asString(item.pain),
+    source: asString(item.source),
   }))
 }
 
@@ -348,7 +359,32 @@ function toMotionAccounts(value: unknown): AccountsInMotionAccountViewModel[] {
     domain: asString(item.domain),
     alternatives_considering: toStringArray(item.alternatives_considering),
     top_quote: asString(item.top_quote),
+    decision_maker: item.decision_maker === true,
+    confidence: asNumber(item.confidence) ?? null,
+    quality_flags: toStringArray(item.quality_flags),
+    contact_name: asString(item.contact_name),
+    contact_title: asString(item.contact_title) || asString(item.title),
   }))
+}
+
+function toAccountPressureMetrics(value: unknown): AccountPressureMetricsViewModel | undefined {
+  const obj = asRecord(value)
+  if (Object.keys(obj).length === 0) return undefined
+  return {
+    total_accounts: asNumber(obj.total_accounts) ?? null,
+    high_intent_count: asNumber(obj.high_intent_count) ?? null,
+    active_eval_count: asNumber(obj.active_eval_count) ?? null,
+  }
+}
+
+function toTimingMetrics(value: unknown): TimingMetricsViewModel | undefined {
+  const obj = asRecord(value)
+  if (Object.keys(obj).length === 0) return undefined
+  return {
+    immediate_trigger_count: asNumber(obj.immediate_trigger_count) ?? null,
+    active_eval_signals: asNumber(obj.active_eval_signals) ?? null,
+    sentiment_direction: asString(obj.sentiment_direction),
+  }
 }
 
 function toComparisonMetricSnapshot(value: unknown): ComparisonMetricSnapshotViewModel {
@@ -411,7 +447,81 @@ export function toWeeklyChurnFeedItems(value: unknown): WeeklyChurnFeedItemViewM
     named_accounts: toRecordArray(item.named_accounts).map((account) => ({
       company: asString(account.company),
       urgency: asNumber(account.urgency) ?? null,
+      title: asString(account.title),
+      buying_stage: asString(account.buying_stage),
+      company_size: asString(account.company_size),
+      source: asString(account.source),
+      decision_maker: account.decision_maker === true,
+      confidence_score: asNumber(account.confidence_score) ?? null,
     })),
+    category_council: toCategoryCouncil(item.category_council),
+    retention_strengths: toRecordArray(item.retention_strengths).map((s) => ({
+      area: asString(s.area),
+      mention_count: asNumber(s.mention_count) ?? null,
+    })),
+    account_pressure_summary: asString(item.account_pressure_summary),
+    timing_summary: asString(item.timing_summary),
+    priority_timing_triggers: toStringArray(item.priority_timing_triggers),
+  }))
+}
+
+export function toVendorDeepDives(value: unknown): VendorDeepDiveViewModel[] {
+  return toRecordArray(value).map((item) => ({
+    vendor: asString(item.vendor),
+    category: asString(item.category),
+    total_reviews: asNumber(item.total_reviews) ?? null,
+    churn_signal_density: asNumber(item.churn_signal_density) ?? null,
+    churn_pressure_score: asNumber(item.churn_pressure_score) ?? null,
+    avg_urgency: asNumber(item.avg_urgency) ?? null,
+    risk_level: asString(item.risk_level),
+    sentiment_direction: asString(item.sentiment_direction),
+    trend: asString(item.trend),
+    archetype: asString(item.archetype),
+    archetype_confidence: asNumber(item.archetype_confidence) ?? null,
+    dm_churn_rate: asNumber(item.dm_churn_rate) ?? null,
+    price_complaint_rate: asNumber(item.price_complaint_rate) ?? null,
+    dominant_buyer_role: asString(item.dominant_buyer_role),
+    pain_breakdown: toRecordArray(item.pain_breakdown).map((p) => ({
+      category: asString(p.category),
+      count: asNumber(p.count) ?? null,
+      pct: asNumber(p.pct) ?? null,
+    })),
+    displacement_targets: toRecordArray(item.displacement_targets).map((d) => ({
+      vendor: asString(d.vendor),
+      mention_count: asNumber(d.mention_count) ?? null,
+      primary_driver: asString(d.primary_driver),
+    })),
+    feature_gaps: toRecordArray(item.feature_gaps).map((f) => ({
+      feature: asString(f.feature),
+      mentions: asNumber(f.mentions) ?? null,
+    })),
+    industry_distribution: toRecordArray(item.industry_distribution).map((i) => ({
+      industry: asString(i.industry),
+      count: asNumber(i.count) ?? null,
+    })),
+    company_size_distribution: toRecordArray(item.company_size_distribution).map((s) => ({
+      size: asString(s.size),
+      count: asNumber(s.count) ?? null,
+    })),
+    case_studies: toRecordArray(item.case_studies).map((c) => ({
+      quote: asString(c.quote),
+      company: asString(c.company),
+      urgency: asNumber(c.urgency) ?? null,
+      title: asString(c.title),
+    })),
+    sentiment_breakdown: (() => {
+      const sb = asRecord(item.sentiment_breakdown)
+      return Object.keys(sb).length > 0 ? {
+        positive: asNumber(sb.positive) ?? null,
+        negative: asNumber(sb.negative) ?? null,
+        neutral: asNumber(sb.neutral) ?? null,
+      } : undefined
+    })(),
+    retention_strengths: toRecordArray(item.retention_strengths).map((s) => ({
+      area: asString(s.area),
+      mention_count: asNumber(s.mention_count) ?? null,
+    })),
+    category_council: toCategoryCouncil(item.category_council),
   }))
 }
 
@@ -448,6 +558,16 @@ function toComparisonFlows(value: unknown): ComparisonFlowViewModel[] {
 }
 
 export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel {
+  const timingIntel = asRecord(value.timing_intelligence)
+  const accountReasoning = asRecord(value.account_reasoning)
+  const segmentPlaybook = asRecord(value.segment_playbook)
+  const objectionData = asRecord(value.objection_data)
+
+  // active_evaluation_deadlines: prefer dedicated field, fall back to high_intent_companies
+  const evalDeadlines = Array.isArray(value.active_evaluation_deadlines) && (value.active_evaluation_deadlines as unknown[]).length > 0
+    ? toActiveEvaluationDeadlines(value.active_evaluation_deadlines)
+    : toActiveEvaluationDeadlines(value.high_intent_companies)
+
   return {
     vendor: asString(value.vendor),
     category: asString(value.category),
@@ -457,6 +577,9 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     archetype: asString(value.archetype),
     archetype_risk_level: asString(value.archetype_risk_level),
     archetype_key_signals: toStringArray(value.archetype_key_signals),
+    executive_summary: asString(value.executive_summary),
+    timing_summary: asString(value.timing_summary),
+    account_pressure_summary: asString(value.account_pressure_summary),
     vendor_weaknesses: toWeaknessAnalysis(value.vendor_weaknesses),
     weakness_analysis: toWeaknessAnalysis(value.weakness_analysis),
     customer_pain_quotes: toPainQuotes(value.customer_pain_quotes),
@@ -466,9 +589,67 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     resource_asymmetry: toResourceAsymmetry(value.resource_asymmetry),
     category_council: toCategoryCouncil(value.category_council),
     objection_handlers: toObjectionHandlers(value.objection_handlers),
+    objection_metrics: Object.keys(objectionData).length > 0 ? {
+      avg_urgency: asNumber(objectionData.avg_urgency) ?? null,
+      dm_churn_rate: asNumber(objectionData.dm_churn_rate) ?? null,
+      budget_context: asString(objectionData.budget_context),
+      price_complaint_rate: asNumber(objectionData.price_complaint_rate) ?? null,
+      churn_signal_density: asNumber(objectionData.churn_signal_density) ?? null,
+      recommend_ratio: asNumber(objectionData.recommend_ratio) ?? null,
+    } : null,
     talk_track: toTalkTrack(value.talk_track),
     recommended_plays: toRecommendedPlays(value.recommended_plays),
-    active_evaluation_deadlines: toActiveEvaluationDeadlines(value.active_evaluation_deadlines),
+    active_evaluation_deadlines: evalDeadlines,
+    segment_targets: toRecordArray(segmentPlaybook.priority_segments ?? value.segment_playbook).map((item) => ({
+      segment: asString(item.segment),
+      why_vulnerable: asString(item.why_vulnerable),
+      best_opening_angle: asString(item.best_opening_angle),
+      disqualifier: asString(item.disqualifier),
+      estimated_reach: asString(item.estimated_reach),
+    })),
+    timing_window: asString(timingIntel.best_timing_window),
+    timing_triggers: toRecordArray(timingIntel.immediate_triggers).map((item) => ({
+      trigger: asString(item.trigger),
+      action: asString(item.action),
+      urgency: asString(item.urgency),
+    })),
+    account_market_summary: asString(accountReasoning.market_summary),
+    landmine_questions: toStringArray(value.landmine_questions),
+    discovery_questions: toStringArray(value.discovery_questions),
+    retention_signals: toRecordArray(value.retention_signals).map((item) => ({
+      aspect: asString(item.aspect),
+      mentions: asNumber(item.mentions) ?? null,
+    })),
+    incumbent_strengths: toRecordArray(value.incumbent_strengths).map((item) => ({
+      area: asString(item.area),
+      source: asString(item.source),
+      mention_count: asNumber(item.mention_count) ?? null,
+    })),
+    evidence_depth_warning: asString(value.evidence_depth_warning),
+    evidence_conclusions: toStringArray(value.evidence_conclusions),
+    low_confidence_sections: toStringArray(value.low_confidence_sections),
+    falsification_conditions: toStringArray(value.falsification_conditions),
+    uncertainty_sources: toStringArray(value.uncertainty_sources),
+    account_pressure_metrics: (() => {
+      const m = asRecord(value.account_pressure_metrics)
+      return Object.keys(m).length > 0 ? {
+        total_accounts: asNumber(m.total_accounts) ?? null,
+        high_intent_count: asNumber(m.high_intent_count) ?? null,
+        active_eval_count: asNumber(m.active_eval_count) ?? null,
+      } : undefined
+    })(),
+    buyer_authority: (() => {
+      const ba = asRecord(value.buyer_authority)
+      return Object.keys(ba).length > 0 ? ba : undefined
+    })(),
+    integration_stack: toStringArray(value.integration_stack),
+    keyword_spikes: (() => {
+      const ks = asRecord(value.keyword_spikes)
+      return Object.keys(ks).length > 0 ? {
+        spike_count: asNumber(ks.spike_count) ?? null,
+        keywords: toStringArray(ks.keywords),
+      } : undefined
+    })(),
     source_distribution: Object.fromEntries(
       Object.entries(asRecord(value.source_distribution)).filter(([, count]) => typeof count === 'number'),
     ) as Record<string, number>,
@@ -529,5 +710,13 @@ export function toAccountsInMotionViewModel(value: UnknownRecord): AccountsInMot
     feature_gaps: toFeatureGaps(value.feature_gaps),
     cross_vendor_context: toCrossVendorContext(value.cross_vendor_context),
     accounts: toMotionAccounts(value.accounts),
+    account_pressure_summary: asString(value.account_pressure_summary),
+    account_pressure_metrics: toAccountPressureMetrics(value.account_pressure_metrics),
+    priority_account_names: toStringArray(value.priority_account_names),
+    timing_summary: asString(value.timing_summary),
+    timing_metrics: toTimingMetrics(value.timing_metrics),
+    priority_timing_triggers: toStringArray(value.priority_timing_triggers),
+    segment_targeting_summary: asString(value.segment_targeting_summary),
+    category_council: toCategoryCouncil(value.category_council) ?? undefined,
   }
 }

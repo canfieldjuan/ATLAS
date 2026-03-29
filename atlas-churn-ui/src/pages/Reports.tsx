@@ -21,12 +21,15 @@ export const REPORT_TYPE_COLORS: Record<string, string> = {
   account_deep_dive: 'bg-pink-500/20 text-pink-300',
   vendor_retention: 'bg-orange-500/20 text-orange-400',
   challenger_intel: 'bg-purple-500/20 text-purple-400',
+  challenger_brief: 'bg-purple-500/20 text-purple-400',
   battle_card: 'bg-red-500/20 text-red-400',
+  vendor_deep_dive: 'bg-sky-500/20 text-sky-400',
 }
 
 const QUALITY_STATUS_COLORS: Record<string, string> = {
   sales_ready: 'bg-emerald-500/20 text-emerald-300',
   needs_review: 'bg-amber-500/20 text-amber-300',
+  thin_evidence: 'bg-slate-500/20 text-slate-300',
   deterministic_fallback: 'bg-rose-500/20 text-rose-300',
 }
 
@@ -34,6 +37,7 @@ function qualityStatusLabel(status: string | null | undefined): string {
   const key = (status || '').toLowerCase()
   if (key === 'sales_ready') return 'Sales Ready'
   if (key === 'needs_review') return 'Needs Review'
+  if (key === 'thin_evidence') return 'Thin Evidence'
   if (key === 'deterministic_fallback') return 'Fallback'
   return ''
 }
@@ -258,6 +262,7 @@ export default function Reports() {
             <option value="vendor_retention">Vendor Retention</option>
             <option value="challenger_intel">Challenger Intel</option>
             <option value="battle_card">Battle Card</option>
+            <option value="vendor_deep_dive">Vendor Deep Dive</option>
           </select>
           <select
             value={qualityFilter}
@@ -432,7 +437,9 @@ export default function Reports() {
                   <p className="text-sm text-white font-medium mb-1">
                     {['vendor_comparison', 'account_comparison'].includes(r.report_type) && r.vendor_filter && r.category_filter
                       ? `${r.vendor_filter} vs ${r.category_filter}`
-                      : r.vendor_filter}
+                      : r.report_type === 'challenger_brief' && r.vendor_filter && r.category_filter
+                        ? `${r.vendor_filter} → ${r.category_filter}`
+                        : r.vendor_filter}
                   </p>
                 )}
                 <p className="text-sm text-slate-400 line-clamp-2">
