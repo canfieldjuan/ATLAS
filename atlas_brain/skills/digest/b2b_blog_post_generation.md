@@ -181,10 +181,7 @@ When `related_posts` is provided in the input, link to 2-3 related posts natural
 
 Format: `[anchor text](/blog/slug-here)`
 
-Examples:
-- "Teams evaluating alternatives may want to see our [Salesforce churn signal analysis](/blog/salesforce-deep-dive-2026-03)."
-- "For a detailed comparison, see our [HubSpot vs Salesforce showdown](/blog/hubspot-vs-salesforce-2026-03)."
-- "Pricing is a recurring theme -- our [Jira pricing reality check](/blog/real-cost-of-jira-2026-03) digs deeper."
+**CRITICAL: Only link to slugs that appear in the `related_posts` input array.** Do NOT invent or guess blog slugs. If `related_posts` is empty, do not include any internal `/blog/` links.
 
 Place internal links where they genuinely add value to the reader's journey. Do not force links into unrelated paragraphs.
 
