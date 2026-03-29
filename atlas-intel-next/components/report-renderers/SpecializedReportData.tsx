@@ -1,14 +1,16 @@
 import { clsx } from 'clsx'
-import { MessageSquareQuote, Shield, Swords, Target, TrendingDown, Zap } from 'lucide-react'
+import { Clock, Crosshair, MessageSquareQuote, Shield, Swords, Target, TrendingDown, Users, Zap } from 'lucide-react'
 import type { ReactNode } from 'react'
 import ArchetypeBadge from '@/components/ArchetypeBadge'
 import { StructuredReportData } from '@/components/report-renderers/StructuredReportData'
 import { normalizeReportObject, normalizeUnknown } from '@/lib/reportNormalization'
+import { useState } from 'react'
 import {
   toBattleCardViewModel,
   toAccountsInMotionViewModel,
   toChallengerBriefViewModel,
   toComparisonReportViewModel,
+  toVendorDeepDives,
   toVendorScorecards,
   toWeeklyChurnFeedItems,
 } from '@/lib/reportViewModels'
@@ -24,6 +26,7 @@ import type {
   ObjectionHandlerViewModel,
   RecommendedPlayViewModel,
   TalkTrackViewModel,
+  VendorDeepDiveViewModel,
   VendorScorecardViewModel,
   WeeklyChurnFeedItemViewModel,
   WeaknessAnalysisItemViewModel,
@@ -505,13 +508,60 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
         </SectionCard>
       )}
 
+      {data.account_pressure_summary && (
+        <SectionCard title="Account Pressure" icon={<Zap className="h-4 w-4 text-orange-400" />}>
+          <p className="text-sm text-slate-300">{data.account_pressure_summary}</p>
+          {data.account_pressure_metrics && (
+            <div className="grid grid-cols-3 gap-2 mt-2">
+              <MetricRow label="Total Accounts" value={data.account_pressure_metrics.total_accounts} color="text-orange-400" />
+              <MetricRow label="High Intent" value={data.account_pressure_metrics.high_intent_count} color="text-red-400" />
+              <MetricRow label="Active Eval" value={data.account_pressure_metrics.active_eval_count} color="text-amber-400" />
+            </div>
+          )}
+          {data.priority_account_names && data.priority_account_names.length > 0 && (
+            <p className="text-xs text-slate-400 mt-2">Priority: {data.priority_account_names.join(', ')}</p>
+          )}
+        </SectionCard>
+      )}
+
+      {data.timing_summary && (
+        <SectionCard title="Timing Intelligence" icon={<Clock className="h-4 w-4 text-blue-400" />}>
+          <p className="text-sm text-slate-300">{data.timing_summary}</p>
+          {data.priority_timing_triggers && data.priority_timing_triggers.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-2">
+              {data.priority_timing_triggers.map((trigger, i) => (
+                <span key={i} className="px-2 py-0.5 text-xs bg-blue-900/30 text-blue-300 rounded">{trigger}</span>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      )}
+
+      {data.segment_targeting_summary && (
+        <SectionCard title="Segment Targeting" icon={<Crosshair className="h-4 w-4 text-purple-400" />}>
+          <p className="text-sm text-slate-300">{data.segment_targeting_summary}</p>
+        </SectionCard>
+      )}
+
+      {data.category_council && (data.category_council.conclusion || data.category_council.market_regime) && (
+        <SectionCard title="Category Council" icon={<Users className="h-4 w-4 text-emerald-400" />}>
+          <div className="space-y-1">
+            {data.category_council.market_regime && <MetricRow label="Market Regime" value={data.category_council.market_regime.replace(/_/g, ' ')} />}
+            {data.category_council.winner && <MetricRow label="Category Winner" value={data.category_council.winner} color="text-green-400" />}
+            {data.category_council.loser && <MetricRow label="Losing Ground" value={data.category_council.loser} color="text-red-400" />}
+          </div>
+          {data.category_council.conclusion && <p className="text-sm text-slate-300 mt-2">{data.category_council.conclusion}</p>}
+          {data.category_council.durability && <p className="text-xs text-slate-400 mt-1">Durability: {data.category_council.durability}</p>}
+        </SectionCard>
+      )}
+
       {accounts.length > 0 && (
         <SectionCard title={`Prospecting List (${accounts.length} accounts)`} icon={<Target className="h-4 w-4 text-amber-400" />}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm table-auto">
               <thead>
                 <tr className="border-b border-slate-700/50">
-                  {['Company', 'Score', 'Stage', 'Urg', 'Pain', 'Industry', 'Domain', 'Alts'].map((header) => (
+                  {['Company', 'Score', 'Stage', 'Urg', 'Pain', 'DM', 'Conf', 'Alts'].map((header) => (
                     <th key={header} className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">{header}</th>
                   ))}
                 </tr>
@@ -519,7 +569,16 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
               <tbody>
                 {accounts.slice(0, 25).map((account: AccountsInMotionAccountViewModel, index: number) => (
                   <tr key={index} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                    <td className="px-2 py-1 text-slate-300 align-top break-words">{(account.company ?? '').slice(0, 24)}</td>
+                    <td className="px-2 py-1 text-slate-300 align-top break-words">
+                      {(account.company ?? '').slice(0, 24)}
+                      {account.contact_name && <span className="block text-[10px] text-cyan-400">{account.contact_name}</span>}
+                      {account.contact_title && <span className="block text-[10px] text-slate-500">{account.contact_title}</span>}
+                      {account.quality_flags && account.quality_flags.length > 0 && (
+                        <span className="flex flex-wrap gap-0.5 mt-0.5">{account.quality_flags.slice(0, 2).map((flag, fi) => (
+                          <span key={fi} className="px-1 py-0 text-[9px] bg-slate-800 text-slate-400 rounded">{flag.replace(/_/g, ' ')}</span>
+                        ))}</span>
+                      )}
+                    </td>
                     <td className="px-2 py-1">
                       <span className={clsx('font-medium', Number(account.opportunity_score) >= 50 ? 'text-green-400' : Number(account.opportunity_score) >= 30 ? 'text-amber-400' : 'text-slate-300')}>
                         {account.opportunity_score ?? ''}
@@ -528,8 +587,8 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
                     <td className="px-2 py-1 text-slate-300 align-top break-words">{(account.buying_stage ?? '').replace(/_/g, ' ')}</td>
                     <td className="px-2 py-1 text-slate-300 align-top break-words">{typeof account.urgency === 'number' ? account.urgency.toFixed(0) : ''}</td>
                     <td className="px-2 py-1 text-slate-400 align-top break-words">{(account.pain_category ?? '').replace(/_/g, ' ')}</td>
-                    <td className="px-2 py-1 text-slate-400 align-top break-words">{(account.industry ?? '').slice(0, 18)}</td>
-                    <td className="px-2 py-1 text-slate-400 align-top break-words">{(account.domain ?? '').slice(0, 22)}</td>
+                    <td className="px-2 py-1 text-center">{account.decision_maker ? <span className="text-green-400 text-xs">DM</span> : ''}</td>
+                    <td className="px-2 py-1 text-xs text-slate-500 align-top">{typeof account.confidence === 'number' ? `${Math.round(account.confidence * 100)}%` : ''}</td>
                     <td className="px-2 py-1 text-xs text-slate-500 align-top break-words">{Array.isArray(account.alternatives_considering) ? account.alternatives_considering.slice(0, 2).join(', ') : ''}</td>
                   </tr>
                 ))}
@@ -545,7 +604,7 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
                   <div key={index}>
                     <span className="text-[10px] text-slate-500">{account.company}{account.urgency ? ` (urgency: ${account.urgency})` : ''}</span>
                     <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 break-words whitespace-pre-wrap">
-                      "{account.top_quote}"
+                      &ldquo;{account.top_quote}&rdquo;
                     </blockquote>
                   </div>
                 ))}
@@ -570,14 +629,37 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
   const qualityLabel = data.quality_status
     ? data.quality_status.replace(/_/g, ' ')
     : null
+  const hiCompanies = Array.isArray(rawData.high_intent_companies)
+    ? (rawData.high_intent_companies as Record<string, unknown>[])
+    : []
+
   const skipKeys = [
+    // Explicitly rendered fields
     'vendor', 'category', 'churn_pressure_score', 'total_reviews', 'confidence',
-    'archetype', 'archetype_risk_level', 'archetype_key_signals',
+    'archetype', 'archetype_risk_level', 'archetype_key_signals', 'archetype_confidence',
     'vendor_weaknesses', 'weakness_analysis', 'customer_pain_quotes',
     'competitor_differentiators', 'cross_vendor_battles', 'competitive_landscape',
     'resource_asymmetry', 'category_council', 'objection_handlers', 'talk_track',
     'recommended_plays', 'active_evaluation_deadlines', 'source_distribution',
     'llm_render_status', 'quality_status', 'quality_score', 'battle_card_quality',
+    'data_stale', 'objection_data', 'high_intent_companies',
+    'executive_summary', 'discovery_questions', 'landmine_questions',
+    'account_pressure_metrics', 'buyer_authority', 'integration_stack',
+    'keyword_spikes', 'retention_signals', 'incumbent_strengths',
+    'falsification_conditions', 'uncertainty_sources', 'evidence_conclusions',
+    'low_confidence_sections', 'evidence_depth_warning',
+    // Internal LLM reasoning contracts — too nested to show usefully
+    'vendor_core_reasoning', 'displacement_reasoning', 'category_reasoning',
+    'account_reasoning', 'reasoning_contracts', 'locked_facts',
+    'render_packet_version', 'render_contracts_used', 'render_packet_hash',
+    'segment_playbook', 'timing_intelligence', 'timing_summary',
+    'account_pressure_summary', 'segment_targets', 'timing_window', 'timing_triggers',
+    // Internal / metadata — not shown in UI
+    'synthesis_wedge', 'synthesis_wedge_label', 'risk_level',
+    'ecosystem_context',
+    'evidence_window', 'evidence_window_days',
+    'reasoning_source', 'synthesis_schema_version', 'section_disclaimers',
+    'category_dynamics', 'timing_metrics',
   ]
 
   return (
@@ -613,71 +695,61 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {weaknesses.length > 0 && (
-          <SectionCard title="Weakness Analysis" icon={<TrendingDown className="h-4 w-4 text-red-400" />}>
-            <div className="space-y-3">
-              {weaknesses.slice(0, 5).map((weakness: WeaknessAnalysisItemViewModel, index: number) => (
-                <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-                  <p className="text-sm font-medium text-white">{weakness.weakness ?? weakness.area ?? weakness.name ?? ''}</p>
-                  {weakness.evidence && <p className="text-xs text-slate-400 mt-1">{weakness.evidence}</p>}
-                  {weakness.customer_quote && <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2 break-words whitespace-pre-wrap">"{weakness.customer_quote}"</blockquote>}
-                  {weakness.winning_position && <p className="text-xs text-cyan-300 mt-2">{weakness.winning_position}</p>}
-                </div>
-              ))}
-            </div>
-          </SectionCard>
-        )}
+      {/* Executive Summary — prominent text block */}
+      {typeof rawData.executive_summary === 'string' && rawData.executive_summary && (
+        <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-4">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Executive Summary</p>
+          <p className="text-sm text-slate-200 leading-relaxed">{rawData.executive_summary}</p>
+        </div>
+      )}
 
-        {data.competitive_landscape && (
-          <SectionCard title="Competitive Landscape" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
-            {data.competitive_landscape.vulnerability_window && (
-              <p className="text-sm text-slate-300 mb-3">{data.competitive_landscape.vulnerability_window}</p>
-            )}
-            {data.competitive_landscape.top_alternatives.length > 0 && (
-              <div className="mb-3">
-                <p className="text-xs font-medium text-slate-400 mb-1">Top Alternatives</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {data.competitive_landscape.top_alternatives.map((item, index) => (
-                    <span key={index} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">{item}</span>
-                  ))}
-                </div>
+      {/* Weakness Analysis — full width, items in 2-col grid (text-heavy, needs room) */}
+      {weaknesses.length > 0 && (
+        <SectionCard title="Weakness Analysis" icon={<TrendingDown className="h-4 w-4 text-red-400" />}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {weaknesses.slice(0, 6).map((weakness: WeaknessAnalysisItemViewModel, index: number) => (
+              <div key={index} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-1.5">
+                <p className="text-sm font-medium text-white">{weakness.weakness ?? weakness.area ?? weakness.name ?? ''}</p>
+                {weakness.evidence && <p className="text-xs text-slate-400">{weakness.evidence}</p>}
+                {weakness.customer_quote && <blockquote className="text-xs text-slate-300 italic border-l-2 border-cyan-500/50 pl-2 break-words">"{weakness.customer_quote}"</blockquote>}
+                {weakness.winning_position && <p className="text-xs text-cyan-300">{weakness.winning_position}</p>}
               </div>
-            )}
-            {data.competitive_landscape.displacement_triggers.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-slate-400 mb-1">Displacement Triggers</p>
-                <ul className="space-y-1">
-                  {data.competitive_landscape.displacement_triggers.slice(0, 4).map((trigger, index) => (
-                    <li key={index} className="text-sm text-slate-300 flex gap-2 min-w-0">
-                      <span className="text-cyan-400 shrink-0">-</span>
-                      <span className="min-w-0 break-words">{trigger}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </SectionCard>
-        )}
-      </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
 
-      {(data.customer_pain_quotes.length > 0 || data.competitor_differentiators.length > 0) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {data.customer_pain_quotes.length > 0 && (
-            <SectionCard title="Customer Pain Quotes" icon={<MessageSquareQuote className="h-4 w-4 text-amber-400" />}>
-              <div className="space-y-3">
-                {data.customer_pain_quotes.slice(0, 5).map((quote, index) => (
-                  <div key={index}>
-                    <blockquote className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-3 break-words whitespace-pre-wrap">"{quote.quote}"</blockquote>
-                    <div className="flex flex-wrap gap-2 mt-1 text-xs text-slate-500">
-                      {quote.company && <span>{quote.company}</span>}
-                      {quote.role && <span>{quote.role}</span>}
-                      {quote.pain_category && <span>{quote.pain_category}</span>}
-                      {quote.urgency != null && <span className="text-amber-400">urgency {quote.urgency}/10</span>}
-                    </div>
+      {/* Competitive Landscape + Competitor Differentiators — side by side only when both present */}
+      {(data.competitive_landscape || data.competitor_differentiators.length > 0) && (
+        <div className={clsx('grid gap-6', data.competitive_landscape && data.competitor_differentiators.length > 0 ? 'lg:grid-cols-2' : 'grid-cols-1')}>
+          {data.competitive_landscape && (
+            <SectionCard title="Competitive Landscape" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
+              {data.competitive_landscape.vulnerability_window && (
+                <p className="text-sm text-slate-300 mb-3">{data.competitive_landscape.vulnerability_window}</p>
+              )}
+              {data.competitive_landscape.top_alternatives.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-xs font-medium text-slate-400 mb-1">Top Alternatives</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {data.competitive_landscape.top_alternatives.map((item, index) => (
+                      <span key={index} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">{item}</span>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
+              {data.competitive_landscape.displacement_triggers.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-400 mb-1">Displacement Triggers</p>
+                  <ul className="space-y-1">
+                    {data.competitive_landscape.displacement_triggers.slice(0, 4).map((trigger, index) => (
+                      <li key={index} className="text-sm text-slate-300 flex gap-2 min-w-0">
+                        <span className="text-cyan-400 shrink-0">-</span>
+                        <span className="min-w-0 break-words">{trigger}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </SectionCard>
           )}
 
@@ -687,17 +759,17 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
                 <table className="w-full text-sm table-auto">
                   <thead>
                     <tr className="border-b border-slate-700/50">
-                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Competitor</th>
-                      <th className="text-right text-xs text-slate-400 px-2 py-1 align-top break-words">Mentions</th>
-                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Driver</th>
+                      <th className="text-left text-xs text-slate-400 px-2 py-1">Competitor</th>
+                      <th className="text-right text-xs text-slate-400 px-2 py-1">Mentions</th>
+                      <th className="text-left text-xs text-slate-400 px-2 py-1">Driver</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.competitor_differentiators.slice(0, 8).map((item: CompetitorDifferentiatorViewModel, index: number) => (
                       <tr key={index} className="border-b border-slate-800/50">
-                        <td className="px-2 py-1 text-slate-300 align-top break-words">{item.competitor ?? ''}</td>
-                        <td className="px-2 py-1 text-right text-slate-400 align-top break-words">{item.mentions ?? item.count ?? ''}</td>
-                        <td className="px-2 py-1 text-slate-400 align-top break-words">{item.primary_driver ?? item.solves_weakness ?? ''}</td>
+                        <td className="px-2 py-1.5 text-slate-300">{item.competitor ?? ''}</td>
+                        <td className="px-2 py-1.5 text-right text-slate-400">{item.mentions ?? item.count ?? ''}</td>
+                        <td className="px-2 py-1.5 text-slate-400 break-words">{item.primary_driver ?? item.solves_weakness ?? ''}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -708,19 +780,94 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
         </div>
       )}
 
+      {/* Customer Pain Quotes — full width, items in 2-col grid (long quotes need room) */}
+      {data.customer_pain_quotes.length > 0 && (
+        <SectionCard title="Customer Pain Quotes" icon={<MessageSquareQuote className="h-4 w-4 text-amber-400" />}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {data.customer_pain_quotes.slice(0, 6).map((quote, index) => (
+              <div key={index} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-1.5">
+                <blockquote className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-2 break-words">"{quote.quote}"</blockquote>
+                <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+                  {quote.company && <span>{quote.company}</span>}
+                  {quote.role && <span>{quote.role}</span>}
+                  {quote.pain_category && <span className="text-slate-400">{quote.pain_category}</span>}
+                  {quote.urgency != null && <span className="text-amber-400">urgency {quote.urgency}/10</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Segment Playbook + Timing Intelligence */}
+      {((data.segment_targets?.length ?? 0) > 0 || data.timing_window || (data.timing_triggers?.length ?? 0) > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          {(data.segment_targets?.length ?? 0) > 0 && (
+            <SectionCard title="Segment Playbook" icon={<Target className="h-4 w-4 text-cyan-400" />}>
+              <div className="space-y-3">
+                {data.segment_targets.slice(0, 5).map((seg, index) => (
+                  <div key={index} className="bg-slate-800/50 rounded-lg p-3">
+                    <p className="text-sm font-medium text-white">{seg.segment}</p>
+                    {seg.why_vulnerable && <p className="text-xs text-slate-400 mt-1">{seg.why_vulnerable}</p>}
+                    {seg.best_opening_angle && <p className="text-xs text-cyan-300 mt-1">{seg.best_opening_angle}</p>}
+                    {seg.disqualifier && <p className="text-xs text-rose-400 mt-1">Skip if: {seg.disqualifier}</p>}
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          )}
+          {(data.timing_window || (data.timing_triggers?.length ?? 0) > 0) && (
+            <SectionCard title="Timing Intelligence" icon={<Zap className="h-4 w-4 text-amber-400" />}>
+              {data.timing_window && (
+                <div className="mb-3">
+                  <p className="text-xs text-slate-400 mb-1">Best Window</p>
+                  <p className="text-sm text-slate-300">{data.timing_window}</p>
+                </div>
+              )}
+              {data.timing_summary && <p className="text-xs text-slate-400 mb-3">{data.timing_summary}</p>}
+              {(data.timing_triggers?.length ?? 0) > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-slate-400">Immediate Triggers</p>
+                  {data.timing_triggers.slice(0, 5).map((t, index) => (
+                    <div key={index} className="bg-slate-800/50 rounded p-2">
+                      <p className="text-xs text-white">{t.trigger}</p>
+                      {t.action && <p className="text-xs text-cyan-300 mt-0.5">{t.action}</p>}
+                      {t.urgency && <p className="text-xs text-amber-400 mt-0.5">{t.urgency}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </SectionCard>
+          )}
+        </div>
+      )}
+
+      {/* Cross-Vendor Battles + Market Context — side by side only when both present */}
       {(data.cross_vendor_battles.length > 0 || data.resource_asymmetry || data.category_council) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className={clsx('grid gap-6', data.cross_vendor_battles.length > 0 && (data.resource_asymmetry || data.category_council) ? 'lg:grid-cols-2' : 'grid-cols-1')}>
           {data.cross_vendor_battles.length > 0 && (
             <SectionCard title="Cross-Vendor Battles" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {data.cross_vendor_battles.slice(0, 4).map((battle, index) => (
                   <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-                    <div className="flex flex-wrap gap-2 text-xs mb-2">
+                    <div className="flex flex-wrap gap-2 text-xs mb-1.5">
                       {battle.opponent && <span className="text-white font-medium">vs {battle.opponent}</span>}
                       {battle.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {battle.winner}</span>}
                       {battle.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {battle.loser}</span>}
+                      {battle.confidence != null && battle.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(battle.confidence * 100)}% conf.</span>}
+                      {battle.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{battle.durability}</span>}
                     </div>
-                    {battle.conclusion && <p className="text-sm text-slate-300">{battle.conclusion}</p>}
+                    {battle.conclusion && <p className="text-xs text-slate-300">{battle.conclusion}</p>}
+                    {battle.key_insights.length > 0 && (
+                      <ul className="mt-1 space-y-0.5">
+                        {battle.key_insights.slice(0, 2).map((insight, i) => (
+                          <li key={i} className="text-xs text-slate-400 flex gap-1.5">
+                            <span className="text-cyan-400 shrink-0">-</span>
+                            <span>{insight.insight}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 ))}
               </div>
@@ -731,13 +878,22 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
             <SectionCard title="Market Context" icon={<Shield className="h-4 w-4 text-cyan-400" />}>
               {data.resource_asymmetry?.conclusion && <p className="text-sm text-slate-300 mb-3">{data.resource_asymmetry.conclusion}</p>}
               {data.resource_asymmetry?.resource_advantage && <MetricRow label="Resource Advantage" value={data.resource_asymmetry.resource_advantage} />}
-              {data.category_council?.conclusion && <p className="text-sm text-slate-300 mt-3">{data.category_council.conclusion}</p>}
+              {data.category_council && (
+                <div className="flex flex-wrap gap-2 text-xs mb-2 mt-3">
+                  {data.category_council.market_regime && <span className="px-2 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{data.category_council.market_regime}</span>}
+                  {data.category_council.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {data.category_council.winner}</span>}
+                  {data.category_council.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {data.category_council.loser}</span>}
+                  {data.category_council.confidence != null && data.category_council.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(data.category_council.confidence * 100)}% conf.</span>}
+                  {data.category_council.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{data.category_council.durability}</span>}
+                </div>
+              )}
+              {data.category_council?.conclusion && <p className="text-sm text-slate-300">{data.category_council.conclusion}</p>}
               {data.category_council?.key_insights.length ? (
                 <ul className="space-y-1 mt-3">
                   {data.category_council.key_insights.slice(0, 4).map((insight, index) => (
                     <li key={index} className="text-xs text-slate-400 flex gap-2 min-w-0">
                       <span className="text-cyan-400 shrink-0">-</span>
-                      <span className="min-w-0 break-all">{insight.insight}</span>
+                      <span className="min-w-0 break-words">{insight.insight}</span>
                     </li>
                   ))}
                 </ul>
@@ -747,62 +903,259 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
         </div>
       )}
 
-      {(data.active_evaluation_deadlines.length > 0 || data.recommended_plays.length > 0 || data.talk_track) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {data.active_evaluation_deadlines.length > 0 && (
-            <SectionCard title="Active Evaluation Deadlines" icon={<Target className="h-4 w-4 text-red-400" />}>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm table-auto">
-                  <thead>
-                    <tr className="border-b border-slate-700/50">
-                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Company</th>
-                      <th className="text-left text-xs text-slate-400 px-2 py-1 align-top break-words">Timeline</th>
-                      <th className="text-right text-xs text-slate-400 px-2 py-1 align-top break-words">Urgency</th>
+      {data.active_evaluation_deadlines.length > 0 && (
+        <SectionCard title="Target Accounts" icon={<Target className="h-4 w-4 text-red-400" />}>
+          {data.account_pressure_summary && <p className="text-sm text-slate-400 mb-3">{data.account_pressure_summary}</p>}
+          {data.account_market_summary && (
+            <p className="text-sm text-slate-400 mb-3">{data.account_market_summary}</p>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm table-auto">
+              <thead>
+                <tr className="border-b border-slate-700/50">
+                  <th className="text-left text-xs text-slate-400 px-2 py-1">Company</th>
+                  <th className="text-left text-xs text-slate-400 px-2 py-1">Why Now</th>
+                  <th className="text-left text-xs text-slate-400 px-2 py-1">Stage</th>
+                  <th className="text-right text-xs text-slate-400 px-2 py-1">Urgency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...data.active_evaluation_deadlines].sort((a, b) => {
+                  const scoreA = (a.urgency ?? 0) + (a.buying_stage === 'evaluation' || a.buying_stage === 'active_purchase' ? 3 : 0) + (a.evaluation_deadline ? 2 : 0) + (a.contract_end ? 1 : 0)
+                  const scoreB = (b.urgency ?? 0) + (b.buying_stage === 'evaluation' || b.buying_stage === 'active_purchase' ? 3 : 0) + (b.evaluation_deadline ? 2 : 0) + (b.contract_end ? 1 : 0)
+                  return scoreB - scoreA
+                }).slice(0, 10).map((item, index) => {
+                  const whyNow = item.evaluation_deadline ? 'eval deadline' : item.contract_end ? 'renewal window' : item.buying_stage === 'evaluation' || item.buying_stage === 'active_purchase' ? 'active evaluation' : (item.urgency ?? 0) >= 7 ? 'high pain + urgency' : item.pain ? item.pain.replace(/_/g, ' ') : ''
+                  return (
+                    <tr key={index} className="border-b border-slate-800/50">
+                      <td className="px-2 py-1 text-slate-300 align-top">{item.company ?? ''}</td>
+                      <td className="px-2 py-1 text-cyan-400 align-top text-xs">{whyNow}</td>
+                      <td className="px-2 py-1 text-slate-400 align-top">{(item.buying_stage ?? item.decision_timeline ?? '').replace(/_/g, ' ')}</td>
+                      <td className="px-2 py-1 text-right text-amber-400 align-top">{item.urgency ?? ''}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {data.active_evaluation_deadlines.slice(0, 8).map((item, index) => (
-                      <tr key={index} className="border-b border-slate-800/50">
-                        <td className="px-2 py-1 text-slate-300 align-top break-words">{item.company ?? ''}</td>
-                        <td className="px-2 py-1 text-slate-400 align-top break-words">{item.decision_timeline ?? item.evaluation_deadline ?? item.contract_end ?? ''}</td>
-                        <td className="px-2 py-1 text-right text-slate-400 align-top break-words">{item.urgency ?? ''}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Evidence Posture */}
+      {(data.evidence_depth_warning || data.low_confidence_sections.length > 0 || data.uncertainty_sources.length > 0 || data.falsification_conditions.length > 0 || data.evidence_conclusions.length > 0) && (
+        <SectionCard title="Evidence Posture" icon={<Shield className="h-4 w-4 text-amber-400" />}>
+          {data.evidence_depth_warning && (
+            <p className="text-xs text-amber-300 mb-3">{data.evidence_depth_warning}</p>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            {data.evidence_conclusions.length > 0 && (
+              <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3">
+                <p className="text-emerald-400 font-medium mb-1.5">Safe to Lead With</p>
+                <ul className="space-y-1">{data.evidence_conclusions.map((s, i) => (
+                  <li key={i} className="text-slate-300">{s}</li>
+                ))}</ul>
+              </div>
+            )}
+            {(data.low_confidence_sections.length > 0 || data.uncertainty_sources.length > 0) && (
+              <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
+                <p className="text-amber-400 font-medium mb-1.5">Use Carefully</p>
+                <ul className="space-y-1">
+                  {data.low_confidence_sections.map((s, i) => (
+                    <li key={`lc-${i}`} className="text-slate-400 flex gap-1.5"><span className="text-amber-400 shrink-0">!</span><span>{s}</span></li>
+                  ))}
+                  {data.uncertainty_sources.map((s, i) => (
+                    <li key={`us-${i}`} className="text-slate-400 flex gap-1.5"><span className="text-slate-500 shrink-0">?</span><span>{s}</span></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {data.falsification_conditions.length > 0 && (
+              <div className="bg-rose-500/5 border border-rose-500/20 rounded-lg p-3">
+                <p className="text-rose-400 font-medium mb-1.5">Could Break This Thesis</p>
+                <ul className="space-y-1">{data.falsification_conditions.map((s, i) => (
+                  <li key={i} className="text-slate-400 flex gap-1.5"><span className="text-rose-400 shrink-0">x</span><span>{s}</span></li>
+                ))}</ul>
+              </div>
+            )}
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Operational Signals */}
+      {(data.account_pressure_metrics || data.keyword_spikes || data.integration_stack.length > 0 || data.buyer_authority) && (
+        <SectionCard title="Operational Signals" icon={<Zap className="h-4 w-4 text-cyan-400" />}>
+          <div className="flex flex-wrap gap-3 text-xs">
+            {data.account_pressure_metrics?.active_eval_count != null && (
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2 text-center">
+                <p className="text-lg font-bold text-amber-400">{data.account_pressure_metrics.active_eval_count}</p>
+                <p className="text-slate-500">Active Eval</p>
+              </div>
+            )}
+            {data.account_pressure_metrics?.high_intent_count != null && (
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2 text-center">
+                <p className="text-lg font-bold text-red-400">{data.account_pressure_metrics.high_intent_count}</p>
+                <p className="text-slate-500">High Intent</p>
+              </div>
+            )}
+            {data.keyword_spikes?.spike_count != null && data.keyword_spikes.spike_count > 0 && (
+              <div className="bg-slate-800/50 rounded-lg px-3 py-2 text-center">
+                <p className="text-lg font-bold text-cyan-400">{data.keyword_spikes.spike_count}</p>
+                <p className="text-slate-500">Keyword Spikes</p>
+              </div>
+            )}
+          </div>
+          {data.buyer_authority && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {(() => {
+                const ba = data.buyer_authority
+                const pills: Array<[string, string]> = []
+                // Handle nested maps: role_types, buying_stages
+                const roleTypes = ba.role_types as Record<string, number> | undefined
+                const buyingStages = ba.buying_stages as Record<string, number> | undefined
+                if (roleTypes && typeof roleTypes === 'object') {
+                  Object.entries(roleTypes)
+                    .filter(([k, v]) => k !== 'unknown' && typeof v === 'number' && v > 0)
+                    .sort(([, a], [, b]) => (b as number) - (a as number))
+                    .slice(0, 3)
+                    .forEach(([k, v]) => pills.push([k.replace(/_/g, ' '), String(v)]))
+                }
+                if (buyingStages && typeof buyingStages === 'object') {
+                  Object.entries(buyingStages)
+                    .filter(([, v]) => typeof v === 'number' && v > 0)
+                    .sort(([, a], [, b]) => (b as number) - (a as number))
+                    .slice(0, 3)
+                    .forEach(([k, v]) => pills.push([k.replace(/_/g, ' '), String(v)]))
+                }
+                // Flat keys fallback
+                if (pills.length === 0) {
+                  if (ba.dominant_role) pills.push(['role', String(ba.dominant_role)])
+                  if (ba.buying_stage) pills.push(['stage', String(ba.buying_stage)])
+                  if (typeof ba.dm_rate === 'number') pills.push(['DM rate', `${Math.round(Number(ba.dm_rate) * 100)}%`])
+                }
+                return pills.map(([label, val], i) => (
+                  <span key={i} className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-300 rounded text-xs">{label}: {val}</span>
+                ))
+              })()}
+            </div>
+          )}
+          {data.keyword_spikes?.keywords && data.keyword_spikes.keywords.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {data.keyword_spikes.keywords.slice(0, 8).map((kw, i) => (
+                <span key={i} className="px-1.5 py-0.5 bg-cyan-500/10 text-cyan-300 rounded text-xs">{kw}</span>
+              ))}
+            </div>
+          )}
+          {data.integration_stack.length > 0 && (
+            <div className="mt-2">
+              <p className="text-xs text-slate-500 mb-1">Integration Stack</p>
+              <div className="flex flex-wrap gap-1.5">
+                {data.integration_stack.slice(0, 8).map((int, i) => (
+                  <span key={i} className="px-1.5 py-0.5 bg-slate-700/50 text-slate-300 rounded text-xs">{int}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </SectionCard>
+      )}
+
+      {/* Retention Signals + Incumbent Strengths */}
+      {(data.retention_signals.length > 0 || data.incumbent_strengths.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          {data.retention_signals.length > 0 && (
+            <SectionCard title="Retention Signals" icon={<Shield className="h-4 w-4 text-emerald-400" />}>
+              <div className="space-y-1">
+                {data.retention_signals.map((sig, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="text-slate-300">{sig.aspect}</span>
+                    <span className="text-slate-500">{sig.mentions ?? ''}</span>
+                  </div>
+                ))}
               </div>
             </SectionCard>
           )}
-
-          {(data.talk_track || data.recommended_plays.length > 0) && (
-            <SectionCard title="Talk Track and Plays" icon={<MessageSquareQuote className="h-4 w-4 text-cyan-400" />}>
-              {data.talk_track && (
-                <div className="space-y-3 mb-4">
-                  {[
-                    { key: 'opening' as const, label: 'Opening' },
-                    { key: 'mid_call_pivot' as const, label: 'Mid-Call Pivot' },
-                    { key: 'closing' as const, label: 'Closing' },
-                  ].map(({ key, label }) => {
-                    const value = data.talk_track?.[key]
-                    if (!value) return null
-                    return <div key={key}><p className="text-xs text-slate-500 uppercase mb-1">{label}</p><p className="text-sm text-slate-300 break-words">{value}</p></div>
-                  })}
-                </div>
-              )}
-              {data.recommended_plays.length > 0 && (
-                <div className="space-y-2">
-                  {data.recommended_plays.slice(0, 4).map((play: RecommendedPlayViewModel, index: number) => (
-                    <div key={index} className="bg-slate-800/50 rounded-lg p-3">
-                      <p className="text-sm text-white font-medium">{play.play ?? play.name ?? play.description ?? ''}</p>
-                      {play.target_segment && <p className="text-xs text-amber-300 mt-1">{play.target_segment}</p>}
-                      {play.key_message && <p className="text-xs text-slate-400 mt-1">{play.key_message}</p>}
+          {data.incumbent_strengths.length > 0 && (
+            <SectionCard title="Incumbent Strengths" icon={<Shield className="h-4 w-4 text-cyan-400" />}>
+              <div className="space-y-1">
+                {data.incumbent_strengths.map((str, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="text-slate-300">{str.area}</span>
+                    <div className="flex items-center gap-2">
+                      {str.source && <span className="text-slate-500">{str.source}</span>}
+                      <span className="text-slate-500">{str.mention_count ?? ''}</span>
                     </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                ))}
+              </div>
             </SectionCard>
           )}
         </div>
+      )}
+
+      {/* Landmine + Discovery Questions */}
+      {(data.landmine_questions.length > 0 || data.discovery_questions.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          {data.landmine_questions.length > 0 && (
+            <SectionCard title="Landmine Questions" icon={<Shield className="h-4 w-4 text-rose-400" />}>
+              <ul className="space-y-2">
+                {data.landmine_questions.map((q, i) => (
+                  <li key={i} className="text-sm text-slate-300 flex gap-2 min-w-0">
+                    <span className="text-rose-400 shrink-0">{i + 1}.</span>
+                    <span className="min-w-0 break-words">{q}</span>
+                  </li>
+                ))}
+              </ul>
+            </SectionCard>
+          )}
+          {data.discovery_questions.length > 0 && (
+            <SectionCard title="Discovery Questions" icon={<MessageSquareQuote className="h-4 w-4 text-cyan-400" />}>
+              <ul className="space-y-2">
+                {data.discovery_questions.map((q, i) => (
+                  <li key={i} className="text-sm text-slate-300 flex gap-2 min-w-0">
+                    <span className="text-cyan-400 shrink-0">{i + 1}.</span>
+                    <span className="min-w-0 break-words">{q}</span>
+                  </li>
+                ))}
+              </ul>
+            </SectionCard>
+          )}
+        </div>
+      )}
+
+      {/* Recommended Plays — full width, items in 2-col grid (text-heavy cards need room) */}
+      {data.recommended_plays.length > 0 && (
+        <SectionCard title="Recommended Plays" icon={<Target className="h-4 w-4 text-cyan-400" />}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {data.recommended_plays.slice(0, 6).map((play: RecommendedPlayViewModel, index: number) => (
+              <div key={index} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-1.5">
+                <p className="text-sm font-medium text-white">{play.play ?? play.name ?? play.description ?? ''}</p>
+                {play.target_segment && <p className="text-xs text-amber-300">{play.target_segment}</p>}
+                {play.key_message && <p className="text-xs text-slate-400">{play.key_message}</p>}
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
+      {/* Talk Track — full width, stages in a 3-col row */}
+      {data.talk_track && (
+        <SectionCard title="Talk Track" icon={<MessageSquareQuote className="h-4 w-4 text-cyan-400" />}>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {([
+              { key: 'opening' as const, label: 'Opening' },
+              { key: 'mid_call_pivot' as const, label: 'Mid-Call Pivot' },
+              { key: 'closing' as const, label: 'Closing' },
+            ] as const).map(({ key, label }) => {
+              const value = data.talk_track?.[key]
+              if (!value) return null
+              return (
+                <div key={key} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3">
+                  <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">{label}</p>
+                  <p className="text-sm text-slate-300 break-words">{value}</p>
+                </div>
+              )
+            })}
+          </div>
+        </SectionCard>
       )}
 
       {Object.keys(data.source_distribution).length > 0 && (
@@ -814,6 +1167,32 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
           </div>
         </SectionCard>
       )}
+
+      {(() => {
+        const obj = rawData.objection_data !== null && typeof rawData.objection_data === 'object' && !Array.isArray(rawData.objection_data)
+          ? (rawData.objection_data as Record<string, unknown>)
+          : null
+        if (!obj) return null
+        const stats: { label: string; value: string; accent?: string }[] = []
+        if (obj.avg_urgency != null) stats.push({ label: 'Avg Urgency', value: String(obj.avg_urgency), accent: 'text-amber-400' })
+        if (obj.recommend_ratio != null) stats.push({ label: 'Recommend Ratio', value: typeof obj.recommend_ratio === 'number' ? `${obj.recommend_ratio}%` : String(obj.recommend_ratio) })
+        if (obj.positive_review_pct != null) stats.push({ label: 'Positive Review %', value: typeof obj.positive_review_pct === 'number' ? `${(obj.positive_review_pct as number).toFixed(1)}%` : String(obj.positive_review_pct) })
+        if (obj.dm_churn_rate != null) stats.push({ label: 'DM Churn Rate', value: String(obj.dm_churn_rate) })
+        if (obj.sentiment_direction != null) stats.push({ label: 'Sentiment', value: String(obj.sentiment_direction).replace(/_/g, ' ') })
+        if (!stats.length) return null
+        return (
+          <SectionCard title="Objection Metrics" icon={<Shield className="h-4 w-4 text-slate-400" />}>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {stats.map(({ label, value, accent }) => (
+                <div key={label} className="bg-slate-800/60 border border-slate-700/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-400 mb-1">{label}</p>
+                  <p className={`text-sm font-semibold leading-tight ${accent ?? 'text-white'}`}>{value}</p>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        )
+      })()}
 
       <StructuredReportData data={rawData} skipKeys={skipKeys} className="xl:grid-cols-1" />
     </div>
@@ -1009,9 +1388,377 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
                 "{item.key_quote}"
               </blockquote>
             )}
+
+            {/* Named Accounts + Retention Strengths side by side */}
+            {(item.named_accounts.length > 0 || item.retention_strengths.length > 0) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {item.named_accounts.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Target Accounts</p>
+                    <div className="space-y-1">
+                      {item.named_accounts.slice(0, 5).map((acct, j) => (
+                        <div key={j} className="text-xs space-y-0.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-slate-300 truncate">{acct.company ?? ''}</span>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {acct.decision_maker && <span className="text-cyan-400">DM</span>}
+                              {acct.confidence_score != null && acct.confidence_score > 0 && <span className="text-slate-500">{Math.round(acct.confidence_score * 100)}%</span>}
+                              {acct.urgency != null && <span className="text-amber-400">{acct.urgency}</span>}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-x-2 text-slate-500">
+                            {acct.title && <span>{acct.title}</span>}
+                            {acct.buying_stage && <span>{acct.buying_stage.replace(/_/g, ' ')}</span>}
+                            {acct.source && <span>{acct.source}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {item.retention_strengths.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-500 mb-1.5">Retention Strengths</p>
+                    <div className="space-y-1">
+                      {item.retention_strengths.slice(0, 3).map((s, j) => (
+                        <div key={j} className="flex items-center justify-between text-xs">
+                          <span className="text-emerald-300 capitalize">{(s.area ?? '').replace(/_/g, ' ')}</span>
+                          <span className="text-slate-500">{s.mention_count ?? ''}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Category Council */}
+            {item.category_council?.conclusion && (
+              <div className="text-xs">
+                <div className="flex flex-wrap gap-1.5 mb-1">
+                  {item.category_council.market_regime && <span className="px-1.5 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{item.category_council.market_regime}</span>}
+                  {item.category_council.winner && <span className="px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {item.category_council.winner}</span>}
+                  {item.category_council.loser && <span className="px-1.5 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {item.category_council.loser}</span>}
+                  {item.category_council.confidence != null && item.category_council.confidence > 0 && <span className="px-1.5 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(item.category_council.confidence * 100)}%</span>}
+                  {item.category_council.durability && <span className="px-1.5 py-0.5 bg-amber-500/15 text-amber-300 rounded">{item.category_council.durability}</span>}
+                </div>
+                <p className="text-slate-400">{item.category_council.conclusion}</p>
+                {item.category_council.key_insights.length > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {item.category_council.key_insights.slice(0, 2).map((insight, k) => (
+                      <li key={k} className="text-slate-500 flex gap-1.5"><span className="text-cyan-400 shrink-0">-</span><span>{insight.insight}</span></li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {/* Timing + Account pressure summaries */}
+            {(item.timing_summary || item.account_pressure_summary || item.priority_timing_triggers.length > 0) && (
+              <div className="space-y-1 text-xs text-slate-400">
+                {item.timing_summary && <p>{item.timing_summary}</p>}
+                {item.priority_timing_triggers.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {item.priority_timing_triggers.slice(0, 3).map((t, k) => (
+                      <span key={k} className="px-1.5 py-0.5 bg-amber-500/10 text-amber-300 rounded text-xs">{t}</span>
+                    ))}
+                  </div>
+                )}
+                {item.account_pressure_summary && <p>{item.account_pressure_summary}</p>}
+              </div>
+            )}
+
+            {/* Secondary metrics row */}
+            {(item.sentiment_direction || item.trend || item.dm_churn_rate != null || item.price_complaint_rate != null) && (
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                {item.sentiment_direction && <span>Sentiment: {item.sentiment_direction}</span>}
+                {item.trend && <span>Trend: {item.trend}</span>}
+                {item.dm_churn_rate != null && <span>DM churn: {(item.dm_churn_rate * 100).toFixed(0)}%</span>}
+                {item.price_complaint_rate != null && <span>Price complaints: {(item.price_complaint_rate * 100).toFixed(0)}%</span>}
+              </div>
+            )}
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ---- Vendor Deep Dive ----
+
+function VendorDeepDiveDetail({ items }: { items: VendorDeepDiveViewModel[] }) {
+  const [selected, setSelected] = useState(0)
+  if (items.length === 0) return <p className="text-slate-500 text-sm">No vendor data found.</p>
+
+  const v = items[selected]
+  const pains = v.pain_breakdown ?? []
+  const maxPain = Number(pains[0]?.count ?? 1)
+  const targets = v.displacement_targets ?? []
+  const maxTarget = Number(targets[0]?.mention_count ?? 1)
+  const gaps = v.feature_gaps ?? []
+  const industries = v.industry_distribution ?? []
+  const sizes = v.company_size_distribution ?? []
+  const studies = v.case_studies ?? []
+  const sent = v.sentiment_breakdown ?? {}
+  const sentTotal = (sent.positive ?? 0) + (sent.negative ?? 0) + (sent.neutral ?? 0)
+  const retentionStrengths = v.retention_strengths ?? []
+  const council = v.category_council
+
+  return (
+    <div className="space-y-4 min-w-0">
+      {/* Vendor picker */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <select
+          value={selected}
+          onChange={e => setSelected(Number(e.target.value))}
+          className="bg-slate-800 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-cyan-500"
+        >
+          {items.map((item, i) => (
+            <option key={i} value={i}>
+              {item.vendor ?? `Vendor ${i + 1}`}
+              {item.risk_level ? ` -- ${item.risk_level}` : ''}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-slate-500">{items.length} vendors · sorted by churn pressure</span>
+      </div>
+
+      {/* Vendor header */}
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-100">{v.vendor ?? '--'}</h2>
+            <p className="text-xs text-slate-400 mt-0.5">{v.category ?? '--'}</p>
+          </div>
+          <div className="flex flex-wrap gap-2 items-center">
+            {v.risk_level && (
+              <span className={clsx(
+                'px-2 py-0.5 rounded text-xs font-semibold',
+                v.risk_level === 'high' ? 'bg-red-900/50 text-red-300' :
+                v.risk_level === 'medium' ? 'bg-amber-900/50 text-amber-300' :
+                'bg-green-900/50 text-green-300'
+              )}>
+                {v.risk_level} risk
+              </span>
+            )}
+            {v.archetype && (
+              <span className="px-2 py-0.5 rounded bg-purple-900/40 text-purple-300 text-xs">
+                {v.archetype.replace(/_/g, ' ')}
+                {v.archetype_confidence != null ? ` · ${(v.archetype_confidence * 100).toFixed(0)}%` : ''}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Stat strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Pressure', value: v.churn_pressure_score != null ? `${Math.round(v.churn_pressure_score)}/100` : null, color: 'text-red-400' },
+            { label: 'Signal Density', value: v.churn_signal_density != null ? `${v.churn_signal_density}%` : null, color: 'text-amber-400' },
+            { label: 'Avg Urgency', value: v.avg_urgency, color: 'text-orange-400' },
+            { label: 'Reviews', value: v.total_reviews, color: 'text-slate-300' },
+          ].map(({ label, value, color }) => value != null ? (
+            <div key={label} className="bg-slate-800/60 rounded-lg p-2.5 text-center">
+              <p className="text-xs text-slate-500 mb-1">{label}</p>
+              <p className={clsx('text-base font-semibold', color)}>{String(value)}</p>
+            </div>
+          ) : null)}
+        </div>
+
+        {/* Secondary metrics row */}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-slate-400">
+          {v.dm_churn_rate != null && <span>DM churn: <span className="text-slate-200">{(v.dm_churn_rate * 100).toFixed(0)}%</span></span>}
+          {v.price_complaint_rate != null && <span>Price complaints: <span className="text-slate-200">{(v.price_complaint_rate * 100).toFixed(0)}%</span></span>}
+          {v.sentiment_direction && <span>Sentiment: <span className="text-slate-200">{v.sentiment_direction.replace(/_/g, ' ')}</span></span>}
+          {v.trend && <span>Trend: <span className="text-slate-200">{v.trend}</span></span>}
+          {v.dominant_buyer_role && v.dominant_buyer_role !== 'unknown' && <span>Buyer role: <span className="text-slate-200">{v.dominant_buyer_role.replace(/_/g, ' ')}</span></span>}
+        </div>
+      </div>
+
+      {/* Pain + Displacement */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {pains.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Pain Breakdown</h3>
+            <div className="space-y-2">
+              {pains.map((p, i) => {
+                const label = (p.category ?? '').replace(/_/g, ' ')
+                const count = Number(p.count ?? 0)
+                const pct = maxPain > 0 ? Math.min((count / maxPain) * 100, 100) : 0
+                return (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-32 text-slate-300 shrink-0 capitalize truncate">{label}</span>
+                    <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div className="h-2 rounded-full bg-red-500/60" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="w-16 text-right text-slate-400 shrink-0">
+                      {count}{p.pct != null ? ` · ${(p.pct * 100).toFixed(0)}%` : ''}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {targets.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Displacement Targets</h3>
+            <div className="space-y-2">
+              {targets.map((t, i) => {
+                const count = Number(t.mention_count ?? 0)
+                const pct = maxTarget > 0 ? Math.min((count / maxTarget) * 100, 100) : 0
+                return (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="w-28 text-green-400 shrink-0 truncate">{t.vendor ?? '--'}</span>
+                    <div className="flex-1 bg-slate-800 rounded-full h-2 overflow-hidden">
+                      <div className="h-2 rounded-full bg-green-500/50" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-slate-500 shrink-0 w-8 text-right">{count}</span>
+                    {t.primary_driver && <DriverBadge driver={t.primary_driver} />}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Feature gaps + Customer profile */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {gaps.length > 0 && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Feature Gaps</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {gaps.map((g, i) => (
+                <span key={i} className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-xs">
+                  {g.feature ?? '?'}{g.mentions != null ? <span className="text-slate-500"> ·{g.mentions}</span> : null}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {(industries.length > 0 || sizes.length > 0) && (
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-slate-300 mb-3">Customer Profile</h3>
+            {industries.length > 0 && (
+              <div className="mb-2">
+                <p className="text-xs text-slate-500 mb-1">Industries</p>
+                <div className="flex flex-wrap gap-1">
+                  {industries.slice(0, 5).map((ind, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-xs capitalize">
+                      {ind.industry ?? '?'}{ind.count != null ? ` ·${ind.count}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {sizes.length > 0 && (
+              <div>
+                <p className="text-xs text-slate-500 mb-1">Company Size</p>
+                <div className="flex flex-wrap gap-1">
+                  {sizes.map((sz, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 text-xs">
+                      {sz.size ?? '?'}{sz.count != null ? ` ·${sz.count}` : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Sentiment breakdown */}
+      {sentTotal > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Sentiment Distribution</h3>
+          <div className="flex gap-2 text-xs items-center">
+            {[
+              { label: 'Positive', count: sent.positive ?? 0, cls: 'bg-green-500/60' },
+              { label: 'Neutral', count: sent.neutral ?? 0, cls: 'bg-slate-600' },
+              { label: 'Negative', count: sent.negative ?? 0, cls: 'bg-red-500/60' },
+            ].map(({ label, count, cls }) => {
+              const pct = sentTotal > 0 ? (count / sentTotal) * 100 : 0
+              return (
+                <div key={label} className="flex-1">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-slate-400">{label}</span>
+                    <span className="text-slate-300">{pct.toFixed(0)}%</span>
+                  </div>
+                  <div className="bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div className={clsx('h-2 rounded-full', cls)} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Retention Strengths */}
+      {retentionStrengths.length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="text-sm font-medium text-slate-300 mb-3">Retention Strengths</h3>
+          <div className="space-y-1">
+            {retentionStrengths.map((s, i) => (
+              <div key={i} className="flex items-center justify-between text-xs">
+                <span className="text-emerald-300 capitalize">{(s.area ?? '').replace(/_/g, ' ')}</span>
+                <span className="text-slate-500">{s.mention_count ?? ''}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Category Council */}
+      {council && (council.conclusion || council.market_regime) && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-3">
+            <Users className="h-4 w-4 text-emerald-400" /> Category Council
+          </h3>
+          <div className="flex flex-wrap gap-2 text-xs mb-2">
+            {council.market_regime && <span className="px-2 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{council.market_regime}</span>}
+            {council.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {council.winner}</span>}
+            {council.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {council.loser}</span>}
+            {council.confidence != null && council.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(council.confidence * 100)}% conf.</span>}
+            {council.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{council.durability}</span>}
+          </div>
+          {council.conclusion && <p className="text-sm text-slate-300">{council.conclusion}</p>}
+          {council.key_insights.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {council.key_insights.slice(0, 4).map((insight, k) => (
+                <li key={k} className="text-xs text-slate-400 flex gap-2 min-w-0">
+                  <span className="text-cyan-400 shrink-0">-</span>
+                  <span>{insight.insight}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Case studies */}
+      {studies.length > 0 && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+          <h3 className="flex items-center gap-2 text-sm font-medium text-slate-300 mb-3">
+            <MessageSquareQuote className="h-4 w-4 text-cyan-400" /> Customer Quotes
+          </h3>
+          <div className="space-y-3">
+            {studies.map((s, i) => (
+              <div key={i} className="border-l-2 border-cyan-500/30 pl-3">
+                <blockquote className="text-xs text-slate-300 italic break-words">&quot;{s.quote}&quot;</blockquote>
+                <p className="text-xs text-slate-500 mt-1">
+                  {s.company ?? 'Anonymous'}
+                  {s.title ? ` · ${s.title}` : ''}
+                  {s.urgency ? ` · urgency ${s.urgency}` : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1202,8 +1949,9 @@ interface DisplacementReportData {
 
 function signalColor(strength: string | null | undefined): string {
   const s = (strength ?? '').toLowerCase()
-  if (s === 'very_high' || s === 'high') return 'text-red-400'
-  if (s === 'medium') return 'text-amber-400'
+  if (s === 'very_high' || s === 'high' || s === 'strong') return 'text-red-400'
+  if (s === 'medium' || s === 'moderate') return 'text-amber-400'
+  if (s === 'emerging') return 'text-cyan-400'
   return 'text-slate-400'
 }
 
@@ -1240,7 +1988,7 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
   const drivers: DriverSummaryRow[] = Array.isArray(data.driver_summary) ? (data.driver_summary as DriverSummaryRow[]) : []
 
   const totalMentions = typeof meta.total_mentions === 'number' ? meta.total_mentions : null
-  const pricingPct = typeof meta.pricing_pct === 'number' ? `${(meta.pricing_pct * 100).toFixed(0)}%` : null
+  const pricingPct = typeof meta.pricing_pct === 'number' ? `${Math.round(meta.pricing_pct)}%` : null
 
   return (
     <div className="space-y-5 min-w-0 [overflow-wrap:anywhere]">
@@ -1339,7 +2087,7 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
           <div className="space-y-2">
             {drivers.map((d, i) => {
               const pct = typeof d.pct === 'number' ? d.pct : 0
-              const barWidth = `${Math.min(pct * 100, 100).toFixed(1)}%`
+              const barWidth = `${Math.min(pct, 100).toFixed(1)}%`
               return (
                 <div key={i} className="flex items-center gap-3 text-xs">
                   <span className="w-32 text-slate-300 shrink-0 capitalize">{driverLabel(d.driver)}</span>
@@ -1349,7 +2097,7 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
                       style={{ width: barWidth }}
                     />
                   </div>
-                  <span className="w-10 text-right text-slate-400 shrink-0">{(pct * 100).toFixed(0)}%</span>
+                  <span className="w-10 text-right text-slate-400 shrink-0">{Math.round(pct)}%</span>
                   {d.mentions != null && (
                     <span className="text-slate-600 shrink-0">{d.mentions}m</span>
                   )}
@@ -1372,8 +2120,10 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
                 {/* Header: from → to */}
                 <div className="flex items-center gap-1.5 text-sm font-medium flex-wrap">
                   <span className="text-red-300">{b.from_vendor ?? '?'}</span>
+                  {b.source_archetype && <span className="text-xs text-slate-500">({b.source_archetype})</span>}
                   <span className="text-slate-500">→</span>
                   <span className="text-green-300">{b.to_vendor ?? '?'}</span>
+                  {b.target_archetype && <span className="text-xs text-slate-500">({b.target_archetype})</span>}
                 </div>
                 {/* Chips row */}
                 <div className="flex flex-wrap gap-1.5 items-center">
@@ -1386,6 +2136,12 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
                     </span>
                   )}
                   <DriverBadge driver={b.primary_driver} />
+                  {b.confidence_score != null && b.confidence_score > 0 && (
+                    <span className="px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-300 text-xs">{Math.round(b.confidence_score * 100)}% conf.</span>
+                  )}
+                  {b.durability && (
+                    <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 text-xs">{b.durability}</span>
+                  )}
                 </div>
                 {/* Quote */}
                 {b.key_quote && (
@@ -1507,6 +2263,7 @@ export function SpecializedReportData({
   if (reportType === 'weekly_churn_feed') return <WeeklyChurnFeedDetail items={toWeeklyChurnFeedItems(normalizedValue)} />
   if (reportType === 'vendor_scorecard') return <VendorScorecardDetail items={toVendorScorecards(normalizedValue)} />
   if (reportType === 'displacement_report') return <DisplacementReportDetail data={normalized} />
+  if (reportType === 'vendor_deep_dive') return <VendorDeepDiveDetail items={toVendorDeepDives(normalizedValue)} />
   if (reportType === 'category_overview') {
     const items: CategoryOverviewItem[] = Array.isArray(normalizedValue)
       ? (normalizedValue as CategoryOverviewItem[])

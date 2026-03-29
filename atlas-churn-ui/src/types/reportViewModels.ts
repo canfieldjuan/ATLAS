@@ -184,6 +184,10 @@ export interface CategoryCouncilViewModel {
   category?: string
   conclusion?: string
   confidence?: number | null
+  market_regime?: string
+  winner?: string
+  loser?: string
+  durability?: string
   key_insights: KeyInsightViewModel[]
 }
 
@@ -193,6 +197,44 @@ export interface ActiveEvaluationDeadlineViewModel {
   contract_end?: string
   evaluation_deadline?: string
   urgency?: number | null
+  buying_stage?: string
+  role?: string
+  pain?: string
+  source?: string
+}
+
+export interface SegmentPlaybookItemViewModel {
+  segment?: string
+  why_vulnerable?: string
+  best_opening_angle?: string
+  disqualifier?: string
+  estimated_reach?: string
+}
+
+export interface TimingTriggerViewModel {
+  trigger?: string
+  action?: string
+  urgency?: string
+}
+
+export interface RetentionSignalViewModel {
+  aspect?: string
+  mentions?: number | null
+}
+
+export interface IncumbentStrengthViewModel {
+  area?: string
+  source?: string
+  mention_count?: number | null
+}
+
+export interface ObjectionMetricsViewModel {
+  avg_urgency?: number | null
+  dm_churn_rate?: number | null
+  budget_context?: string
+  price_complaint_rate?: number | null
+  churn_signal_density?: number | null
+  recommend_ratio?: number | null
 }
 
 export interface BattleCardViewModel {
@@ -204,6 +246,9 @@ export interface BattleCardViewModel {
   archetype?: string
   archetype_risk_level?: string
   archetype_key_signals: string[]
+  executive_summary?: string
+  timing_summary?: string
+  account_pressure_summary?: string
   vendor_weaknesses: WeaknessAnalysisItemViewModel[]
   weakness_analysis: WeaknessAnalysisItemViewModel[]
   customer_pain_quotes: PainQuoteViewModel[]
@@ -213,9 +258,29 @@ export interface BattleCardViewModel {
   resource_asymmetry: ResourceAsymmetryViewModel | null
   category_council: CategoryCouncilViewModel | null
   objection_handlers: ObjectionHandlerViewModel[]
+  objection_metrics: ObjectionMetricsViewModel | null
   talk_track: TalkTrackViewModel | null
   recommended_plays: RecommendedPlayViewModel[]
   active_evaluation_deadlines: ActiveEvaluationDeadlineViewModel[]
+  segment_targets: SegmentPlaybookItemViewModel[]
+  timing_window?: string
+  timing_triggers: TimingTriggerViewModel[]
+  account_market_summary?: string
+  landmine_questions: string[]
+  discovery_questions: string[]
+  retention_signals: RetentionSignalViewModel[]
+  incumbent_strengths: IncumbentStrengthViewModel[]
+  // Trust/calibration
+  evidence_depth_warning?: string
+  evidence_conclusions: string[]
+  low_confidence_sections: string[]
+  falsification_conditions: string[]
+  uncertainty_sources: string[]
+  // Operational signals
+  account_pressure_metrics?: AccountPressureMetricsViewModel
+  buyer_authority?: Record<string, unknown>
+  integration_stack: string[]
+  keyword_spikes?: KeywordSpikesViewModel
   source_distribution: Record<string, number>
   llm_render_status?: string
   quality_status?: string
@@ -279,6 +344,17 @@ export interface ComparisonReportViewModel {
 export interface FeedNamedAccountViewModel {
   company?: string
   urgency?: number | null
+  title?: string
+  buying_stage?: string
+  company_size?: string
+  source?: string
+  decision_maker?: boolean
+  confidence_score?: number | null
+}
+
+export interface FeedRetentionStrengthViewModel {
+  area?: string
+  mention_count?: number | null
 }
 
 export interface WeeklyChurnFeedItemViewModel {
@@ -302,6 +378,61 @@ export interface WeeklyChurnFeedItemViewModel {
   trend?: string
   action_recommendation?: string
   named_accounts: FeedNamedAccountViewModel[]
+  category_council?: CategoryCouncilViewModel | null
+  retention_strengths: FeedRetentionStrengthViewModel[]
+  account_pressure_summary?: string
+  timing_summary?: string
+  priority_timing_triggers: string[]
+}
+
+export interface DeepDivePainBreakdownViewModel {
+  category?: string
+  count?: number | null
+  pct?: number | null
+}
+
+export interface DeepDiveDisplacementTargetViewModel {
+  vendor?: string
+  mention_count?: number | null
+  primary_driver?: string
+}
+
+export interface DeepDiveFeatureGapViewModel {
+  feature?: string
+  mentions?: number | null
+}
+
+export interface DeepDiveCaseStudyViewModel {
+  quote?: string
+  company?: string
+  urgency?: number | null
+  title?: string
+}
+
+export interface VendorDeepDiveViewModel {
+  vendor?: string
+  category?: string
+  total_reviews?: number | null
+  churn_signal_density?: number | null
+  churn_pressure_score?: number | null
+  avg_urgency?: number | null
+  risk_level?: string
+  sentiment_direction?: string
+  trend?: string
+  archetype?: string
+  archetype_confidence?: number | null
+  dm_churn_rate?: number | null
+  price_complaint_rate?: number | null
+  dominant_buyer_role?: string
+  pain_breakdown: DeepDivePainBreakdownViewModel[]
+  displacement_targets: DeepDiveDisplacementTargetViewModel[]
+  feature_gaps: DeepDiveFeatureGapViewModel[]
+  industry_distribution: Array<{ industry?: string; count?: number | null }>
+  company_size_distribution: Array<{ size?: string; count?: number | null }>
+  case_studies: DeepDiveCaseStudyViewModel[]
+  sentiment_breakdown?: { positive?: number | null; negative?: number | null; neutral?: number | null }
+  retention_strengths?: Array<{ area?: string; mention_count?: number | null }>
+  category_council?: CategoryCouncilViewModel | null
 }
 
 export interface VendorScorecardViewModel {
@@ -328,6 +459,29 @@ export interface AccountsInMotionAccountViewModel {
   domain?: string
   alternatives_considering: string[]
   top_quote?: string
+  decision_maker?: boolean
+  confidence?: number | null
+  quality_flags?: string[]
+  contact_name?: string
+  contact_title?: string
+}
+
+export interface AccountPressureMetricsViewModel {
+  total_accounts?: number | null
+  high_intent_count?: number | null
+  active_eval_count?: number | null
+}
+
+export interface KeywordSpikesViewModel {
+  spike_count?: number | null
+  keywords: string[]
+}
+
+export interface TimingMetricsViewModel {
+  immediate_trigger_count?: number | null
+  active_eval_signals?: number | null
+  sentiment_direction?: string
+  [key: string]: unknown
 }
 
 export interface AccountsInMotionViewModel {
@@ -338,4 +492,12 @@ export interface AccountsInMotionViewModel {
   feature_gaps: FeatureGapViewModel[]
   cross_vendor_context: CrossVendorContextViewModel
   accounts: AccountsInMotionAccountViewModel[]
+  account_pressure_summary?: string
+  account_pressure_metrics?: AccountPressureMetricsViewModel
+  priority_account_names?: string[]
+  timing_summary?: string
+  timing_metrics?: TimingMetricsViewModel
+  priority_timing_triggers?: string[]
+  segment_targeting_summary?: string
+  category_council?: CategoryCouncilViewModel
 }
