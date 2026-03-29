@@ -5728,6 +5728,7 @@ async def build_manual_topic_ctx(
     topic_type: str,
     vendor_b: str | None = None,
     category: str | None = None,
+    company_size: str | None = None,
 ) -> dict[str, Any]:
     """Construct topic_ctx for a manually requested blog post.
 
@@ -5786,7 +5787,7 @@ async def build_manual_topic_ctx(
             "slug": slug,
         })
     elif topic_type == "best_fit_guide":
-        size = ctx.get("company_size") or "teams"
+        size = company_size or ctx.get("company_size") or "teams"
         slug = f"best-{_slugify(category)}-for-{_slugify(size)}-{month_suffix}"
         ctx.update({
             "vendor_count": 0,
