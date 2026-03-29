@@ -70,6 +70,26 @@ _VENDORISH_NAME_PATTERN = re.compile(
     r"(?:\s+(?:[A-Z][a-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+|[A-Z]{2,}|[a-z]+[A-Z][A-Za-z0-9]*)){0,3}"
     r")\b"
 )
+_VENDORISH_SKIP_WORDS = frozenset(
+    " ".join(re.findall(r"[a-z0-9]+", w.lower())) for w in (
+        # Common English words that match the capitalized pattern
+        "The", "This", "That", "When", "What", "Where", "Which", "While",
+        "Most", "Top", "Data", "Teams", "Users", "Some", "Each", "Both",
+        "Many", "Other", "These", "Those", "After", "Before", "Between",
+        "About", "Since", "Until", "During", "However", "Although",
+        # Document structure words
+        "Introduction", "Conclusion", "Overview", "Analysis", "Guide",
+        "Report", "Summary", "Review", "Section", "Chart", "Table",
+        "Source", "Note", "Key", "Figure", "Methodology",
+        # Time/date words
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+        # Tech/domain terms that aren't vendors
+        "API", "SEO", "SaaS", "CRM", "ERP", "DNS", "SSL", "CSS",
+        "HTML", "REST", "SDK", "ROI", "KPI", "B2B", "SMB",
+    )
+)
 
 
 def _build_grounded_vendor_set(blueprint: "PostBlueprint") -> set[str]:
@@ -153,12 +173,10 @@ def _find_unsupported_data_claims(
         for name in candidates:
             normalized_name = _normalized_vendor_text(name)
             if normalized_name not in grounded and len(normalized_name) > 2:
-                if normalized_name in (
-                    "the", "this", "that", "when", "what", "where",
-                    "most", "top", "data", "teams", "users",
-                    "introduction", "conclusion", "overview",
-                    "analysis", "guide", "report",
-                ):
+                if normalized_name in _VENDORISH_SKIP_WORDS:
+                    continue
+                # Skip single words that appear as labels (followed by colon)
+                if re.search(r"\b" + re.escape(name) + r"\s*:", sentence):
                     continue
                 flagged.append(f"{name}: {sentence.strip()[:120]}")
                 break
