@@ -1,8 +1,8 @@
-"""Follow-up task: correlate news articles with vendor churn archetypes.
+"""Follow-up task: correlate news articles with vendor churn wedges.
 
-Lightweight task that reads vendor archetypes from b2b_churn_signals
-and matches against classified news_articles. Persists correlations
-to b2b_article_correlations.
+Reads vendor reasoning from synthesis (with legacy fallback) and matches
+against classified news_articles. Persists correlations to
+b2b_article_correlations.
 """
 
 import logging
@@ -40,8 +40,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _correlate_articles_with_archetypes,
         reconstruct_reasoning_lookup,
     )
+    from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
 
-    reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    # Synthesis-first: load all synthesis views, fill gaps with legacy
+    try:
+        from ._b2b_synthesis_reader import load_best_reasoning_views
+        # Get all vendor names from churn_signals for scoping
+        vendor_rows = await pool.fetch(
+            "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
+            "WHERE archetype IS NOT NULL AND last_computed_at::date >= $1",
+            today,
+        )
+        all_vendors = [r["vendor_name"] for r in vendor_rows if r["vendor_name"]]
+        if all_vendors:
+            views = await load_best_reasoning_views(pool, all_vendors, as_of=today)
+            synth_lookup = build_reasoning_lookup_from_views(views)
+        else:
+            synth_lookup = {}
+    except Exception:
+        logger.debug("Synthesis view loading failed, falling back to legacy", exc_info=True)
+        synth_lookup = {}
+
+    legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    reasoning_lookup = {**legacy_lookup, **synth_lookup}
     if not reasoning_lookup:
         return {"_skip_synthesis": "No reasoning data available"}
 

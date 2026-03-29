@@ -251,6 +251,13 @@ def _segment_scale_label(text: str) -> str:
     return ""
 
 
+_SEGMENT_NAME_PRESERVATIONS: dict[str, str] = {
+    "small business": "Small Business",
+    "mid market": "Mid-Market",
+    "mid-market": "Mid-Market",
+}
+
+
 def _normalize_priority_segment_label(value: Any) -> str:
     text = _normalize_contract_text(value)
     if not text:
@@ -259,6 +266,8 @@ def _normalize_priority_segment_label(value: Any) -> str:
     lowered = re.sub(r"\(\s*role\s*:\s*([^)]+)\)", r" \1 ", lowered)
     lowered = re.sub(r"\brole:\s*", "", lowered)
     lowered = re.sub(r"\([^)]*\b(use case|role|segment|department|size|contract)\b[^)]*\)", " ", lowered)
+    # Strip parenthetical numeric ranges like "(1-10 employees)" or "(51-200)"
+    lowered = re.sub(r"\([^)]*\d[^)]*\)", " ", lowered)
     lowered = re.sub(r"\s+", " ", lowered).strip(" -")
 
     for key, label in _SEGMENT_ROLE_LABELS.items():
@@ -267,6 +276,10 @@ def _normalize_priority_segment_label(value: Any) -> str:
     for key, label in _SEGMENT_TEAM_KEYWORDS:
         if key in lowered:
             return label
+    # Preserve human-readable segment tier names before scale normalization
+    preservation = _SEGMENT_NAME_PRESERVATIONS.get(lowered)
+    if preservation:
+        return preservation
     scale = _segment_scale_label(lowered)
     if scale:
         if "contract" in lowered:
@@ -1098,6 +1111,172 @@ def _filter_valid_citations(value: Any, valid_source_ids: set[str]) -> Any:
     return value
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 contract builders
+# ---------------------------------------------------------------------------
+
+def _build_why_they_stay(packet: Any) -> dict[str, Any] | None:
+    """Build a why_they_stay block from packet retention_proof.
+
+    Explains why customers remain despite churn pressure -- the counter-
+    signal that prevents over-aggressive positioning.
+    """
+    retention_proof = getattr(packet, "retention_proof", None) or []
+    if not retention_proof:
+        return None
+    strengths: list[dict[str, Any]] = []
+    for proof in retention_proof:
+        if not isinstance(proof, dict):
+            continue
+        area = proof.get("area", "")
+        strength_text = proof.get("strength", "")
+        if not area:
+            continue
+        entry: dict[str, Any] = {"area": area}
+        if strength_text:
+            entry["evidence"] = strength_text
+        sid = proof.get("_sid")
+        if sid:
+            entry["_sid"] = sid
+        mc = proof.get("mention_count")
+        if mc is not None:
+            entry["mention_count"] = mc
+        strengths.append(entry)
+    if not strengths:
+        return None
+    # Build summary from top strengths
+    top_areas = [s["area"].replace("_", " ") for s in strengths[:3]]
+    summary = (
+        f"Retention anchored by {', '.join(top_areas)}"
+        if top_areas else ""
+    )
+    return {
+        "summary": summary,
+        "strengths": strengths,
+    }
+
+
+def _build_confidence_posture(
+    packet: Any,
+    causal_narrative: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Build a confidence_posture block from coverage gaps and section confidence.
+
+    Surfaces the explicit limits on what the reasoning can claim, so
+    downstream consumers can hedge appropriately.
+    """
+    coverage_gaps = getattr(packet, "coverage_gaps", None) or []
+    section_confidence = causal_narrative.get("confidence", "medium")
+
+    limits: list[str] = []
+    for gap in coverage_gaps:
+        if not isinstance(gap, dict):
+            continue
+        gap_type = gap.get("type", "")
+        area = gap.get("area", "")
+        sample = gap.get("sample_size", 0)
+        if gap_type == "thin_segment_sample":
+            limits.append(f"thin {area.replace('_', ' ')} sample (n={sample})")
+        elif gap_type == "missing_pool":
+            limits.append(f"no {area} evidence")
+        elif gap_type == "thin_account_signals":
+            limits.append(f"weak account signal density (n={sample})")
+        elif gap_type == "shallow_evidence_window":
+            limits.append(f"shallow evidence window ({sample} days)")
+
+    if not limits and section_confidence in ("high", "medium"):
+        return None
+
+    return {
+        "overall": section_confidence,
+        "limits": limits,
+    }
+
+
+def _build_switch_triggers(
+    timing_intelligence: dict[str, Any],
+    packet: Any,
+) -> list[dict[str, Any]]:
+    """Extract switch triggers from timing intelligence and displacement data.
+
+    Switch triggers are the specific events or conditions that push a
+    customer from 'frustrated but staying' to 'actively switching'.
+    """
+    triggers: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+
+    # Source 1: immediate_triggers from timing intelligence
+    immediate = timing_intelligence.get("immediate_triggers") or []
+    for t in immediate:
+        if not isinstance(t, dict):
+            continue
+        trigger_type = t.get("type") or t.get("trigger_type") or ""
+        description = t.get("description") or t.get("signal") or ""
+        label = trigger_type or description[:40]
+        if not label or label in seen_labels:
+            continue
+        seen_labels.add(label)
+        entry: dict[str, Any] = {"type": trigger_type}
+        if description:
+            entry["description"] = description
+        sid = t.get("_sid") or t.get("source_id")
+        if sid:
+            entry["_sid"] = sid
+        triggers.append(entry)
+
+    # Source 2: high-urgency temporal spikes from packet
+    temporal_items = getattr(packet, "pools", {}).get("temporal", [])
+    for si in temporal_items:
+        data = getattr(si, "data", {})
+        if not isinstance(data, dict):
+            continue
+        spike_type = data.get("spike_type") or data.get("type") or ""
+        magnitude = data.get("magnitude") or data.get("spike_magnitude") or 0
+        try:
+            mag_val = float(magnitude)
+        except (TypeError, ValueError):
+            mag_val = 0.0
+        if mag_val < 2.0:
+            continue
+        label = spike_type or "temporal_spike"
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        entry = {"type": "spike", "description": spike_type}
+        ref = getattr(si, "source_ref", None)
+        if ref:
+            entry["_sid"] = ref.source_id
+        triggers.append(entry)
+
+    return triggers
+
+
+def _build_evidence_governance(packet: Any) -> dict[str, Any] | None:
+    """Build evidence_governance block from packet governance signals.
+
+    Passthrough of metric_ledger, contradictions, and coverage_gaps so
+    downstream consumers can read uncertainty/governance directly.
+    """
+    metric_ledger = getattr(packet, "metric_ledger", None) or []
+    contradictions = getattr(packet, "contradiction_rows", None) or []
+    coverage_gaps = getattr(packet, "coverage_gaps", None) or []
+    minority_signals = getattr(packet, "minority_signals", None) or []
+
+    if not any([metric_ledger, contradictions, coverage_gaps, minority_signals]):
+        return None
+
+    gov: dict[str, Any] = {}
+    if metric_ledger:
+        gov["metric_ledger"] = metric_ledger
+    if contradictions:
+        gov["contradictions"] = contradictions
+    if coverage_gaps:
+        gov["coverage_gaps"] = coverage_gaps
+    if minority_signals:
+        gov["minority_signals"] = minority_signals
+    return gov
+
+
 def build_reasoning_contracts(
     synthesis: dict[str, Any],
     packet: Any,
@@ -1333,6 +1512,58 @@ def build_reasoning_contracts(
         category["citations"] = citations
     _filter_valid_citations(category, valid_source_ids)
 
+    # --- Phase 3: why_they_stay from retention_proof -----------------------
+    # Merge: deterministic builder fills gaps, model-provided content preserved
+    deterministic_wts = _build_why_they_stay(packet)
+    if vendor_core:
+        existing_wts = vendor_core.get("why_they_stay")
+        if isinstance(existing_wts, dict) and existing_wts:
+            # Model provided content -- merge deterministic strengths in
+            if deterministic_wts:
+                existing_strengths = existing_wts.get("strengths") or []
+                existing_areas = {s.get("area") for s in existing_strengths if isinstance(s, dict)}
+                for s in deterministic_wts.get("strengths") or []:
+                    if isinstance(s, dict) and s.get("area") not in existing_areas:
+                        existing_strengths.append(s)
+                existing_wts["strengths"] = existing_strengths
+            vendor_core["why_they_stay"] = existing_wts
+        elif deterministic_wts:
+            vendor_core["why_they_stay"] = deterministic_wts
+
+    # --- Phase 3: confidence_posture from coverage_gaps -------------------
+    deterministic_cp = _build_confidence_posture(packet, causal_narrative)
+    if vendor_core:
+        existing_cp = vendor_core.get("confidence_posture")
+        if isinstance(existing_cp, dict) and existing_cp:
+            # Model provided content -- merge deterministic limits in
+            if deterministic_cp:
+                existing_limits = list(existing_cp.get("limits") or [])
+                existing_set = set(existing_limits)
+                for lim in deterministic_cp.get("limits") or []:
+                    if lim not in existing_set:
+                        existing_limits.append(lim)
+                existing_cp["limits"] = existing_limits
+            vendor_core["confidence_posture"] = existing_cp
+        elif deterministic_cp:
+            vendor_core["confidence_posture"] = deterministic_cp
+
+    # --- Phase 3: switch_triggers from timing/displacement ----------------
+    deterministic_st = _build_switch_triggers(timing_intelligence, packet)
+    if displacement:
+        existing_st = displacement.get("switch_triggers")
+        if isinstance(existing_st, list) and existing_st:
+            # Model provided triggers -- merge deterministic ones in
+            existing_types = {t.get("type") for t in existing_st if isinstance(t, dict)}
+            for t in deterministic_st:
+                if isinstance(t, dict) and t.get("type") not in existing_types:
+                    existing_st.append(t)
+            displacement["switch_triggers"] = existing_st
+        elif deterministic_st:
+            displacement["switch_triggers"] = deterministic_st
+
+    # --- Phase 3: evidence_governance passthrough from packet -------------
+    evidence_governance = _build_evidence_governance(packet)
+
     contracts = {"schema_version": "v1"}
     if vendor_core:
         contracts["vendor_core_reasoning"] = vendor_core
@@ -1342,6 +1573,8 @@ def build_reasoning_contracts(
         contracts["category_reasoning"] = category
     if account:
         contracts["account_reasoning"] = account
+    if evidence_governance:
+        contracts["evidence_governance"] = evidence_governance
     return contracts
 
 

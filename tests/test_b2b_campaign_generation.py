@@ -355,7 +355,8 @@ async def test_generate_challenger_campaigns_uses_mode_aware_briefing_context(mo
     assert payload["briefing_context"]["priority_account_names"] == ["Gamma Co"]
     assert payload["briefing_context"]["top_displacement_targets"] == ["IncumbentCRM"]
     assert payload["briefing_context"]["trend"] == "increasing"
-    assert payload["incumbent_archetypes"]["pricing_shock"] == ["IncumbentCRM"]
+    # pricing_shock legacy archetype maps to price_squeeze wedge
+    assert payload["incumbent_archetypes"]["price_squeeze"] == ["IncumbentCRM"]
     assert result["generated"] == 2
 
 
@@ -933,3 +934,298 @@ async def test_generate_content_appends_signoff_when_missing(monkeypatch):
 
     assert result is not None
     assert "Best,<br>Juan Canfield<br>Founder, Atlas Intel" in result["body"]
+
+
+# ---------------------------------------------------------------------------
+# _briefing_context_from_data: new fields from Sources 10-12
+# ---------------------------------------------------------------------------
+
+def test_briefing_context_extracts_account_pressure_metrics():
+    import json
+    briefing_data = json.dumps({
+        "headline": "Churn pressure rising.",
+        "account_pressure_metrics": {
+            "total_accounts": 5,
+            "high_intent_count": 3,
+            "active_eval_signal_count": 2,
+            "decision_maker_count": 1,
+        },
+    })
+
+    context = mod._briefing_context_from_data(briefing_data)
+
+    assert context["account_high_intent_count"] == 3
+    assert context["account_active_eval_count"] == 2
+
+
+def test_briefing_context_omits_zero_account_metrics():
+    import json
+    briefing_data = json.dumps({
+        "account_pressure_metrics": {
+            "total_accounts": 0,
+            "high_intent_count": 0,
+            "active_eval_signal_count": 0,
+        },
+    })
+
+    context = mod._briefing_context_from_data(briefing_data)
+
+    assert "account_high_intent_count" not in context
+    assert "account_active_eval_count" not in context
+
+
+def test_briefing_context_extracts_timing_triggers():
+    import json
+    briefing_data = json.dumps({
+        "headline": "Timing window active.",
+        "priority_timing_triggers": ["Q2 renewal approaching", "Price increase signal"],
+    })
+
+    context = mod._briefing_context_from_data(briefing_data)
+
+    assert context["priority_timing_triggers"] == [
+        "Q2 renewal approaching",
+        "Price increase signal",
+    ]
+
+
+def test_briefing_context_extracts_buyer_profiles():
+    import json
+    briefing_data = json.dumps({
+        "headline": "Buyer signals.",
+        "buyer_profiles": [
+            {"role_type": "economic_buyer", "buying_stage": "renewal_decision", "avg_urgency": 8.5},
+            {"role_type": "evaluator", "buying_stage": "evaluation", "avg_urgency": 7.2},
+            {"role_type": "end_user", "buying_stage": "post_purchase", "avg_urgency": 3.1},
+        ],
+    })
+
+    context = mod._briefing_context_from_data(briefing_data)
+
+    profiles = context["top_buyer_profiles"]
+    # Only top 2 extracted
+    assert len(profiles) == 2
+    assert profiles[0]["role_type"] == "economic_buyer"
+    assert profiles[0]["buying_stage"] == "renewal_decision"
+    assert profiles[0]["avg_urgency"] == 8.5
+
+
+def test_briefing_context_extracts_competitive_dynamics():
+    import json
+    # Use canonical dict shape for switch_reasons (as built by build_displacement_dynamics)
+    briefing_data = json.dumps({
+        "headline": "Competitive pressure.",
+        "competitive_dynamics": {
+            "pairs": [
+                {
+                    "challenger": "Zoho",
+                    "battle_summary": "Zoho wins on price in SMB.",
+                    "switch_reasons": [
+                        {"reason": "lower cost", "reason_category": "pricing", "mention_count": 28},
+                        {"reason": "simpler UI", "reason_category": "ux", "mention_count": 15},
+                    ],
+                },
+                {
+                    "challenger": "Pipedrive",
+                    "battle_summary": "Pipedrive preferred for sales-led motions.",
+                    "switch_reasons": [
+                        {"reason": "better pipeline UX", "reason_category": "ux", "mention_count": 10}
+                    ],
+                },
+            ]
+        },
+    })
+
+    context = mod._briefing_context_from_data(briefing_data)
+
+    dyn = context["competitive_dynamics"]
+    assert len(dyn) == 2
+    assert dyn[0]["challenger"] == "Zoho"
+    assert dyn[0]["battle_summary"] == "Zoho wins on price in SMB."
+    # switch_reasons in campaign context are extracted as plain reason strings
+    assert dyn[0]["switch_reasons"] == ["lower cost", "simpler UI"]
+
+
+def test_briefing_context_extracts_pain_urgency():
+    import json
+    briefing_data = json.dumps({
+        "headline": "Pain signals.",
+        "pain_breakdown": [
+            {"category": "pricing", "count": 80, "avg_urgency": 7.8},
+            {"category": "support", "count": 40, "avg_urgency": 5.5},
+            {"category": "features", "count": 20},
+        ],
+    })
+
+    context = mod._briefing_context_from_data(briefing_data)
+
+    urgency = context["pain_urgency"]
+    # Only entries with avg_urgency included
+    assert len(urgency) == 2
+    assert urgency[0]["category"] == "pricing"
+    assert urgency[0]["avg_urgency"] == 7.8
+    # features has no avg_urgency, excluded
+    categories = [u["category"] for u in urgency]
+    assert "features" not in categories
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: reasoning_context enrichment
+# ---------------------------------------------------------------------------
+
+def test_reasoning_context_includes_phase3_fields():
+    """When synthesis has Phase 3 contracts, reasoning_context should include
+    why_they_stay, timing, switch_triggers, confidence_limits, account_summary."""
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
+
+    raw = {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "medium",
+                    "summary": "Pricing pressure from recent hike",
+                    "key_signals": ["40% increase in complaints"],
+                    "what_would_weaken_thesis": [
+                        {"condition": "Price rollback", "signal_source": "temporal", "monitorable": True},
+                    ],
+                    "data_gaps": [],
+                },
+                "timing_intelligence": {
+                    "best_timing_window": "Q2 renewal cycle",
+                    "immediate_triggers": [
+                        {"type": "deadline", "trigger": "Q2 renewal"},
+                        {"type": "spike", "trigger": "Complaint surge"},
+                    ],
+                    "confidence": "medium",
+                },
+                "why_they_stay": {
+                    "summary": "Retention anchored by integrations",
+                    "strengths": [
+                        {"area": "integrations", "evidence": "Broad ecosystem"},
+                        {"area": "brand", "evidence": "Brand loyalty"},
+                    ],
+                },
+                "confidence_posture": {
+                    "overall": "medium",
+                    "limits": ["thin enterprise sample"],
+                },
+            },
+            "displacement_reasoning": {
+                "switch_triggers": [
+                    {"type": "deadline", "description": "Q2 contract renewal"},
+                    {"type": "spike", "description": "March complaint surge"},
+                ],
+            },
+            "account_reasoning": {
+                "market_summary": "Active evaluation concentrated in mid-market ops teams.",
+            },
+        },
+    }
+    # Simulate what the campaign generation code does
+    from datetime import date
+    view = SynthesisView("TestVendor", raw, schema_version="v2", as_of_date=date(2026, 3, 28))
+
+    cn = view.section("causal_narrative")
+    wedge = view.primary_wedge
+    wedge_label = wedge.value if wedge else cn.get("primary_wedge", "")
+
+    reasoning_ctx = {
+        "wedge": wedge_label,
+        "confidence": view.confidence("causal_narrative"),
+        "summary": cn.get("summary", ""),
+        "key_signals": cn.get("key_signals", []),
+    }
+
+    wts = view.why_they_stay
+    if wts:
+        reasoning_ctx["why_they_stay"] = {
+            "summary": wts.get("summary", ""),
+            "strengths": [
+                {"area": s.get("area", ""), "evidence": s.get("evidence", "")}
+                for s in wts.get("strengths", []) if isinstance(s, dict)
+            ][:5],
+        }
+    timing = view.section("timing_intelligence")
+    if timing:
+        reasoning_ctx["timing"] = {
+            "best_window": timing.get("best_timing_window", ""),
+            "trigger_count": len(timing.get("immediate_triggers") or []),
+        }
+    triggers = view.switch_triggers
+    if triggers:
+        reasoning_ctx["switch_triggers"] = [
+            {"type": t.get("type", ""), "description": t.get("description", "")}
+            for t in triggers[:3]
+        ]
+    cp = view.confidence_posture
+    if cp and cp.get("limits"):
+        reasoning_ctx["confidence_limits"] = cp["limits"]
+    acct = view.contract("account_reasoning")
+    if acct and acct.get("market_summary"):
+        reasoning_ctx["account_summary"] = acct["market_summary"]
+
+    # Assertions
+    assert reasoning_ctx["wedge"] == "price_squeeze"
+    assert reasoning_ctx["why_they_stay"]["summary"] == "Retention anchored by integrations"
+    assert len(reasoning_ctx["why_they_stay"]["strengths"]) == 2
+    assert reasoning_ctx["timing"]["best_window"] == "Q2 renewal cycle"
+    assert reasoning_ctx["timing"]["trigger_count"] == 2
+    assert len(reasoning_ctx["switch_triggers"]) == 2
+    assert reasoning_ctx["confidence_limits"] == ["thin enterprise sample"]
+    assert reasoning_ctx["account_summary"] == "Active evaluation concentrated in mid-market ops teams."
+
+
+def test_challenger_ctx_includes_incumbent_reasoning():
+    """When incumbent views have Phase 3 contracts, challenger_ctx should
+    include incumbent_reasoning with per-vendor summaries."""
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
+
+    inc_raw = {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "medium",
+                    "summary": "Incumbents losing on pricing",
+                },
+                "why_they_stay": {
+                    "summary": "Ecosystem lock-in keeps customers",
+                },
+            },
+            "displacement_reasoning": {
+                "switch_triggers": [
+                    {"type": "deadline", "description": "Q2 renewal"},
+                ],
+            },
+        },
+    }
+    from datetime import date
+    view = SynthesisView("IncumbentCRM", inc_raw, "v2", date(2026, 3, 28))
+
+    # Simulate challenger path logic
+    by_archetype = {}
+    incumbent_reasoning = {}
+    wedge = view.primary_wedge
+    label = wedge.value if wedge else view.section("causal_narrative").get("primary_wedge", "")
+    if label:
+        by_archetype.setdefault(label, []).append("IncumbentCRM")
+
+    cn = view.section("causal_narrative")
+    inc_summary = {
+        "wedge": label,
+        "summary": cn.get("summary", ""),
+    }
+    wts = view.why_they_stay
+    if wts:
+        inc_summary["why_they_stay"] = wts.get("summary", "")
+    triggers = view.switch_triggers
+    if triggers:
+        inc_summary["switch_triggers"] = [t.get("type", "") for t in triggers[:3]]
+    if inc_summary.get("summary"):
+        incumbent_reasoning["IncumbentCRM"] = inc_summary
+
+    assert by_archetype == {"price_squeeze": ["IncumbentCRM"]}
+    assert "IncumbentCRM" in incumbent_reasoning
+    assert incumbent_reasoning["IncumbentCRM"]["why_they_stay"] == "Ecosystem lock-in keeps customers"
+    assert incumbent_reasoning["IncumbentCRM"]["switch_triggers"] == ["deadline"]

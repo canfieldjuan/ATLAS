@@ -405,38 +405,42 @@ async def _fetch_latest_synthesis_views(
     *,
     as_of: date,
     analysis_window_days: int,
+    vendor_names: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Fetch latest reasoning synthesis rows and wrap them in SynthesisView."""
-    from ._b2b_synthesis_reader import load_synthesis_view
+    """Fetch best reasoning views (synthesis-first, legacy fallback).
 
-    rows = await pool.fetch(
-        """
-        SELECT DISTINCT ON (vendor_name)
-               vendor_name, as_of_date, schema_version, synthesis
-        FROM b2b_reasoning_synthesis
-        WHERE as_of_date <= $1
-          AND analysis_window_days = $2
-        ORDER BY vendor_name, as_of_date DESC, created_at DESC
-        """,
-        as_of,
-        analysis_window_days,
+    When ``vendor_names`` is provided, scopes to those vendors. Otherwise
+    loads all vendors with synthesis rows, then fills gaps from legacy.
+    """
+    if vendor_names:
+        from ._b2b_synthesis_reader import load_best_reasoning_views
+        return await load_best_reasoning_views(
+            pool, vendor_names,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
+
+    # Broad load: collect vendor names from synthesis + legacy, then batch-load
+    from ._b2b_synthesis_reader import load_best_reasoning_views
+
+    synth_names = await pool.fetch(
+        "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
+        "WHERE as_of_date <= $1 AND analysis_window_days = $2",
+        as_of, analysis_window_days,
     )
-    views: dict[str, Any] = {}
-    for row in rows:
-        raw = row["synthesis"]
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception:
-                continue
-        if isinstance(raw, dict):
-            views[row["vendor_name"]] = load_synthesis_view(
-                raw,
-                row["vendor_name"],
-                schema_version=row["schema_version"] or "",
-                as_of_date=row["as_of_date"],
-            )
-    return views
+    legacy_names = await pool.fetch(
+        "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
+        "WHERE archetype IS NOT NULL",
+    )
+    all_names = list({
+        r["vendor_name"] for r in (*synth_names, *legacy_names)
+        if r.get("vendor_name")
+    })
+    if not all_names:
+        return {}
+    return await load_best_reasoning_views(
+        pool, all_names, as_of=as_of, analysis_window_days=analysis_window_days,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1014,6 +1018,64 @@ def _build_vendor_aggregate(
         contract_gaps = contract_gaps_for_consumer(view, "accounts_in_motion")
         if contract_gaps:
             result["reasoning_contract_gaps"] = contract_gaps
+
+        # Phase 3 governance fields
+        wts = getattr(view, "why_they_stay", None)
+        if isinstance(wts, dict) and wts:
+            result["why_they_stay"] = wts
+        cp = getattr(view, "confidence_posture", None)
+        if isinstance(cp, dict) and cp:
+            result["confidence_posture"] = cp
+            limits = cp.get("limits")
+            if limits:
+                result["confidence_limits"] = limits
+        st = getattr(view, "switch_triggers", None)
+        if isinstance(st, list) and st:
+            result["switch_triggers"] = st
+        cg = getattr(view, "coverage_gaps", None)
+        if isinstance(cg, list) and cg:
+            result["coverage_gaps"] = cg
+
+    # Backfill account-pressure fields from raw accounts when synthesis didn't
+    # populate them.  Uses the same field names so consumers see a consistent
+    # schema regardless of the data path.
+    if not result.get("account_pressure_summary") and accounts:
+        high_urgency = [a for a in accounts if float(a.get("urgency") or 0) >= 7]
+        active_eval = [a for a in accounts if (a.get("buying_stage") or "").lower() in (
+            "active_purchase", "evaluation", "renewal_decision",
+        )]
+        top_pain = ""
+        pain_counts: dict[str, int] = {}
+        for a in accounts:
+            pc = a.get("pain_category") or ""
+            if pc:
+                pain_counts[pc] = pain_counts.get(pc, 0) + 1
+        if pain_counts:
+            top_pain = max(pain_counts, key=pain_counts.get)  # type: ignore[arg-type]
+        parts = [f"{len(accounts)} accounts in motion"]
+        if high_urgency:
+            parts.append(f"{len(high_urgency)} high-urgency")
+        if active_eval:
+            parts.append(f"{len(active_eval)} in active evaluation")
+        if top_pain:
+            parts.append(f"top pain: {top_pain}")
+        result["account_pressure_summary"] = ", ".join(parts) + "."
+    if not result.get("account_pressure_metrics") and accounts:
+        high_urgency_count = sum(1 for a in accounts if float(a.get("urgency") or 0) >= 7)
+        active_eval_count = sum(1 for a in accounts if (a.get("buying_stage") or "").lower() in (
+            "active_purchase", "evaluation", "renewal_decision",
+        ))
+        result["account_pressure_metrics"] = {
+            "total_accounts": len(accounts),
+            "high_intent_count": high_urgency_count,
+            "active_eval_count": active_eval_count,
+        }
+    if not result.get("priority_account_names") and accounts:
+        result["priority_account_names"] = [
+            a.get("company") or a.get("company_name") or ""
+            for a in sorted(accounts, key=lambda a: a.get("opportunity_score", 0), reverse=True)[:3]
+            if a.get("company") or a.get("company_name")
+        ]
     return result
 
 
@@ -1189,8 +1251,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.exception("Accounts in motion evidence-vault fetch failed")
         evidence_vault_lookup = {}
 
-    # --- Phase 2: Reconstruct reasoning + cross-vendor ---
-    reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    # --- Phase 2: Reconstruct reasoning (synthesis-first) + cross-vendor ---
     xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
     try:
         raw_synthesis_views = await _fetch_latest_synthesis_views(
@@ -1201,6 +1262,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         logger.exception("Accounts in motion synthesis lookup failed")
         raw_synthesis_views = {}
+    # Build reasoning_lookup from synthesis views first, legacy fallback
+    from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
+    legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    synth_lookup = build_reasoning_lookup_from_views(raw_synthesis_views)
+    reasoning_lookup = {**legacy_lookup, **synth_lookup}
     synthesis_views = {
         _canonicalize_vendor(vendor): view
         for vendor, view in raw_synthesis_views.items()

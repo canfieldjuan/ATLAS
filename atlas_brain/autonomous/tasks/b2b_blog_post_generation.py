@@ -1341,6 +1341,234 @@ async def _detect_campaign_content_gaps(pool) -> dict[str, set[str]]:
     return demand
 
 
+# ---------------------------------------------------------------------------
+# Reasoning-aware topic reranker (Phase 7)
+# ---------------------------------------------------------------------------
+
+# Score adjustments for reasoning-backed reranking
+_REASONING_TIMING_BOOST = 10.0       # topic has active timing intelligence
+_REASONING_ACCOUNT_BOOST = 8.0       # topic has account-level intent signals
+_REASONING_SWITCH_TRIGGER_BOOST = 6.0  # displacement has switch triggers
+_REASONING_COVERAGE_GAP_PENALTY = -15.0  # evidence is thin
+_REASONING_RETENTION_BOOST = 3.0     # why_they_stay available (enables balanced copy)
+_REASONING_CONTRADICTION_PENALTY = -5.0  # contradictory evidence reduces confidence
+
+
+async def _rerank_topic_candidates_with_reasoning(
+    pool,
+    candidates: list[tuple[str, float, str, dict[str, Any]]],
+    *,
+    as_of: date | None = None,
+    analysis_window_days: int = 90,
+) -> list[tuple[str, float, str, dict[str, Any]]]:
+    """Rerank topic candidates using synthesis reasoning signals.
+
+    Adjusts normalized scores based on reasoning quality so topics backed
+    by strong synthesis outrank raw-volume topics, and thin-evidence topics
+    are deprioritized even when deterministic scores are high.
+    """
+    if not candidates:
+        return candidates
+
+    # Collect vendor names and category names from candidates
+    vendor_set: set[str] = set()
+    category_set: set[str] = set()
+    for _, _, _, ctx in candidates:
+        for key in ("vendor", "from_vendor", "vendor_a", "vendor_b"):
+            v = str(ctx.get(key) or "").strip()
+            if v:
+                vendor_set.add(v)
+        cat = str(ctx.get("category") or "").strip()
+        if cat:
+            category_set.add(cat)
+
+    from ._b2b_synthesis_reader import load_best_reasoning_views
+
+    # For category-only candidates, resolve categories to vendor names
+    vendor_to_category: dict[str, str] = {}
+    if category_set:
+        cat_vendors_needed = category_set - {v.lower() for v in vendor_set}
+        if cat_vendors_needed:
+            try:
+                _as_of_filter = as_of or date.today()
+                cat_vendor_rows = await pool.fetch(
+                    """
+                    SELECT DISTINCT vendor_name, product_category
+                    FROM b2b_churn_signals
+                    WHERE LOWER(product_category) = ANY($1)
+                      AND archetype IS NOT NULL
+                      AND last_computed_at::date <= $2
+                    ORDER BY vendor_name
+                    """,
+                    [c.lower() for c in cat_vendors_needed],
+                    _as_of_filter,
+                )
+                for row in cat_vendor_rows:
+                    vn = row.get("vendor_name")
+                    pc = row.get("product_category")
+                    if vn:
+                        vendor_set.add(vn)
+                        if pc:
+                            vendor_to_category[vn] = pc.lower().strip()
+            except Exception:
+                logger.debug("Category vendor resolution failed", exc_info=True)
+
+    views: dict = {}
+    if vendor_set:
+        try:
+            views = await load_best_reasoning_views(
+                pool, list(vendor_set),
+                as_of=as_of,
+                analysis_window_days=analysis_window_days,
+            )
+        except Exception:
+            logger.debug("Reasoning reranker: synthesis lookup failed, skipping", exc_info=True)
+            return candidates
+
+    # Build category index from loaded views
+    category_views: dict[str, list] = {}
+    for vname, view in views.items():
+        cat_name = ""
+        # Source 1: DB-resolved category from vendor resolution query
+        cat_name = vendor_to_category.get(vname, "")
+        # Source 2: evidence_vault product_category
+        if not cat_name:
+            ev = view.raw.get("evidence_vault") or {}
+            if isinstance(ev, dict):
+                cat_name = str(ev.get("product_category") or "").strip()
+        # Source 3: category_reasoning fields
+        if not cat_name:
+            cat_contract = view.contract("category_reasoning")
+            if isinstance(cat_contract, dict):
+                for cat_key in ("category", "product_category"):
+                    cat_name = str(cat_contract.get(cat_key) or "").strip()
+                    if cat_name:
+                        break
+        if cat_name:
+            category_views.setdefault(cat_name.lower().strip(), []).append(view)
+
+    if not views and not category_views:
+        return candidates
+
+    reranked: list[tuple[str, float, str, dict[str, Any]]] = []
+    for slug, score, topic_type, ctx in candidates:
+        adjustment = 0.0
+        reasons: list[str] = []
+
+        # Get primary vendor's reasoning view
+        primary = (
+            str(ctx.get("vendor") or ctx.get("from_vendor") or "").strip()
+            or str(ctx.get("vendor_a") or "").strip()
+        )
+        view = views.get(primary) if primary else None
+
+        if view is not None:
+            # Timing intelligence boost
+            timing = view.section("timing_intelligence")
+            if timing and timing.get("best_timing_window"):
+                triggers = timing.get("immediate_triggers") or []
+                if triggers:
+                    adjustment += _REASONING_TIMING_BOOST
+                    reasons.append("timing_boost")
+
+            # Account-level intent boost
+            acct = view.contract("account_reasoning")
+            if acct and acct.get("market_summary"):
+                high_intent = acct.get("high_intent_count")
+                if isinstance(high_intent, dict):
+                    high_intent = high_intent.get("value")
+                if high_intent and int(high_intent or 0) > 0:
+                    adjustment += _REASONING_ACCOUNT_BOOST
+                    reasons.append("account_intent_boost")
+
+            # Switch trigger boost
+            triggers = view.switch_triggers
+            if triggers:
+                adjustment += _REASONING_SWITCH_TRIGGER_BOOST
+                reasons.append("switch_trigger_boost")
+
+            # Why they stay boost (enables balanced copy)
+            if view.why_they_stay:
+                adjustment += _REASONING_RETENTION_BOOST
+                reasons.append("retention_context")
+
+            # Coverage gap penalty
+            gaps = view.coverage_gaps
+            if gaps:
+                # Scale penalty by number of gaps
+                gap_penalty = _REASONING_COVERAGE_GAP_PENALTY * min(len(gaps), 3) / 3
+                adjustment += gap_penalty
+                reasons.append(f"coverage_gap_penalty({len(gaps)})")
+
+            # Contradiction penalty
+            contradictions = view.contradictions
+            if contradictions:
+                adjustment += _REASONING_CONTRADICTION_PENALTY
+                reasons.append("contradiction_penalty")
+
+        # For showdowns, apply symmetric reasoning for vendor_b at half weight
+        vendor_b = str(ctx.get("vendor_b") or "").strip()
+        view_b = views.get(vendor_b) if vendor_b else None
+        if view_b is not None:
+            _SECONDARY_WEIGHT = 0.5
+            timing_b = view_b.section("timing_intelligence")
+            if timing_b and (timing_b.get("immediate_triggers") or []):
+                adjustment += _REASONING_TIMING_BOOST * _SECONDARY_WEIGHT
+                reasons.append("vendor_b_timing_boost")
+            if view_b.switch_triggers:
+                adjustment += _REASONING_SWITCH_TRIGGER_BOOST * _SECONDARY_WEIGHT
+                reasons.append("vendor_b_trigger_boost")
+            if view_b.why_they_stay:
+                adjustment += _REASONING_RETENTION_BOOST * _SECONDARY_WEIGHT
+                reasons.append("vendor_b_retention_context")
+            gaps_b = view_b.coverage_gaps
+            if gaps_b:
+                adjustment += _REASONING_COVERAGE_GAP_PENALTY * min(len(gaps_b), 3) / 6
+                reasons.append(f"vendor_b_gap_penalty({len(gaps_b)})")
+            if view_b.contradictions:
+                adjustment += _REASONING_CONTRADICTION_PENALTY * _SECONDARY_WEIGHT
+                reasons.append("vendor_b_contradiction_penalty")
+
+        # Category-level reasoning for topics without vendor keys
+        if view is None and view_b is None:
+            cat_name = str(ctx.get("category") or "").lower().strip()
+            cat_matches = category_views.get(cat_name, [])
+            if cat_matches:
+                # Use the best-informed category view
+                best_cat_view = cat_matches[0]
+                cat_contract = best_cat_view.contract("category_reasoning")
+                if isinstance(cat_contract, dict):
+                    regime = cat_contract.get("market_regime", "")
+                    if regime:
+                        adjustment += 4.0  # category has regime context
+                        reasons.append("category_regime_boost")
+                    cat_confidence = cat_contract.get("confidence_score")
+                    if cat_confidence is not None:
+                        try:
+                            if float(cat_confidence) < 0.3:
+                                adjustment += _REASONING_COVERAGE_GAP_PENALTY / 3
+                                reasons.append("category_low_confidence_penalty")
+                        except (TypeError, ValueError):
+                            pass
+                cat_gaps = best_cat_view.coverage_gaps
+                if cat_gaps:
+                    adjustment += _REASONING_COVERAGE_GAP_PENALTY * min(len(cat_gaps), 3) / 6
+                    reasons.append(f"category_gap_penalty({len(cat_gaps)})")
+
+        new_score = max(0.0, score + adjustment)
+        if reasons:
+            ctx = {**ctx, "_reasoning_adjustments": reasons}
+        reranked.append((slug, new_score, topic_type, ctx))
+
+    reranked.sort(key=lambda x: x[1], reverse=True)
+    boosted = sum(1 for _, _, _, c in reranked if c.get("_reasoning_adjustments"))
+    if boosted:
+        logger.info(
+            "Reasoning reranker adjusted %d/%d candidates", boosted, len(reranked),
+        )
+    return reranked
+
+
 async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]] | None:
     """Score candidates and pick the best unwritten B2B topic."""
     today = date.today()
@@ -1490,6 +1718,11 @@ async def _select_topic(pool, max_per_run: int = 1) -> tuple[str, dict[str, Any]
             "Outbound showdown gap bonus applied to %d candidate(s)",
             showdown_gap_boost_count,
         )
+
+    # --- Reasoning-aware reranking (Phase 7) ---
+    raw_candidates = await _rerank_topic_candidates_with_reasoning(
+        pool, raw_candidates, as_of=today,
+    )
 
     # --- Data sufficiency gate: filter candidates below minimum review counts ---
     sources = _blog_source_allowlist()
@@ -2238,41 +2471,37 @@ async def _load_pool_layers_for_blog(
 
     data["pool_layers"] = all_layers
 
-    # Load reasoning synthesis views for causal narratives (scoped to active vendors)
-    if vendor_names:
-        try:
-            from ._b2b_synthesis_reader import load_synthesis_view
+    # Load reasoning views (synthesis-first, legacy fallback)
+    from ._b2b_synthesis_reader import load_best_reasoning_views
 
-            vendor_filters = sorted({v.lower().strip() for v in vendor_names if v})
-            rows = await pool.fetch(
-                """
-                SELECT DISTINCT ON (vendor_name)
-                       vendor_name, as_of_date, schema_version, synthesis
-                FROM b2b_reasoning_synthesis
-                WHERE as_of_date <= $1
-                  AND analysis_window_days = $2
-                  AND LOWER(vendor_name) = ANY($3::text[])
-                ORDER BY vendor_name, as_of_date DESC, created_at DESC
-                """,
-                today,
-                window_days,
-                vendor_filters,
+    view_names = [v.strip() for v in vendor_names if v and v.strip()]
+
+    # For category-only topics, resolve category to vendors
+    if not view_names:
+        category_name = str(
+            topic_ctx.get("category") or ""
+        ).strip()
+        if category_name:
+            try:
+                cat_rows = await pool.fetch(
+                    "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
+                    "WHERE LOWER(product_category) = LOWER($1) "
+                    "AND archetype IS NOT NULL "
+                    "AND last_computed_at::date <= $2 "
+                    "LIMIT 10",
+                    category_name, today,
+                )
+                view_names = [r["vendor_name"] for r in cat_rows if r.get("vendor_name")]
+            except Exception:
+                logger.debug("Category vendor resolution for blog render failed", exc_info=True)
+
+    if view_names:
+        try:
+            synth_views = await load_best_reasoning_views(
+                pool, view_names,
+                as_of=today,
+                analysis_window_days=window_days,
             )
-            synth_views: dict[str, Any] = {}
-            for row in rows:
-                raw = row["synthesis"]
-                if isinstance(raw, str):
-                    try:
-                        raw = json.loads(raw)
-                    except Exception:
-                        continue
-                if isinstance(raw, dict):
-                    synth_views[row["vendor_name"]] = load_synthesis_view(
-                        raw,
-                        row["vendor_name"],
-                        schema_version=row["schema_version"] or "",
-                        as_of_date=row["as_of_date"],
-                    )
             data["synthesis_views"] = synth_views
         except Exception:
             logger.warning("Failed to load synthesis views for blog generation", exc_info=True)
@@ -2341,6 +2570,17 @@ async def _load_pool_layers_for_blog(
     # Extract synthesis contracts for primary vendor(s)
     synth = data.get("synthesis_views") or {}
     primary = vendor or vendor_a
+    # For category-only topics, pick the best-informed view from loaded views
+    if not primary and synth:
+        # Prefer view with category_reasoning.market_regime
+        for vn, v in synth.items():
+            cat_c = v.contract("category_reasoning")
+            if isinstance(cat_c, dict) and cat_c.get("market_regime"):
+                primary = vn
+                break
+        # Fallback: first view with any contracts
+        if not primary:
+            primary = next(iter(synth), "")
     if primary and synth.get(primary):
         view = synth[primary]
         contracts = view.materialized_contracts()
@@ -2350,6 +2590,30 @@ async def _load_pool_layers_for_blog(
                 view.primary_wedge.value if view.primary_wedge else None
             )
             data["synthesis_wedge_label"] = view.wedge_label
+        # Phase 3 governance sections for blueprint context
+        if view.why_they_stay:
+            data["why_they_stay"] = view.why_they_stay
+        if view.confidence_posture:
+            data["confidence_posture"] = view.confidence_posture
+        eg = view.evidence_governance
+        if eg:
+            data["evidence_governance"] = eg
+
+    # Balanced multi-vendor synthesis for showdown/comparison topics
+    if vendor_a and vendor_b:
+        view_b = synth.get(vendor_b)
+        if view_b:
+            contracts_b = view_b.materialized_contracts()
+            if contracts_b:
+                data["synthesis_contracts_b"] = contracts_b
+                data["synthesis_wedge_b"] = (
+                    view_b.primary_wedge.value if view_b.primary_wedge else None
+                )
+                data["synthesis_wedge_label_b"] = view_b.wedge_label
+            if view_b.why_they_stay:
+                data["why_they_stay_b"] = view_b.why_they_stay
+            if view_b.confidence_posture:
+                data["confidence_posture_b"] = view_b.confidence_posture
 
 
 # -- Stage 2: Data Gathering --------------------------------------
@@ -2381,11 +2645,12 @@ async def _gather_data(
     if topic_type == "vendor_alternative":
         vendor = topic_ctx["vendor"]
         category = topic_ctx["category"]
-        profile, signals, reviews, partner = await asyncio.gather(
+        profile, signals, reviews, partner, extended_ctx = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
             _fetch_churn_signals(pool, vendor),
             _fetch_quotable_reviews(pool, vendor_name=vendor),
             _fetch_affiliate_partner(pool, topic_ctx.get("affiliate_id")),
+            _fetch_vendor_extended_context(pool, vendor),
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
@@ -2398,6 +2663,7 @@ async def _gather_data(
             evidence_vault_lookup.get(vendor),
         )
         data["partner"] = partner if not isinstance(partner, Exception) else None
+        data["extended_ctx"] = extended_ctx if not isinstance(extended_ctx, Exception) else {}
 
     elif topic_type == "vendor_showdown":
         vendor_a, vendor_b = topic_ctx["vendor_a"], topic_ctx["vendor_b"]
@@ -2441,10 +2707,11 @@ async def _gather_data(
 
     elif topic_type == "migration_guide":
         vendor = topic_ctx["vendor"]
-        profile, signals, quotes = await asyncio.gather(
+        profile, signals, quotes, extended_ctx = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
             _fetch_churn_signals(pool, vendor),
             _fetch_quotable_reviews(pool, vendor_name=vendor),
+            _fetch_vendor_extended_context(pool, vendor),
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
@@ -2456,6 +2723,7 @@ async def _gather_data(
             quotes if not isinstance(quotes, Exception) else [],
             evidence_vault_lookup.get(vendor),
         )
+        data["extended_ctx"] = extended_ctx if not isinstance(extended_ctx, Exception) else {}
 
     elif topic_type == "pricing_reality_check":
         vendor = topic_ctx["vendor"]
@@ -2668,10 +2936,11 @@ async def _gather_data(
 
     elif topic_type == "vendor_deep_dive":
         vendor = topic_ctx["vendor"]
-        profile, signals, quotes = await asyncio.gather(
+        profile, signals, quotes, extended_ctx = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
             _fetch_churn_signals(pool, vendor),
             _fetch_quotable_reviews(pool, vendor_name=vendor),
+            _fetch_vendor_extended_context(pool, vendor),
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
@@ -2683,6 +2952,7 @@ async def _gather_data(
             quotes if not isinstance(quotes, Exception) else [],
             evidence_vault_lookup.get(vendor),
         )
+        data["extended_ctx"] = extended_ctx if not isinstance(extended_ctx, Exception) else {}
         # Fetch competitors for context
         compared = (data["profile"].get("commonly_compared_to") or [])[:5]
         competitor_profiles = []
@@ -2876,6 +3146,44 @@ async def _fetch_product_profile(pool, vendor_name: str) -> dict[str, Any]:
     result["integrations"] = result.get("top_integrations", [])
     result["use_cases"] = result.get("primary_use_cases", [])
     return result
+
+
+async def _fetch_vendor_extended_context(pool, vendor_name: str) -> dict[str, Any]:
+    """Fetch extended vendor context from use case, integration, and buyer profile tables.
+
+    Returns ``{"use_cases": [...], "integrations": [...], "buyer_profiles": [...]}``.
+    Each list entry includes mention counts and confidence scores from aggregated review data.
+    Empty dicts on missing tables or errors -- callers use profile fallbacks.
+    """
+    try:
+        use_case_rows, integration_rows, buyer_rows = await asyncio.gather(
+            pool.fetch(
+                "SELECT use_case_name, mention_count, avg_urgency, confidence_score "
+                "FROM b2b_vendor_use_cases WHERE vendor_name = $1 "
+                "ORDER BY mention_count DESC LIMIT 8",
+                vendor_name,
+            ),
+            pool.fetch(
+                "SELECT integration_name, mention_count, confidence_score "
+                "FROM b2b_vendor_integrations WHERE vendor_name = $1 "
+                "ORDER BY mention_count DESC LIMIT 10",
+                vendor_name,
+            ),
+            pool.fetch(
+                "SELECT role_type, buying_stage, review_count, dm_count, avg_urgency "
+                "FROM b2b_vendor_buyer_profiles WHERE vendor_name = $1 "
+                "ORDER BY review_count DESC LIMIT 8",
+                vendor_name,
+            ),
+        )
+        return {
+            "use_cases": [dict(r) for r in use_case_rows],
+            "integrations": [dict(r) for r in integration_rows],
+            "buyer_profiles": [dict(r) for r in buyer_rows],
+        }
+    except Exception:
+        logger.debug("Extended context unavailable for %s", vendor_name)
+        return {}
 
 
 async def _fetch_pain_category_urgency(pool, vendor_name: str) -> dict[str, float]:
@@ -3485,6 +3793,14 @@ def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
             context_stats["category_winner"] = contract_category["winner"]
         if contract_category.get("loser"):
             context_stats["category_loser"] = contract_category["loser"]
+        # Buyer persona distribution from extended context
+        _ext_alt = data.get("extended_ctx") or {}
+        _buyer_profiles_alt = _ext_alt.get("buyer_profiles") or []
+        if _buyer_profiles_alt:
+            context_stats["top_buyer_personas"] = [
+                {"role": p["role_type"], "stage": p["buying_stage"], "reviews": p["review_count"]}
+                for p in _buyer_profiles_alt[:3]
+            ]
 
         sections.append(SectionSpec(
             id="market_context",
@@ -4067,13 +4383,21 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Top pain categories driving migration.",
         ))
 
+    # Use mention-counted integrations from extended context when available
+    _ext_ctx = data.get("extended_ctx") or {}
+    _ext_ints = _ext_ctx.get("integrations") or []
+    _migration_integrations = (
+        [{"name": r["integration_name"], "mentions": r["mention_count"]} for r in _ext_ints[:5]]
+        if _ext_ints
+        else (profile.get("integrations", [])[:5] if isinstance(profile.get("integrations"), list) else [])
+    )
     sections.append(SectionSpec(
         id="practical",
         heading="Making the Switch: What to Expect",
         goal="Practical migration considerations (integrations, learning curve)",
         key_stats={
             "vendor": vendor,
-            "integrations": profile.get("integrations", [])[:5] if isinstance(profile.get("integrations"), list) else [],
+            "integrations": _migration_integrations,
         },
     ))
 
@@ -4250,19 +4574,53 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
             chart_ids=["pain-radar"],
         ))
 
-    # Integrations and use cases
+    # Integrations and use cases -- prefer mention-counted extended context over flat profile arrays
+    extended_ctx = data.get("extended_ctx") or {}
+    ext_integrations = extended_ctx.get("integrations") or []
+    ext_use_cases = extended_ctx.get("use_cases") or []
+    ext_buyer_profiles = extended_ctx.get("buyer_profiles") or []
     integrations = profile.get("integrations", [])
     use_cases = profile.get("use_cases", [])
-    if integrations or use_cases:
+    if ext_integrations or ext_use_cases or integrations or use_cases:
+        ecosystem_integrations = (
+            [{"name": r["integration_name"], "mentions": r["mention_count"]}
+             for r in ext_integrations[:8]]
+            if ext_integrations
+            else [str(i)[:30] for i in integrations[:8]] if isinstance(integrations, list) else []
+        )
+        ecosystem_use_cases = (
+            [{"name": r["use_case_name"], "mentions": r["mention_count"],
+              "urgency": round(float(r.get("avg_urgency") or 0), 1)}
+             for r in ext_use_cases[:6]]
+            if ext_use_cases
+            else [str(u)[:40] for u in use_cases[:6]] if isinstance(use_cases, list) else []
+        )
+        effective_int_count = len(ext_integrations) if ext_integrations else len(integrations) if isinstance(integrations, list) else 0
+        effective_uc_count = len(ext_use_cases) if ext_use_cases else len(use_cases) if isinstance(use_cases, list) else 0
         sections.append(SectionSpec(
             id="ecosystem",
             heading=f"The {vendor} Ecosystem: Integrations & Use Cases",
             goal="Show the product ecosystem and typical deployment scenarios",
             key_stats={
-                "integrations": [str(i)[:30] for i in integrations[:8]] if isinstance(integrations, list) else [],
-                "use_cases": [str(u)[:40] for u in use_cases[:6]] if isinstance(use_cases, list) else [],
+                "integrations": ecosystem_integrations,
+                "use_cases": ecosystem_use_cases,
             },
-            data_summary=f"{len(integrations)} integrations and {len(use_cases)} primary use cases.",
+            data_summary=f"{effective_int_count} integrations and {effective_uc_count} primary use cases.",
+        ))
+
+    if ext_buyer_profiles:
+        sections.append(SectionSpec(
+            id="buyer_profiles",
+            heading=f"Who Reviews {vendor}: Buyer Personas",
+            goal="Show the distribution of buyer roles and purchase stages to anchor persona targeting",
+            key_stats={
+                "top_buyer_roles": [
+                    {"role": p["role_type"], "stage": p["buying_stage"],
+                     "reviews": p["review_count"]}
+                    for p in ext_buyer_profiles[:5]
+                ],
+            },
+            data_summary=f"Top buyer roles: {', '.join(p['role_type'] for p in ext_buyer_profiles[:3] if p.get('role_type'))}.",
         ))
 
     # Competitive landscape

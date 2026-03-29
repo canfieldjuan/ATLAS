@@ -43,7 +43,9 @@ You receive a JSON object with:
   - `pain_categories`
   - `primary_blog_post`
   - `supporting_blog_posts`
-- `archetype_context` (optional): Object with `{archetype, confidence, falsification}` -- the vendor's classified churn pattern from stratified reasoning. `archetype` is one of: "pricing_shock", "feature_gap", "support_collapse", "leadership_redesign", "acquisition_decay", "integration_break", "category_disruption", "compliance_gap". `confidence` is 0-1. `falsification` is an array of conditions that would disprove the classification.
+- `reasoning_context` (optional): Object with `{wedge, confidence, summary, key_signals, falsification}` -- the vendor's canonical reasoning from synthesis (preferred) or legacy churn signals (fallback). `wedge` is one of: "price_squeeze", "feature_parity", "support_erosion", "integration_lock", "category_shift", "acquisition_hangover", "compliance_exposure", "ux_regression", "segment_mismatch", "stable". `confidence` is "high", "medium", "low", or "insufficient". `summary` is the causal narrative. `key_signals` is an array of supporting evidence. `falsification` is an array of conditions that would disprove the classification.
+- `reasoning_contracts` (optional): Full materialized reasoning contracts from synthesis. Contains `vendor_core_reasoning`, `displacement_reasoning`, `category_reasoning`, `account_reasoning` when available. Use these for deeper context on timing, segments, and displacement dynamics.
+- `archetype_context` (deprecated): No longer populated. Use `reasoning_context` instead.
 - `channel`: Which channel to generate for -- "email_cold", "linkedin", or "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent to this company
 
@@ -142,16 +144,20 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 25. **Quote framing is mandatory**: Never drop a bare quote or number into the email as an unframed fact. Wrap evidence with analyst language such as "Buyers are reporting...", "Teams evaluating alternatives are saying...", or "Across the accounts we analyzed..." before the quote or number.
 
-26. **Archetype-aware messaging**: When `archetype_context` is present, tailor messaging to the churn pattern:
-   - `pricing_shock`: Lead with cost savings, ROI, value restoration. Reference price increases or billing frustration.
-   - `feature_gap`: Lead with competitive features, capability comparison, roadmap wins. Reference specific missing features.
-   - `support_collapse`: Lead with SLA guarantees, dedicated support, response time commitments. Reference support degradation.
-   - `leadership_redesign`: Acknowledge UX/product direction frustration, offer stability and continuity. Reference post-acquisition or redesign disruption.
-   - `acquisition_decay`: Emphasize independence, product focus, and long-term roadmap commitment. Reference post-acquisition neglect.
-   - `integration_break`: Lead with API stability, ecosystem compatibility, migration support. Reference broken integrations.
-   - `category_disruption`: Position as the modern alternative, emphasize innovation velocity. Reference market shift.
-   - `compliance_gap`: Lead with compliance coverage, audit readiness, security certifications. Reference regulatory pressure.
-   - If archetype confidence is below 0.5, blend the archetype angle with general pain-based messaging rather than committing fully to one angle.
+26. **Reasoning-aware messaging**: When `reasoning_context` is present, tailor messaging to the wedge type. Use `reasoning_context.summary` and `reasoning_context.key_signals` for specifics rather than generic wedge language:
+   - `price_squeeze`: Lead with cost savings, ROI, value restoration. Reference price increases or billing frustration.
+   - `feature_parity`: Lead with competitive features, capability comparison, roadmap wins. Reference specific missing features.
+   - `support_erosion`: Lead with SLA guarantees, dedicated support, response time commitments. Reference support degradation.
+   - `ux_regression`: Acknowledge UX/product direction frustration, offer stability and continuity. Reference redesign disruption.
+   - `acquisition_hangover`: Emphasize independence, product focus, and long-term roadmap commitment. Reference post-acquisition neglect.
+   - `integration_lock`: Lead with API stability, ecosystem compatibility, migration support. Reference broken integrations.
+   - `category_shift`: Position as the modern alternative, emphasize innovation velocity. Reference market shift.
+   - `compliance_exposure`: Lead with compliance coverage, audit readiness, security certifications. Reference regulatory pressure.
+   - `segment_mismatch`: Lead with fit -- their segment is underserved by the incumbent.
+   - `stable`: Long-game nurture; monitor for trigger events. Lighter touch.
+   - If `reasoning_context.confidence` is "low" or "insufficient", blend the wedge angle with general pain-based messaging rather than committing fully to one angle.
+   - When `reasoning_contracts` is present, use `vendor_core_reasoning.timing_intelligence` for urgency cues and `displacement_reasoning.migration_proof` for switch evidence.
+   - `archetype_context` is no longer populated; all reasoning comes through `reasoning_context`.
 
 27. **Use the comparison package when present**: If `comparison_asset.alternative_vendor` is present, orient the email around why that alternative is a better fit for the target's pain. Use `comparison_asset.selection_reason` and `comparison_asset.pain_categories` to sharpen the comparison, but never mention that the selection came from an internal scoring system.
 

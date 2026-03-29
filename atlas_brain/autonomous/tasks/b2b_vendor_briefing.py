@@ -9,7 +9,12 @@ Data sources (in priority order):
 2. b2b_churn_signals -- fallback aggregated metrics
 3. b2b_evidence_vault -- canonical weakness, quote, and company-signal evidence
 4. b2b_product_profiles -- enrichment (profile summary, competitive context)
-5. b2b_reviews -- high-urgency quotes if evidence is still insufficient
+5. b2b_reasoning_synthesis -- reasoning contracts fallback when feed absent (sets reasoning_synthesis flag)
+6. b2b_segment_intelligence -- buyer segment breakdown (role, stage, pain)
+7. b2b_temporal_intelligence -- renewal windows, budget cycles, keyword spikes
+8. b2b_cross_vendor_conclusions -- pairwise battle + category council outcomes
+9. b2b_vendor_buyer_profiles -- role/stage distribution with urgency signals
+10. b2b_reviews -- high-urgency quotes if evidence is still insufficient
 """
 
 from __future__ import annotations
@@ -127,6 +132,33 @@ def _apply_reasoning_synthesis_to_briefing(
     if contracts:
         briefing["reasoning_contracts"] = contracts
         used = True
+
+    # Phase 3 governance fields from contracts
+    if isinstance(vendor_core, dict) and vendor_core:
+        wts = vendor_core.get("why_they_stay")
+        if isinstance(wts, dict) and wts:
+            briefing["why_they_stay"] = wts
+            used = True
+        cp = vendor_core.get("confidence_posture")
+        if isinstance(cp, dict) and cp:
+            briefing["confidence_posture"] = cp
+            limits = cp.get("limits")
+            if limits:
+                briefing["confidence_limits"] = limits
+            used = True
+
+    if isinstance(displacement, dict) and displacement:
+        st = displacement.get("switch_triggers")
+        if isinstance(st, list) and st:
+            briefing["switch_triggers"] = st
+            used = True
+
+    eg = contracts.get("evidence_governance")
+    if isinstance(eg, dict) and eg:
+        cg = eg.get("coverage_gaps")
+        if isinstance(cg, list) and cg:
+            briefing["coverage_gaps"] = cg
+            used = True
 
     for field in (
         "synthesis_wedge",
@@ -1371,6 +1403,156 @@ async def generate_account_cards(
 
 
 # ---------------------------------------------------------------------------
+# Briefing apply helpers (Sources 10-12)
+# ---------------------------------------------------------------------------
+
+def _apply_pain_points_to_briefing(
+    briefing: dict[str, Any],
+    pain_pts: list[dict[str, Any]],
+) -> bool:
+    """Backfill or enrich pain_breakdown from b2b_vendor_pain_points rows.
+
+    Backfills when pain_breakdown is absent or sparse (< 2 entries).
+    Enriches existing entries with avg_urgency, avg_rating, and
+    confidence_score when the category matches.
+    """
+    if not pain_pts:
+        return False
+    current_pain = briefing.get("pain_breakdown") or []
+    if len(current_pain) < 2:
+        briefing["pain_breakdown"] = [
+            {
+                "category": p["pain_category"],
+                "count": p["mention_count"],
+                "avg_urgency": float(p.get("avg_urgency") or 0),
+                "avg_rating": (
+                    float(p["avg_rating"]) if p.get("avg_rating") is not None else None
+                ),
+                "confidence_score": float(p.get("confidence_score") or 0),
+            }
+            for p in pain_pts[:8]
+        ]
+        return True
+    pp_by_cat = {p["pain_category"]: p for p in pain_pts}
+    enriched = False
+    for item in current_pain:
+        if not isinstance(item, dict):
+            continue
+        cat = item.get("category") or item.get("pain_category") or ""
+        pp = pp_by_cat.get(cat)
+        if not pp:
+            continue
+        if pp.get("avg_urgency") is not None and "avg_urgency" not in item:
+            item["avg_urgency"] = float(pp["avg_urgency"])
+            enriched = True
+        if pp.get("avg_rating") is not None and "avg_rating" not in item:
+            item["avg_rating"] = float(pp["avg_rating"])
+            enriched = True
+        if pp.get("confidence_score") is not None and "confidence_score" not in item:
+            item["confidence_score"] = float(pp["confidence_score"])
+            enriched = True
+    if enriched:
+        briefing["pain_breakdown"] = current_pain
+    return enriched
+
+
+def _apply_account_intelligence_to_briefing(
+    briefing: dict[str, Any],
+    acct_data: dict[str, Any],
+) -> bool:
+    """Populate account-pressure fields from b2b_account_intelligence payload.
+
+    Always writes account_pressure_metrics.
+    Only backfills account_pressure_summary, named_account_count, and
+    priority_account_names when the briefing does not already have them.
+    """
+    summary = acct_data.get("summary") or {}
+    if not summary:
+        return False
+    briefing["account_pressure_metrics"] = {
+        k: v for k, v in summary.items() if isinstance(v, (int, float))
+    }
+    if not briefing.get("account_pressure_summary"):
+        high_intent = int(summary.get("high_intent_count") or 0)
+        active_eval = int(summary.get("active_eval_signal_count") or 0)
+        dm_count = int(summary.get("decision_maker_count") or 0)
+        parts = []
+        if high_intent:
+            parts.append(
+                f"{high_intent} high-intent account{'s' if high_intent != 1 else ''}"
+            )
+        if active_eval:
+            parts.append(
+                f"{active_eval} active evaluation signal{'s' if active_eval != 1 else ''}"
+            )
+        if dm_count:
+            parts.append(
+                f"{dm_count} decision-maker signal{'s' if dm_count != 1 else ''}"
+            )
+        if parts:
+            briefing["account_pressure_summary"] = (
+                "Detected: " + ", ".join(parts) + "."
+            )
+    if not briefing.get("named_account_count"):
+        total = int(summary.get("total_accounts") or 0)
+        if total:
+            briefing["named_account_count"] = total
+    accounts_raw = acct_data.get("accounts") or []
+    # Materialize named_accounts when the briefing doesn't already have them.
+    # Normalizes canonical account_intelligence shape to the named_accounts
+    # format consumed by generate_account_cards() and the email template.
+    if not briefing.get("named_accounts") and accounts_raw:
+        normalized: list[dict[str, Any]] = []
+        for a in accounts_raw:
+            if not isinstance(a, dict):
+                continue
+            company = (
+                a.get("company_name")
+                or a.get("account_name")
+                or a.get("name")
+                or ""
+            )
+            if not company:
+                continue
+            urgency = float(a.get("urgency_score") or a.get("urgency") or 0)
+            raw_title = a.get("buyer_role") or a.get("title") or ""
+            title = raw_title if raw_title not in ("unknown", "") else None
+            normalized.append({
+                "company": company,
+                "urgency": urgency,
+                "title": title,
+                "company_size": a.get("company_size"),
+                "buying_stage": a.get("buying_stage"),
+                "pain_category": a.get("pain_category"),
+                "source": a.get("source"),
+                "confidence_score": float(a.get("confidence_score") or 0),
+                "reasoning_backed": False,
+            })
+        normalized.sort(key=lambda x: x["urgency"], reverse=True)
+        if normalized:
+            briefing["named_accounts"] = normalized[:10]
+    if not briefing.get("priority_account_names"):
+        priority: list[str] = []
+        for a in accounts_raw:
+            if not isinstance(a, dict):
+                continue
+            name = (
+                a.get("company_name")
+                or a.get("account_name")
+                or a.get("name")
+                or ""
+            )
+            if name and (
+                a.get("high_intent")
+                or float(a.get("urgency_score") or 0) >= 6.0
+            ):
+                priority.append(name)
+        if priority:
+            briefing["priority_account_names"] = priority[:5]
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Data builder
 # ---------------------------------------------------------------------------
 
@@ -1407,6 +1589,13 @@ async def build_vendor_briefing(
             "churn_signals": False,
             "evidence_vault": False,
             "product_profile": False,
+            "segment_intelligence": False,
+            "temporal_intelligence": False,
+            "cross_vendor_conclusions": False,
+            "buyer_profiles": False,
+            "pain_points": False,
+            "account_intelligence": False,
+            "displacement_dynamics": False,
             "raw_review_quotes": False,
         },
     }
@@ -1502,6 +1691,124 @@ async def build_vendor_briefing(
             ]
 
     # ------------------------------------------------------------------
+    # Source 5: reasoning view (synthesis-first, legacy fallback)
+    # ------------------------------------------------------------------
+    reasoning_view = None
+    if not briefing.get("reasoning_contracts"):
+        from ._b2b_synthesis_reader import load_best_reasoning_view
+
+        reasoning_view = await load_best_reasoning_view(pool, vendor_name)
+        if reasoning_view is not None:
+            contracts = reasoning_view.materialized_contracts()
+            if contracts:
+                synth_dict: dict[str, Any] = {"reasoning_contracts": contracts}
+                if reasoning_view.primary_wedge:
+                    synth_dict["synthesis_wedge"] = reasoning_view.primary_wedge.value
+                    synth_dict["synthesis_wedge_label"] = reasoning_view.wedge_label
+                synth_dict["reasoning_source"] = "b2b_reasoning_synthesis"
+                synth_dict["synthesis_schema_version"] = reasoning_view.schema_version
+                if reasoning_view.as_of_date:
+                    synth_dict["data_as_of_date"] = reasoning_view.as_of_date.isoformat()
+                meta = reasoning_view.meta
+                if meta:
+                    synth_dict["evidence_window"] = meta
+                if _apply_reasoning_synthesis_to_briefing(briefing, synth_dict):
+                    briefing["data_sources"]["reasoning_synthesis"] = True
+
+    # ------------------------------------------------------------------
+    # Source 6: b2b_segment_intelligence
+    # ------------------------------------------------------------------
+    seg_data = await _fetch_segment_intelligence(pool, vendor_name)
+    if seg_data:
+        briefing["segment_intelligence"] = seg_data
+        briefing["data_sources"]["segment_intelligence"] = True
+
+    # ------------------------------------------------------------------
+    # Source 7: b2b_temporal_intelligence (fallback when feed is absent)
+    # ------------------------------------------------------------------
+    if not briefing.get("timing_intelligence"):
+        temporal = await _fetch_temporal_intelligence(pool, vendor_name)
+        if temporal:
+            briefing["timing_intelligence"] = temporal
+            timing_summary, timing_metrics, priority_triggers = (
+                _timing_summary_payload(temporal)
+            )
+            if timing_summary:
+                briefing["timing_summary"] = timing_summary
+            if timing_metrics:
+                briefing["timing_metrics"] = timing_metrics
+            if priority_triggers:
+                briefing["priority_timing_triggers"] = priority_triggers
+            briefing["data_sources"]["temporal_intelligence"] = True
+
+    # ------------------------------------------------------------------
+    # Source 8: b2b_cross_vendor_conclusions
+    # ------------------------------------------------------------------
+    conclusions = await _fetch_cross_vendor_conclusions(pool, vendor_name)
+    if conclusions:
+        briefing["cross_vendor_conclusions"] = conclusions
+        briefing["data_sources"]["cross_vendor_conclusions"] = True
+
+    # ------------------------------------------------------------------
+    # Source 9: b2b_vendor_buyer_profiles
+    # ------------------------------------------------------------------
+    buyer_profiles = await _fetch_buyer_profiles(pool, vendor_name)
+    if buyer_profiles:
+        briefing["buyer_profiles"] = buyer_profiles
+        briefing["data_sources"]["buyer_profiles"] = True
+
+    # ------------------------------------------------------------------
+    # Source 10: b2b_vendor_pain_points (fallback + urgency enrichment)
+    # ------------------------------------------------------------------
+    pain_pts = await _fetch_pain_points(pool, vendor_name)
+    if pain_pts:
+        if _apply_pain_points_to_briefing(briefing, pain_pts):
+            briefing["data_sources"]["pain_points"] = True
+
+    # ------------------------------------------------------------------
+    # Source 11: b2b_account_intelligence
+    # ------------------------------------------------------------------
+    acct_data = await _fetch_account_intelligence(pool, vendor_name)
+    if acct_data:
+        if _apply_account_intelligence_to_briefing(briefing, acct_data):
+            briefing["data_sources"]["account_intelligence"] = True
+
+    # ------------------------------------------------------------------
+    # Source 12: b2b_displacement_dynamics (competitive augmentation)
+    # ------------------------------------------------------------------
+    disp_dynamics = await _fetch_displacement_dynamics(
+        pool, vendor_name, challenger_mode=challenger_mode
+    )
+    if disp_dynamics:
+        briefing["competitive_dynamics"] = disp_dynamics
+        briefing["data_sources"]["displacement_dynamics"] = True
+        # Augment cross_vendor_conclusions when fewer than 2 pairwise entries
+        existing = briefing.get("cross_vendor_conclusions") or []
+        pairwise_count = sum(
+            1 for c in existing
+            if isinstance(c, dict) and c.get("analysis_type") == "pairwise_battle"
+        )
+        if pairwise_count < 2:
+            for pair in disp_dynamics.get("pairs") or []:
+                summary = pair.get("battle_summary") or ""
+                if not summary:
+                    continue
+                existing.append({
+                    "analysis_type": "pairwise_battle",
+                    "vendors": [vendor_name, pair.get("challenger") or ""],
+                    "summary": summary,
+                    "confidence": 0.6,
+                    "source": "displacement_dynamics",
+                })
+                new_count = sum(
+                    1 for c in existing
+                    if isinstance(c, dict) and c.get("analysis_type") == "pairwise_battle"
+                )
+                if new_count >= 2:
+                    break
+            briefing["cross_vendor_conclusions"] = existing
+
+    # ------------------------------------------------------------------
     # Challenger mode: flip displacement to show incumbents losing TO us
     # ------------------------------------------------------------------
     if challenger_mode:
@@ -1544,37 +1851,37 @@ async def build_vendor_briefing(
         briefing["evidence"] = evidence
 
     # ------------------------------------------------------------------
-    # Archetype context: "why now" + "what changed" + falsification
+    # Archetype / wedge context: "why now" + falsification
     # ------------------------------------------------------------------
     try:
-        arch_row = await pool.fetchrow(
-            "SELECT archetype, archetype_confidence, falsification_conditions "
-            "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
-            "AND archetype IS NOT NULL "
-            "ORDER BY last_computed_at DESC LIMIT 1",
-            vendor_name,
-        )
-        if arch_row and arch_row["archetype"]:
-            briefing["archetype"] = arch_row["archetype"]
-            briefing["archetype_confidence"] = (
-                float(arch_row["archetype_confidence"])
-                if arch_row["archetype_confidence"] else None
+        if reasoning_view is None:
+            from ._b2b_synthesis_reader import load_best_reasoning_view
+            reasoning_view = await load_best_reasoning_view(pool, vendor_name)
+        if reasoning_view is not None:
+            wedge = reasoning_view.primary_wedge
+            cn = reasoning_view.section("causal_narrative")
+            # Prefer validated wedge, fall back to raw primary_wedge from contracts
+            briefing["archetype"] = (
+                wedge.value if wedge
+                else cn.get("primary_wedge", "")
             )
-            falsification = arch_row["falsification_conditions"] or []
-            briefing["falsification_conditions"] = (
-                falsification if isinstance(falsification, list)
-                else []
-            )
+            briefing["archetype_confidence"] = reasoning_view.confidence("causal_narrative")
+            briefing["falsification_conditions"] = [
+                fc.get("condition", fc) if isinstance(fc, dict) else fc
+                for fc in reasoning_view.falsification_conditions()
+            ]
 
-            # Prior archetype for "what changed" context
+            # "what changed" context via prior archetype
             from .b2b_churn_intelligence import _fetch_prior_archetypes
 
             prior = await _fetch_prior_archetypes(pool, [vendor_name])
             prior_data = prior.get(vendor_name, {})
             if prior_data.get("archetype"):
                 briefing["archetype_was"] = prior_data["archetype"]
+                # Compare using raw legacy archetype when available
+                current_legacy = cn.get("_legacy_archetype") or briefing["archetype"]
                 briefing["archetype_changed"] = (
-                    prior_data["archetype"] != arch_row["archetype"]
+                    prior_data["archetype"] != current_legacy
                 )
     except Exception:
         logger.debug("Archetype enrichment skipped for %s", vendor_name, exc_info=True)
@@ -1661,6 +1968,321 @@ async def _extract_feed_entry(pool: Any, vendor_name: str) -> dict | None:
             return entry
 
     return None
+
+
+async def _fetch_reasoning_synthesis(pool: Any, vendor_name: str) -> dict[str, Any] | None:
+    """Fetch best reasoning for one vendor (synthesis-first, legacy fallback).
+
+    Returns the raw dict suitable for _apply_reasoning_synthesis_to_briefing.
+    """
+    from ._b2b_synthesis_reader import load_best_reasoning_view
+
+    view = await load_best_reasoning_view(pool, vendor_name)
+    if view is None:
+        return None
+    # Return materialized contracts as the raw dict for the existing applier
+    contracts = view.materialized_contracts()
+    if not contracts:
+        return None
+    result: dict[str, Any] = {"reasoning_contracts": contracts}
+    if view.primary_wedge:
+        result["synthesis_wedge"] = view.primary_wedge.value
+        result["synthesis_wedge_label"] = view.wedge_label
+    result["reasoning_source"] = "b2b_reasoning_synthesis"
+    result["synthesis_schema_version"] = view.schema_version
+    if view.as_of_date:
+        result["data_as_of_date"] = view.as_of_date.isoformat()
+    meta = view.meta
+    if meta:
+        result["evidence_window"] = meta
+    return result
+
+
+async def _fetch_segment_intelligence(pool: Any, vendor_name: str) -> dict[str, Any] | None:
+    """Fetch top priority segments from b2b_segment_intelligence."""
+    row = await pool.fetchrow(
+        """
+        SELECT segments
+        FROM b2b_segment_intelligence
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY as_of_date DESC
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    if not row:
+        return None
+    data = row["segments"]
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    roles = data.get("affected_roles") or []
+    if not isinstance(roles, list):
+        return None
+    top_segments = sorted(
+        [r for r in roles if isinstance(r, dict)],
+        key=lambda r: float(r.get("priority_score") or 0),
+        reverse=True,
+    )[:4]
+    if not top_segments:
+        return None
+    return {
+        "top_segments": top_segments,
+        "as_of_date": data.get("as_of_date"),
+    }
+
+
+async def _fetch_temporal_intelligence(pool: Any, vendor_name: str) -> dict[str, Any] | None:
+    """Fetch temporal intelligence signals for one vendor."""
+    row = await pool.fetchrow(
+        """
+        SELECT temporal
+        FROM b2b_temporal_intelligence
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY as_of_date DESC
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    if not row:
+        return None
+    data = row["temporal"]
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return data if isinstance(data, dict) else None
+
+
+async def _fetch_cross_vendor_conclusions(
+    pool: Any, vendor_name: str
+) -> list[dict[str, Any]]:
+    """Fetch pairwise battle and category council conclusions involving this vendor."""
+    window_days = max(settings.b2b_churn.intelligence_window_days, 60)
+    cutoff = date.today() - timedelta(days=window_days)
+    rows = await pool.fetch(
+        """
+        SELECT analysis_type, vendors, conclusion, confidence, computed_date
+        FROM b2b_cross_vendor_conclusions
+        WHERE EXISTS (
+            SELECT 1 FROM unnest(vendors) v WHERE LOWER(v) = LOWER($1)
+        )
+          AND computed_date > $2
+        ORDER BY
+            CASE analysis_type WHEN 'pairwise_battle' THEN 0 ELSE 1 END,
+            confidence DESC,
+            computed_date DESC
+        LIMIT 5
+        """,
+        vendor_name,
+        cutoff,
+    )
+    if not rows:
+        return []
+    results = []
+    for r in rows:
+        conclusion = r["conclusion"]
+        if isinstance(conclusion, str):
+            try:
+                conclusion = json.loads(conclusion)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        summary = ""
+        if isinstance(conclusion, dict):
+            summary = (
+                conclusion.get("conclusion")
+                or conclusion.get("summary")
+                or ""
+            )
+        results.append({
+            "analysis_type": r["analysis_type"],
+            "vendors": list(r["vendors"]),
+            "confidence": float(r["confidence"] or 0),
+            "summary": summary,
+            "computed_date": r["computed_date"].isoformat() if r["computed_date"] else None,
+        })
+    return results
+
+
+async def _fetch_buyer_profiles(
+    pool: Any, vendor_name: str
+) -> list[dict[str, Any]]:
+    """Fetch buyer role/stage profiles ranked by urgency-weighted intent signal.
+
+    Rows at renewal_decision / evaluation stages with high urgency surface
+    first even when they have lower review volume than post-purchase rows.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT role_type, buying_stage, review_count, dm_count,
+               avg_urgency, confidence_score
+        FROM b2b_vendor_buyer_profiles
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND confidence_score >= 0.4
+          AND role_type != 'unknown'
+        ORDER BY
+            (COALESCE(avg_urgency, 0) * confidence_score) DESC,
+            review_count DESC
+        LIMIT 6
+        """,
+        vendor_name,
+    )
+    if not rows:
+        return []
+    return [
+        {
+            "role_type": r["role_type"],
+            "buying_stage": r["buying_stage"],
+            "review_count": r["review_count"],
+            "dm_count": r["dm_count"],
+            "avg_urgency": float(r["avg_urgency"] or 0),
+            "confidence_score": float(r["confidence_score"] or 0),
+        }
+        for r in rows
+    ]
+
+
+async def _fetch_pain_points(
+    pool: Any, vendor_name: str
+) -> list[dict[str, Any]]:
+    """Fetch pain-category signal counts from b2b_vendor_pain_points."""
+    rows = await pool.fetch(
+        """
+        SELECT pain_category, mention_count, primary_count,
+               avg_urgency, avg_rating, confidence_score
+        FROM b2b_vendor_pain_points
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND confidence_score >= 0.3
+        ORDER BY mention_count DESC, confidence_score DESC
+        LIMIT 8
+        """,
+        vendor_name,
+    )
+    if not rows:
+        return []
+    return [
+        {
+            "pain_category": r["pain_category"],
+            "mention_count": r["mention_count"],
+            "primary_count": r["primary_count"],
+            "avg_urgency": float(r["avg_urgency"] or 0),
+            "avg_rating": (
+                float(r["avg_rating"]) if r["avg_rating"] is not None else None
+            ),
+            "confidence_score": float(r["confidence_score"] or 0),
+        }
+        for r in rows
+    ]
+
+
+async def _fetch_account_intelligence(
+    pool: Any, vendor_name: str
+) -> dict[str, Any] | None:
+    """Fetch latest account-intelligence payload from b2b_account_intelligence."""
+    row = await pool.fetchrow(
+        """
+        SELECT accounts, as_of_date
+        FROM b2b_account_intelligence
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY as_of_date DESC
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    if not row:
+        return None
+    data = row["accounts"]
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+async def _fetch_displacement_dynamics(
+    pool: Any, vendor_name: str, *, challenger_mode: bool = False
+) -> dict[str, Any] | None:
+    """Fetch top competitive displacement dynamics for one vendor.
+
+    In standard mode: rows where vendor is from_vendor (losing customers).
+    In challenger mode: rows where vendor is to_vendor (gaining customers);
+    the 'challenger' field in each pair is the incumbent from_vendor.
+
+    battle_summary is extracted as a plain conclusion string from the
+    canonical dict shape built by build_displacement_dynamics().
+    Sort key is edge_metrics.mention_count (canonical field name).
+    """
+    if challenger_mode:
+        query = """
+            SELECT DISTINCT ON (from_vendor)
+                from_vendor AS peer_vendor, dynamics, as_of_date
+            FROM b2b_displacement_dynamics
+            WHERE LOWER(to_vendor) = LOWER($1)
+            ORDER BY from_vendor, as_of_date DESC
+            LIMIT 5
+        """
+    else:
+        query = """
+            SELECT DISTINCT ON (to_vendor)
+                to_vendor AS peer_vendor, dynamics, as_of_date
+            FROM b2b_displacement_dynamics
+            WHERE LOWER(from_vendor) = LOWER($1)
+            ORDER BY to_vendor, as_of_date DESC
+            LIMIT 5
+        """
+    rows = await pool.fetch(query, vendor_name)
+    if not rows:
+        return None
+    pairs = []
+    for r in rows:
+        dyn = r["dynamics"]
+        if isinstance(dyn, str):
+            try:
+                dyn = json.loads(dyn)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        if not isinstance(dyn, dict):
+            continue
+        # battle_summary is a dict in the canonical shape; extract conclusion string
+        raw_summary = dyn.get("battle_summary")
+        if isinstance(raw_summary, dict):
+            battle_text = (
+                raw_summary.get("conclusion")
+                or raw_summary.get("winner") or ""
+            )
+        else:
+            battle_text = str(raw_summary) if raw_summary else ""
+        pairs.append({
+            "challenger": r["peer_vendor"],
+            "battle_summary": battle_text,
+            "switch_reasons": (dyn.get("switch_reasons") or [])[:5],
+            "flow_summary": dyn.get("flow_summary") or {},
+            "edge_metrics": dyn.get("edge_metrics") or {},
+            "trend_acceleration": dyn.get("trend_acceleration") or {},
+            "as_of_date": (
+                r["as_of_date"].isoformat()
+                if r["as_of_date"] and hasattr(r["as_of_date"], "isoformat")
+                else str(r["as_of_date"]) if r["as_of_date"] else None
+            ),
+        })
+    if not pairs:
+        return None
+    # Sort by canonical edge_metrics.mention_count (not total_mentions)
+    pairs.sort(
+        key=lambda p: float(
+            (p.get("edge_metrics") or {}).get("mention_count") or 0
+        ),
+        reverse=True,
+    )
+    return {"pairs": pairs[:2]}
 
 
 async def _fetch_vendor_evidence_vault(pool: Any, vendor_name: str) -> dict[str, Any] | None:

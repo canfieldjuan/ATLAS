@@ -136,6 +136,12 @@ class CompressedPacket:
     pools: dict[str, list[ScoredItem]]
     aggregates: list[TrackedAggregate]
     source_registry: dict[str, SourceRef] = field(default_factory=dict)
+    # Governance / tension signals (Phase 2)
+    metric_ledger: list[dict[str, Any]] = field(default_factory=list)
+    contradiction_rows: list[dict[str, Any]] = field(default_factory=list)
+    minority_signals: list[dict[str, Any]] = field(default_factory=list)
+    coverage_gaps: list[dict[str, Any]] = field(default_factory=list)
+    retention_proof: list[dict[str, Any]] = field(default_factory=list)
 
     def source_ids(self) -> frozenset[str]:
         """All valid source IDs in this packet."""
@@ -145,6 +151,27 @@ class CompressedPacket:
                 ids.add(item.source_ref.source_id)
         for agg in self.aggregates:
             ids.add(agg.source_id)
+        # Include governance source IDs
+        for entry in self.metric_ledger:
+            sid = entry.get("_sid")
+            if sid:
+                ids.add(sid)
+        for entry in self.contradiction_rows:
+            sid = entry.get("_sid")
+            if sid:
+                ids.add(sid)
+        for entry in self.minority_signals:
+            sid = entry.get("_sid")
+            if sid:
+                ids.add(sid)
+        for entry in self.coverage_gaps:
+            sid = entry.get("_sid")
+            if sid:
+                ids.add(sid)
+        for entry in self.retention_proof:
+            sid = entry.get("_sid")
+            if sid:
+                ids.add(sid)
         return frozenset(ids)
 
     def to_llm_payload(self) -> dict[str, Any]:
@@ -162,6 +189,19 @@ class CompressedPacket:
         for agg in self.aggregates:
             agg_out[agg.label] = {"value": agg.value, "_sid": agg.source_id}
         payload["precomputed_aggregates"] = agg_out
+
+        # Governance / tension signals
+        if self.metric_ledger:
+            payload["metric_ledger"] = self.metric_ledger
+        if self.contradiction_rows:
+            payload["contradiction_rows"] = self.contradiction_rows
+        if self.minority_signals:
+            payload["minority_signals"] = self.minority_signals
+        if self.coverage_gaps:
+            payload["coverage_gaps"] = self.coverage_gaps
+        if self.retention_proof:
+            payload["retention_proof"] = self.retention_proof
+
         return payload
 
 
@@ -1251,6 +1291,332 @@ def _score_accounts(
 
 
 # ---------------------------------------------------------------------------
+# Governance / tension signal extractors (Phase 2 packet widening)
+# ---------------------------------------------------------------------------
+
+# Dimensions that can carry contradictions across segments.
+_CONTRADICTION_DIMENSIONS = (
+    "support", "pricing", "usability", "integrations", "performance",
+    "reliability", "onboarding", "documentation", "security",
+)
+
+# Segment kinds used for contradiction detection.
+_SEGMENT_KINDS_FOR_CONTRADICTIONS = (
+    "role", "department", "size", "duration", "contract",
+)
+
+
+def _build_metric_ledger(
+    aggregates: list[TrackedAggregate],
+    *,
+    analysis_window_days: int = 90,
+) -> list[dict[str, Any]]:
+    """Build a scoped metric ledger from pre-computed aggregates.
+
+    Every numeric claim the LLM might cite must come from this ledger so
+    downstream validators can reject unsupported numbers.
+    """
+    # Metrics that are safe for all surfaces
+    _ALL_SURFACES = ["report", "battle_card", "blog", "campaign"]
+    # Metrics only appropriate for internal analysis
+    _INTERNAL = ["report", "battle_card"]
+
+    # (label, scope_category, surfaces)
+    _METRIC_REGISTRY: dict[str, tuple[str, list[str]]] = {
+        # Volume / density
+        "total_reviews": ("review_volume", _ALL_SURFACES),
+        "reviews_in_analysis_window": ("review_volume", _ALL_SURFACES),
+        "reviews_in_recent_window": ("review_volume", _ALL_SURFACES),
+        "churn_density": ("churn_intensity", _ALL_SURFACES),
+        "avg_urgency": ("churn_intensity", _ALL_SURFACES),
+        # Sentiment
+        "recommend_ratio": ("sentiment", _ALL_SURFACES),
+        "avg_rating": ("sentiment", _ALL_SURFACES),
+        "negative_review_pct": ("sentiment", _ALL_SURFACES),
+        "positive_review_pct": ("sentiment", _ALL_SURFACES),
+        # Pricing pressure
+        "price_complaint_rate": ("pricing_pressure", _ALL_SURFACES),
+        # Decision-maker signals
+        "dm_churn_rate": ("decision_maker_signals", _INTERNAL),
+        "company_signal_decision_maker_count": ("decision_maker_signals", _INTERNAL),
+        # Displacement
+        "displacement_mention_count": ("displacement", _ALL_SURFACES),
+        # Temporal
+        "keyword_spike_count": ("temporal_spikes", _INTERNAL),
+        # Account signals
+        "company_signal_count": ("account_signals", _ALL_SURFACES),
+        "company_signal_high_urgency_count": ("account_signals", _INTERNAL),
+        "company_signal_evaluation_count": ("account_signals", _INTERNAL),
+        "company_signal_active_purchase_count": ("account_signals", _INTERNAL),
+        "segment_active_eval_signal_count": ("account_signals", _INTERNAL),
+    }
+
+    ledger: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for agg in aggregates:
+        if agg.label in seen:
+            continue
+        seen.add(agg.label)
+        reg = _METRIC_REGISTRY.get(agg.label)
+        if reg is not None:
+            scope_category, surfaces = reg
+        elif agg.label.startswith("vault_weakness_"):
+            scope_category, surfaces = "weakness_mentions", _INTERNAL
+        elif agg.label.startswith("vault_strength_"):
+            scope_category, surfaces = "strength_mentions", _INTERNAL
+        elif agg.label.startswith("segment_reach_"):
+            scope_category, surfaces = "segment_reach", _INTERNAL
+        else:
+            continue
+        ledger.append({
+            "label": agg.label,
+            "value": agg.value,
+            "scope": scope_category,
+            "time_window_days": analysis_window_days,
+            "allowed_surfaces": surfaces,
+            "_sid": agg.source_id,
+        })
+    return ledger
+
+
+def _build_contradiction_rows(
+    pools: dict[str, list[ScoredItem]],
+) -> list[dict[str, Any]]:
+    """Detect segment-level contradictions across dimensions.
+
+    A contradiction exists when two segments within the same dimension
+    (e.g., support) have opposing sentiment signals -- one positive, one
+    negative. This forces the LLM to hedge rather than generalise.
+    """
+    segment_items = pools.get("segment", [])
+
+    # Group items by weakness/strength dimension mentioned in the data
+    # Key: (dimension, segment_kind) -> list of (segment_label, sentiment)
+    signals_by_dim: dict[str, list[tuple[str, str, str]]] = {}
+
+    for si in segment_items:
+        kind = si.source_ref.kind
+        if kind not in _SEGMENT_KINDS_FOR_CONTRADICTIONS:
+            continue
+        seg_label = si.source_ref.key
+        churn_rate = _safe_float(si.data.get("churn_rate", 0))
+        # Infer sentiment from churn rate
+        if churn_rate >= 0.4:
+            sentiment = "negative"
+        elif churn_rate <= 0.15:
+            sentiment = "positive"
+        else:
+            continue  # ambiguous, skip
+        signals_by_dim.setdefault(kind, []).append((seg_label, sentiment, kind))
+
+    # Also look at weakness/strength evidence vault items for dimension signals
+    vault_items = pools.get("evidence_vault", [])
+    weakness_dims: set[str] = set()
+    strength_dims: set[str] = set()
+    for si in vault_items:
+        dim = si.source_ref.key
+        if si.source_ref.kind == "weakness":
+            weakness_dims.add(dim)
+        elif si.source_ref.kind == "strength":
+            strength_dims.add(dim)
+
+    rows: list[dict[str, Any]] = []
+
+    # Contradiction type 1: same segment kind has both high-churn and low-churn segments
+    for kind, entries in signals_by_dim.items():
+        positives = [e for e in entries if e[1] == "positive"]
+        negatives = [e for e in entries if e[1] == "negative"]
+        if positives and negatives:
+            rows.append({
+                "dimension": kind,
+                "segment_a": negatives[0][0],
+                "segment_b": positives[0][0],
+                "statement_a": "negative",
+                "statement_b": "positive",
+                "_sid": f"segment:contradiction:{kind}",
+            })
+
+    # Contradiction type 2: dimension appears in both weakness AND strength evidence
+    overlap_dims = weakness_dims & strength_dims
+    for dim in sorted(overlap_dims):
+        rows.append({
+            "dimension": dim,
+            "segment_a": "weakness_evidence",
+            "segment_b": "strength_evidence",
+            "statement_a": "negative",
+            "statement_b": "positive",
+            "_sid": f"vault:contradiction:{dim}",
+        })
+
+    return rows
+
+
+def _build_minority_signals(
+    pools: dict[str, list[ScoredItem]],
+    aggregates: list[TrackedAggregate],
+) -> list[dict[str, Any]]:
+    """Extract rare-but-severe signals that scored compression might drop.
+
+    A minority signal is one with high urgency but low mention count --
+    the kind of thing that gets silently dropped by top-N truncation
+    but could be a critical blocker for specific segments.
+    """
+    signals: list[dict[str, Any]] = []
+
+    vault_items = pools.get("evidence_vault", [])
+    for si in vault_items:
+        if si.source_ref.kind != "weakness":
+            continue
+        mc = _safe_float(
+            si.data.get("mention_count_total", si.data.get("mention_count", 0)),
+        )
+        urgency = _safe_float(si.data.get("avg_urgency", si.data.get("urgency", 0)))
+        # Minority: low count but high urgency
+        if mc <= 5 and urgency >= 7.0:
+            label = si.source_ref.key
+            signals.append({
+                "label": label,
+                "urgency": round(urgency, 1),
+                "count": int(mc),
+                "reason": "rare_but_severe",
+                "_sid": f"vault:minority:{label}",
+            })
+
+    # Also check account signals for isolated high-urgency DM signals
+    account_items = pools.get("accounts", [])
+    for si in account_items:
+        urgency = _safe_float(
+            si.data.get("urgency_score", si.data.get("intent_score", 0)),
+        )
+        is_dm = bool(si.data.get("decision_maker") or si.data.get("is_decision_maker"))
+        if is_dm and urgency >= 9.0:
+            name = si.source_ref.key
+            signals.append({
+                "label": f"dm_alert_{name}",
+                "urgency": round(urgency, 1),
+                "count": 1,
+                "reason": "decision_maker_extreme_urgency",
+                "_sid": f"accounts:minority:{name}",
+            })
+
+    return signals
+
+
+def _build_coverage_gaps(
+    pools: dict[str, list[ScoredItem]],
+    aggregates: list[TrackedAggregate],
+) -> list[dict[str, Any]]:
+    """Detect areas where evidence is thin and conclusions should be hedged.
+
+    Coverage gaps are NOT missing data -- they are areas where data exists
+    but is too sparse to support confident claims.
+    """
+    gaps: list[dict[str, Any]] = []
+
+    # Gap type 1: thin segment samples (segment items that were retained
+    # despite being near the MIN_SEGMENT_SAMPLE_SIZE threshold)
+    segment_items = pools.get("segment", [])
+    for si in segment_items:
+        sample_size = _safe_int(
+            si.data.get("review_count", si.data.get("count", 0)),
+        )
+        if 0 < sample_size < MIN_SEGMENT_SAMPLE_SIZE * 2:
+            area = f"{si.source_ref.kind}_{si.source_ref.key}"
+            gaps.append({
+                "type": "thin_segment_sample",
+                "area": area,
+                "sample_size": sample_size,
+                "_sid": f"gap:thin_segment:{area}",
+            })
+
+    # Gap type 2: no displacement evidence
+    disp_items = pools.get("displacement", [])
+    if not disp_items:
+        gaps.append({
+            "type": "missing_pool",
+            "area": "displacement",
+            "sample_size": 0,
+            "_sid": "gap:missing_pool:displacement",
+        })
+
+    # Gap type 3: very few account signals
+    account_items = pools.get("accounts", [])
+    if len(account_items) < 3:
+        gaps.append({
+            "type": "thin_account_signals",
+            "area": "accounts",
+            "sample_size": len(account_items),
+            "_sid": "gap:thin_accounts:accounts",
+        })
+
+    # Gap type 4: shallow evidence window
+    window_start = None
+    window_end = None
+    for agg in aggregates:
+        if agg.label == "enrichment_window_start":
+            window_start = agg.value
+        elif agg.label == "enrichment_window_end":
+            window_end = agg.value
+    if window_start and window_end:
+        try:
+            from datetime import date as _date
+            start = _date.fromisoformat(str(window_start)[:10])
+            end = _date.fromisoformat(str(window_end)[:10])
+            window_days = (end - start).days
+            if window_days < MIN_EVIDENCE_WINDOW_DAYS:
+                gaps.append({
+                    "type": "shallow_evidence_window",
+                    "area": "temporal_depth",
+                    "sample_size": window_days,
+                    "_sid": "gap:shallow_window:temporal_depth",
+                })
+        except (ValueError, TypeError):
+            pass
+
+    return gaps
+
+
+def _build_retention_proof(
+    pools: dict[str, list[ScoredItem]],
+) -> list[dict[str, Any]]:
+    """Extract strength evidence that explains why customers stay despite frustration.
+
+    Retention proof is the counter-signal to churn pressure. Without it,
+    the LLM over-indexes on churn signals and produces unrealistically
+    aggressive positioning.
+    """
+    proofs: list[dict[str, Any]] = []
+
+    vault_items = pools.get("evidence_vault", [])
+    for si in vault_items:
+        if si.source_ref.kind != "strength":
+            continue
+        area = si.source_ref.key
+        mc = _safe_float(
+            si.data.get("mention_count_total", si.data.get("mention_count", 0)),
+        )
+        # Only include strengths with meaningful evidence
+        if mc < 3:
+            continue
+        # Build a strength summary from available data
+        summary_parts: list[str] = []
+        for field in ("summary", "description", "key", "label", "category", "theme"):
+            val = si.data.get(field)
+            if val and isinstance(val, str) and len(val) > 5:
+                summary_parts.append(val)
+                break
+        strength_text = summary_parts[0] if summary_parts else area.replace("_", " ")
+        proofs.append({
+            "area": area,
+            "strength": strength_text,
+            "mention_count": int(mc),
+            "_sid": f"vault:strength:{area}",
+        })
+
+    return proofs
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1324,9 +1690,21 @@ def compress_vendor_pools(
                 pool=parts[0], kind=parts[1], key=parts[2],
             )
 
+    # Build governance / tension signals
+    metric_ledger = _build_metric_ledger(all_aggregates)
+    contradiction_rows = _build_contradiction_rows(all_pools)
+    minority_signals = _build_minority_signals(all_pools, all_aggregates)
+    coverage_gaps = _build_coverage_gaps(all_pools, all_aggregates)
+    retention_proof = _build_retention_proof(all_pools)
+
     return CompressedPacket(
         vendor_name=vendor_name,
         pools=all_pools,
         aggregates=all_aggregates,
         source_registry=source_reg,
+        metric_ledger=metric_ledger,
+        contradiction_rows=contradiction_rows,
+        minority_signals=minority_signals,
+        coverage_gaps=coverage_gaps,
+        retention_proof=retention_proof,
     )

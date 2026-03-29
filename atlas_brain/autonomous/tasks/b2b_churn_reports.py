@@ -1,12 +1,14 @@
 """Follow-up task: build and persist churn intelligence reports.
 
 Runs after b2b_churn_core (staggered cron). Reads persisted artifacts
-from b2b_churn_signals, b2b_reviews, and related tables. Builds
-deterministic reports, runs LLM enrichment, and persists to
-b2b_intelligence.
+from b2b_reasoning_synthesis, b2b_churn_signals, b2b_reviews, and
+related tables. Builds deterministic reports, runs LLM enrichment,
+and persists to b2b_intelligence.
 
-Does NOT re-run the stratified reasoner -- reads reasoning conclusions
-from b2b_churn_signals via reconstruct_reasoning_lookup().
+Reasoning is synthesis-first: builds reasoning_lookup from
+b2b_reasoning_synthesis views when available, with legacy fallback to
+b2b_churn_signals via reconstruct_reasoning_lookup() for vendors not
+yet covered by synthesis.
 """
 
 import asyncio
@@ -119,14 +121,39 @@ def _build_scorecard_narrative_payload(
     payload["locked_facts"] = _build_scorecard_locked_facts(scorecard)
 
     if scorecard.get("archetype"):
+        rc = (reasoning_lookup or {}).get(scorecard.get("vendor", ""), {})
         payload["reasoning_conclusion"] = {
             "archetype": scorecard["archetype"],
-            "confidence": scorecard.get("archetype_confidence", 0),
+            "confidence": scorecard.get("archetype_confidence") or rc.get("confidence", 0),
             "executive_summary": scorecard.get("reasoning_summary", ""),
-            "key_signals": list(
-                (reasoning_lookup or {}).get(scorecard.get("vendor", ""), {}).get("key_signals", [])
-            )[:4],
+            "key_signals": list(rc.get("key_signals", []))[:4],
         }
+
+    # Phase 6: include governance context for calibrated narrative
+    wts = scorecard.get("why_they_stay")
+    if isinstance(wts, dict) and wts:
+        payload["why_they_stay"] = {
+            "summary": wts.get("summary", ""),
+            "top_strengths": [
+                s.get("area", "") for s in wts.get("strengths", [])
+                if isinstance(s, dict)
+            ][:3],
+        }
+    cp = scorecard.get("confidence_posture")
+    if isinstance(cp, dict) and cp.get("limits"):
+        payload["confidence_limits"] = cp["limits"]
+    cg = scorecard.get("coverage_gaps")
+    if isinstance(cg, list) and cg:
+        payload["coverage_gaps"] = [
+            {"type": g.get("type", ""), "area": g.get("area", "")}
+            for g in cg[:5] if isinstance(g, dict)
+        ]
+    ml = scorecard.get("metric_ledger")
+    if isinstance(ml, list) and ml:
+        payload["metric_ledger"] = [
+            {"label": m.get("label", ""), "value": m.get("value"), "scope": m.get("scope", "")}
+            for m in ml[:10] if isinstance(m, dict)
+        ]
 
     return payload
 
@@ -260,37 +287,28 @@ async def _fetch_latest_synthesis_views(
     as_of: date,
     analysis_window_days: int,
 ) -> dict[str, Any]:
-    """Fetch latest reasoning synthesis rows and wrap them in SynthesisView."""
-    from ._b2b_synthesis_reader import load_synthesis_view
+    """Fetch best reasoning views for all vendors (synthesis-first, legacy fallback)."""
+    from ._b2b_synthesis_reader import load_best_reasoning_views
 
-    rows = await pool.fetch(
-        """
-        SELECT DISTINCT ON (vendor_name)
-               vendor_name, as_of_date, schema_version, synthesis
-        FROM b2b_reasoning_synthesis
-        WHERE as_of_date <= $1
-          AND analysis_window_days = $2
-        ORDER BY vendor_name, as_of_date DESC, created_at DESC
-        """,
-        as_of,
-        analysis_window_days,
+    # Collect vendor names from both synthesis and legacy tables
+    synth_names = await pool.fetch(
+        "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
+        "WHERE as_of_date <= $1 AND analysis_window_days = $2",
+        as_of, analysis_window_days,
     )
-    views: dict[str, Any] = {}
-    for row in rows:
-        raw = row["synthesis"]
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except Exception:
-                continue
-        if isinstance(raw, dict):
-            views[row["vendor_name"]] = load_synthesis_view(
-                raw,
-                row["vendor_name"],
-                schema_version=row["schema_version"] or "",
-                as_of_date=row["as_of_date"],
-            )
-    return views
+    legacy_names = await pool.fetch(
+        "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
+        "WHERE archetype IS NOT NULL",
+    )
+    all_names = list({
+        r["vendor_name"] for r in (*synth_names, *legacy_names)
+        if r.get("vendor_name")
+    })
+    if not all_names:
+        return {}
+    return await load_best_reasoning_views(
+        pool, all_names, as_of=as_of, analysis_window_days=analysis_window_days,
+    )
 
 
 def _attach_synthesis_contracts_to_report_entry(
@@ -368,6 +386,28 @@ def _attach_synthesis_contracts_to_report_entry(
     contract_gaps = contract_gaps_for_consumer(view, consumer_name)
     if contract_gaps:
         entry["reasoning_contract_gaps"] = contract_gaps
+
+    # Phase 6: surface governance fields for confidence/freshness transparency
+    why_they_stay = getattr(view, "why_they_stay", None)
+    if isinstance(why_they_stay, dict) and why_they_stay:
+        entry["why_they_stay"] = why_they_stay
+
+    confidence_posture = getattr(view, "confidence_posture", None)
+    if isinstance(confidence_posture, dict) and confidence_posture:
+        entry["confidence_posture"] = confidence_posture
+        limits = confidence_posture.get("limits")
+        if limits:
+            entry["confidence_limits"] = limits
+
+    coverage_gaps = getattr(view, "coverage_gaps", None)
+    if isinstance(coverage_gaps, list) and coverage_gaps:
+        entry["coverage_gaps"] = coverage_gaps
+
+    evidence_governance = getattr(view, "evidence_governance", None)
+    if isinstance(evidence_governance, dict) and evidence_governance:
+        ml = evidence_governance.get("metric_ledger")
+        if ml:
+            entry["metric_ledger"] = ml
 
 
 def _build_report_lookup_bundle(
@@ -488,6 +528,7 @@ def _attach_context_to_deterministic_reports(
     deterministic_vendor_scorecards: list[dict[str, Any]],
     deterministic_displacement_map: list[dict[str, Any]],
     deterministic_category_overview: list[dict[str, Any]],
+    deterministic_vendor_deep_dives: list[dict[str, Any]] | None = None,
     evidence_vault_lookup: dict[str, dict[str, Any]],
     synthesis_views: dict[str, Any],
     xv_lookup: dict[str, dict[str, Any]],
@@ -555,13 +596,21 @@ def _attach_context_to_deterministic_reports(
                 include_displacement=True,
             )
             attached_vendors.add(vendor)
-            if not scorecard.get("reasoning_summary"):
-                causal = view.section("causal_narrative")
-                trigger = causal.get("trigger") if isinstance(causal, dict) else ""
-                why_now = causal.get("why_now") if isinstance(causal, dict) else ""
-                summary_bits = [bit for bit in (trigger, why_now) if bit]
-                if summary_bits:
-                    scorecard["reasoning_summary"] = ". ".join(summary_bits)
+            # Synthesis narrative replaces legacy reasoning_summary to prevent
+            # dual narratives.  Build from causal_narrative fields.
+            causal = view.section("causal_narrative")
+            if isinstance(causal, dict):
+                summary = causal.get("summary") or causal.get("executive_summary") or ""
+                if not summary:
+                    trigger = causal.get("trigger", "")
+                    why_now = causal.get("why_now", "")
+                    summary = ". ".join(bit for bit in (trigger, why_now) if bit)
+                if summary:
+                    scorecard["reasoning_summary"] = summary
+                    scorecard["reasoning_source"] = "b2b_reasoning_synthesis"
+            # Override legacy archetype with synthesis wedge
+            if view.primary_wedge:
+                scorecard["archetype"] = view.primary_wedge.value
         category_name = str(feed_category_lookup.get(vendor) or scorecard.get("category") or "").strip()
         if category_name:
             scorecard.setdefault("category", category_name)
@@ -592,6 +641,49 @@ def _attach_context_to_deterministic_reports(
                     })
         if comparisons:
             scorecard["cross_vendor_comparisons"] = comparisons
+
+    for dd_entry in (deterministic_vendor_deep_dives or []):
+        vendor = dd_entry.get("vendor", "")
+        vault = (evidence_vault_lookup or {}).get(vendor, {})
+        if isinstance(vault, dict) and vault.get("strength_evidence"):
+            dd_strengths: list[dict[str, Any]] = []
+            for item in vault["strength_evidence"]:
+                if not isinstance(item, dict):
+                    continue
+                area = str(item.get("label") or item.get("key") or "").strip()
+                if not area:
+                    continue
+                dd_strengths.append({
+                    "area": area,
+                    "mention_count": int(item.get("mention_count_total") or 0),
+                })
+            if dd_strengths:
+                dd_strengths.sort(key=lambda row: -row["mention_count"])
+                dd_entry["retention_strengths"] = dd_strengths[:5]
+        dd_category = str(dd_entry.get("category") or "").strip()
+        if dd_category:
+            council = xv_lookup.get("councils", {}).get(dd_category)
+            if council:
+                cc = council.get("conclusion", {})
+                if any([cc.get("winner"), cc.get("loser"), cc.get("conclusion"), cc.get("market_regime"), cc.get("key_insights")]):
+                    dd_entry["category_council"] = {
+                        "winner": cc.get("winner") or "",
+                        "loser": cc.get("loser") or "",
+                        "conclusion": cc.get("conclusion") or "",
+                        "market_regime": cc.get("market_regime") or "",
+                        "durability": cc.get("durability_assessment") or "",
+                        "confidence": council.get("confidence"),
+                        "key_insights": cc.get("key_insights") or [],
+                    }
+        view = synthesis_views.get(vendor)
+        if view:
+            _attach_synthesis_contracts_to_report_entry(
+                dd_entry,
+                view,
+                consumer_name="vendor_deep_dive",
+                requested_as_of=as_of,
+                include_displacement=False,
+            )
 
     for edge in deterministic_displacement_map:
         pair = tuple(sorted([edge["from_vendor"], edge["to_vendor"]]))
@@ -656,9 +748,8 @@ async def _build_deterministic_report_bundle(
         reconstruct_cross_vendor_lookup,
         reconstruct_reasoning_lookup,
     )
+    from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
 
-    if reasoning_lookup is None:
-        reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=as_of)
     if xv_lookup is None:
         xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=as_of)
     if synthesis_views is None:
@@ -667,6 +758,12 @@ async def _build_deterministic_report_bundle(
             as_of=as_of,
             analysis_window_days=analysis_window_days,
         )
+    if reasoning_lookup is None:
+        # Synthesis-first: build from synthesis views, legacy fallback for gaps
+        legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=as_of)
+        synth_lookup = build_reasoning_lookup_from_views(synthesis_views)
+        # Synthesis entries override legacy; legacy fills uncovered vendors
+        reasoning_lookup = {**legacy_lookup, **synth_lookup}
     if evidence_vault_lookup is None:
         evidence_vault_lookup = await _fetch_latest_evidence_vault(
             pool,
@@ -711,6 +808,7 @@ async def _build_deterministic_report_bundle(
         company_lookup=lookups["company_lookup"],
         keyword_spike_lookup=lookups["keyword_spike_lookup"],
         prior_reports=prior_reports,
+        synthesis_views=synthesis_views,
         reasoning_lookup=reasoning_lookup,
     )
     inbound_displacement_lookup = _build_inbound_displacement_lookup(competitive_disp)
@@ -730,6 +828,7 @@ async def _build_deterministic_report_bundle(
         product_profile_lookup=lookups["product_profile_lookup"],
         prior_reports=prior_reports,
         inbound_displacement_lookup=inbound_displacement_lookup,
+        synthesis_views=synthesis_views,
         reasoning_lookup=reasoning_lookup,
         timeline_lookup=lookups["timeline_lookup"],
         use_case_lookup=lookups["use_case_lookup"],
@@ -744,6 +843,7 @@ async def _build_deterministic_report_bundle(
         competitive_disp,
         competitor_reasons,
         lookups["quote_lookup"],
+        synthesis_views=synthesis_views,
         reasoning_lookup=reasoning_lookup,
     )
     for edge in deterministic_displacement_map:
@@ -765,6 +865,21 @@ async def _build_deterministic_report_bundle(
         dm_lookup=lookups["dm_lookup"],
         price_lookup=lookups["price_lookup"],
         competitor_lookup=lookups["competitor_lookup"],
+        synthesis_views=synthesis_views,
+        reasoning_lookup=reasoning_lookup,
+    )
+    vendor_deep_dives = _build_vendor_deep_dives(
+        vendor_scores,
+        pain_lookup=lookups["pain_lookup"],
+        competitor_lookup=lookups["competitor_lookup"],
+        feature_gap_lookup=lookups["feature_gap_lookup"],
+        quote_lookup=lookups["quote_lookup"],
+        company_lookup=lookups["company_lookup"],
+        dm_lookup=lookups["dm_lookup"],
+        price_lookup=lookups["price_lookup"],
+        sentiment_lookup=lookups["sentiment_lookup"],
+        buyer_auth_lookup=lookups.get("buyer_auth_lookup"),
+        synthesis_views=synthesis_views,
         reasoning_lookup=reasoning_lookup,
     )
     attached_contract_vendors = _attach_context_to_deterministic_reports(
@@ -774,6 +889,7 @@ async def _build_deterministic_report_bundle(
         deterministic_vendor_scorecards=deterministic_vendor_scorecards,
         deterministic_displacement_map=deterministic_displacement_map,
         deterministic_category_overview=deterministic_category_overview,
+        deterministic_vendor_deep_dives=vendor_deep_dives,
         evidence_vault_lookup=evidence_vault_lookup,
         synthesis_views=synthesis_views,
         xv_lookup=xv_lookup,
@@ -800,7 +916,6 @@ async def _build_deterministic_report_bundle(
         council = xv_lookup.get("councils", {}).get(cat_name)
         if council:
             conclusion = council.get("conclusion", {})
-            # Flatten cross_vendor_analysis to avoid [object Object] in UI GenericReportView
             cat_entry["market_regime"] = conclusion.get("market_regime", "")
             cat_entry["market_conclusion"] = conclusion.get("conclusion", "")
             cat_entry["market_winner"] = conclusion.get("winner", "")
@@ -808,19 +923,6 @@ async def _build_deterministic_report_bundle(
             cat_entry["market_durability"] = conclusion.get("durability_assessment", "")
             cat_entry["market_confidence"] = council.get("confidence", 0)
             cat_entry["market_insights"] = conclusion.get("key_insights", [])
-    vendor_deep_dives = _build_vendor_deep_dives(
-        vendor_scores,
-        pain_lookup=lookups["pain_lookup"],
-        competitor_lookup=lookups["competitor_lookup"],
-        feature_gap_lookup=lookups["feature_gap_lookup"],
-        quote_lookup=lookups["quote_lookup"],
-        company_lookup=lookups["company_lookup"],
-        dm_lookup=lookups["dm_lookup"],
-        price_lookup=lookups["price_lookup"],
-        sentiment_lookup=lookups["sentiment_lookup"],
-        buyer_auth_lookup=lookups.get("buyer_auth_lookup"),
-        reasoning_lookup=reasoning_lookup,
-    )
     return {
         "weekly_churn_feed": deterministic_weekly_feed,
         "vendor_scorecards": deterministic_vendor_scorecards,
@@ -1020,9 +1122,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     deterministic_displacement_map = bundle["displacement_map"]
     deterministic_category_overview = bundle["category_insights"]
     vendor_deep_dives = bundle["vendor_deep_dives"]
+    synth_count = sum(
+        1 for v in reasoning_lookup.values()
+        if v.get("mode") == "synthesis"
+    )
     logger.info(
-        "Reconstructed reasoning for %d vendors from b2b_churn_signals",
-        len(reasoning_lookup),
+        "Reasoning for %d vendors (%d synthesis-first, %d legacy fallback)",
+        len(reasoning_lookup), synth_count, len(reasoning_lookup) - synth_count,
     )
     logger.info(
         "Cross-vendor enrichment: %d battles, %d councils, %d asymmetries",

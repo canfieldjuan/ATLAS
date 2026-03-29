@@ -545,3 +545,479 @@ async def test_send_batch_briefings_uses_deterministic_scheduled_mode(monkeypatc
         account_cards_reasoning_depth=0,
     )
     assert pool.execute_calls
+
+
+# ---------------------------------------------------------------------------
+# _apply_pain_points_to_briefing
+# ---------------------------------------------------------------------------
+
+def test_apply_pain_points_backfills_empty_pain_breakdown():
+    briefing: dict = {"pain_breakdown": []}
+    pain_pts = [
+        {
+            "pain_category": "pricing",
+            "mention_count": 80,
+            "primary_count": 60,
+            "avg_urgency": 7.2,
+            "avg_rating": 2.5,
+            "confidence_score": 0.85,
+        },
+        {
+            "pain_category": "support",
+            "mention_count": 40,
+            "primary_count": 20,
+            "avg_urgency": 5.1,
+            "avg_rating": None,
+            "confidence_score": 0.6,
+        },
+    ]
+
+    used = briefing_mod._apply_pain_points_to_briefing(briefing, pain_pts)
+
+    assert used is True
+    assert len(briefing["pain_breakdown"]) == 2
+    pricing = briefing["pain_breakdown"][0]
+    assert pricing["category"] == "pricing"
+    assert pricing["count"] == 80
+    assert pricing["avg_urgency"] == 7.2
+    assert pricing["avg_rating"] == 2.5
+    assert pricing["confidence_score"] == 0.85
+    assert briefing["pain_breakdown"][1]["avg_rating"] is None
+
+
+def test_apply_pain_points_enriches_existing_pain_breakdown():
+    briefing: dict = {
+        "pain_breakdown": [
+            {"category": "pricing", "count": 50},
+            {"category": "support", "count": 20},
+            {"category": "features", "count": 10},
+        ]
+    }
+    pain_pts = [
+        {
+            "pain_category": "pricing",
+            "mention_count": 80,
+            "primary_count": 60,
+            "avg_urgency": 7.2,
+            "avg_rating": 2.5,
+            "confidence_score": 0.85,
+        },
+        {
+            "pain_category": "support",
+            "mention_count": 40,
+            "primary_count": 20,
+            "avg_urgency": 5.1,
+            "avg_rating": 3.1,
+            "confidence_score": 0.6,
+        },
+    ]
+
+    used = briefing_mod._apply_pain_points_to_briefing(briefing, pain_pts)
+
+    assert used is True
+    pricing = briefing["pain_breakdown"][0]
+    assert pricing["avg_urgency"] == 7.2
+    assert pricing["avg_rating"] == 2.5
+    assert pricing["confidence_score"] == 0.85
+    # features row had no matching pain_point -- unchanged
+    assert "avg_urgency" not in briefing["pain_breakdown"][2]
+
+
+def test_apply_pain_points_does_not_overwrite_existing_urgency():
+    briefing: dict = {
+        "pain_breakdown": [{"category": "pricing", "count": 50, "avg_urgency": 9.0}]
+    }
+    pain_pts = [
+        {
+            "pain_category": "pricing",
+            "mention_count": 80,
+            "primary_count": 60,
+            "avg_urgency": 3.0,
+            "avg_rating": None,
+            "confidence_score": 0.85,
+        }
+    ]
+    # existing has only 1 entry -- backfill threshold is < 2, so this replaces
+    used = briefing_mod._apply_pain_points_to_briefing(briefing, pain_pts)
+    assert used is True
+    # backfill replaced the list
+    assert briefing["pain_breakdown"][0]["avg_urgency"] == 3.0
+
+
+def test_apply_pain_points_skips_when_list_is_empty():
+    briefing: dict = {"pain_breakdown": [{"category": "pricing", "count": 50}] * 3}
+    used = briefing_mod._apply_pain_points_to_briefing(briefing, [])
+    assert used is False
+
+
+# ---------------------------------------------------------------------------
+# _apply_account_intelligence_to_briefing
+# ---------------------------------------------------------------------------
+
+def test_apply_account_intelligence_populates_pressure_fields():
+    briefing: dict = {}
+    acct_data = {
+        "summary": {
+            "total_accounts": 5,
+            "high_intent_count": 3,
+            "active_eval_signal_count": 2,
+            "decision_maker_count": 1,
+            "with_seat_count": 2,
+            "with_contract_end": 0,
+        },
+        "accounts": [
+            {"company_name": "Acme Corp", "urgency_score": 8.0, "high_intent": True},
+            {"company_name": "Beta Inc", "urgency_score": 7.5},
+            {"company_name": "Low Inc", "urgency_score": 2.0},
+        ],
+    }
+
+    used = briefing_mod._apply_account_intelligence_to_briefing(briefing, acct_data)
+
+    assert used is True
+    assert briefing["account_pressure_metrics"]["high_intent_count"] == 3
+    assert briefing["account_pressure_metrics"]["active_eval_signal_count"] == 2
+    assert "3 high-intent accounts" in briefing["account_pressure_summary"]
+    assert "2 active evaluation signals" in briefing["account_pressure_summary"]
+    assert "Acme Corp" in briefing["priority_account_names"]
+    assert "Beta Inc" in briefing["priority_account_names"]
+    assert "Low Inc" not in briefing["priority_account_names"]
+    # named_account_count should be populated from summary.total_accounts
+    assert briefing["named_account_count"] == 5
+
+
+def test_apply_account_intelligence_materializes_named_accounts():
+    briefing: dict = {}
+    acct_data = {
+        "summary": {
+            "total_accounts": 2,
+            "high_intent_count": 2,
+            "active_eval_signal_count": 2,
+            "decision_maker_count": 0,
+        },
+        "accounts": [
+            {
+                "company_name": "Acme Corp",
+                "urgency_score": 8.5,
+                "buyer_role": "VP Operations",
+                "buying_stage": "evaluation",
+                "pain_category": "pricing",
+                "source": "g2",
+                "confidence_score": 0.72,
+            },
+            {
+                "company_name": "Beta Inc",
+                "urgency_score": 6.2,
+                "buyer_role": "unknown",
+                "buying_stage": "renewal_decision",
+                "pain_category": "support",
+                "source": "reddit",
+                "confidence_score": 0.55,
+            },
+        ],
+    }
+
+    briefing_mod._apply_account_intelligence_to_briefing(briefing, acct_data)
+
+    accounts = briefing["named_accounts"]
+    assert len(accounts) == 2
+    # Sorted by urgency descending
+    assert accounts[0]["company"] == "Acme Corp"
+    assert accounts[0]["urgency"] == 8.5
+    assert accounts[0]["title"] == "VP Operations"
+    assert accounts[0]["buying_stage"] == "evaluation"
+    assert accounts[0]["source"] == "g2"
+    # buyer_role "unknown" should normalize to None
+    assert accounts[1]["company"] == "Beta Inc"
+    assert accounts[1]["title"] is None
+
+
+def test_apply_account_intelligence_does_not_overwrite_existing_named_accounts():
+    briefing: dict = {"named_accounts": [{"company": "Existing", "urgency": 9.0}]}
+    acct_data = {
+        "summary": {"total_accounts": 1, "high_intent_count": 1, "active_eval_signal_count": 0, "decision_maker_count": 0},
+        "accounts": [{"company_name": "New Corp", "urgency_score": 7.0}],
+    }
+
+    briefing_mod._apply_account_intelligence_to_briefing(briefing, acct_data)
+
+    # Existing named_accounts preserved
+    assert briefing["named_accounts"][0]["company"] == "Existing"
+    assert len(briefing["named_accounts"]) == 1
+
+
+def test_apply_account_intelligence_skips_summary_when_already_set():
+    briefing: dict = {
+        "account_pressure_summary": "Already set.",
+        "named_accounts": [{"company": "Existing"}],
+    }
+    acct_data = {
+        "summary": {
+            "total_accounts": 10,
+            "high_intent_count": 7,
+            "active_eval_signal_count": 4,
+            "decision_maker_count": 2,
+        },
+        "accounts": [],
+    }
+
+    used = briefing_mod._apply_account_intelligence_to_briefing(briefing, acct_data)
+
+    assert used is True
+    # Summary unchanged (already set)
+    assert briefing["account_pressure_summary"] == "Already set."
+    # named_account_count set from total_accounts even when named_accounts already present
+    assert briefing["named_account_count"] == 10
+    # Metrics always written
+    assert briefing["account_pressure_metrics"]["high_intent_count"] == 7
+
+
+def test_apply_account_intelligence_returns_false_when_summary_missing():
+    briefing: dict = {}
+    used = briefing_mod._apply_account_intelligence_to_briefing(briefing, {})
+    assert used is False
+
+
+# ---------------------------------------------------------------------------
+# build_vendor_briefing: Sources 10-12 integration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_build_vendor_briefing_uses_pain_points_fallback(monkeypatch):
+    class DummyPool:
+        is_initialized = True
+
+        async def fetchrow(self, *args, **kwargs):
+            return None
+
+        async def fetch(self, query, *args):
+            if "b2b_vendor_pain_points" in query:
+                return [
+                    {
+                        "pain_category": "pricing",
+                        "mention_count": 90,
+                        "primary_count": 70,
+                        "avg_urgency": 7.8,
+                        "avg_rating": 2.3,
+                        "confidence_score": 0.9,
+                    },
+                    {
+                        "pain_category": "support",
+                        "mention_count": 50,
+                        "primary_count": 30,
+                        "avg_urgency": 5.5,
+                        "avg_rating": 3.0,
+                        "confidence_score": 0.7,
+                    },
+                ]
+            return []
+
+    monkeypatch.setattr(briefing_mod, "get_db_pool", lambda: DummyPool())
+    monkeypatch.setattr(
+        briefing_mod,
+        "_extract_feed_entry",
+        AsyncMock(
+            return_value={
+                "churn_pressure_score": 55,
+                "churn_signal_density": 14.0,
+                "avg_urgency": 6.0,
+                "total_reviews": 100,
+                "dm_churn_rate": 10.0,
+                "pain_breakdown": [],
+                "top_displacement_targets": [],
+                "evidence": [],
+                "named_accounts": [],
+                "top_feature_gaps": [],
+                "category": "CRM",
+            }
+        ),
+    )
+    monkeypatch.setattr(briefing_mod, "_fetch_vendor_evidence_vault", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_product_profile", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_high_urgency_quotes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(briefing_mod, "_enrich_with_analyst_summary", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "generate_account_cards", AsyncMock(return_value=[]))
+
+    result = await briefing_mod.build_vendor_briefing("Zendesk")
+
+    assert result is not None
+    assert result["data_sources"]["pain_points"] is True
+    assert result["pain_breakdown"][0]["category"] == "pricing"
+    assert result["pain_breakdown"][0]["avg_urgency"] == 7.8
+
+
+@pytest.mark.asyncio
+async def test_build_vendor_briefing_uses_account_intelligence(monkeypatch):
+    class DummyPool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            if "b2b_account_intelligence" in query:
+                return {
+                    "accounts": {
+                        "summary": {
+                            "total_accounts": 4,
+                            "high_intent_count": 3,
+                            "active_eval_signal_count": 2,
+                            "decision_maker_count": 1,
+                        },
+                        "accounts": [
+                            {"company_name": "Acme", "urgency_score": 8.5},
+                        ],
+                    },
+                    "as_of_date": "2026-03-28",
+                }
+            return None
+
+        async def fetch(self, *args, **kwargs):
+            return []
+
+    monkeypatch.setattr(briefing_mod, "get_db_pool", lambda: DummyPool())
+    monkeypatch.setattr(
+        briefing_mod,
+        "_extract_feed_entry",
+        AsyncMock(
+            return_value={
+                "churn_pressure_score": 55,
+                "churn_signal_density": 14.0,
+                "avg_urgency": 6.0,
+                "total_reviews": 100,
+                "dm_churn_rate": 10.0,
+                "pain_breakdown": [{"category": "pricing", "count": 30}] * 3,
+                "top_displacement_targets": [],
+                "evidence": [],
+                "named_accounts": [],
+                "top_feature_gaps": [],
+                "category": "CRM",
+            }
+        ),
+    )
+    monkeypatch.setattr(briefing_mod, "_fetch_vendor_evidence_vault", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_product_profile", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_high_urgency_quotes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(briefing_mod, "_enrich_with_analyst_summary", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "generate_account_cards", AsyncMock(return_value=[]))
+
+    result = await briefing_mod.build_vendor_briefing("Zendesk")
+
+    assert result is not None
+    assert result["data_sources"]["account_intelligence"] is True
+    assert result["account_pressure_metrics"]["high_intent_count"] == 3
+    assert "3 high-intent accounts" in result["account_pressure_summary"]
+    assert result["named_account_count"] == 4
+    assert "Acme" in result["priority_account_names"]
+    # named_accounts should be materialized from account objects
+    assert result["named_accounts"][0]["company"] == "Acme"
+    assert result["named_accounts"][0]["urgency"] == 8.5
+
+
+@pytest.mark.asyncio
+async def test_build_vendor_briefing_displacement_dynamics_augments_thin_conclusions(monkeypatch):
+    class DummyPool:
+        is_initialized = True
+
+        async def fetchrow(self, *args, **kwargs):
+            return None
+
+        async def fetch(self, query, *args):
+            if "b2b_displacement_dynamics" in query:
+                return [
+                    {
+                        "peer_vendor": "Zoho",
+                        "dynamics": {
+                            "battle_summary": {
+                                "winner": "Zoho",
+                                "loser": "HubSpot",
+                                "conclusion": "Zoho wins on price in SMB segment.",
+                                "confidence": 0.75,
+                                "durability_assessment": None,
+                                "key_insights": ["SMB pricing gap is widening"],
+                                "resource_advantage": None,
+                            },
+                            "switch_reasons": [
+                                {
+                                    "reason": "lower cost",
+                                    "reason_category": "pricing",
+                                    "mention_count": 28,
+                                    "direction": None,
+                                    "reason_detail": None,
+                                },
+                                {
+                                    "reason": "simpler UI",
+                                    "reason_category": "ux",
+                                    "mention_count": 15,
+                                    "direction": None,
+                                    "reason_detail": None,
+                                },
+                            ],
+                            "flow_summary": {
+                                "explicit_switch_count": 20,
+                                "active_evaluation_count": 8,
+                                "total_flow_mentions": 42,
+                            },
+                            "edge_metrics": {
+                                "mention_count": 42,
+                                "primary_driver": "pricing",
+                                "signal_strength": None,
+                                "key_quote": None,
+                                "confidence_score": 0.75,
+                                "velocity_7d": 3,
+                                "velocity_30d": 12,
+                            },
+                            "trend_acceleration": None,
+                            "evidence_breakdown": [],
+                            "segment_displacement": None,
+                        },
+                        "as_of_date": "2026-03-25",
+                    }
+                ]
+            return []
+
+    monkeypatch.setattr(briefing_mod, "get_db_pool", lambda: DummyPool())
+    monkeypatch.setattr(
+        briefing_mod,
+        "_extract_feed_entry",
+        AsyncMock(
+            return_value={
+                "churn_pressure_score": 55,
+                "churn_signal_density": 14.0,
+                "avg_urgency": 6.0,
+                "total_reviews": 100,
+                "dm_churn_rate": 10.0,
+                "pain_breakdown": [{"category": "pricing", "count": 30}] * 3,
+                "top_displacement_targets": [],
+                "evidence": [],
+                "named_accounts": [],
+                "top_feature_gaps": [],
+                "category": "CRM",
+            }
+        ),
+    )
+    monkeypatch.setattr(briefing_mod, "_fetch_vendor_evidence_vault", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_product_profile", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_high_urgency_quotes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(briefing_mod, "_enrich_with_analyst_summary", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "generate_account_cards", AsyncMock(return_value=[]))
+
+    result = await briefing_mod.build_vendor_briefing("HubSpot")
+
+    assert result is not None
+    assert result["data_sources"]["displacement_dynamics"] is True
+    assert result["competitive_dynamics"]["pairs"][0]["challenger"] == "Zoho"
+    # battle_summary should be extracted as the conclusion string, not the raw dict
+    assert result["competitive_dynamics"]["pairs"][0]["battle_summary"] == (
+        "Zoho wins on price in SMB segment."
+    )
+    # switch_reasons remain as canonical dicts with reason field
+    reasons = result["competitive_dynamics"]["pairs"][0]["switch_reasons"]
+    assert reasons[0]["reason"] == "lower cost"
+    assert reasons[1]["reason"] == "simpler UI"
+    # Sorted by edge_metrics.mention_count (canonical field)
+    assert result["competitive_dynamics"]["pairs"][0]["edge_metrics"]["mention_count"] == 42
+    # Should have been promoted into cross_vendor_conclusions
+    conclusions = result.get("cross_vendor_conclusions") or []
+    pairwise = [c for c in conclusions if c.get("analysis_type") == "pairwise_battle"]
+    assert len(pairwise) >= 1
+    # Uses "summary" (not "conclusion") to match the shape all renderers key off
+    assert pairwise[0]["summary"] == "Zoho wins on price in SMB segment."
+    assert pairwise[0]["confidence"] == 0.6

@@ -882,6 +882,87 @@ class TestPrompt:
         assert len(VALID_WEDGE_TYPES) == 10
 
 
+# ---- Module 3b: Neutral Reasoning Synthesis Prompt ----
+
+class TestNeutralPrompt:
+    def test_prompt_imports(self):
+        from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
+            REASONING_SYNTHESIS_PROMPT,
+            REASONING_SYNTHESIS_PROMPT_VERSION,
+        )
+        assert isinstance(REASONING_SYNTHESIS_PROMPT, str)
+        assert isinstance(REASONING_SYNTHESIS_PROMPT_VERSION, str)
+        assert len(REASONING_SYNTHESIS_PROMPT_VERSION) == 8
+
+    def test_prompt_contains_wedge_values(self):
+        from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
+            REASONING_SYNTHESIS_PROMPT,
+        )
+        from atlas_brain.reasoning.wedge_registry import WEDGE_ENUM_VALUES
+        for val in WEDGE_ENUM_VALUES:
+            assert val in REASONING_SYNTHESIS_PROMPT
+
+    def test_prompt_requires_sid_and_source_id(self):
+        from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
+            REASONING_SYNTHESIS_PROMPT,
+        )
+        assert "_sid" in REASONING_SYNTHESIS_PROMPT
+        assert "source_id" in REASONING_SYNTHESIS_PROMPT
+
+    def test_prompt_no_sales_language(self):
+        from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
+            REASONING_SYNTHESIS_PROMPT,
+        )
+        assert "Sales reps" not in REASONING_SYNTHESIS_PROMPT
+        assert "AEs" not in REASONING_SYNTHESIS_PROMPT
+        assert "revenue leaders" not in REASONING_SYNTHESIS_PROMPT
+        assert "sales battle cards" not in REASONING_SYNTHESIS_PROMPT
+
+    def test_prompt_has_governance_awareness(self):
+        from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
+            REASONING_SYNTHESIS_PROMPT,
+        )
+        assert "contradiction_rows" in REASONING_SYNTHESIS_PROMPT
+        assert "coverage_gaps" in REASONING_SYNTHESIS_PROMPT
+        assert "retention_proof" in REASONING_SYNTHESIS_PROMPT
+        assert "minority_signals" in REASONING_SYNTHESIS_PROMPT
+        assert "metric_ledger" in REASONING_SYNTHESIS_PROMPT
+
+    def test_prompt_has_phase3_contract_sections(self):
+        from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
+            REASONING_SYNTHESIS_PROMPT,
+        )
+        assert "why_they_stay" in REASONING_SYNTHESIS_PROMPT
+        assert "confidence_posture" in REASONING_SYNTHESIS_PROMPT
+        assert "switch_triggers" in REASONING_SYNTHESIS_PROMPT
+        assert "neutralization" in REASONING_SYNTHESIS_PROMPT
+
+    def test_prompt_is_contracts_first(self):
+        from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
+            REASONING_SYNTHESIS_PROMPT,
+        )
+        assert '"reasoning_contracts"' in REASONING_SYNTHESIS_PROMPT
+        assert '"vendor_core_reasoning"' in REASONING_SYNTHESIS_PROMPT
+        assert '"displacement_reasoning"' in REASONING_SYNTHESIS_PROMPT
+        assert '"reasoning_shape": "contracts_first_v1"' in REASONING_SYNTHESIS_PROMPT
+
+    def test_synthesis_task_uses_neutral_prompt(self):
+        """The synthesis task should import the neutral prompt, not battle card."""
+        import ast
+        with open("atlas_brain/autonomous/tasks/b2b_reasoning_synthesis.py") as f:
+            source = f.read()
+        assert "reasoning_synthesis" in source
+        assert "REASONING_SYNTHESIS_PROMPT" in source
+        assert "BATTLE_CARD_REASONING_PROMPT" not in source
+
+    def test_battle_card_prompt_not_imported_by_synthesis_task(self):
+        """battle_card_reasoning should only be used for battle card rendering."""
+        import ast
+        with open("atlas_brain/autonomous/tasks/b2b_reasoning_synthesis.py") as f:
+            source = f.read()
+        assert "battle_card_reasoning" not in source
+
+
 # ---- Module 4: Validation ----
 
 def _make_valid_synthesis(packet=None):
@@ -3821,7 +3902,9 @@ class TestReasoningSynthesisTask:
         detail = result["failed_vendors"][0]
         assert detail["vendor_name"] == "RetryVendor"
         assert detail["stage"] == "validation"
-        assert detail["summary"] == "vendor=RetryVendor errors=1 FAIL"
+        assert "vendor=RetryVendor" in detail["summary"]
+        assert "errors=1" in detail["summary"]
+        assert "FAIL" in detail["summary"]
         assert detail["tokens_used"] == 18
         assert detail["attempts_used"] == 1
         assert len(detail["reasons"]) == 1

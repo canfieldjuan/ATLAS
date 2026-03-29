@@ -7,6 +7,11 @@ from typing import Optional
 from ._shared import VALID_REPORT_TYPES, get_pool, logger
 from .server import mcp
 
+# Lazy import to avoid circular dependency -- only used by draft_campaign
+def _get_blog_matcher():
+    from ...autonomous.tasks._blog_matching import fetch_relevant_blog_posts
+    return fetch_relevant_blog_posts
+
 _VALID_ANALYSIS_TYPES = ("pairwise_battle", "category_council", "resource_asymmetry")
 _VALID_CHANNELS = ("email_cold", "email_followup", "linkedin", "phone", "custom")
 
@@ -395,6 +400,7 @@ async def build_accounts_in_motion(
 
     try:
         import asyncio
+        from collections import Counter
 
         from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
             _apply_account_quality_adjustments,
@@ -414,6 +420,8 @@ async def build_accounts_in_motion(
             _fetch_competitive_displacement,
             _fetch_feature_gaps,
             _fetch_high_intent_companies,
+            _fetch_latest_account_intelligence,
+            _fetch_latest_evidence_vault,
             _fetch_price_complaint_rates,
             _fetch_quotable_evidence,
             _fetch_timeline_signals,
@@ -421,6 +429,10 @@ async def build_accounts_in_motion(
         from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
             reconstruct_cross_vendor_lookup,
             reconstruct_reasoning_lookup,
+        )
+        from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
+            build_reasoning_lookup_from_views,
+            load_best_reasoning_view,
         )
         from atlas_brain.config import settings
 
@@ -444,6 +456,8 @@ async def build_accounts_in_motion(
             competitive_disp,
             signal_meta,
             apollo_orgs,
+            evidence_vault_lookup,
+            account_pool_lookup,
         ) = await asyncio.gather(
             _fetch_high_intent_companies(pool, int(min_urgency), window),
             _fetch_timeline_signals(pool, window),
@@ -455,12 +469,24 @@ async def build_accounts_in_motion(
             _fetch_competitive_displacement(pool, window),
             _fetch_company_signal_metadata(pool, window),
             _fetch_apollo_org_lookup(pool),
+            _fetch_latest_evidence_vault(pool, as_of=today, analysis_window_days=window),
+            _fetch_latest_account_intelligence(pool, as_of=today, analysis_window_days=window),
         )
 
         competitive_disp = _aggregate_competitive_disp(competitive_disp)
 
-        reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+        # Synthesis-first reasoning lookup
         xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
+        try:
+            view = await load_best_reasoning_view(pool, vendor, as_of=today)
+            if view:
+                synth_lookup = build_reasoning_lookup_from_views({vendor: view})
+            else:
+                synth_lookup = {}
+        except Exception:
+            synth_lookup = {}
+        legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+        reasoning_lookup = {**legacy_lookup, **synth_lookup}
 
         merged = _merge_company_profiles(
             high_intent,
@@ -492,6 +518,14 @@ async def build_accounts_in_motion(
         vendor_accounts.sort(key=lambda a: a.get("opportunity_score", 0), reverse=True)
         vendor_accounts = vendor_accounts[:max_accounts]
 
+        # Derive category from accounts (same logic as nightly pipeline)
+        cat_counts: Counter[str] = Counter()
+        for acct in vendor_accounts:
+            cat = acct.get("category")
+            if cat:
+                cat_counts[cat] += 1
+        vendor_category = cat_counts.most_common(1)[0][0] if cat_counts else None
+
         feature_gap_lookup = _build_feature_gap_lookup(feature_gaps)
         price_lookup = {
             _canonicalize_vendor(r["vendor"]): r["price_complaint_rate"]
@@ -506,12 +540,16 @@ async def build_accounts_in_motion(
         aggregate = _build_vendor_aggregate(
             vendor,
             vendor_accounts,
+            category=vendor_category,
             reasoning_lookup=reasoning_lookup,
             xv_lookup=xv_lookup,
             competitor_lookup=competitor_lookup,
             feature_gap_lookup=feature_gap_lookup,
             price_lookup=price_lookup,
             budget_lookup=budget_lookup,
+            evidence_vault_lookup=evidence_vault_lookup if not isinstance(evidence_vault_lookup, Exception) else None,
+            account_pool_lookup=account_pool_lookup if not isinstance(account_pool_lookup, Exception) else None,
+            requested_as_of=today,
         )
 
         result = {
@@ -635,12 +673,52 @@ async def draft_campaign(
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
 
+        # Fetch relevant blog posts before inserting so they can be stored in metadata
+        blog_posts: list[dict] = []
+        try:
+            fetch_blogs = _get_blog_matcher()
+            blog_posts = await fetch_blogs(
+                pool,
+                pipeline="b2b",
+                vendor_name=vendor_name.strip(),
+                include_drafts=False,
+                limit=3,
+            )
+        except Exception:
+            logger.debug("Blog lookup failed for draft_campaign vendor=%s", vendor_name)
+
+        metadata: dict = {}
+        if blog_posts:
+            metadata["blog_posts"] = blog_posts
+
+        # Store reasoning context for audit trail
+        try:
+            from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
+                load_best_reasoning_view,
+            )
+            reasoning_view = await load_best_reasoning_view(pool, vendor_name.strip())
+            if reasoning_view is not None:
+                wedge = reasoning_view.primary_wedge
+                reasoning_meta: dict = {
+                    "wedge": wedge.value if wedge else "",
+                    "confidence": reasoning_view.confidence("causal_narrative"),
+                    "schema_version": reasoning_view.schema_version,
+                }
+                wts = reasoning_view.why_they_stay
+                if wts and wts.get("summary"):
+                    reasoning_meta["why_they_stay"] = wts["summary"]
+                if reasoning_view.confidence_limits:
+                    reasoning_meta["confidence_limits"] = reasoning_view.confidence_limits
+                metadata["reasoning"] = reasoning_meta
+        except Exception:
+            logger.debug("Reasoning lookup failed for draft_campaign vendor=%s", vendor_name)
+
         row = await pool.fetchrow(
             """
             INSERT INTO b2b_campaigns
                 (company_name, vendor_name, channel, subject, body, cta,
-                 opportunity_score, urgency_score, llm_model, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft')
+                 opportunity_score, urgency_score, llm_model, status, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10::jsonb)
             RETURNING id, created_at
             """,
             company_name.strip(),
@@ -652,14 +730,19 @@ async def draft_campaign(
             opportunity_score,
             urgency_score,
             llm_model.strip(),
+            json.dumps(metadata),
         )
 
-        return json.dumps({
+        result = {
             "success": True,
             "campaign_id": str(row["id"]),
             "status": "draft",
             "created_at": str(row["created_at"]),
-        })
+        }
+        if blog_posts:
+            result["blog_posts"] = blog_posts
+
+        return json.dumps(result)
     except Exception:
         logger.exception("draft_campaign error")
         return json.dumps({"success": False, "error": "Internal error"})
