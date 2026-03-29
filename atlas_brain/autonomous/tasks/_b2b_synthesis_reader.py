@@ -934,7 +934,7 @@ async def load_best_reasoning_view(
     vendor_name: str,
     *,
     as_of: date | None = None,
-    analysis_window_days: int = 90,
+    analysis_window_days: int = 30,
 ) -> SynthesisView | None:
     """Load the best available reasoning for a vendor.
 
@@ -1049,7 +1049,7 @@ async def load_best_reasoning_views(
     vendor_names: list[str],
     *,
     as_of: date | None = None,
-    analysis_window_days: int = 90,
+    analysis_window_days: int = 30,
 ) -> dict[str, SynthesisView]:
     """Batch-load best reasoning for multiple vendors.
 
