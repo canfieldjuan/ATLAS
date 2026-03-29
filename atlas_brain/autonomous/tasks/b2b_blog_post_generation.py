@@ -487,6 +487,26 @@ def _apply_blog_quality_gate(
     if missing_vendors:
         blocking_issues.append(f"missing_vendor_mentions:{','.join(missing_vendors)}")
 
+    # Block placeholder links
+    if 'href="#"' in body or "href='#'" in body:
+        blocking_issues.append("placeholder_links_href_hash")
+
+    # Block nonexistent internal blog links
+    internal_links = re.findall(r'/blog/([a-z0-9\-]+)', body)
+    if internal_links:
+        known = set(content.get("related_slugs") or [])
+        fake = [lk for lk in internal_links if lk not in known and lk != blueprint.slug]
+        if fake:
+            blocking_issues.append(f"nonexistent_internal_links:{','.join(fake[:4])}")
+
+    # Warn on title/slug mismatch
+    title_lower = str(content.get("title") or blueprint.suggested_title or "").lower()
+    for vk in ("vendor", "vendor_a", "vendor_b"):
+        v = str((blueprint.data_context or {}).get(vk) or "").strip()
+        if v and len(v) > 2 and v.lower() not in title_lower:
+            warnings.append(f"title_missing_expected_vendor:{v}")
+            break
+
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
     report = {
         "score": score,
@@ -1646,7 +1666,7 @@ async def _select_topic(
         raw_candidates.append((slug, score, "churn_report", {**cr, "slug": slug}))
 
     for mig in migrations:
-        slug = f"migration-from-{_slugify(mig['vendor'])}-{month_suffix}"
+        slug = f"switch-to-{_slugify(mig['vendor'])}-{month_suffix}"
         score = mig["switch_count"] * mig["review_total"] * 1.5
         raw_candidates.append((slug, score, "migration_guide", {**mig, "slug": slug}))
 
@@ -5275,12 +5295,15 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
         key_stats=bf_stats,
     ))
 
+    company_size = ctx.get("company_size") or ctx.get("dominant_size") or ""
+    size_label = company_size.replace("_", " ").replace("-", " ").strip() if company_size else ""
+    size_suffix = f" for {size_label} Teams" if size_label and size_label != "unknown" else ""
     return PostBlueprint(
         topic_type="best_fit_guide",
         slug=ctx["slug"],
-        suggested_title=f"Best {category} Tools in 2026: {ctx['vendor_count']} Vendors Compared Across {ctx['total_reviews']} Reviews",
-        tags=[category.lower(), "buyers-guide", "comparison", "honest-review", "team-size"],
-        data_context={**data.get("data_context", {}), "category": category},
+        suggested_title=f"Best {category} Tools{size_suffix}: {ctx['vendor_count']} Vendors Compared Across {ctx['total_reviews']} Reviews",
+        tags=[category.lower(), "buyers-guide", "comparison", "honest-review", *(["team-size"] if size_label else [])],
+        data_context={**data.get("data_context", {}), "category": category, "company_size": company_size},
         sections=sections,
         charts=charts,
         quotable_phrases=data.get("quotes", []),
