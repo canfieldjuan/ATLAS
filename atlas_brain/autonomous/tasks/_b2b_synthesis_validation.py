@@ -979,15 +979,17 @@ def _check_metric_ledger_numbers(
                 sid = obj.get("source_id", "")
                 if not sid:
                     return
+                val = obj.get("value")
+                is_numeric = isinstance(val, (int, float))
                 if sid not in all_packet_sids:
                     _add(
                         result,
                         path,
-                        "unsupported_number",
-                        f"numeric claim cites source_id '{sid}' not in packet",
-                        severity="error",
+                        "unsupported_number" if is_numeric else "unsupported_source",
+                        f"{'numeric' if is_numeric else 'text'} claim cites source_id '{sid}' not in packet",
+                        severity="error" if is_numeric else "warning",
                     )
-                elif sid not in ledger_sids:
+                elif is_numeric and sid not in ledger_sids:
                     _add(
                         result,
                         path,
