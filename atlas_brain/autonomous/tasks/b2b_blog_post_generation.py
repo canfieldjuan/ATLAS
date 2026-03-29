@@ -64,6 +64,12 @@ _DATA_CLAIM_PATTERN = re.compile(
     + r"|\d+\s*%|\d+\s+reviews?\b|\d+\s+stories?\b)",
     re.IGNORECASE,
 )
+_VENDORISH_NAME_PATTERN = re.compile(
+    r"\b("
+    r"(?:[A-Z][a-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+|[A-Z]{2,}|[a-z]+[A-Z][A-Za-z0-9]*)"
+    r"(?:\s+(?:[A-Z][a-z0-9]*[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+|[A-Z]{2,}|[a-z]+[A-Z][A-Za-z0-9]*)){0,3}"
+    r")\b"
+)
 
 
 def _build_grounded_vendor_set(blueprint: "PostBlueprint") -> set[str]:
@@ -71,18 +77,21 @@ def _build_grounded_vendor_set(blueprint: "PostBlueprint") -> set[str]:
     names: set[str] = set()
     ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
     # Topic vendors
-    for key in ("vendor", "vendor_a", "vendor_b", "from_vendor"):
+    for key in ("vendor", "vendor_a", "vendor_b", "from_vendor", "to_vendor"):
         v = str(ctx.get(key) or "").strip()
-        if v and len(v) > 1:
-            names.add(v.lower())
+        nv = _normalized_vendor_text(v)
+        if nv and len(nv) > 1:
+            names.add(nv)
     # Chart labels and series values
     for chart in blueprint.charts:
         for row in chart.data:
             if not isinstance(row, dict):
                 continue
             for val in row.values():
-                if isinstance(val, str) and len(val) > 1:
-                    names.add(val.lower().strip())
+                if isinstance(val, str):
+                    nv = _normalized_vendor_text(val)
+                    if nv and len(nv) > 1:
+                        names.add(nv)
     # Explicit vendor lists in data_context
     for key in ("displacement_targets", "competitors", "commonly_switched_from",
                 "top_displacement_targets", "vendor_profiles"):
@@ -92,37 +101,67 @@ def _build_grounded_vendor_set(blueprint: "PostBlueprint") -> set[str]:
                 if isinstance(item, dict):
                     for vk in ("vendor", "name", "competitor", "vendor_name"):
                         v = str(item.get(vk) or "").strip()
-                        if v and len(v) > 1:
-                            names.add(v.lower())
-                elif isinstance(item, str) and len(item) > 1:
-                    names.add(item.lower().strip())
+                        nv = _normalized_vendor_text(v)
+                        if nv and len(nv) > 1:
+                            names.add(nv)
+                elif isinstance(item, str):
+                    nv = _normalized_vendor_text(item)
+                    if nv and len(nv) > 1:
+                        names.add(nv)
     return names
 
 
 def _find_unsupported_data_claims(
     body: str,
     grounded: set[str],
+    known_vendors: list[str] | None = None,
 ) -> list[str]:
-    """Return sentences with data-claim markers that reference ungrounded vendors."""
-    # Split on sentence boundaries (period/newline followed by space or heading)
+    """Return sentences with data-claim markers that reference ungrounded vendors.
+
+    Uses two detection strategies:
+    1. Known-vendor lookup: check if any known vendor (from DB) appears in a
+       claim sentence but is NOT in the grounded set.
+    2. Regex fallback: extract capitalized name patterns for vendors not in
+       the known universe (catches novel names the LLM invented).
+    """
     sentences = re.split(r'(?<=[.!?])\s+|\n+', body)
     flagged: list[str] = []
+
+    # Build case-insensitive lookup for known vendors not in grounded set
+    ungrounded_known: list[tuple[str, re.Pattern[str]]] = []
+    for v in (known_vendors or []):
+        nv = _normalized_vendor_text(v)
+        if nv and nv not in grounded and len(v) > 2:
+            # Match the vendor name as a whole word, case-insensitive
+            pattern = re.compile(r"\b" + re.escape(v) + r"\b", re.IGNORECASE)
+            ungrounded_known.append((v, pattern))
+
     for sentence in sentences:
         if not _DATA_CLAIM_PATTERN.search(sentence):
             continue
-        # Extract capitalized multi-word names (likely vendor/product names)
-        # Match 1-4 capitalized words in sequence
-        candidates = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b', sentence)
+        # Strategy 1: known vendor lookup
+        found_known = False
+        for vendor_name, pattern in ungrounded_known:
+            if pattern.search(sentence):
+                flagged.append(f"{vendor_name}: {sentence.strip()[:120]}")
+                found_known = True
+                break
+        if found_known:
+            continue
+        # Strategy 2: regex fallback for names not in known universe
+        candidates = _VENDORISH_NAME_PATTERN.findall(sentence)
         for name in candidates:
-            if name.lower() not in grounded and len(name) > 2:
-                # Skip common English words that look like names
-                if name.lower() in ("the", "this", "that", "when", "what", "where",
-                                    "most", "top", "data", "teams", "users",
-                                    "introduction", "conclusion", "overview",
-                                    "analysis", "guide", "report"):
+            normalized_name = _normalized_vendor_text(name)
+            if normalized_name not in grounded and len(normalized_name) > 2:
+                if normalized_name in (
+                    "the", "this", "that", "when", "what", "where",
+                    "most", "top", "data", "teams", "users",
+                    "introduction", "conclusion", "overview",
+                    "analysis", "guide", "report",
+                ):
                     continue
                 flagged.append(f"{name}: {sentence.strip()[:120]}")
-                break  # one flag per sentence
+                break
     return flagged
 
 
@@ -644,7 +683,10 @@ def _apply_blog_quality_gate(
 
     # Unsupported data claims: vendor names in claim-bearing sentences not in data
     grounded = _build_grounded_vendor_set(blueprint)
-    unsupported = _find_unsupported_data_claims(body, grounded)
+    ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    unsupported = _find_unsupported_data_claims(
+        body, grounded, known_vendors=ctx.get("_known_vendors"),
+    )
     for claim in unsupported[:3]:
         warnings.append(f"unsupported_data_claim:{claim}")
 
@@ -840,6 +882,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         blueprint.data_context["_valid_internal_slugs"] = [
             p["slug"] for p in (link_posts or []) if isinstance(p, dict) and p.get("slug")
         ]
+        # Store known vendor universe for data claim validation
+        if "_known_vendors" not in blueprint.data_context:
+            try:
+                _kv_rows = await pool.fetch(
+                    "SELECT DISTINCT vendor_name FROM b2b_churn_signals"
+                )
+                blueprint.data_context["_known_vendors"] = [
+                    r["vendor_name"] for r in _kv_rows if r["vendor_name"]
+                ]
+            except Exception:
+                blueprint.data_context["_known_vendors"] = []
         content = _generate_content(
             llm, blueprint, cfg.blog_post_max_tokens,
             related_posts=link_posts,
