@@ -387,3 +387,65 @@ def test_data_claim_allows_topic_vendor_in_claim():
     }
     _, report = _apply_blog_quality_gate(bp, content)
     assert not any("unsupported_data_claim" in w for w in report.get("warnings", []))
+
+
+def test_data_claim_flags_ungrounded_camelcase_vendor():
+    """CamelCase vendors like BigCommerce should still be detected when ungrounded."""
+    bp = _migration_blueprint()
+    content = {
+        "title": "Switch to Shopify",
+        "description": "desc",
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_CLAIM_PAD}\n"
+            "The top migration source is QuickBooks POS for fast-moving retail teams.\n"
+            "{{chart:sources-bar}}\n"
+            '> "We switched from WooCommerce after hitting scaling limits" -- reviewer\n'
+            '> "BigCommerce pricing pushed us to Shopify" -- reviewer\n'
+        ),
+    }
+    _, report = _apply_blog_quality_gate(bp, content)
+    assert any("unsupported_data_claim:QuickBooks POS" in w for w in report.get("warnings", []))
+
+
+def test_data_claim_allows_to_vendor_grounding():
+    """Destination-only topic vendor keys should still ground supported claims."""
+    bp = PostBlueprint(
+        topic_type="migration_guide",
+        slug="switch-to-shopify-2026-03",
+        suggested_title="Migration Guide: Why Teams Are Switching to Shopify",
+        tags=["shopify", "migration"],
+        data_context={
+            "to_vendor": "Shopify",
+            "review_period": "2026-02 to 2026-03",
+        },
+        sections=[],
+        charts=[
+            ChartSpec(
+                chart_id="sources-bar",
+                chart_type="horizontal_bar",
+                title="Where Shopify Users Come From",
+                data=[{"name": "WooCommerce", "migrations": 5}],
+            )
+        ],
+        quotable_phrases=[
+            {"phrase": "We switched from WooCommerce after hitting scaling limits"},
+            {"phrase": "Shopify setup was faster than our old stack"},
+        ],
+    )
+    content = {
+        "title": "Switch to Shopify",
+        "description": "desc",
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_CLAIM_PAD}\n"
+            "Data shows Shopify attracts 93 switching stories from competitors.\n"
+            "{{chart:sources-bar}}\n"
+            '> "We switched from WooCommerce after hitting scaling limits" -- reviewer\n'
+            '> "Shopify setup was faster than our old stack" -- reviewer\n'
+        ),
+    }
+    _, report = _apply_blog_quality_gate(bp, content)
+    assert not any("unsupported_data_claim" in w for w in report.get("warnings", []))
