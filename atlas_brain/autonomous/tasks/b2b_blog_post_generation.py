@@ -44,7 +44,86 @@ _ANSWER_PREFIX_RE = re.compile(r"(?im)^(\s*)answer:\s*")
 _CRITICAL_BLOG_WARNINGS = {
     "review_period_not_explicitly_mentioned",
     "methodology_disclaimer_missing_self_selected",
+    "unsupported_data_claim",
 }
+_DATA_CLAIM_MARKERS = (
+    "most common",
+    "top migration",
+    "top source",
+    "primary source",
+    "primary driver",
+    "leading source",
+    "data shows",
+    "reviews mention",
+    "switched from",
+    "stories analyzed",
+)
+_DATA_CLAIM_PATTERN = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(m) for m in _DATA_CLAIM_MARKERS)
+    + r"|\d+\s*%|\d+\s+reviews?\b|\d+\s+stories?\b)",
+    re.IGNORECASE,
+)
+
+
+def _build_grounded_vendor_set(blueprint: "PostBlueprint") -> set[str]:
+    """Build the set of vendor/product names supported by chart + context data."""
+    names: set[str] = set()
+    ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    # Topic vendors
+    for key in ("vendor", "vendor_a", "vendor_b", "from_vendor"):
+        v = str(ctx.get(key) or "").strip()
+        if v and len(v) > 1:
+            names.add(v.lower())
+    # Chart labels and series values
+    for chart in blueprint.charts:
+        for row in chart.data:
+            if not isinstance(row, dict):
+                continue
+            for val in row.values():
+                if isinstance(val, str) and len(val) > 1:
+                    names.add(val.lower().strip())
+    # Explicit vendor lists in data_context
+    for key in ("displacement_targets", "competitors", "commonly_switched_from",
+                "top_displacement_targets", "vendor_profiles"):
+        items = ctx.get(key)
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    for vk in ("vendor", "name", "competitor", "vendor_name"):
+                        v = str(item.get(vk) or "").strip()
+                        if v and len(v) > 1:
+                            names.add(v.lower())
+                elif isinstance(item, str) and len(item) > 1:
+                    names.add(item.lower().strip())
+    return names
+
+
+def _find_unsupported_data_claims(
+    body: str,
+    grounded: set[str],
+) -> list[str]:
+    """Return sentences with data-claim markers that reference ungrounded vendors."""
+    # Split on sentence boundaries (period/newline followed by space or heading)
+    sentences = re.split(r'(?<=[.!?])\s+|\n+', body)
+    flagged: list[str] = []
+    for sentence in sentences:
+        if not _DATA_CLAIM_PATTERN.search(sentence):
+            continue
+        # Extract capitalized multi-word names (likely vendor/product names)
+        # Match 1-4 capitalized words in sequence
+        candidates = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b', sentence)
+        for name in candidates:
+            if name.lower() not in grounded and len(name) > 2:
+                # Skip common English words that look like names
+                if name.lower() in ("the", "this", "that", "when", "what", "where",
+                                    "most", "top", "data", "teams", "users",
+                                    "introduction", "conclusion", "overview",
+                                    "analysis", "guide", "report"):
+                    continue
+                flagged.append(f"{name}: {sentence.strip()[:120]}")
+                break  # one flag per sentence
+    return flagged
 
 
 def _blog_source_allowlist() -> list[str]:
@@ -326,14 +405,27 @@ def _extract_blockquote_quotes(markdown: str) -> list[str]:
 
 def _source_quote_texts(blueprint: PostBlueprint) -> list[str]:
     phrases = blueprint.quotable_phrases or []
+    expected_vendors = _expected_quote_vendors(blueprint)
+    candidate_vendors = {
+        str(item.get("vendor") or "").strip()
+        for item in phrases
+        if isinstance(item, dict) and str(item.get("vendor") or "").strip()
+    }
     out: list[str] = []
     seen: set[str] = set()
     for item in phrases:
         if not isinstance(item, dict):
             continue
+        item_vendor = str(item.get("vendor") or "").strip()
+        if expected_vendors and item_vendor and item_vendor.lower() not in expected_vendors:
+            continue
         for key in ("phrase", "text", "quote", "best_quote"):
             value = str(item.get(key) or "").strip()
             if not value:
+                continue
+            if expected_vendors and _quote_mentions_unexpected_vendor(
+                value, expected_vendors, candidate_vendors,
+            ):
                 continue
             marker = _normalize_quote_text(value)
             if not marker or marker in seen:
@@ -342,6 +434,43 @@ def _source_quote_texts(blueprint: PostBlueprint) -> list[str]:
             out.append(value)
             break
     return out
+
+
+def _expected_quote_vendors(blueprint: PostBlueprint) -> set[str]:
+    data_context = blueprint.data_context or {}
+    expected: set[str] = set()
+    for key in ("vendor", "vendor_a", "vendor_b", "from_vendor", "to_vendor"):
+        value = str(data_context.get(key) or "").strip().lower()
+        if value:
+            expected.add(value)
+    return expected
+
+
+def _normalized_vendor_text(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+
+
+def _quote_mentions_unexpected_vendor(
+    quote_text: str,
+    expected_vendors: set[str],
+    candidate_vendors: set[str],
+) -> bool:
+    if not expected_vendors or not candidate_vendors:
+        return False
+    normalized_quote = f" {_normalized_vendor_text(quote_text)} "
+    if not normalized_quote.strip():
+        return False
+    for vendor in candidate_vendors:
+        if not vendor:
+            continue
+        normalized_vendor = _normalized_vendor_text(vendor)
+        if not normalized_vendor:
+            continue
+        if vendor.lower() in expected_vendors:
+            continue
+        if f" {normalized_vendor} " in normalized_quote:
+            return True
+    return False
 
 
 def _quote_matches_source(quote_text: str, source_quotes: list[str]) -> bool:
@@ -507,6 +636,18 @@ def _apply_blog_quality_gate(
             warnings.append(f"title_missing_expected_vendor:{v}")
             break
 
+    body_lower = body.lower()
+    if "category winner" in body_lower or "category loser" in body_lower:
+        dc = blueprint.data_context or {}
+        if not (dc.get("category_winner") or dc.get("category_loser")):
+            blocking_issues.append("unsupported_category_outcome_assertion")
+
+    # Unsupported data claims: vendor names in claim-bearing sentences not in data
+    grounded = _build_grounded_vendor_set(blueprint)
+    unsupported = _find_unsupported_data_claims(body, grounded)
+    for claim in unsupported[:3]:
+        warnings.append(f"unsupported_data_claim:{claim}")
+
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
     report = {
         "score": score,
@@ -537,7 +678,7 @@ def _critical_quality_warnings(report: dict[str, Any]) -> list[str]:
     return [
         str(w)
         for w in (report.get("warnings", []) or [])
-        if str(w) in _CRITICAL_BLOG_WARNINGS
+        if any(str(w) == cw or str(w).startswith(cw + ":") for cw in _CRITICAL_BLOG_WARNINGS)
     ]
 
 

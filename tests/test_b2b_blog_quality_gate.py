@@ -104,6 +104,73 @@ This analysis is based on self-selected reviewers from 2026-02 to 2026-03.
     assert any(issue.startswith("missing_vendor_mentions:") for issue in report["blocking_issues"])
 
 
+def test_quality_gate_drops_quotes_from_unexpected_vendors():
+    blueprint = _build_blueprint(
+        quotes=[
+            {"phrase": "Mailchimp pricing climbed too quickly for our team", "vendor": "Mailchimp"},
+            {"phrase": "Zendesk costs kept rising without warning", "vendor": "Zendesk"},
+            {"phrase": "Intercom onboarding helped us move faster", "vendor": "Intercom"},
+        ]
+    )
+    _pad = (
+        "Mailchimp and Intercom are compared using reviewer sentiment signals "
+        "and switching context from public software reviews across platforms. "
+    ) * 120
+    content = {
+        "title": "Mailchimp vs Intercom",
+        "description": "desc",
+        "content": f"""
+## Introduction
+This analysis is based on self-selected reviewers from 2026-02 to 2026-03.
+Mailchimp and Intercom are compared using reviewer signals.
+{_pad}
+{{{{chart:head2head-bar}}}}
+
+> "Mailchimp pricing climbed too quickly for our team" -- reviewer on Reddit
+> "Zendesk costs kept rising without warning" -- reviewer on G2
+> "Intercom onboarding helped us move faster" -- reviewer on G2
+""",
+    }
+
+    cleaned, report = _apply_blog_quality_gate(blueprint, content)
+    assert report["status"] == "pass"
+    assert "Zendesk costs kept rising without warning" not in cleaned["content"]
+    assert any(item.startswith("removed_unmatched_quotes:") for item in report["fixes_applied"])
+
+
+def test_quality_gate_blocks_unsupported_category_outcome_assertion():
+    blueprint = _build_blueprint(
+        quotes=[
+            {"phrase": "Mailchimp pricing climbed too quickly for our team", "vendor": "Mailchimp"},
+            {"phrase": "Intercom onboarding helped us move faster", "vendor": "Intercom"},
+        ]
+    )
+    _pad = (
+        "Mailchimp and Intercom are compared using reviewer sentiment signals "
+        "and switching context from public software reviews across platforms. "
+    ) * 120
+    content = {
+        "title": "Mailchimp vs Intercom",
+        "description": "desc",
+        "content": f"""
+## Introduction
+This analysis is based on self-selected reviewers from 2026-02 to 2026-03.
+Mailchimp and Intercom are compared using reviewer signals.
+{_pad}
+{{{{chart:head2head-bar}}}}
+
+> "Mailchimp pricing climbed too quickly for our team" -- reviewer on Reddit
+> "Intercom onboarding helped us move faster" -- reviewer on G2
+
+The category winner in the data is HubSpot.
+""",
+    }
+
+    _, report = _apply_blog_quality_gate(blueprint, content)
+    assert report["status"] == "fail"
+    assert "unsupported_category_outcome_assertion" in (report["blocking_issues"] or [])
+
+
 def _raw_content_missing_methodology() -> str:
     filler = (
         "Mailchimp and Intercom are compared using reviewer sentiment signals, "
@@ -200,3 +267,123 @@ def test_enforce_quality_fails_when_blocking_issues_persist_after_retry(monkeypa
     assert final is None
     issues = report.get("blocking_issues") or []
     assert any("missing_vendor_mentions" in issue for issue in issues)
+
+
+# ---------------------------------------------------------------------------
+# Unsupported data claim tests
+# ---------------------------------------------------------------------------
+
+_CLAIM_PAD = (
+    "Mailchimp and Intercom are compared using reviewer sentiment signals "
+    "and switching context from public software reviews across platforms. "
+) * 120
+
+
+def _migration_blueprint() -> PostBlueprint:
+    """Blueprint with migration chart grounding WooCommerce and BigCommerce."""
+    return PostBlueprint(
+        topic_type="migration_guide",
+        slug="switch-to-shopify-2026-03",
+        suggested_title="Migration Guide: Why Teams Are Switching to Shopify",
+        tags=["shopify", "migration"],
+        data_context={
+            "vendor": "Shopify",
+            "review_period": "2026-02 to 2026-03",
+        },
+        sections=[],
+        charts=[
+            ChartSpec(
+                chart_id="sources-bar",
+                chart_type="horizontal_bar",
+                title="Where Shopify Users Come From",
+                data=[
+                    {"name": "WooCommerce", "migrations": 5},
+                    {"name": "BigCommerce", "migrations": 3},
+                ],
+            ),
+        ],
+        quotable_phrases=[
+            {"phrase": "We switched from WooCommerce after hitting scaling limits"},
+            {"phrase": "BigCommerce pricing pushed us to Shopify"},
+        ],
+    )
+
+
+def test_data_claim_flags_ungrounded_vendor():
+    """Magento is not in chart data -- claiming it as a top source is unsupported."""
+    bp = _migration_blueprint()
+    content = {
+        "title": "Switch to Shopify",
+        "description": "desc",
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_CLAIM_PAD}\n"
+            "The top migration sources include Magento and Squarespace.\n"
+            "{{chart:sources-bar}}\n"
+            '> "We switched from WooCommerce after hitting scaling limits" -- reviewer\n'
+            '> "BigCommerce pricing pushed us to Shopify" -- reviewer\n'
+        ),
+    }
+    _, report = _apply_blog_quality_gate(bp, content)
+    assert any("unsupported_data_claim" in w for w in report.get("warnings", []))
+
+
+def test_data_claim_allows_contextual_mention_without_claim_marker():
+    """BigCommerce mentioned without a claim marker should not flag."""
+    bp = _migration_blueprint()
+    content = {
+        "title": "Switch to Shopify",
+        "description": "desc",
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_CLAIM_PAD}\n"
+            "Shopify competes with Squarespace in the e-commerce space.\n"
+            "{{chart:sources-bar}}\n"
+            '> "We switched from WooCommerce after hitting scaling limits" -- reviewer\n'
+            '> "BigCommerce pricing pushed us to Shopify" -- reviewer\n'
+        ),
+    }
+    _, report = _apply_blog_quality_gate(bp, content)
+    assert not any("unsupported_data_claim" in w for w in report.get("warnings", []))
+
+
+def test_data_claim_allows_grounded_vendor_in_claim_sentence():
+    """WooCommerce IS in chart data -- claiming it as top source is fine."""
+    bp = _migration_blueprint()
+    content = {
+        "title": "Switch to Shopify",
+        "description": "desc",
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_CLAIM_PAD}\n"
+            "The top migration source is WooCommerce with 5 stories analyzed.\n"
+            "{{chart:sources-bar}}\n"
+            '> "We switched from WooCommerce after hitting scaling limits" -- reviewer\n'
+            '> "BigCommerce pricing pushed us to Shopify" -- reviewer\n'
+        ),
+    }
+    _, report = _apply_blog_quality_gate(bp, content)
+    assert not any("unsupported_data_claim" in w for w in report.get("warnings", []))
+
+
+def test_data_claim_allows_topic_vendor_in_claim():
+    """Shopify is the topic vendor -- mentioning it in data claims is fine."""
+    bp = _migration_blueprint()
+    content = {
+        "title": "Switch to Shopify",
+        "description": "desc",
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_CLAIM_PAD}\n"
+            "Data shows Shopify attracts 93 switching stories from competitors.\n"
+            "{{chart:sources-bar}}\n"
+            '> "We switched from WooCommerce after hitting scaling limits" -- reviewer\n'
+            '> "BigCommerce pricing pushed us to Shopify" -- reviewer\n'
+        ),
+    }
+    _, report = _apply_blog_quality_gate(bp, content)
+    assert not any("unsupported_data_claim" in w for w in report.get("warnings", []))
