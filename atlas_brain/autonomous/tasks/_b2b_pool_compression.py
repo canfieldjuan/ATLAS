@@ -1331,6 +1331,8 @@ def _build_metric_ledger(
         "avg_urgency": ("churn_intensity", _ALL_SURFACES),
         # Sentiment
         "recommend_ratio": ("sentiment", _ALL_SURFACES),
+        "recommend_yes": ("sentiment", _ALL_SURFACES),
+        "recommend_no": ("sentiment", _ALL_SURFACES),
         "avg_rating": ("sentiment", _ALL_SURFACES),
         "negative_review_pct": ("sentiment", _ALL_SURFACES),
         "positive_review_pct": ("sentiment", _ALL_SURFACES),
@@ -1341,14 +1343,44 @@ def _build_metric_ledger(
         "company_signal_decision_maker_count": ("decision_maker_signals", _INTERNAL),
         # Displacement
         "displacement_mention_count": ("displacement", _ALL_SURFACES),
-        # Temporal
+        "total_explicit_switches": ("displacement", _ALL_SURFACES),
+        "total_active_evaluations": ("displacement", _ALL_SURFACES),
+        "total_flow_mentions": ("displacement", _INTERNAL),
+        # Category
+        "vendor_count": ("category_dynamics", _INTERNAL),
+        "displacement_flow_count": ("category_dynamics", _INTERNAL),
+        "regime_confidence": ("category_dynamics", _INTERNAL),
+        "regime_avg_churn_velocity": ("category_dynamics", _INTERNAL),
+        "regime_avg_price_pressure": ("category_dynamics", _INTERNAL),
+        # Temporal signals
         "keyword_spike_count": ("temporal_spikes", _INTERNAL),
+        "evaluation_deadline_signals": ("temporal_signals", _INTERNAL),
+        "contract_end_signals": ("temporal_signals", _INTERNAL),
+        "renewal_signals": ("temporal_signals", _INTERNAL),
+        "budget_cycle_signals": ("temporal_signals", _INTERNAL),
+        # Temporal sentiment
+        "sentiment_declining": ("temporal_sentiment", _INTERNAL),
+        "sentiment_stable": ("temporal_sentiment", _INTERNAL),
+        "sentiment_improving": ("temporal_sentiment", _INTERNAL),
+        "sentiment_total": ("temporal_sentiment", _INTERNAL),
+        "declining_pct": ("temporal_sentiment", _INTERNAL),
+        "improving_pct": ("temporal_sentiment", _INTERNAL),
+        # Segment budget
+        "price_increase_rate": ("segment_budget", _INTERNAL),
+        "price_increase_count": ("segment_budget", _INTERNAL),
+        "annual_spend_signal_count": ("segment_budget", _INTERNAL),
+        "price_per_seat_signal_count": ("segment_budget", _INTERNAL),
         # Account signals
         "company_signal_count": ("account_signals", _ALL_SURFACES),
         "company_signal_high_urgency_count": ("account_signals", _INTERNAL),
         "company_signal_evaluation_count": ("account_signals", _INTERNAL),
         "company_signal_active_purchase_count": ("account_signals", _INTERNAL),
         "segment_active_eval_signal_count": ("account_signals", _INTERNAL),
+        # Account summary
+        "total_accounts": ("account_signals", _ALL_SURFACES),
+        "decision_maker_count": ("account_signals", _INTERNAL),
+        "high_intent_count": ("account_signals", _INTERNAL),
+        "active_eval_signal_count": ("account_signals", _INTERNAL),
     }
 
     ledger: list[dict[str, Any]] = []
@@ -1366,6 +1398,8 @@ def _build_metric_ledger(
             scope_category, surfaces = "strength_mentions", _INTERNAL
         elif agg.label.startswith("segment_reach_"):
             scope_category, surfaces = "segment_reach", _INTERNAL
+        elif agg.label.startswith("segment_"):
+            scope_category, surfaces = "segment_metrics", _INTERNAL
         else:
             continue
         ledger.append({
