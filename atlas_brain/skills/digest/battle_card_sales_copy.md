@@ -71,6 +71,7 @@ A JSON object with:
 - `incumbent_strengths` (if present): evidence-backed areas where the vendor genuinely excels, with mention counts, trends, and customer quotes. Use these to ground objection handler `acknowledge` fields in real strengths rather than guessing what the prospect might defend.
 - `active_evaluation_deadlines` (if present): active timing signals that may indicate near-term buying windows
 - `falsification_conditions` / `uncertainty_sources` (if present): conditions that would weaken the churn thesis -- use them to calibrate claim strength
+- `metric_ledger` (if present): list of scoped metric entries, each with `label`, `value`, `scope`, and `wording`. Use `wording` verbatim when citing a metric in copy -- do not rephrase the number or change its scope. Valid scopes: `all_reviews` (whole review corpus), `pricing_mentions` (only reviews mentioning pricing), `decision_makers` (decision-maker subset), `active_eval_accounts` (accounts in active evaluation), `segment_sample` (a specific segment slice), `budget_data` (budget-signal subset). Never transfer a metric from one scope to another in copy -- e.g., do not use a `pricing_mentions` count as if it represents `all_reviews`.
 - `locked_facts` (if present): authoritative structured facts that synthesis must not contradict:
   - `vendor`
   - `archetype`
@@ -118,7 +119,18 @@ A JSON object with:
       "key_message": "The one sentence this rep should lead with. Must connect to a real weakness.",
       "timing": "When to run this play. E.g., 'Q2 contract renewals', 'After support incident', 'During annual planning'"
     }
-  ]
+  ],
+
+  "why_they_stay": {
+    "summary": "1-2 sentences on the real incumbent strengths keeping accounts in place. Be honest -- this is for the rep's internal prep, not marketing copy. Knowing what the vendor does well makes the attack more credible.",
+    "strengths": [
+      {
+        "area": "The specific strength area. E.g., 'Integrations', 'Support quality', 'Ease of use'",
+        "evidence": "What the data shows -- mention count, reviewer sentiment, or specific quote fragment. Ground this in retention_signals or incumbent_strengths from the input.",
+        "how_to_neutralize": "How a rep positions when the prospect defends this strength. Not 'we are better' -- reframe when the strength stops mattering. E.g., 'Acknowledge the integration depth, then redirect to the cost of maintaining those integrations under the new pricing tier.'"
+      }
+    ]
+  }
 }
 ```
 
@@ -198,6 +210,7 @@ A JSON object with:
 - If `category_council` is present, use its `market_regime`, `conclusion`, and `key_insights` to explain the broader market backdrop in `competitive_landscape.vulnerability_window`. Use the council `winner` and `loser` only when they are consistent with `locked_facts.allowed_opponents`.
 - If `resource_asymmetry` is present, use `resource_advantage` to inform the `talk_track` mid-call pivot and `recommended_plays` targeting. If the target vendor lacks the resource advantage, this strengthens the urgency angle.
 - If `ecosystem_context` is present and `market_structure` indicates consolidation or fragmentation, reference this in `competitive_landscape.vulnerability_window` to explain WHY the market is moving.
+- `why_they_stay` is always required. Derive `strengths` from `retention_signals` and `incumbent_strengths` when present -- use the top 1-3 areas by mention count or confidence. If neither field is in the input, infer from high `positive_review_pct`, `recommend_ratio > 0.75`, or the highest-scoring non-pain review themes visible in `vendor_weaknesses` (areas with low pain score). Do not fabricate strengths with no signal in the input; if no evidence exists, produce one item with `area: "Established user base"` and honest low-confidence wording.
 - If `validation_feedback` is present, treat it as a hard correction list. Revise `prior_attempt` to remove every flagged issue, keep supported claims, and return clean JSON only.
 - If `prior_attempt` is raw text instead of JSON, salvage only the supported content, map it into the required schema, and discard unsupported or malformed fragments.
 

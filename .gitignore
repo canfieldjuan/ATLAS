@@ -91,3 +91,4 @@ requirements.freeze.bak
 *.key
 *.pem
 .claude/
+.vercel

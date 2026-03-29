@@ -724,6 +724,28 @@ def _render_vendor_deep_dive(
                 color = _score_color(float(val)) if metric_key == "churn_pressure_score" else None
                 pdf.metric_row(label, _safe_str(val), color)
 
+        # Reasoning Intelligence
+        archetype = entry.get("archetype")
+        if archetype:
+            pdf.section_title("Reasoning Intelligence")
+            label = _safe_str(archetype).replace("_", " ").title()
+            conf = entry.get("archetype_confidence")
+            conf_str = f" ({conf:.0%})" if isinstance(conf, (int, float)) else ""
+            pdf.metric_row("Archetype", f"{label}{conf_str}")
+            risk_level = entry.get("reasoning_risk_level") or entry.get("risk_level")
+            if risk_level:
+                pdf.metric_row("Reasoning Risk Level", _safe_str(risk_level).upper())
+            summary = entry.get("reasoning_executive_summary") or entry.get("reasoning_summary")
+            if summary:
+                pdf.body_text(_latin1_safe(str(summary)[:600]))
+            falsifications = _safe_list(entry.get("falsification_conditions"))
+            if falsifications:
+                pdf.section_title("Falsification Conditions")
+                for fc in falsifications[:3]:
+                    txt = fc.get("condition", fc) if isinstance(fc, dict) else _safe_str(fc)
+                    if txt:
+                        pdf.body_text(_latin1_safe(f"  \u2022 {str(txt)[:200]}"))
+
         # Customer profile
         profile = entry.get("customer_profile")
         if isinstance(profile, dict):

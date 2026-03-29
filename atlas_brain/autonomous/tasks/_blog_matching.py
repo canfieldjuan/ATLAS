@@ -46,6 +46,42 @@ _PIPELINE_TOPIC_TYPES = {
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+# Maps role keyword fragments → {topic_type: score_boost}.
+# Higher boost = stronger preference for that topic type for this role.
+_ROLE_TOPIC_BOOSTS: list[tuple[tuple[str, ...], dict[str, int]]] = [
+    # Finance, procurement, budget holders → pricing content resonates most
+    (("cfo", "finance", "controller", "procurement", "budget", "treasurer", "accounting"),
+     {"pricing_reality_check": 3, "churn_report": 1}),
+    # Technical buyers → migration feasibility is the key concern
+    (("cto", "engineer", "developer", "architect", "devops", "platform", "infrastructure", "technical"),
+     {"migration_guide": 3, "vendor_deep_dive": 1}),
+    # Operations/IT leadership → churn and market context
+    (("operations", "coo", "director of ops", "it director", "it manager"),
+     {"churn_report": 2, "market_landscape": 1}),
+    # Product/marketing → market landscape and best-fit content
+    (("cmo", "marketing", "product", "growth", "demand gen"),
+     {"market_landscape": 2, "best_fit_guide": 2}),
+    # Sales/BD → competitive comparison assets
+    (("sales", "business development", "bd", "revenue", "account executive", "ae"),
+     {"vendor_showdown": 2, "vendor_alternative": 2}),
+    # C-suite generalists → deep dives and landscape
+    (("ceo", "president", "founder", "owner", "vp", "vice president", "svp", "evp"),
+     {"vendor_deep_dive": 2, "market_landscape": 2}),
+]
+
+
+def _role_topic_boosts(contact_role: str | None) -> dict[str, int]:
+    """Return ``{topic_type: boost}`` for a contact role string."""
+    if not contact_role:
+        return {}
+    role_lower = contact_role.lower()
+    boosts: dict[str, int] = {}
+    for keywords, topic_boosts in _ROLE_TOPIC_BOOSTS:
+        if any(kw in role_lower for kw in keywords):
+            for topic, pts in topic_boosts.items():
+                boosts[topic] = max(boosts.get(topic, 0), pts)
+    return boosts
+
 
 def _tokenize_text(value: str) -> list[str]:
     return _WORD_RE.findall((value or "").lower())
@@ -94,6 +130,7 @@ async def fetch_relevant_blog_posts(
     brand_names: list[str] | None = None,
     pain_categories: list[str] | None = None,
     alternative_vendors: list[str] | None = None,
+    contact_role: str | None = None,
     include_drafts: bool = False,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
@@ -112,6 +149,8 @@ async def fetch_relevant_blog_posts(
         alternative_vendors: Alternative vendor names the target is
             evaluating.  Matches against ``data_context.vendor_b`` in
             showdown posts.
+        contact_role: Contact's job title/role.  Boosts topic types that
+            resonate with the buyer persona (e.g. CFO → pricing_reality_check).
         include_drafts: When true, allow ``draft`` posts as a fallback when
             no published matches exist.
         limit: Max posts to return (default 3).
@@ -165,6 +204,7 @@ async def fetch_relevant_blog_posts(
     cat_lower = (category or "").lower()
     pain_lower = [p.lower() for p in (pain_categories or []) if p]
     alt_lower = [a.lower() for a in (alternative_vendors or []) if a]
+    role_boosts = _role_topic_boosts(contact_role)
 
     # Score each post
     allowed_statuses = set(statuses)
@@ -204,10 +244,12 @@ async def fetch_relevant_blog_posts(
                 score += 3
                 break  # one name match is enough
 
-        # Pain category match: post covers the same pain the campaign targets (+4)
+        # Pain category match: post covers the same pain the campaign targets.
         # Check topic_type, tags, title, slug, and pain-specific data_context
         # fields -- NOT the entire data_context blob (avoids false positives
         # from vendor names or categories containing pain keywords).
+        # Scoring: +4 first matched pain, +2 second, +1 each additional --
+        # rewards breadth while keeping top-priority pain as the dominant signal.
         if pain_lower:
             pain_haystack_parts = [title, slug, tags_text]
             # Extract pain-specific fields from data_context
@@ -219,10 +261,11 @@ async def fetch_relevant_blog_posts(
             # topic_type itself is a pain signal (pricing_reality_check)
             pain_haystack_parts.append(row["topic_type"] or "")
             pain_haystack = " ".join(pain_haystack_parts)
+            pain_match_count = 0
             for pain in pain_lower:
                 if len(pain) >= 3 and pain in pain_haystack:
-                    score += 4
-                    break
+                    score += 4 if pain_match_count == 0 else (2 if pain_match_count == 1 else 1)
+                    pain_match_count += 1
 
         # Alternative vendor match: post compares with the vendor being evaluated (+5)
         if alt_lower:
@@ -235,6 +278,11 @@ async def fetch_relevant_blog_posts(
                 if alt == vendor_b or _contains_term_as_tokens(alt_haystack, alt):
                     score += 5
                     break
+
+        # Role-based topic boost: e.g. CFO contact → pricing_reality_check +3
+        if role_boosts:
+            topic_type = str(row.get("topic_type") or "").lower()
+            score += role_boosts.get(topic_type, 0)
 
         if score > 0:
             status_rank = 1 if status == "published" else 0

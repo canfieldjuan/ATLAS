@@ -973,3 +973,85 @@ class TestGetDisplacementHistorySuppression:
         assert "dc.status = 'applied'" in sql, (
             "suppression predicate must check status = 'applied'"
         )
+
+
+@pytest.mark.asyncio
+class TestDraftCampaignBlogIntegration:
+    """draft_campaign should fetch blog posts, store them in metadata, and return them."""
+
+    _BLOG_POST = {"title": "Why Users Leave Zendesk", "url": "https://example.com/blog/zendesk", "topic_type": "vendor_alternative"}
+
+    async def _run_draft_campaign(self, pool, blog_posts):
+        from atlas_brain.mcp.b2b.write_intelligence import draft_campaign
+
+        campaign_row = {"id": uuid4(), "created_at": datetime(2026, 3, 28, tzinfo=timezone.utc)}
+        pool.fetchrow = AsyncMock(return_value=campaign_row)
+
+        async def _fake_blogs(*args, **kwargs):
+            return blog_posts
+
+        with _patch_pool(pool):
+            with patch("atlas_brain.mcp.b2b.write_intelligence._get_blog_matcher", return_value=_fake_blogs):
+                result_json = await draft_campaign(
+                    company_name="Acme Corp",
+                    vendor_name="Zendesk",
+                    channel="email_cold",
+                    subject="Why teams leave Zendesk",
+                    body="Hi, I noticed your team is evaluating Zendesk alternatives.",
+                    llm_model="claude-sonnet-4-6",
+                )
+        return json.loads(result_json)
+
+    async def test_blog_posts_included_in_response_when_found(self):
+        pool = _mock_pool()
+        result = await self._run_draft_campaign(pool, [self._BLOG_POST])
+
+        assert result["success"] is True
+        assert "blog_posts" in result
+        assert result["blog_posts"] == [self._BLOG_POST]
+
+    async def test_blog_posts_absent_from_response_when_none_found(self):
+        pool = _mock_pool()
+        result = await self._run_draft_campaign(pool, [])
+
+        assert result["success"] is True
+        assert "blog_posts" not in result
+
+    async def test_blog_posts_stored_in_metadata_jsonb(self):
+        pool = _mock_pool()
+        await self._run_draft_campaign(pool, [self._BLOG_POST])
+
+        insert_call = pool.fetchrow.call_args
+        sql = insert_call[0][0]
+        args = insert_call[0][1:]
+        # metadata is the 10th positional arg ($10::jsonb)
+        assert "metadata" in sql.lower()
+        metadata_arg = next(
+            (a for a in args if isinstance(a, str) and "blog_posts" in a), None
+        )
+        assert metadata_arg is not None
+        stored = json.loads(metadata_arg)
+        assert stored["blog_posts"] == [self._BLOG_POST]
+
+    async def test_blog_fetch_failure_does_not_abort_campaign_creation(self):
+        pool = _mock_pool()
+        campaign_row = {"id": uuid4(), "created_at": datetime(2026, 3, 28, tzinfo=timezone.utc)}
+        pool.fetchrow = AsyncMock(return_value=campaign_row)
+
+        async def _failing_blogs(*args, **kwargs):
+            raise RuntimeError("DB connection lost")
+
+        from atlas_brain.mcp.b2b.write_intelligence import draft_campaign
+        with _patch_pool(pool):
+            with patch("atlas_brain.mcp.b2b.write_intelligence._get_blog_matcher", return_value=_failing_blogs):
+                result_json = await draft_campaign(
+                    company_name="Acme Corp",
+                    vendor_name="Zendesk",
+                    channel="email_cold",
+                    subject="Subject",
+                    body="Body",
+                    llm_model="claude-sonnet-4-6",
+                )
+        result = json.loads(result_json)
+        assert result["success"] is True
+        assert "blog_posts" not in result

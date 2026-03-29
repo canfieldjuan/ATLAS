@@ -781,3 +781,103 @@ class TestRedditProfile:
         result = resolve_review(review, vendor_name="Terraform Cloud")
         assert result.resolved_company_name == "HashiCorp"
         assert result.confidence_label in ("medium", "high")
+
+
+# -- Founder Pattern False Positive Guards ------------------------------------
+
+
+class TestFounderPatternGuards:
+
+    def test_founder_real_company(self):
+        # "Founder, Acme Inc" — valid company name
+        sig = _extract_from_bio_regex("Founder, Acme Inc", "bio")
+        assert sig is not None
+        assert sig.value == "Acme Inc"
+        assert sig.signal_type == "founder_of_company"
+
+    def test_founder_and_conjunction_rejected(self):
+        # "Founder, and like many of you" — sentence continuation, not a company
+        sig = _extract_from_bio_regex("Founder, and like many of you I use this", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("and "))
+
+    def test_founder_i_am_rejected(self):
+        # "Founder, I've been using this product" — pronoun start
+        sig = _extract_from_bio_regex("Founder, I've been using this product for years", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("i'"))
+
+    def test_founder_trying_to_improve_rejected(self):
+        # "Founder, and i'm trying to improve that" — false positive from previous run
+        sig = _extract_from_bio_regex(
+            "Co-founder, and I'm trying to improve that metric", "bio"
+        )
+        assert sig is None or (sig.value and "trying" not in sig.value.lower())
+
+    def test_owner_we_rejected(self):
+        # "Owner, we switched from Slack" — "we" is a pronoun, not a company
+        sig = _extract_from_bio_regex("Owner, we switched from Slack last year", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("we "))
+
+    def test_founder_the_rejected(self):
+        # "Founder, the company was acquired" — article start
+        sig = _extract_from_bio_regex("Founder, the company was acquired", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("the "))
+
+    def test_founder_many_rejected(self):
+        # "Founder, many of you know me" — "many" is in reject lookahead
+        sig = _extract_from_bio_regex("Founder, many of you know me", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("many"))
+
+
+# -- Word Count Cap -----------------------------------------------------------
+
+
+class TestWordCountCap:
+
+    def test_long_phrase_rejected(self):
+        # 7-word phrase should be empty after clean
+        assert _clean_extracted_name("and like many of you out there") == ""
+
+    def test_six_word_limit_exact(self):
+        # Exactly 6 words — allowed
+        result = _clean_extracted_name("Very Long Company Name Inc Ltd")
+        # Should NOT be empty (6 words)
+        assert result != ""
+
+    def test_seven_words_rejected(self):
+        # 7 words — rejected
+        result = _clean_extracted_name("Very Long Company Name Inc Ltd Corp")
+        assert result == ""
+
+    def test_short_name_passes(self):
+        assert _clean_extracted_name("Stripe") == "Stripe"
+
+    def test_three_word_company_passes(self):
+        assert _clean_extracted_name("International Business Machines") == "International Business Machines"
+
+
+# -- Handle-at-Company Sentence Fragment Guards --------------------------------
+
+
+class TestHandleAtCompanyGuards:
+
+    def test_handle_at_real_company(self):
+        # "dev @ Stripe" — valid
+        sig = _extract_from_bio_regex("dev @ Stripe", "bio")
+        assert sig is not None
+        assert "Stripe" in sig.value
+
+    def test_handle_at_conjunction_rejected(self):
+        # "working @ all the things" — "all" is in reject lookahead
+        sig = _extract_from_bio_regex("working @ all the things I do", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("all "))
+
+    def test_handle_at_mentioned_rejected(self):
+        # "freelancer @ mentioned on a card" — past-tense verb start, not a company
+        sig = _extract_from_bio_regex("freelancer @ mentioned on a card project", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("mentioned"))
+
+    def test_handle_at_many_rejected(self):
+        # "freelancer @ many companies" — "many" in reject lookahead; "freelancer" is
+        # not a title_at_company keyword so handle_at_company fires.
+        sig = _extract_from_bio_regex("freelancer @ many companies and startups", "bio")
+        assert sig is None or (sig.value and not sig.value.lower().startswith("many"))

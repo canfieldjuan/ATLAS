@@ -941,13 +941,31 @@ async def get_context(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    transport = "sse" if "--sse" in sys.argv else "stdio"
-    if transport == "sse":
+    if "--sse" in sys.argv:
+        import anyio
+        import uvicorn
         from ..config import settings
-        from .auth import run_sse_with_auth
+        from mcp.server.transport_security import TransportSecuritySettings
 
         mcp.settings.host = settings.mcp.host
         mcp.settings.port = settings.mcp.memory_port
-        run_sse_with_auth(mcp, settings.mcp.host, settings.mcp.memory_port)
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+        # Use Streamable HTTP transport (required by Claude online)
+        # Falls back to legacy SSE for older clients automatically
+        app = mcp.streamable_http_app()
+
+        async def _serve():
+            config = uvicorn.Config(
+                app,
+                host=settings.mcp.host,
+                port=settings.mcp.memory_port,
+                log_level="info",
+            )
+            server = uvicorn.Server(config)
+            await server.serve()
+
+        anyio.run(_serve)
     else:
         mcp.run(transport="stdio")

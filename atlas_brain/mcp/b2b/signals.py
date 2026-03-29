@@ -62,6 +62,8 @@ async def list_churn_signals(
             SELECT vendor_name, product_category, total_reviews,
                    churn_intent_count, avg_urgency_score, avg_rating_normalized,
                    nps_proxy, price_complaint_rate, decision_maker_churn_rate,
+                   archetype, archetype_confidence, reasoning_risk_level,
+                   keyword_spike_count, insider_signal_count,
                    last_computed_at
             FROM b2b_churn_signals
             {where}
@@ -82,6 +84,11 @@ async def list_churn_signals(
                 "nps_proxy": float(r["nps_proxy"]) if r["nps_proxy"] is not None else None,
                 "price_complaint_rate": float(r["price_complaint_rate"]) if r["price_complaint_rate"] is not None else None,
                 "decision_maker_churn_rate": float(r["decision_maker_churn_rate"]) if r["decision_maker_churn_rate"] is not None else None,
+                "archetype": r["archetype"],
+                "archetype_confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] is not None else None,
+                "reasoning_risk_level": r["reasoning_risk_level"],
+                "keyword_spike_count": r["keyword_spike_count"],
+                "insider_signal_count": r["insider_signal_count"],
                 "last_computed_at": r["last_computed_at"],
             }
             for r in rows
@@ -169,6 +176,24 @@ async def get_churn_signal(
             "confidence_score": float(row["confidence_score"]) if row["confidence_score"] is not None else 0,
             "last_computed_at": row["last_computed_at"],
             "created_at": row["created_at"],
+            # Reasoning
+            "archetype": row["archetype"],
+            "archetype_confidence": float(row["archetype_confidence"]) if row["archetype_confidence"] is not None else None,
+            "reasoning_mode": row["reasoning_mode"],
+            "reasoning_risk_level": row["reasoning_risk_level"],
+            "reasoning_executive_summary": row["reasoning_executive_summary"],
+            "reasoning_key_signals": _safe_json(row["reasoning_key_signals"]),
+            "reasoning_uncertainty_sources": _safe_json(row["reasoning_uncertainty_sources"]),
+            "falsification_conditions": _safe_json(row["falsification_conditions"]),
+            # Insider signals
+            "insider_signal_count": row["insider_signal_count"],
+            "insider_org_health_summary": row["insider_org_health_summary"],
+            "insider_talent_drain_rate": float(row["insider_talent_drain_rate"]) if row["insider_talent_drain_rate"] is not None else None,
+            "insider_quotable_evidence": _safe_json(row["insider_quotable_evidence"]),
+            # Keyword / temporal trends
+            "keyword_spike_count": row["keyword_spike_count"],
+            "keyword_spike_keywords": _safe_json(row["keyword_spike_keywords"]),
+            "keyword_trend_summary": row["keyword_trend_summary"],
         }
         signal = await _apply_field_overrides(pool, "churn_signal", str(row["id"]), signal)
 
@@ -201,43 +226,65 @@ async def list_high_intent_companies(
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
         conditions = [
-            "enrichment_status = 'enriched'",
-            "(enrichment->>'urgency_score')::numeric >= $1",
-            "reviewer_company IS NOT NULL AND reviewer_company != ''",
-            "enriched_at > NOW() - make_interval(days => $2)",
+            "r.enrichment_status = 'enriched'",
+            "(r.enrichment->>'urgency_score')::numeric >= $1",
+            "r.reviewer_company IS NOT NULL AND r.reviewer_company != ''",
+            "r.enriched_at > NOW() - make_interval(days => $2)",
         ]
         params: list = [min_urgency, window_days]
         idx = 3
 
         if vendor_name:
-            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+            conditions.append(f"r.vendor_name ILIKE '%' || ${idx} || '%'")
             params.append(vendor_name)
             idx += 1
 
-        conditions.append(_suppress_predicate('review'))
+        conditions.append(_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='r.vendor_name'))
         capped = min(limit, 100)
         params.append(capped)
         where = " AND ".join(conditions)
 
         rows = await pool.fetch(
             f"""
-            SELECT reviewer_company, vendor_name, product_category,
-                   enrichment->'reviewer_context'->>'role_level' AS role_level,
-                   (enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
-                   (enrichment->>'urgency_score')::numeric AS urgency,
-                   enrichment->>'pain_category' AS pain,
-                   enrichment->'competitors_mentioned' AS alternatives,
-                   enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
-                   CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                    THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
-                   enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
-                   enrichment->'timeline'->>'contract_end' AS contract_end,
-                   enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
-                   reviewer_title, company_size_raw,
-                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-            FROM b2b_reviews
+            SELECT
+                COALESCE(ar.resolved_company_name, r.reviewer_company) AS company,
+                r.reviewer_company AS raw_company,
+                ar.confidence_label AS resolution_confidence,
+                r.vendor_name, r.product_category,
+                r.enrichment->'reviewer_context'->>'role_level' AS role_level,
+                (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
+                (r.enrichment->>'urgency_score')::numeric AS urgency,
+                r.enrichment->>'pain_category' AS pain,
+                r.enrichment->'competitors_mentioned' AS alternatives,
+                r.enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
+                CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                 THEN (r.enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+                r.enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
+                r.enrichment->'timeline'->>'contract_end' AS contract_end,
+                r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+                r.reviewer_title, r.company_size_raw,
+                COALESCE(poc.industry, r.reviewer_industry,
+                         r.enrichment->'reviewer_context'->>'industry') AS industry,
+                poc.employee_count AS verified_employee_count,
+                poc.country AS company_country,
+                poc.domain AS company_domain,
+                poc.annual_revenue_range AS revenue_range,
+                poc.founded_year,
+                poc.total_funding,
+                poc.latest_funding_stage,
+                poc.headcount_growth_6m,
+                poc.headcount_growth_12m,
+                poc.headcount_growth_24m,
+                poc.publicly_traded_exchange,
+                poc.publicly_traded_symbol,
+                poc.short_description AS company_description
+            FROM b2b_reviews r
+            LEFT JOIN b2b_account_resolution ar
+                ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+            LEFT JOIN prospect_org_cache poc
+                ON poc.company_name_norm = ar.normalized_company_name
             WHERE {where}
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC
+            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
             LIMIT ${idx}
             """,
             *params,
@@ -250,7 +297,9 @@ async def list_high_intent_companies(
             except (ValueError, TypeError):
                 urgency = 0
             companies.append({
-                "company": r["reviewer_company"],
+                "company": r["company"],
+                "raw_company": r["raw_company"],
+                "resolution_confidence": r["resolution_confidence"],
                 "vendor": r["vendor_name"],
                 "category": r["product_category"],
                 "role_level": r["role_level"],
@@ -266,6 +315,19 @@ async def list_high_intent_companies(
                 "reviewer_title": r["reviewer_title"],
                 "company_size": r["company_size_raw"],
                 "industry": r["industry"],
+                "verified_employee_count": r["verified_employee_count"],
+                "company_country": r["company_country"],
+                "company_domain": r["company_domain"],
+                "revenue_range": r["revenue_range"],
+                "founded_year": r["founded_year"],
+                "total_funding": r["total_funding"],
+                "funding_stage": r["latest_funding_stage"],
+                "headcount_growth_6m": float(r["headcount_growth_6m"]) if r["headcount_growth_6m"] is not None else None,
+                "headcount_growth_12m": float(r["headcount_growth_12m"]) if r["headcount_growth_12m"] is not None else None,
+                "headcount_growth_24m": float(r["headcount_growth_24m"]) if r["headcount_growth_24m"] is not None else None,
+                "publicly_traded": r["publicly_traded_exchange"] or None,
+                "ticker": r["publicly_traded_symbol"] or None,
+                "company_description": r["company_description"],
             })
 
         return json.dumps({"companies": companies, "count": len(companies)}, default=str)
@@ -322,18 +384,36 @@ async def get_vendor_profile(vendor_name: str) -> str:
         # Top 5 high-intent companies
         hi_rows = await pool.fetch(
             f"""
-            SELECT reviewer_company,
-                   (enrichment->>'urgency_score')::numeric AS urgency,
-                   enrichment->>'pain_category' AS pain,
-                   reviewer_title, company_size_raw,
-                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-            FROM b2b_reviews
-            WHERE vendor_name ILIKE '%' || $1 || '%'
-              AND enrichment_status = 'enriched'
-              AND (enrichment->>'urgency_score')::numeric >= 7
-              AND reviewer_company IS NOT NULL AND reviewer_company != ''
-              AND {_suppress_predicate('review')}
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC
+            SELECT COALESCE(ar.resolved_company_name, r.reviewer_company) AS reviewer_company,
+                   (r.enrichment->>'urgency_score')::numeric AS urgency,
+                   r.enrichment->>'pain_category' AS pain,
+                   r.reviewer_title, r.company_size_raw,
+                   COALESCE(poc.industry, r.reviewer_industry,
+                            r.enrichment->'reviewer_context'->>'industry') AS industry,
+                   poc.employee_count AS verified_employee_count,
+                   poc.country AS company_country,
+                   poc.domain AS company_domain,
+                   poc.annual_revenue_range AS revenue_range,
+                   poc.founded_year,
+                   poc.total_funding,
+                   poc.latest_funding_stage,
+                   poc.headcount_growth_6m,
+                   poc.headcount_growth_12m,
+                   poc.headcount_growth_24m,
+                   poc.publicly_traded_exchange,
+                   poc.publicly_traded_symbol,
+                   poc.short_description AS company_description
+            FROM b2b_reviews r
+            LEFT JOIN b2b_account_resolution ar
+                ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+            LEFT JOIN prospect_org_cache poc
+                ON poc.company_name_norm = ar.normalized_company_name
+            WHERE r.vendor_name ILIKE '%' || $1 || '%'
+              AND r.enrichment_status = 'enriched'
+              AND (r.enrichment->>'urgency_score')::numeric >= 7
+              AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
+              AND {_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='r.vendor_name')}
+            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
             LIMIT 5
             """,
             vname,
@@ -375,6 +455,24 @@ async def get_vendor_profile(vendor_name: str) -> str:
                 "timeline_summary": _safe_json(signal_row["timeline_summary"]),
                 "confidence_score": float(signal_row["confidence_score"]) if signal_row["confidence_score"] is not None else 0,
                 "last_computed_at": signal_row["last_computed_at"],
+                # Reasoning
+                "archetype": signal_row["archetype"],
+                "archetype_confidence": float(signal_row["archetype_confidence"]) if signal_row["archetype_confidence"] is not None else None,
+                "reasoning_mode": signal_row["reasoning_mode"],
+                "reasoning_risk_level": signal_row["reasoning_risk_level"],
+                "reasoning_executive_summary": signal_row["reasoning_executive_summary"],
+                "reasoning_key_signals": _safe_json(signal_row["reasoning_key_signals"]),
+                "reasoning_uncertainty_sources": _safe_json(signal_row["reasoning_uncertainty_sources"]),
+                "falsification_conditions": _safe_json(signal_row["falsification_conditions"]),
+                # Insider signals
+                "insider_signal_count": signal_row["insider_signal_count"],
+                "insider_org_health_summary": signal_row["insider_org_health_summary"],
+                "insider_talent_drain_rate": float(signal_row["insider_talent_drain_rate"]) if signal_row["insider_talent_drain_rate"] is not None else None,
+                "insider_quotable_evidence": _safe_json(signal_row["insider_quotable_evidence"]),
+                # Keyword / temporal trends
+                "keyword_spike_count": signal_row["keyword_spike_count"],
+                "keyword_spike_keywords": _safe_json(signal_row["keyword_spike_keywords"]),
+                "keyword_trend_summary": signal_row["keyword_trend_summary"],
             }
             sig = await _apply_field_overrides(pool, "churn_signal", str(signal_row["id"]), sig)
             profile["churn_signal"] = sig
@@ -395,6 +493,19 @@ async def get_vendor_profile(vendor_name: str) -> str:
                 "title": r["reviewer_title"],
                 "company_size": r["company_size_raw"],
                 "industry": r["industry"],
+                "verified_employee_count": r["verified_employee_count"],
+                "company_country": r["company_country"],
+                "company_domain": r["company_domain"],
+                "revenue_range": r["revenue_range"],
+                "founded_year": r["founded_year"],
+                "total_funding": r["total_funding"],
+                "funding_stage": r["latest_funding_stage"],
+                "headcount_growth_6m": float(r["headcount_growth_6m"]) if r["headcount_growth_6m"] is not None else None,
+                "headcount_growth_12m": float(r["headcount_growth_12m"]) if r["headcount_growth_12m"] is not None else None,
+                "headcount_growth_24m": float(r["headcount_growth_24m"]) if r["headcount_growth_24m"] is not None else None,
+                "publicly_traded": r["publicly_traded_exchange"] or None,
+                "ticker": r["publicly_traded_symbol"] or None,
+                "company_description": r["company_description"],
             }
             for r in hi_rows
         ]

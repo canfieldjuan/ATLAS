@@ -66,7 +66,9 @@ export default function ReportDetail() {
   const badgeColor = REPORT_TYPE_COLORS[report.report_type] ?? 'bg-slate-500/20 text-slate-400'
   const title = ['vendor_comparison', 'account_comparison'].includes(report.report_type) && report.vendor_filter && report.category_filter
     ? `${report.vendor_filter} vs ${report.category_filter}`
-    : (report.vendor_filter ?? report.report_type.replace(/_/g, ' '))
+    : report.report_type === 'challenger_brief' && report.vendor_filter && report.category_filter
+      ? `${report.vendor_filter} → ${report.category_filter}`
+      : (report.vendor_filter ?? report.report_type.replace(/_/g, ' '))
 
   // intelligence_data can be an object (keyed fields) or an array (vendor/edge rows)
   const rawIntel = report.intelligence_data

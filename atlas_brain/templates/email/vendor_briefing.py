@@ -175,6 +175,9 @@ def render_vendor_briefing_html(briefing: dict) -> str:
         evidence (list of quote strings),
         named_accounts (list of {company, urgency}),
         top_feature_gaps (list of strings),
+        timing_summary (str -- when to reach out),
+        buyer_profiles (list of {role_type, buying_stage, review_count, avg_urgency}),
+        cross_vendor_conclusions (list of {analysis_type, vendors, summary, confidence}),
         booking_url, report_date
     """
     vendor = _safe(briefing.get("vendor_name"), "Unknown Vendor")
@@ -441,6 +444,208 @@ def render_vendor_briefing_html(briefing: dict) -> str:
               </td></tr>
             </table>"""
 
+    # Section 8b2: segment intelligence
+    seg_intel = briefing.get("segment_intelligence") or {}
+    top_segments = seg_intel.get("top_segments") or []
+    segment_intel_html = ""
+    _seg_pain_labels = {
+        "pricing": "Pricing",
+        "support": "Support",
+        "reliability": "Reliability",
+        "usability": "Usability",
+        "features": "Missing Features",
+        "performance": "Performance",
+        "integration": "Integrations",
+        "security": "Security",
+        "onboarding": "Onboarding",
+        "migration": "Migration",
+        "other": "General Dissatisfaction",
+    }
+    _seg_role_labels = {
+        "economic_buyer": "Economic Buyer",
+        "champion": "Champion",
+        "evaluator": "Evaluator",
+        "end_user": "End User",
+    }
+    _seg_stage_labels = {
+        "active_purchase": "Active Purchase",
+        "evaluation": "Evaluating",
+        "renewal_decision": "Renewal Decision",
+        "post_purchase": "Post-Purchase",
+    }
+    if top_segments:
+        seg_rows = ""
+        for seg in top_segments[:4]:
+            role = _safe(_seg_role_labels.get(seg.get("role_type", ""), seg.get("role_type", "")))
+            stage = _safe(_seg_stage_labels.get(seg.get("top_buying_stage", ""), seg.get("top_buying_stage", "")))
+            raw_pain = (seg.get("top_pain") or "other").lower()
+            pain = _safe(_seg_pain_labels.get(raw_pain, raw_pain.title()))
+            pain_color = _pain_color(raw_pain)
+            rc = int(seg.get("review_count") or 0)
+            seg_rows += (
+                f'<tr style="border-bottom:1px solid #eee;">'
+                f'<td style="padding:7px 12px;font-size:13px;color:#333;">{role}</td>'
+                f'<td style="padding:7px 12px;font-size:13px;color:#555;">{stage}</td>'
+                f'<td style="padding:7px 12px;font-size:13px;">'
+                f'<span style="color:{pain_color};font-weight:600;">{pain}</span></td>'
+                f'<td style="padding:7px 12px;font-size:12px;color:#888;text-align:right;">'
+                f'{rc} signals</td>'
+                f'</tr>'
+            )
+        segment_intel_html = f"""
+            <!-- Segment Intelligence -->
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+              <tr><td style="padding:0 24px;">
+                <h3 style="margin:0 0 10px;font-size:16px;color:#1a2332;">
+                  {"Segments Switching" if challenger_mode else "Segments at Risk"}
+                </h3>
+                <table cellpadding="0" cellspacing="0" border="0"
+                       style="width:100%;border:1px solid #eee;border-radius:6px;overflow:hidden;">
+                  <tr style="background:#f8f9fa;">
+                    <th style="padding:6px 12px;text-align:left;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Role</th>
+                    <th style="padding:6px 12px;text-align:left;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Stage</th>
+                    <th style="padding:6px 12px;text-align:left;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Top Pain</th>
+                    <th style="padding:6px 12px;text-align:right;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Volume</th>
+                  </tr>
+                  {seg_rows}
+                </table>
+              </td></tr>
+            </table>"""
+
+    # Section 8c: timing window
+    timing_summary = briefing.get("timing_summary") or ""
+    priority_triggers = briefing.get("priority_timing_triggers") or []
+    timing_html = ""
+    if timing_summary or priority_triggers:
+        trigger_items = ""
+        for t in priority_triggers[:3]:
+            t_text = _safe(t) if isinstance(t, str) else _safe(str(t))
+            if t_text:
+                trigger_items += (
+                    f'<li style="padding:2px 0;font-size:13px;color:#555;">'
+                    f'{t_text}</li>'
+                )
+        trigger_block = ""
+        if trigger_items:
+            trigger_block = (
+                f'<ul style="margin:8px 0 0;padding-left:18px;">'
+                f'{trigger_items}</ul>'
+            )
+        timing_html = f"""
+            <!-- Timing Window -->
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+              <tr><td style="padding:0 24px;">
+                <h3 style="margin:0 0 10px;font-size:16px;color:#1a2332;">Timing Window</h3>
+                <div style="font-size:14px;color:#444;line-height:1.5;">{escape(timing_summary)}</div>
+                {trigger_block}
+              </td></tr>
+            </table>"""
+
+    # Section 8d: who is evaluating (buyer profiles)
+    buyer_profiles = briefing.get("buyer_profiles") or []
+    buyer_profiles_html = ""
+    _role_labels = {
+        "economic_buyer": "Economic Buyer",
+        "champion": "Champion",
+        "evaluator": "Evaluator",
+        "end_user": "End User",
+    }
+    _stage_labels = {
+        "active_purchase": "Active Purchase",
+        "evaluation": "Evaluating",
+        "renewal_decision": "Renewal Decision",
+        "post_purchase": "Post-Purchase",
+    }
+    if buyer_profiles:
+        profile_rows = ""
+        for bp in buyer_profiles[:4]:
+            role = _safe(_role_labels.get(bp.get("role_type", ""), bp.get("role_type", "")))
+            stage = _safe(_stage_labels.get(bp.get("buying_stage", ""), bp.get("buying_stage", "")))
+            try:
+                urgency = float(bp.get("avg_urgency") or 0)
+            except (TypeError, ValueError):
+                urgency = 0.0
+            urgency_color = "#e74c3c" if urgency >= 7 else "#f39c12" if urgency >= 4 else "#27ae60"
+            rc = int(bp.get("review_count") or 0)
+            profile_rows += (
+                f'<tr style="border-bottom:1px solid #eee;">'
+                f'<td style="padding:7px 12px;font-size:13px;color:#333;">{role}</td>'
+                f'<td style="padding:7px 12px;font-size:13px;color:#555;">{stage}</td>'
+                f'<td style="padding:7px 12px;font-size:13px;color:{urgency_color};'
+                f'font-weight:600;text-align:center;">{urgency:.1f}</td>'
+                f'<td style="padding:7px 12px;font-size:12px;color:#888;'
+                f'text-align:right;">{rc} signals</td>'
+                f'</tr>'
+            )
+        buyer_profiles_html = f"""
+            <!-- Buyer Profiles -->
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+              <tr><td style="padding:0 24px;">
+                <h3 style="margin:0 0 10px;font-size:16px;color:#1a2332;">Who Is Evaluating</h3>
+                <table cellpadding="0" cellspacing="0" border="0"
+                       style="width:100%;border:1px solid #eee;border-radius:6px;overflow:hidden;">
+                  <tr style="background:#f8f9fa;">
+                    <th style="padding:6px 12px;text-align:left;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Role</th>
+                    <th style="padding:6px 12px;text-align:left;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Stage</th>
+                    <th style="padding:6px 12px;text-align:center;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Urgency</th>
+                    <th style="padding:6px 12px;text-align:right;font-size:11px;color:#888;
+                               font-weight:600;text-transform:uppercase;">Volume</th>
+                  </tr>
+                  {profile_rows}
+                </table>
+              </td></tr>
+            </table>"""
+
+    # Section 8e: competitive intel (up to 2 pairwise battle conclusions)
+    cross_vendor = briefing.get("cross_vendor_conclusions") or []
+    competitive_intel_html = ""
+    pairwise = [
+        c for c in cross_vendor
+        if c.get("analysis_type") == "pairwise_battle" and c.get("summary")
+    ][:2]
+    if pairwise:
+        conclusion_blocks = ""
+        for entry in pairwise:
+            summary_text = _safe(entry.get("summary", ""), "")
+            if not summary_text:
+                continue
+            conf = float(entry.get("confidence") or 0)
+            conf_pct = f"{int(conf * 100)}% confidence" if conf else ""
+            conf_tag = (
+                f' <span style="font-size:11px;color:#888;font-weight:400;">'
+                f'({conf_pct})</span>' if conf_pct else ""
+            )
+            vendors_involved = [
+                v for v in (entry.get("vendors") or [])
+            ]
+            vs_label = " vs ".join(vendors_involved) if vendors_involved else ""
+            vs_tag = (
+                f'<div style="font-size:11px;color:#888;margin-bottom:4px;">'
+                f'{escape(vs_label)}</div>' if vs_label else ""
+            )
+            conclusion_blocks += (
+                f'<div style="margin-bottom:10px;font-size:13px;color:#444;'
+                f'line-height:1.6;background:#f8f9fa;border-left:3px solid #2980b9;'
+                f'padding:10px 14px;border-radius:0 4px 4px 0;">'
+                f'{vs_tag}{summary_text}{conf_tag}</div>'
+            )
+        if conclusion_blocks:
+            competitive_intel_html = f"""
+            <!-- Competitive Intel -->
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+              <tr><td style="padding:0 24px;">
+                <h3 style="margin:0 0 10px;font-size:16px;color:#1a2332;">Competitive Intel</h3>
+                {conclusion_blocks}
+              </td></tr>
+            </table>"""
+
     # Section 9: CTA content
     cta_title = f"There&#39;s more in the full report"
     if challenger_mode:
@@ -658,6 +863,18 @@ def render_vendor_briefing_html(briefing: dict) -> str:
   {feature_gap_html}
 
   {correlated_articles_html}
+
+  <!-- Section 8b2: Segment Intelligence -->
+  {"" if not segment_intel_html else f"<tr><td>{segment_intel_html}</td></tr>"}
+
+  <!-- Section 8c: Timing Window -->
+  {"" if not timing_html else f"<tr><td>{timing_html}</td></tr>"}
+
+  <!-- Section 8d: Who Is Evaluating -->
+  {"" if not buyer_profiles_html else f"<tr><td>{buyer_profiles_html}</td></tr>"}
+
+  <!-- Section 8e: Competitive Intel -->
+  {"" if not competitive_intel_html else f"<tr><td>{competitive_intel_html}</td></tr>"}
 
   <!-- Section 9: CTA -->
   <tr>
