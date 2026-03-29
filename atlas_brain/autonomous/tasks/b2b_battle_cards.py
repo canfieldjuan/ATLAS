@@ -32,6 +32,7 @@ _BATTLE_CARD_LLM_FIELDS = (
     "objection_handlers",
     "talk_track",
     "recommended_plays",
+    "why_they_stay",
 )
 
 _BATTLE_CARD_RENDER_INPUT_KEYS = (
@@ -124,6 +125,27 @@ _BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
                 "required": ["play", "target_segment", "key_message", "timing"],
             },
         },
+        "why_they_stay": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "summary": {"type": "string"},
+                "strengths": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "area": {"type": "string"},
+                            "evidence": {"type": "string"},
+                            "how_to_neutralize": {"type": "string"},
+                        },
+                        "required": ["area", "evidence", "how_to_neutralize"],
+                    },
+                },
+            },
+            "required": ["summary", "strengths"],
+        },
     },
     "required": [
         "executive_summary",
@@ -132,11 +154,13 @@ _BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
         "objection_handlers",
         "talk_track",
         "recommended_plays",
+        "why_they_stay",
     ],
 }
 
 _QUALITY_STATUS_SALES_READY = "sales_ready"
 _QUALITY_STATUS_NEEDS_REVIEW = "needs_review"
+_QUALITY_STATUS_THIN_EVIDENCE = "thin_evidence"
 _QUALITY_STATUS_FALLBACK = "deterministic_fallback"
 _QUALITY_PHASE_DETERMINISTIC = "deterministic"
 _QUALITY_PHASE_FINAL = "final"
@@ -147,6 +171,8 @@ _QUALITY_ROLE_HINT_TERMS = (
 )
 _QUALITY_CTA_TERMS = (
     "audit", "workshop", "benchmark", "assessment", "review", "pilot", "session", "discovery",
+    "engage", "target", "outreach", "reach out", "position", "approach", "contact",
+    "identify", "prioritize", "focus", "deploy", "execute", "run",
 )
 _QUALITY_GENERIC_TARGET_SEGMENTS = {"all", "all accounts", "any", "general", "unknown"}
 _QUALITY_DEFAULT_ACCOUNT_STAGE_TERMS = {"evaluation", "renewal_decision"}
@@ -489,11 +515,19 @@ def _battle_card_quality_status(
     phase: str,
     hard_blockers: list[str],
     warnings: list[str],
+    has_canonical_accounts: bool = False,
 ) -> str:
     if hard_blockers:
         return _QUALITY_STATUS_FALLBACK
     if phase == _QUALITY_PHASE_FINAL and not warnings:
         return _QUALITY_STATUS_SALES_READY
+    # Separate thin-evidence (no accounts, no eval signals) from true
+    # needs_review (has data but something needs attention).
+    if not has_canonical_accounts and any(
+        "no high-intent account" in w
+        for w in warnings
+    ):
+        return _QUALITY_STATUS_THIN_EVIDENCE
     return _QUALITY_STATUS_NEEDS_REVIEW
 
 
@@ -547,7 +581,7 @@ def _evaluate_battle_card_quality(
         card["data_stale"] = True
         hard_blockers.append("source data is stale for requested report date")
     if bool(card.get("evidence_window_is_thin")):
-        hard_blockers.append("evidence window is thin for strict quality gate")
+        warnings.append("evidence window is thin; confidence may improve with more data")
 
     evidence_window_days = _reasoning_int(card.get("evidence_window_days"))
     if evidence_window_days is None:
@@ -608,12 +642,17 @@ def _evaluate_battle_card_quality(
     if not global_eval_present:
         global_eval_present = any(value > 0 for _, value in eval_families.get(_QUALITY_EVAL_FAMILY_ACCOUNT_COUNT, []))
     if not qualified_accounts:
-        if allow_global_eval_fallback and high_urgency_accounts > 0 and global_eval_present:
+        stage_list = ", ".join(sorted(required_stages))
+        if not hi_accounts:
+            # No account data at all -- data gap, not a quality failure
+            warnings.append(
+                f"no high-intent account data available for required stages ({stage_list})"
+            )
+        elif allow_global_eval_fallback and high_urgency_accounts > 0 and global_eval_present:
             warnings.append(
                 "high-intent account stage missing; using global active-evaluation evidence fallback"
             )
         else:
-            stage_list = ", ".join(sorted(required_stages))
             hard_blockers.append(
                 f"no high-intent account with urgency >= {min_high_intent_urgency:g} in required stages ({stage_list})"
             )
@@ -667,11 +706,98 @@ def _evaluate_battle_card_quality(
         elif str(card.get("llm_render_status") or "").strip().lower() in {"failed", "failed_quality_gate"}:
             hard_blockers.append("model sales copy missing after render failure")
 
+    # Phase 8: governance-aware quality checks
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        eg = contracts.get("evidence_governance")
+        if isinstance(eg, dict):
+            # Contradiction overreach suppression
+            contradictions = eg.get("contradictions") or []
+            if contradictions:
+                contradiction_dims = [
+                    c.get("dimension", "")
+                    for c in contradictions if isinstance(c, dict)
+                ]
+                dim_text = ", ".join(d for d in contradiction_dims if d)
+                # Scan all LLM-generated fields for absolute language
+                absolute_phrases = ("clearly", "undeniably", "without question", "definitively", "unequivocally")
+                _copy_fields_to_scan = (
+                    "executive_summary", "talk_track",
+                    "objection_handlers", "recommended_plays",
+                )
+                absolute_found = False
+                for field_name in _copy_fields_to_scan:
+                    field_val = card.get(field_name)
+                    if field_val is None:
+                        continue
+                    text = json.dumps(field_val) if isinstance(field_val, (list, dict)) else str(field_val)
+                    text_lower = text.lower()
+                    for phrase in absolute_phrases:
+                        if phrase in text_lower:
+                            hard_blockers.append(
+                                f"{field_name} uses absolute language ('{phrase}') "
+                                f"despite contradictions on [{dim_text}]"
+                            )
+                            absolute_found = True
+                            break
+                    if absolute_found:
+                        break
+                if not absolute_found and dim_text:
+                    warnings.append(
+                        f"contradictory evidence on [{dim_text}]; "
+                        "verify sales copy hedges appropriately"
+                    )
+
+            # Coverage gap enforcement across all generated fields
+            coverage_gaps = eg.get("coverage_gaps") or []
+            if coverage_gaps:
+                gap_areas = [
+                    g.get("area", "").replace("_", " ")
+                    for g in coverage_gaps if isinstance(g, dict) and g.get("area")
+                ]
+                if gap_areas:
+                    warnings.append(
+                        f"thin evidence in [{', '.join(gap_areas)}]; "
+                        "claims about these areas should be hedged"
+                    )
+                    # Check if LLM copy makes strong claims about gap areas
+                    for field_name in ("talk_track", "objection_handlers", "recommended_plays"):
+                        field_val = card.get(field_name)
+                        if field_val is None:
+                            continue
+                        text = json.dumps(field_val) if isinstance(field_val, (list, dict)) else str(field_val)
+                        text_lower = text.lower()
+                        for area in gap_areas:
+                            area_lower = area.lower()
+                            if area_lower in text_lower and any(
+                                strong in text_lower
+                                for strong in ("proven", "guaranteed", "always", "every")
+                            ):
+                                warnings.append(
+                                    f"{field_name} makes strong claims about "
+                                    f"thin-evidence area '{area}'"
+                                )
+                                break
+
+        # Retention strength check: reps need both churn pressure and retention context
+        vc = contracts.get("vendor_core_reasoning")
+        if isinstance(vc, dict):
+            wts = vc.get("why_they_stay")
+            card_wts = card.get("why_they_stay")
+            if isinstance(wts, dict) and wts.get("strengths"):
+                if not isinstance(card_wts, dict) or not card_wts.get("strengths"):
+                    warnings.append(
+                        "synthesis has retention strengths but battle card "
+                        "why_they_stay is missing; reps need incumbent inertia context"
+                    )
+
+    has_canonical_accounts = bool(card.get("account_pressure_metrics"))
     score = max(0, 100 - (25 * len(hard_blockers)) - (5 * len(warnings)))
     status = _battle_card_quality_status(
         phase=phase,
         hard_blockers=hard_blockers,
         warnings=warnings,
+        has_canonical_accounts=has_canonical_accounts,
     )
     return {
         "schema_version": _QUALITY_SCHEMA_VERSION,
@@ -730,7 +856,7 @@ def _build_battle_card_render_payload(
     validation_feedback: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a compact contract-first LLM render packet for battle cards."""
-    from ._b2b_shared import _build_battle_card_locked_facts
+    from ._b2b_shared import _build_battle_card_locked_facts, _build_metric_ledger
 
     payload = {
         key: card[key]
@@ -766,6 +892,30 @@ def _build_battle_card_render_payload(
 
     payload["locked_facts"] = _build_battle_card_locked_facts(card)
     payload["render_packet_version"] = "contract_first_v1"
+    metric_ledger = _build_metric_ledger(card)
+    if metric_ledger:
+        payload["metric_ledger"] = metric_ledger
+
+    # Phase 8: inject governance context so LLM can calibrate
+    contracts = card.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        # why_they_stay as input context (distinct from LLM output field)
+        vc = contracts.get("vendor_core_reasoning")
+        if isinstance(vc, dict):
+            wts = vc.get("why_they_stay")
+            if isinstance(wts, dict) and wts:
+                payload["retention_context"] = wts
+            cp = vc.get("confidence_posture")
+            if isinstance(cp, dict) and cp:
+                payload["confidence_posture"] = cp
+        eg = contracts.get("evidence_governance")
+        if isinstance(eg, dict):
+            contradictions = eg.get("contradictions")
+            if isinstance(contradictions, list) and contradictions:
+                payload["contradictions"] = contradictions
+            cg = eg.get("coverage_gaps")
+            if isinstance(cg, list) and cg:
+                payload["coverage_gaps"] = cg
 
     if prior_attempt is not None:
         payload["prior_attempt"] = prior_attempt
@@ -1041,6 +1191,7 @@ def _battle_card_row_status(card: dict[str, Any]) -> str:
     if status in {
         _QUALITY_STATUS_SALES_READY,
         _QUALITY_STATUS_NEEDS_REVIEW,
+        _QUALITY_STATUS_THIN_EVIDENCE,
         _QUALITY_STATUS_FALLBACK,
     }:
         return status
@@ -1196,6 +1347,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_data_context,
         _fetch_vendor_provenance,
         _fetch_latest_evidence_vault,
+        _fetch_latest_account_intelligence,
         _fetch_review_text_aggregates,
         _fetch_department_distribution,
         _fetch_contract_context_distribution,
@@ -1228,6 +1380,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             competitor_reasons, keyword_spikes,
             data_context, vendor_provenance,
             evidence_vault_lookup,
+            account_intel_lookup,
             product_profiles_raw,
             review_text_agg, department_dist, contract_ctx,
         ) = await asyncio.gather(
@@ -1253,6 +1406,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_data_context(pool, window_days),
             _fetch_vendor_provenance(pool, window_days),
             _fetch_latest_evidence_vault(pool, as_of=today, analysis_window_days=window_days),
+            _fetch_latest_account_intelligence(pool, as_of=today, analysis_window_days=window_days),
             _fetch_product_profiles(pool),
             _fetch_review_text_aggregates(pool, window_days),
             _fetch_department_distribution(pool, window_days),
@@ -1334,50 +1488,46 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if _canonicalize_vendor(row.get("vendor_name") or row.get("vendor") or "")
     })
 
-    # --- Load reasoning synthesis from pool ---
+    # --- Load reasoning views (synthesis-first, legacy fallback) ---
+    from ._b2b_synthesis_reader import (
+        build_reasoning_lookup_from_views,
+        load_best_reasoning_views,
+    )
+
     reasoning_synthesis_lookup: dict[str, dict] = {}
     reasoning_synthesis_as_of_lookup: dict[str, Any] = {}
+    synthesis_views: dict[str, Any] = {}
     try:
-        _synth_rows = await pool.fetch(
-            """
-            SELECT DISTINCT ON (vendor_name)
-                   vendor_name, as_of_date, synthesis
-            FROM b2b_reasoning_synthesis
-            WHERE as_of_date <= $1
-              AND analysis_window_days = $2
-            ORDER BY vendor_name, as_of_date DESC, created_at DESC
-            """,
-            today, window_days,
-        )
-        for sr in _synth_rows:
-            vn = _canonicalize_vendor(sr.get("vendor_name") or "")
-            if vn:
-                data = sr.get("synthesis")
-                if isinstance(data, str):
-                    import json as _json
-                    data = _json.loads(data)
-                if isinstance(data, dict):
-                    reasoning_synthesis_lookup[vn] = data
-                    reasoning_synthesis_as_of_lookup[vn] = sr.get("as_of_date")
+        vendor_names_for_views = [
+            _canonicalize_vendor(row.get("vendor_name") or row.get("vendor") or "")
+            for row in vendor_scores
+            if _canonicalize_vendor(row.get("vendor_name") or row.get("vendor") or "")
+        ]
         if scoped_vendors:
-            vendor_scope = {v.lower() for v in scoped_vendors}
-            reasoning_synthesis_lookup = {
-                k: v for k, v in reasoning_synthesis_lookup.items()
-                if str(k or "").strip().lower() in vendor_scope
-            }
-            reasoning_synthesis_as_of_lookup = {
-                k: v for k, v in reasoning_synthesis_as_of_lookup.items()
-                if str(k or "").strip().lower() in vendor_scope
-            }
+            vendor_names_for_views = [v for v in vendor_names_for_views if v.lower() in {s.lower() for s in scoped_vendors}]
+        synthesis_views = await load_best_reasoning_views(
+            pool, vendor_names_for_views,
+            as_of=today,
+            analysis_window_days=window_days,
+        )
+        for vn, view in synthesis_views.items():
+            canon = _canonicalize_vendor(vn)
+            if canon:
+                reasoning_synthesis_lookup[canon] = view.raw
+                reasoning_synthesis_as_of_lookup[canon] = view.as_of_date
         logger.info(
-            "Loaded reasoning synthesis for %d vendors",
-            len(reasoning_synthesis_lookup),
+            "Loaded reasoning views for %d vendors (%d synthesis, %d legacy)",
+            len(synthesis_views),
+            sum(1 for v in synthesis_views.values() if v.schema_version != "legacy"),
+            sum(1 for v in synthesis_views.values() if v.schema_version == "legacy"),
         )
     except Exception:
-        logger.debug("Reasoning synthesis unavailable", exc_info=True)
+        logger.debug("Reasoning views unavailable", exc_info=True)
 
-    # --- Phase 2: Reconstruct reasoning + cross-vendor from DB ---
-    reasoning_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    # Build reasoning_lookup synthesis-first, legacy fills gaps
+    legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
+    synth_lookup = build_reasoning_lookup_from_views(synthesis_views)
+    reasoning_lookup = {**legacy_lookup, **synth_lookup}
     if scoped_vendors:
         vendor_scope = {v.lower() for v in scoped_vendors}
         reasoning_lookup = {
@@ -1467,6 +1617,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         product_profile_lookup=product_profile_lookup,
         competitive_disp=competitive_disp,
         competitor_reasons=competitor_reasons,
+        synthesis_views=synthesis_views,
         reasoning_lookup=reasoning_lookup,
         timeline_lookup=timeline_lookup,
         use_case_lookup=_build_use_case_lookup(use_case_dist),
@@ -1476,6 +1627,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         buyer_auth_lookup=buyer_auth_lookup,
         keyword_spike_lookup=keyword_spike_lookup,
         evidence_vault_lookup=evidence_vault_lookup,
+        account_intel_lookup=account_intel_lookup,
         reasoning_synthesis_lookup=reasoning_synthesis_lookup,
         reasoning_synthesis_as_of_lookup=reasoning_synthesis_as_of_lookup,
         synthesis_requested_as_of=today,

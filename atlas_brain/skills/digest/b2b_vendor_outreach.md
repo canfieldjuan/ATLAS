@@ -33,7 +33,9 @@ You receive a JSON object with:
 - `tier`: "report" | "dashboard" | "api" -- what we're selling
 - `selling`: Object with `{sender_name, sender_title, sender_company, booking_url}`
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this vendor's category. Full URLs ready to embed.
-- `archetype_context` (optional): Object with `{archetype, confidence, falsification}` -- the vendor's classified churn pattern. `archetype` is one of: "pricing_shock", "feature_gap", "support_collapse", "leadership_redesign", "acquisition_decay", "integration_break", "category_disruption", "compliance_gap". `confidence` is 0-1.
+- `reasoning_context` (optional): Object with `{wedge, confidence, summary, key_signals, falsification, why_they_stay, timing, switch_triggers, confidence_limits, account_summary}` -- the vendor's canonical reasoning from synthesis. `wedge` is one of: "price_squeeze", "feature_parity", "support_erosion", "integration_lock", "category_shift", "acquisition_hangover", "compliance_exposure", "ux_regression", "segment_mismatch", "stable". `confidence` is "high", "medium", "low", or "insufficient".
+- `reasoning_contracts` (optional): Full materialized reasoning contracts from synthesis. Use for deeper context on timing, segments, displacement, and retention.
+- `archetype_context` (optional, backward compat): Same as before, populated from reasoning_context. Prefer `reasoning_context` when both are present.
 - `briefing_context` (optional): Compact summary from the latest vendor briefing. May include:
   - `executive_summary`
   - `account_pressure_summary`
@@ -131,13 +133,18 @@ Return a JSON object:
 
 23. **Protect the report tier**: If `tier == "report"`, the body and CTA must not use the words "dashboard", "live feed", "free trial", "software", or "platform".
 
-24. **Archetype-aware framing**: When `archetype_context` is present, tailor the intelligence framing to the churn pattern:
-   - `pricing_shock`: Frame intelligence around accounts reacting to pricing changes. Highlight cost-sensitivity signals and price-driven displacement.
-   - `feature_gap`: Frame intelligence around feature requests and competitive capability gaps. Highlight product roadmap blind spots.
-   - `support_collapse`: Frame intelligence around support quality signals. Highlight response time and satisfaction degradation.
-   - `leadership_redesign`: Frame intelligence around product direction concerns. Highlight user frustration with UX or strategy changes.
-   - `acquisition_decay` / `integration_break`: Frame as post-change instability signals. Highlight accounts reacting to disruption.
-   - If archetype confidence is below 0.5, use general churn framing rather than committing to the archetype angle.
+24. **Reasoning-aware framing**: When `reasoning_context` is present, tailor intelligence framing to the wedge. Use `reasoning_context.summary` and `reasoning_context.key_signals` for specifics:
+   - `price_squeeze`: Frame intelligence around pricing pressure signals and cost-driven displacement.
+   - `feature_parity`: Frame intelligence around feature gaps and competitive capability comparison.
+   - `support_erosion`: Frame intelligence around support quality degradation signals.
+   - `ux_regression`: Frame intelligence around product direction and UX frustration.
+   - `acquisition_hangover` / `integration_lock`: Frame as post-change instability signals.
+   - `category_shift`: Frame as market evolution requiring repositioning.
+   - `compliance_exposure`: Frame around regulatory pressure signals.
+   - When `reasoning_context.why_they_stay` is present, acknowledge one incumbent strength before pivoting to the pain signal.
+   - When `reasoning_context.confidence` is "low" or "insufficient", use general framing rather than committing to the wedge angle.
+   - When `reasoning_context.switch_triggers` is present, use trigger timing to calibrate urgency.
+   - Falls back to `archetype_context` if `reasoning_context` is absent.
 
 25. **Use `briefing_context` to sharpen the narrative, not replace `signal_summary`.**
    - If `account_pressure_summary` or `timing_summary` is present, use it to calibrate urgency.

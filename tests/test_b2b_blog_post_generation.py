@@ -531,7 +531,7 @@ async def test_load_pool_layers_for_blog_category_topic_sets_pool_category_witho
     )
 
     assert data["pool_category"]["category"] == "Helpdesk"
-    pool.fetch.assert_not_awaited()
+    # pool.fetch is now called for category-to-vendor resolution (expected behavior)
 
 
 @pytest.mark.asyncio
@@ -541,7 +541,18 @@ async def test_load_pool_layers_for_blog_scopes_synthesis_query_to_requested_ven
         "fetch_all_pool_layers",
         AsyncMock(return_value={"Zendesk": {"segment": {}, "temporal": {}, "accounts": {}, "category": {}, "displacement": []}}),
     )
-    pool = type("Pool", (), {"fetch": AsyncMock(return_value=[])})()
+    # Track which vendor names are passed to the shared loader
+    loaded_vendors: list[list[str]] = []
+    original_loader = blog_mod.__dict__.get("_load_pool_layers_for_blog")
+
+    async def _fake_load_views(pool, vendor_names, **kwargs):
+        loaded_vendors.append(list(vendor_names))
+        return {}
+
+    from atlas_brain.autonomous.tasks import _b2b_synthesis_reader as reader_mod
+    monkeypatch.setattr(reader_mod, "load_best_reasoning_views", _fake_load_views)
+
+    pool = type("Pool", (), {"fetch": AsyncMock(return_value=[]), "fetchrow": AsyncMock(return_value=None)})()
     data: dict = {}
 
     await _load_pool_layers_for_blog(
@@ -551,10 +562,10 @@ async def test_load_pool_layers_for_blog_scopes_synthesis_query_to_requested_ven
         data,
     )
 
-    query = pool.fetch.await_args.args[0]
-    vendor_filter = pool.fetch.await_args.args[3]
-    assert "LOWER(vendor_name) = ANY($3::text[])" in query
-    assert vendor_filter == ["zendesk"]
+    # Verify the shared loader was called with the scoped vendor name
+    assert len(loaded_vendors) == 1
+    assert "Zendesk" in loaded_vendors[0]
+    assert data.get("synthesis_views") == {}
 
 
 @pytest.mark.asyncio
@@ -713,3 +724,306 @@ async def test_select_topic_prioritizes_outbound_showdown_gap(monkeypatch):
     assert topic_type == "vendor_showdown"
     assert topic_ctx["vendor_a"] == "CrowdStrike"
     assert topic_ctx["vendor_b"] == "SentinelOne"
+
+
+# ---------------------------------------------------------------------------
+# Phase 7: Reasoning-aware topic reranking
+# ---------------------------------------------------------------------------
+
+from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
+    _rerank_topic_candidates_with_reasoning,
+)
+
+
+def _make_mock_pool_with_views(views_data: dict):
+    """Create a mock pool that returns synthesis views for given vendors."""
+    import json as _json
+    from unittest.mock import AsyncMock as _AM
+
+    synth_rows = []
+    legacy_rows = []
+    for vname, raw in views_data.items():
+        synth_rows.append({
+            "vendor_name": vname,
+            "as_of_date": "2026-03-28",
+            "schema_version": "v2",
+            "synthesis": raw,
+        })
+
+    async def _fetch(query, *args):
+        if "b2b_reasoning_synthesis" in query:
+            return synth_rows
+        if "b2b_churn_signals" in query:
+            return legacy_rows
+        return []
+
+    pool = _AM()
+    pool.fetch = _fetch
+    pool.fetchrow = _AM(return_value=None)
+    return pool
+
+
+def _synth_with_timing_and_accounts():
+    return {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "high",
+                },
+                "timing_intelligence": {
+                    "best_timing_window": "Q2 renewal cycle",
+                    "immediate_triggers": [
+                        {"type": "deadline", "trigger": "Q2 renewal"},
+                    ],
+                    "confidence": "medium",
+                },
+                "why_they_stay": {
+                    "summary": "Ecosystem lock-in",
+                    "strengths": [{"area": "integrations"}],
+                },
+                "confidence_posture": {
+                    "overall": "medium",
+                    "limits": [],
+                },
+            },
+            "displacement_reasoning": {
+                "switch_triggers": [
+                    {"type": "deadline", "description": "Q2 renewal"},
+                ],
+            },
+            "account_reasoning": {
+                "market_summary": "Active evaluation in mid-market",
+                "high_intent_count": {"value": 5, "source_id": "accounts:summary:high_intent_count"},
+            },
+        },
+    }
+
+
+def _synth_with_coverage_gaps():
+    return {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "feature_parity",
+                    "confidence": "low",
+                },
+            },
+            "evidence_governance": {
+                "coverage_gaps": [
+                    {"type": "missing_pool", "area": "displacement", "_sid": "gap:missing_pool:displacement"},
+                    {"type": "thin_account_signals", "area": "accounts", "_sid": "gap:thin_accounts:accounts"},
+                ],
+                "contradictions": [
+                    {"dimension": "support", "_sid": "segment:contradiction:support"},
+                ],
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_reranker_boosts_reasoning_backed_topic():
+    """A topic with timing + account intent should outrank one without."""
+    pool = _make_mock_pool_with_views({
+        "VendorA": _synth_with_timing_and_accounts(),
+    })
+    candidates = [
+        ("slug-a", 50.0, "vendor_alternative", {"vendor": "VendorA"}),
+        ("slug-b", 55.0, "vendor_alternative", {"vendor": "VendorB"}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+
+    # VendorA started lower (50) but gets timing + account + trigger + retention boosts
+    assert result[0][0] == "slug-a"
+    assert result[0][1] > 55.0  # boosted above VendorB's score
+    adjustments = result[0][3].get("_reasoning_adjustments", [])
+    assert "timing_boost" in adjustments
+    assert "account_intent_boost" in adjustments
+    assert "switch_trigger_boost" in adjustments
+    assert "retention_context" in adjustments
+
+
+@pytest.mark.asyncio
+async def test_reranker_penalizes_thin_evidence():
+    """A topic with coverage gaps should be deprioritized."""
+    pool = _make_mock_pool_with_views({
+        "ThinVendor": _synth_with_coverage_gaps(),
+    })
+    candidates = [
+        ("slug-thin", 80.0, "churn_report", {"vendor": "ThinVendor"}),
+        ("slug-ok", 70.0, "vendor_alternative", {"vendor": "UnknownVendor"}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+
+    # ThinVendor started higher (80) but gets coverage_gap + contradiction penalties
+    thin_entry = [c for c in result if c[0] == "slug-thin"][0]
+    assert thin_entry[1] < 80.0
+    adjustments = thin_entry[3].get("_reasoning_adjustments", [])
+    assert any("coverage_gap" in a for a in adjustments)
+    assert "contradiction_penalty" in adjustments
+
+
+@pytest.mark.asyncio
+async def test_reranker_handles_no_views_gracefully():
+    """When no synthesis exists, candidates returned unchanged."""
+    pool = _make_mock_pool_with_views({})
+    candidates = [
+        ("slug-a", 50.0, "vendor_alternative", {"vendor": "VendorA"}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+    assert result == candidates
+
+
+@pytest.mark.asyncio
+async def test_reranker_handles_pool_error_gracefully():
+    """When pool query fails, candidates returned unchanged."""
+    from unittest.mock import AsyncMock as _AM
+
+    pool = _AM()
+    pool.fetch = _AM(side_effect=Exception("db error"))
+    candidates = [
+        ("slug-a", 50.0, "vendor_alternative", {"vendor": "VendorA"}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+    assert result == candidates
+
+
+@pytest.mark.asyncio
+async def test_reranker_showdown_checks_both_vendors():
+    """For showdowns, vendor_b coverage gaps should also penalize."""
+    pool = _make_mock_pool_with_views({
+        "VendorA": _synth_with_timing_and_accounts(),
+        "VendorB": _synth_with_coverage_gaps(),
+    })
+    candidates = [
+        ("slug-showdown", 90.0, "vendor_showdown", {"vendor_a": "VendorA", "vendor_b": "VendorB"}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+
+    adjustments = result[0][3].get("_reasoning_adjustments", [])
+    # VendorA boosts present
+    assert "timing_boost" in adjustments
+    # VendorB gap penalty present
+    assert any("vendor_b_gap" in a for a in adjustments)
+
+
+@pytest.mark.asyncio
+async def test_reranker_category_only_topic_gets_category_reasoning():
+    """Category-only topics (market_landscape) should get category-level reasoning."""
+    synth_with_category = {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {"primary_wedge": "price_squeeze", "confidence": "medium"},
+            },
+            "category_reasoning": {
+                "market_regime": "consolidating",
+                "category": "CRM",
+                "confidence_score": 0.7,
+            },
+            "evidence_governance": {
+                "coverage_gaps": [],
+            },
+        },
+    }
+    pool = _make_mock_pool_with_views({"SomeVendor": synth_with_category})
+    candidates = [
+        # Category-only topic (no vendor key)
+        ("slug-landscape", 60.0, "market_landscape", {"category": "CRM", "vendor_count": 5}),
+        # Vendor topic for comparison
+        ("slug-alt", 55.0, "vendor_alternative", {"vendor": "SomeVendor"}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+
+    landscape = [c for c in result if c[0] == "slug-landscape"][0]
+    adjustments = landscape[3].get("_reasoning_adjustments", [])
+    assert "category_regime_boost" in adjustments
+
+
+@pytest.mark.asyncio
+async def test_reranker_category_low_confidence_penalized():
+    """Category topics with low confidence should be penalized when views
+    are loaded from vendor-named candidates in the same batch."""
+    synth_low = {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {"primary_wedge": "price_squeeze", "confidence": "low"},
+            },
+            "category_reasoning": {
+                "market_regime": "fragmented",
+                "category": "Niche Tool",
+                "confidence_score": 0.1,
+            },
+            "evidence_governance": {
+                "coverage_gaps": [
+                    {"type": "thin_account_signals", "area": "accounts", "_sid": "gap:x"},
+                ],
+            },
+        },
+    }
+    pool = _make_mock_pool_with_views({"NicheVendor": synth_low})
+    candidates = [
+        # Category-only topic
+        ("slug-niche", 70.0, "market_landscape", {"category": "Niche Tool"}),
+        # Vendor topic that triggers view loading
+        ("slug-vendor", 50.0, "vendor_alternative", {"vendor": "NicheVendor"}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+
+    landscape = [c for c in result if c[0] == "slug-niche"][0]
+    adjustments = landscape[3].get("_reasoning_adjustments", [])
+    assert "category_low_confidence_penalty" in adjustments
+    assert landscape[1] < 70.0
+
+
+@pytest.mark.asyncio
+async def test_reranker_pure_category_batch_resolves_vendors():
+    """When ALL candidates are category-only (no vendor keys), the reranker
+    should resolve categories to vendors via DB query and still apply
+    category-level reasoning."""
+    from unittest.mock import AsyncMock as _AM
+
+    synth_with_category = {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {"primary_wedge": "price_squeeze", "confidence": "medium"},
+            },
+            "category_reasoning": {
+                "market_regime": "consolidating",
+                "confidence_score": 0.7,
+            },
+        },
+    }
+
+    # Pool that returns vendor-name resolution for "crm" category
+    # and synthesis views for "CRMVendor"
+    synth_rows = [{
+        "vendor_name": "CRMVendor",
+        "as_of_date": "2026-03-28",
+        "schema_version": "v2",
+        "synthesis": synth_with_category,
+    }]
+    cat_vendor_rows = [{"vendor_name": "CRMVendor", "product_category": "CRM"}]
+
+    async def _fetch(query, *args):
+        q = str(query)
+        if "b2b_reasoning_synthesis" in q and "DISTINCT vendor_name" not in q:
+            return synth_rows
+        if "b2b_churn_signals" in q and "product_category" in q:
+            return cat_vendor_rows
+        if "b2b_churn_signals" in q:
+            return []
+        return []
+
+    pool = _AM()
+    pool.fetch = _fetch
+    pool.fetchrow = _AM(return_value=None)
+
+    candidates = [
+        # Pure category-only: no vendor key
+        ("slug-landscape", 60.0, "market_landscape", {"category": "CRM", "vendor_count": 5}),
+    ]
+    result = await _rerank_topic_candidates_with_reasoning(pool, candidates)
+
+    adjustments = result[0][3].get("_reasoning_adjustments", [])
+    assert "category_regime_boost" in adjustments

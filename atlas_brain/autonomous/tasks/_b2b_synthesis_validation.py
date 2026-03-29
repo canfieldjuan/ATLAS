@@ -83,6 +83,14 @@ _FIELD_SOURCE_PREFIX_RULES = {
     "segment_playbook.priority_segments[*].estimated_reach": (
         "segment:reach:",
     ),
+    # Weakness mention totals are acceptable broader-signal proxies when
+    # displacement-specific counts are thin (prompt instructs the LLM to use
+    # the broadest valid non-switch mention aggregate as a fallback).
+    "migration_proof.displacement_mention_volume": (
+        "vault:weakness:",
+        "vault:metric:",
+        "category:",
+    ),
 }
 
 _FIELDS_REQUIRING_AGGREGATE_SOURCE = {
@@ -940,6 +948,235 @@ def _check_category_reasoning(
 
 
 # ---------------------------------------------------------------------------
+# Phase 3 governance validation
+# ---------------------------------------------------------------------------
+
+def _check_metric_ledger_numbers(
+    synthesis: dict[str, Any],
+    packet: Any | None,
+    result: ValidationResult,
+) -> None:
+    """Reject numeric claims that are not present in the metric_ledger.
+
+    Walks all sections looking for {value, source_id} wrappers and checks
+    that their source_id exists in the packet's metric_ledger.
+    """
+    if packet is None:
+        return
+    ledger = getattr(packet, "metric_ledger", None) or []
+    ledger_sids: set[str] = set()
+    for entry in ledger:
+        sid = entry.get("_sid")
+        if sid:
+            ledger_sids.add(sid)
+
+    # All valid packet source IDs (for the "not in packet at all" error)
+    all_packet_sids = set(packet.source_ids())
+
+    def _walk_wrappers(obj: Any, path: str) -> None:
+        if isinstance(obj, dict):
+            if "value" in obj and "source_id" in obj:
+                sid = obj.get("source_id", "")
+                if not sid:
+                    return
+                if sid not in all_packet_sids:
+                    _add(
+                        result,
+                        path,
+                        "unsupported_number",
+                        f"numeric claim cites source_id '{sid}' not in packet",
+                        severity="error",
+                    )
+                elif sid not in ledger_sids:
+                    _add(
+                        result,
+                        path,
+                        "number_not_in_ledger",
+                        f"numeric claim cites source_id '{sid}' present in packet "
+                        f"but not surfaced in metric_ledger",
+                        severity="warning",
+                    )
+            else:
+                for key, val in obj.items():
+                    _walk_wrappers(val, f"{path}.{key}")
+        elif isinstance(obj, list):
+            for i, item in enumerate(obj):
+                _walk_wrappers(item, f"{path}[{i}]")
+
+    for section in ("causal_narrative", "segment_playbook", "timing_intelligence",
+                     "competitive_reframes", "migration_proof"):
+        sec = synthesis.get(section)
+        if isinstance(sec, dict):
+            _walk_wrappers(sec, section)
+
+
+def _check_contradiction_hedging(
+    synthesis: dict[str, Any],
+    packet: Any | None,
+    result: ValidationResult,
+    *,
+    governance_blocking: bool = False,
+) -> None:
+    """Enforce contradiction-aware hedging when contradiction_rows exist.
+
+    The prompt requires three things:
+    1. Confidence capped at medium (error if high)
+    2. Contradicting dimensions listed in data_gaps
+    3. Contradiction-specific entries in confidence_posture.limits
+
+    Severity is ``error`` when governance_blocking (schema >= 2.3), else ``warning``.
+    """
+    if packet is None:
+        return
+    contradictions = getattr(packet, "contradiction_rows", None) or []
+    if not contradictions:
+        return
+
+    sev = "error" if governance_blocking else "warning"
+
+    cn = synthesis.get("causal_narrative")
+    if not isinstance(cn, dict):
+        return
+
+    # 1. Confidence cap
+    confidence = cn.get("confidence", "")
+    if confidence == "high":
+        _add(
+            result,
+            "causal_narrative.confidence",
+            "contradiction_confidence_cap",
+            f"{len(contradictions)} contradiction(s) detected but confidence is 'high'; "
+            "must be 'medium' or lower when contradictory evidence exists",
+            severity=sev,
+        )
+
+    # 2. Contradicting dimensions must appear in data_gaps
+    data_gaps = cn.get("data_gaps") or []
+    gap_text = " ".join(str(g) for g in data_gaps).lower()
+    contradiction_dims = {
+        c.get("dimension", "").lower()
+        for c in contradictions if isinstance(c, dict) and c.get("dimension")
+    }
+    missing_dims = [
+        d for d in contradiction_dims
+        if d and d not in gap_text
+    ]
+    if missing_dims:
+        _add(
+            result,
+            "causal_narrative.data_gaps",
+            "contradiction_dims_missing_from_data_gaps",
+            f"contradictions on [{', '.join(sorted(missing_dims))}] not reflected in data_gaps",
+            severity=sev,
+        )
+
+    # 3. confidence_posture.limits must reference contradictions
+    cp = _get_confidence_posture(synthesis)
+    cp_limits = cp.get("limits") or [] if isinstance(cp, dict) else []
+    limits_text = " ".join(str(lim) for lim in cp_limits).lower()
+    if contradiction_dims and "contradict" not in limits_text:
+        missing_in_limits = [
+            d for d in contradiction_dims
+            if d and d not in limits_text
+        ]
+        if missing_in_limits:
+            _add(
+                result,
+                "vendor_core_reasoning.confidence_posture.limits",
+                "contradiction_dims_missing_from_limits",
+                f"contradictions on [{', '.join(sorted(missing_in_limits))}] "
+                f"not reflected in confidence_posture.limits",
+                severity=sev,
+            )
+
+
+def _get_confidence_posture(synthesis: dict[str, Any]) -> dict[str, Any]:
+    """Extract confidence_posture from contracts or flat vendor_core."""
+    contracts = synthesis.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        vc = contracts.get("vendor_core_reasoning")
+        if isinstance(vc, dict):
+            cp = vc.get("confidence_posture")
+            if isinstance(cp, dict):
+                return cp
+    vc_flat = synthesis.get("vendor_core_reasoning")
+    if isinstance(vc_flat, dict):
+        cp = vc_flat.get("confidence_posture")
+        if isinstance(cp, dict):
+            return cp
+    return {}
+
+
+def _check_why_they_stay(
+    synthesis: dict[str, Any],
+    packet: Any | None,
+    result: ValidationResult,
+    *,
+    governance_blocking: bool = False,
+) -> None:
+    """Require why_they_stay when retention proof exists.
+
+    Severity is ``error`` when governance_blocking (schema >= 2.3), else ``warning``.
+    """
+    if packet is None:
+        return
+    retention_proof = getattr(packet, "retention_proof", None) or []
+    if not retention_proof:
+        return
+
+    # Check if why_they_stay exists in contracts
+    contracts = synthesis.get("reasoning_contracts")
+    if isinstance(contracts, dict):
+        vc = contracts.get("vendor_core_reasoning")
+        if isinstance(vc, dict) and vc.get("why_they_stay"):
+            return
+
+    # Also check flat vendor_core
+    vc_flat = synthesis.get("vendor_core_reasoning")
+    if isinstance(vc_flat, dict) and vc_flat.get("why_they_stay"):
+        return
+
+    _add(
+        result,
+        "vendor_core_reasoning.why_they_stay",
+        "missing_why_they_stay",
+        f"{len(retention_proof)} retention strength(s) in evidence but no why_they_stay in contracts",
+        severity="error" if governance_blocking else "warning",
+    )
+
+
+def _check_confidence_posture_limits(
+    synthesis: dict[str, Any],
+    packet: Any | None,
+    result: ValidationResult,
+    *,
+    governance_blocking: bool = False,
+) -> None:
+    """Require confidence_posture.limits when coverage gaps exist.
+
+    Severity is ``error`` when governance_blocking (schema >= 2.3), else ``warning``.
+    """
+    if packet is None:
+        return
+    coverage_gaps = getattr(packet, "coverage_gaps", None) or []
+    if not coverage_gaps:
+        return
+
+    # Check if confidence_posture.limits exists in contracts
+    cp = _get_confidence_posture(synthesis)
+    if isinstance(cp, dict) and cp.get("limits"):
+        return
+
+    _add(
+        result,
+        "vendor_core_reasoning.confidence_posture.limits",
+        "missing_confidence_limits",
+        f"{len(coverage_gaps)} coverage gap(s) detected but no confidence_posture.limits in contracts",
+        severity="error" if governance_blocking else "warning",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -988,6 +1225,14 @@ def validate_synthesis(
     _check_segment_constraints(normalized, result)
     _check_trigger_types(normalized, result)
     _check_category_reasoning(normalized, result)
+
+    # Phase 3 governance checks -- blocking for schema >= 2.3, warning for older
+    _schema_raw = str(synthesis.get("schema_version") or "2.1")
+    _governance_blocking = _schema_raw >= "2.3"
+    _check_metric_ledger_numbers(normalized, packet, result)
+    _check_contradiction_hedging(normalized, packet, result, governance_blocking=_governance_blocking)
+    _check_why_they_stay(normalized, packet, result, governance_blocking=_governance_blocking)
+    _check_confidence_posture_limits(normalized, packet, result, governance_blocking=_governance_blocking)
 
     if result.errors:
         logger.warning("Synthesis validation FAILED for %s: %s", vendor_name, result.summary())

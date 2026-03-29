@@ -368,7 +368,7 @@ def _briefing_context_from_data(briefing_data: Any) -> dict[str, Any]:
 
     account_names = _briefing_text_list(
         briefing.get("priority_account_names") or briefing.get("named_accounts"),
-        keys=("account_name", "company_name", "name"),
+        keys=("account_name", "company_name", "name", "company"),
     )
     if account_names:
         context["priority_account_names"] = account_names
@@ -393,6 +393,77 @@ def _briefing_context_from_data(briefing_data: Any) -> dict[str, Any]:
     )
     if pain_labels:
         context["pain_labels"] = pain_labels
+
+    # account pressure metrics from b2b_account_intelligence
+    acct_metrics = briefing.get("account_pressure_metrics")
+    if isinstance(acct_metrics, dict):
+        high_intent = int(acct_metrics.get("high_intent_count") or 0)
+        active_eval = int(acct_metrics.get("active_eval_signal_count") or 0)
+        if high_intent:
+            context["account_high_intent_count"] = high_intent
+        if active_eval:
+            context["account_active_eval_count"] = active_eval
+
+    # timing triggers from b2b_temporal_intelligence
+    triggers = _briefing_text_list(
+        briefing.get("priority_timing_triggers"),
+        keys=("trigger", "label", "text"),
+        max_items=3,
+    )
+    if triggers:
+        context["priority_timing_triggers"] = triggers
+
+    # top buyer profiles (role + stage + urgency)
+    raw_profiles = [
+        p for p in (briefing.get("buyer_profiles") or []) if isinstance(p, dict)
+    ]
+    if raw_profiles:
+        context["top_buyer_profiles"] = [
+            {
+                "role_type": str(p.get("role_type") or ""),
+                "buying_stage": str(p.get("buying_stage") or ""),
+                "avg_urgency": float(p.get("avg_urgency") or 0),
+            }
+            for p in raw_profiles[:2]
+        ]
+
+    # competitive dynamics from b2b_displacement_dynamics
+    comp_dyn = briefing.get("competitive_dynamics")
+    if isinstance(comp_dyn, dict):
+        raw_pairs = [
+            p for p in (comp_dyn.get("pairs") or []) if isinstance(p, dict)
+        ]
+        if raw_pairs:
+            context["competitive_dynamics"] = [
+                {
+                    "challenger": str(p.get("challenger") or ""),
+                    "battle_summary": str(p.get("battle_summary") or "")[:300],
+                    "switch_reasons": [
+                        r.get("reason") or r.get("reason_category") or str(r)
+                        if isinstance(r, dict)
+                        else str(r)
+                        for r in (p.get("switch_reasons") or [])[:3]
+                        if r
+                    ],
+                }
+                for p in raw_pairs[:2]
+            ]
+
+    # pain urgency enrichment from pain_points overlay
+    pain_with_urgency = [
+        p for p in (briefing.get("pain_breakdown") or [])
+        if isinstance(p, dict) and p.get("avg_urgency")
+    ]
+    if pain_with_urgency:
+        context["pain_urgency"] = [
+            {
+                "category": str(
+                    p.get("category") or p.get("pain_category") or ""
+                ),
+                "avg_urgency": float(p.get("avg_urgency") or 0),
+            }
+            for p in pain_with_urgency[:4]
+        ]
 
     return context
 
@@ -633,7 +704,7 @@ async def _prepare_churning_company_context(
         pipeline="b2b",
         vendor_name=base_context.get("churning_from"),
         category=base_context.get("category"),
-        pain_categories=pains[:3] or None,
+        pain_categories=pains or None,
         alternative_vendors=alternatives[:3] or None,
         include_drafts=True,
     )
@@ -1715,20 +1786,76 @@ async def _generate_vendor_campaigns(
             pool, vendor_name, products,
         )
 
-        # Fetch archetype context for the vendor
-        arch_row = await pool.fetchrow(
-            "SELECT archetype, archetype_confidence, falsification_conditions "
-            "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
-            "AND archetype IS NOT NULL "
-            "ORDER BY last_computed_at DESC LIMIT 1",
-            vendor_name,
-        )
-        if arch_row and arch_row["archetype"]:
-            vendor_ctx["archetype_context"] = {
-                "archetype": arch_row["archetype"],
-                "confidence": float(arch_row["archetype_confidence"]) if arch_row["archetype_confidence"] else None,
-                "falsification": arch_row["falsification_conditions"] or [],
+        # Load reasoning context (synthesis-first, legacy fallback)
+        from ._b2b_synthesis_reader import load_best_reasoning_view
+
+        vendor_reasoning = await load_best_reasoning_view(pool, vendor_name)
+        if vendor_reasoning is not None:
+            cn = vendor_reasoning.section("causal_narrative")
+            wedge = vendor_reasoning.primary_wedge
+            wedge_label = wedge.value if wedge else cn.get("primary_wedge", "")
+            falsification = [
+                fc.get("condition", fc) if isinstance(fc, dict) else fc
+                for fc in vendor_reasoning.falsification_conditions()
+            ]
+            # Build summary from available fields -- v2.3 schema uses
+            # trigger/why_now/causal_chain instead of summary/key_signals
+            summary = cn.get("summary") or cn.get("executive_summary") or ""
+            if not summary:
+                parts = [cn.get("trigger", ""), cn.get("why_now", "")]
+                chain = cn.get("causal_chain", "")
+                if chain:
+                    parts.append(chain)
+                summary = ". ".join(p for p in parts if p)
+            key_signals = cn.get("key_signals") or []
+            if not key_signals:
+                # Derive from v2.3 fields
+                for field in ("trigger", "who_most_affected", "why_now"):
+                    val = cn.get(field, "")
+                    if val:
+                        key_signals.append(val)
+            reasoning_ctx: dict[str, Any] = {
+                "wedge": wedge_label,
+                "confidence": vendor_reasoning.confidence("causal_narrative"),
+                "summary": summary,
+                "key_signals": key_signals,
+                "falsification": falsification,
             }
+            # Phase 3 sections: why_they_stay, timing, switch_triggers, accounts
+            wts = vendor_reasoning.why_they_stay
+            if wts:
+                reasoning_ctx["why_they_stay"] = {
+                    "summary": wts.get("summary", ""),
+                    "strengths": [
+                        {"area": s.get("area", ""), "evidence": s.get("evidence", "")}
+                        for s in wts.get("strengths", [])
+                        if isinstance(s, dict)
+                    ][:5],
+                }
+            timing = vendor_reasoning.section("timing_intelligence")
+            if timing:
+                reasoning_ctx["timing"] = {
+                    "best_window": timing.get("best_timing_window", ""),
+                    "trigger_count": len(timing.get("immediate_triggers") or []),
+                }
+            triggers = vendor_reasoning.switch_triggers
+            if triggers:
+                reasoning_ctx["switch_triggers"] = [
+                    {"type": t.get("type", ""), "description": t.get("description", "")}
+                    for t in triggers[:3]
+                ]
+            cp = vendor_reasoning.confidence_posture
+            if cp and cp.get("limits"):
+                reasoning_ctx["confidence_limits"] = cp["limits"]
+            # Account reasoning summary
+            acct = vendor_reasoning.contract("account_reasoning")
+            if acct and acct.get("market_summary"):
+                reasoning_ctx["account_summary"] = acct["market_summary"]
+
+            vendor_ctx["reasoning_context"] = reasoning_ctx
+            contracts = vendor_reasoning.materialized_contracts()
+            if contracts:
+                vendor_ctx["reasoning_contracts"] = contracts
         best = max(vendor_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in vendor_signals if o.get("review_id")]
 
@@ -1737,8 +1864,9 @@ async def _generate_vendor_campaigns(
         _vcomps = [c["name"] for c in (vendor_ctx.get("signal_summary") or {}).get("competitor_distribution", []) if c.get("name")]
         vendor_blog_urls = await _fetch_blog_posts(
             pool, pipeline="b2b", vendor_name=vendor_name, category=vendor_ctx.get("category"),
-            pain_categories=_vpains[:3] or None,
+            pain_categories=_vpains or None,
             alternative_vendors=_vcomps[:3] or None,
+            contact_role=target.get("contact_role"),
             include_drafts=True,
         )
         # Gate URL for vendor-specific report (instead of generic booking page)
@@ -2120,24 +2248,46 @@ async def _generate_challenger_campaigns(
         if briefing_context:
             challenger_ctx["briefing_context"] = briefing_context
 
-        # Fetch incumbent archetypes (the vendors losing customers to this challenger)
+        # Fetch incumbent reasoning (synthesis-first, legacy fallback)
         incumbent_names = [
             inc["name"]
             for inc in challenger_ctx.get("signal_summary", {}).get("incumbents_losing", [])
             if inc.get("name")
         ]
         if incumbent_names:
-            inc_arch_rows = await pool.fetch(
-                "SELECT vendor_name, archetype FROM b2b_churn_signals "
-                "WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
-                incumbent_names,
-            )
-            if inc_arch_rows:
-                # Group by archetype: {"pricing_shock": ["Vendor A"], "feature_gap": ["Vendor B"]}
+            from ._b2b_synthesis_reader import load_best_reasoning_views
+
+            inc_views = await load_best_reasoning_views(pool, incumbent_names)
+            if inc_views:
                 by_archetype: dict[str, list[str]] = {}
-                for r in inc_arch_rows:
-                    by_archetype.setdefault(r["archetype"], []).append(r["vendor_name"])
-                challenger_ctx["incumbent_archetypes"] = by_archetype
+                incumbent_reasoning: dict[str, dict[str, Any]] = {}
+                for vname, view in inc_views.items():
+                    wedge = view.primary_wedge
+                    label = wedge.value if wedge else (
+                        view.section("causal_narrative").get("primary_wedge", "")
+                    )
+                    if label:
+                        by_archetype.setdefault(label, []).append(vname)
+                    # Extract incumbent reasoning summary for challenger context
+                    cn = view.section("causal_narrative")
+                    inc_summary: dict[str, Any] = {
+                        "wedge": label,
+                        "summary": cn.get("summary") or cn.get("executive_summary", ""),
+                    }
+                    wts = view.why_they_stay
+                    if wts:
+                        inc_summary["why_they_stay"] = wts.get("summary", "")
+                    triggers = view.switch_triggers
+                    if triggers:
+                        inc_summary["switch_triggers"] = [
+                            t.get("type", "") for t in triggers[:3]
+                        ]
+                    if inc_summary.get("summary"):
+                        incumbent_reasoning[vname] = inc_summary
+                if by_archetype:
+                    challenger_ctx["incumbent_archetypes"] = by_archetype
+                if incumbent_reasoning:
+                    challenger_ctx["incumbent_reasoning"] = incumbent_reasoning
 
         best = max(challenger_signals, key=lambda o: o["opportunity_score"])
         review_ids = [o["review_id"] for o in challenger_signals if o.get("review_id")]
@@ -2146,8 +2296,9 @@ async def _generate_challenger_campaigns(
         _cincumbents = [c["name"] for c in (challenger_ctx.get("signal_summary") or {}).get("incumbents_losing", []) if c.get("name")]
         challenger_blog_urls = await _fetch_blog_posts(
             pool, pipeline="b2b", vendor_name=challenger_name, category=challenger_ctx.get("category"),
-            pain_categories=_cpains[:3] or None,
+            pain_categories=_cpains or None,
             alternative_vendors=_cincumbents[:3] or None,
+            contact_role=target.get("contact_role"),
             include_drafts=True,
         )
         # Gate URL for challenger-specific report

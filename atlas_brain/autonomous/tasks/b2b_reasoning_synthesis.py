@@ -141,8 +141,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if llm is None:
         return {"_skip_synthesis": "No LLM available for reasoning synthesis"}
 
-    from ...reasoning.single_pass_prompts.battle_card_reasoning import (
-        BATTLE_CARD_REASONING_PROMPT,
+    from ...reasoning.single_pass_prompts.reasoning_synthesis import (
+        REASONING_SYNTHESIS_PROMPT,
     )
     from ...services.protocols import Message
 
@@ -189,7 +189,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
             for attempt in range(max_attempts):
                 messages = [
-                    Message(role="system", content=BATTLE_CARD_REASONING_PROMPT),
+                    Message(role="system", content=REASONING_SYNTHESIS_PROMPT),
                     Message(role="user", content=payload),
                 ]
                 if attempt > 0 and last_text:

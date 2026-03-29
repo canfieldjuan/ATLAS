@@ -2356,7 +2356,7 @@ class TestChurnIntelligenceExecutionProgress:
                 )
 
         async def fake_gather(*coros, **kwargs):
-            if len(coros) == 33:
+            if len(coros) == 34:
                 for coro in coros:
                     close = getattr(coro, "close", None)
                     if close:
@@ -2396,6 +2396,7 @@ class TestChurnIntelligenceExecutionProgress:
                     [],                               # product_profiles_raw
                     ([], []),                         # _review_text_aggs
                     [],                               # _department_dist
+                    [],                               # _company_size_dist
                     ([], []),                         # _contract_ctx_aggs
                     [],                               # _sentiment_tenure_raw
                     [],                               # _turning_points_raw

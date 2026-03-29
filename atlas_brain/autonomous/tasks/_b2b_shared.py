@@ -105,6 +105,48 @@ def _synthesis_reference_confidence_min() -> float:
     return float(settings.b2b_churn.synthesis_reference_confidence_min)
 
 
+# Overreaching absolute phrases paired with evidence-calibrated replacements.
+# Checked in the validator (raises a warning) and in the sanitizer (auto-replaced).
+_BATTLE_CARD_OVERREACH_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("inability to execute", "execution risk is emerging"),
+    ("shows an inability to", "shows emerging risk of"),
+    ("inability to deliver", "delivery risk is present"),
+    ("strongest loser", "losing momentum in evaluated segments"),
+    ("biggest loser", "losing momentum in evaluated segments"),
+    ("clear loser", "losing ground in evaluated segments"),
+    ("failing across the board", "showing broad evaluation pressure"),
+    ("failing at scale", "facing scaling pressure"),
+    ("customers are fleeing", "buyers are actively evaluating alternatives"),
+    ("customers are abandoning", "buyers are evaluating alternatives"),
+    ("customers are leaving in droves", "buyers are evaluating alternatives at scale"),
+    ("is collapsing", "is under increasing pressure"),
+    ("is crumbling", "is showing structural weakness"),
+    ("cannot execute", "faces execution risk"),
+    ("has lost the market", "is losing momentum in evaluated segments"),
+)
+
+
+def _battle_card_overreach_violations(text: str) -> list[str]:
+    """Return banned overreach phrases found in text."""
+    lowered = text.lower()
+    return [phrase for phrase, _ in _BATTLE_CARD_OVERREACH_REPLACEMENTS if phrase in lowered]
+
+
+def _battle_card_replace_overreach(text: str) -> str:
+    """Replace overreaching phrases with evidence-calibrated language."""
+    result = text
+    for phrase, replacement in _BATTLE_CARD_OVERREACH_REPLACEMENTS:
+        lowered = result.lower()
+        if phrase not in lowered:
+            continue
+        idx = lowered.index(phrase)
+        # Preserve sentence casing: if phrase starts a sentence, capitalize replacement.
+        if idx == 0 or lowered[idx - 1] in ".!?\n":
+            replacement = replacement[0].upper() + replacement[1:]
+        result = result[:idx] + replacement + result[idx + len(phrase):]
+    return result
+
+
 def _synthesis_expert_take_max_words() -> int:
     """Return the configured max word count for scorecard expert_take."""
     return int(settings.b2b_churn.synthesis_expert_take_max_words)
@@ -316,6 +358,67 @@ def _battle_card_quote_sort_key(raw_quote: Any) -> tuple[float, int, int]:
     return (urgency, specificity, metadata_points)
 
 
+_PAIN_SIGNAL_TERMS: frozenset[str] = frozenset([
+    "expensive", "pricey", "costly", "overpriced",
+    "difficult", "frustrating", "complicated", "confusing", "clunky",
+    "crashes", "crash", "bugs", "broken", "unreliable", "outage",
+    "poor", "terrible", "awful", "disappointing", "subpar",
+    "canceling", "cancelling", "switching to", "switched to",
+    "migrating to", "as a replacement", "looking to replace",
+    "looking for alternative", "considering switching",
+    "evaluating alternatives", "evaluating a replacement",
+    "unfortunately",
+    "not user-friendly", "not intuitive", "not great", "not good",
+    "unable to", "needs improvement",
+    "missing feature", "limited feature",
+    "price increase", "prices have", "pricing issues", "pricing concerns",
+    "issues with", "problems with",
+])
+
+_POSITIVE_ONLY_PHRASES: tuple[str, ...] = (
+    "perfect score",
+    "rate customer support a perfect",
+    "customer support is good",
+    "support is excellent",
+    "support is amazing",
+    "support is outstanding",
+    "very positive experience",
+    "highly recommend",
+    "no complaints",
+    "no issues",
+    "love everything about",
+    "could not be happier",
+    "best tool",
+    "best crm",
+)
+
+
+def _quote_has_pain_signal(
+    quote_text: str,
+    urgency: float = 0.0,
+    rating: float | None = None,
+    rating_max: float | None = None,
+) -> bool:
+    """Return True if the quote is appropriate for a pain/weakness section.
+
+    Rejects clearly-positive testimonials. High-urgency quotes (>= 6.5) are
+    kept even when ambiguous to avoid discarding thin evidence pools.
+    """
+    lowered = quote_text.lower().strip()
+    if not lowered:
+        return False
+    if rating is not None and rating_max and float(rating_max) > 0:
+        if float(rating) / float(rating_max) >= 0.80:
+            return False
+    for phrase in _POSITIVE_ONLY_PHRASES:
+        if phrase in lowered:
+            if not any(t in lowered for t in _PAIN_SIGNAL_TERMS):
+                return False
+    if any(t in lowered for t in _PAIN_SIGNAL_TERMS):
+        return True
+    return urgency >= 6.5
+
+
 def _build_llm_trace_metadata(
     phase: str,
     *,
@@ -503,6 +606,12 @@ def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
     claims: set[str] = set()
     _battle_card_add_claim(claims, card.get("total_reviews"))
     _battle_card_add_claim(claims, card.get("churn_pressure_score"))
+    acct = card.get("account_pressure_metrics") or {}
+    for key in ("total_accounts", "active_eval_count", "high_intent_count"):
+        _battle_card_add_claim(claims, acct.get(key))
+    for item in card.get("high_intent_companies") or []:
+        if isinstance(item, dict):
+            _battle_card_add_claim(claims, item.get("urgency"))
     data = card.get("objection_data") or {}
     for key in ("price_complaint_rate", "dm_churn_rate"):
         _battle_card_add_claim(claims, data.get(key), pct=True)
@@ -532,6 +641,11 @@ def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
                         continue
                     _battle_card_add_wrapper_claim(claims, segment.get("estimated_reach"))
                     _battle_card_add_claim(claims, segment.get("sample_size"))
+        account_reasoning = contracts.get("account_reasoning") or {}
+        if isinstance(account_reasoning, dict):
+            _battle_card_add_wrapper_claim(claims, account_reasoning.get("total_accounts"))
+            _battle_card_add_wrapper_claim(claims, account_reasoning.get("active_eval_count"))
+            _battle_card_add_wrapper_claim(claims, account_reasoning.get("high_intent_count"))
         displacement = contracts.get("displacement_reasoning") or {}
         if isinstance(displacement, dict):
             migration = displacement.get("migration_proof") or {}
@@ -1522,6 +1636,8 @@ def _sanitize_battle_card_text(
         for term in low_gap_terms:
             if term and term in cleaned.lower():
                 return _battle_card_safe_summary(card) if path == "executive_summary" else "Workflow friction is showing up in customer feedback."
+    if _battle_card_overreach_violations(cleaned):
+        cleaned = _battle_card_replace_overreach(cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
@@ -1546,12 +1662,21 @@ def _battle_card_quote_entries(card: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             quote = str(item.get("quote") or "").strip()
             urgency = float(item.get("urgency") or 0)
+            rating = item.get("rating")
+            rating_max = item.get("rating_max")
         else:
             quote = str(item or "").strip()
             urgency = 0.0
+            rating = None
+            rating_max = None
         if quote and quote not in seen:
             seen.add(quote)
-            entries.append({"quote": quote, "urgency": urgency})
+            entries.append({
+                "quote": quote,
+                "urgency": urgency,
+                "rating": rating,
+                "rating_max": rating_max,
+            })
     return entries
 
 
@@ -1567,6 +1692,15 @@ def _battle_card_best_supported_quote(
     entries = _battle_card_quote_entries(card)
     if excluded_quotes:
         entries = [entry for entry in entries if entry["quote"] not in excluded_quotes]
+    entries = [
+        e for e in entries
+        if _quote_has_pain_signal(
+            e["quote"],
+            urgency=float(e.get("urgency") or 0),
+            rating=e.get("rating"),
+            rating_max=e.get("rating_max"),
+        )
+    ]
     if not entries:
         return ""
     context_tokens = {
@@ -1767,15 +1901,34 @@ def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, 
         if fallback_plays:
             sanitized["recommended_plays"] = fallback_plays
     allowed_quotes = _battle_card_allowed_quotes(card)
+    pain_quote_meta: dict[str, dict[str, Any]] = {}
+    for _pq in card.get("customer_pain_quotes") or []:
+        if isinstance(_pq, dict):
+            _qt = str(_pq.get("quote") or "").strip()
+            if _qt:
+                pain_quote_meta[_qt] = _pq
     weaknesses = sanitized.get("weakness_analysis") if isinstance(sanitized, dict) else None
     if allowed_quotes and isinstance(weaknesses, list):
         for item in weaknesses:
             if not isinstance(item, dict):
                 continue
             customer_quote = str(item.get("customer_quote") or "").strip()
-            if customer_quote and customer_quote not in allowed_quotes:
+            needs_replacement = bool(customer_quote and customer_quote not in allowed_quotes)
+            if not needs_replacement and customer_quote:
+                _meta = pain_quote_meta.get(customer_quote) or {}
+                if not _quote_has_pain_signal(
+                    customer_quote,
+                    urgency=float(_meta.get("urgency") or 0),
+                    rating=_meta.get("rating"),
+                    rating_max=_meta.get("rating_max"),
+                ):
+                    needs_replacement = True
+            if needs_replacement:
                 context = "%s %s" % (item.get("weakness") or "", item.get("evidence") or "")
-                item["customer_quote"] = _battle_card_best_supported_quote(card, context)
+                excluded = {customer_quote} if customer_quote else None
+                item["customer_quote"] = _battle_card_best_supported_quote(
+                    card, context, excluded_quotes=excluded,
+                )
     return sanitized
 
 
@@ -1933,6 +2086,102 @@ def _build_scorecard_locked_facts(scorecard: dict[str, Any]) -> dict[str, Any]:
             "resource_advantage": best.get("resource_advantage", ""),
         }
     return {k: v for k, v in locked.items() if v not in ("", [], None)}
+
+
+def _build_metric_ledger(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build a scoped metric ledger so the LLM knows exactly what each number means.
+
+    Each entry: {label, value, scope, wording}
+    scope options: all_reviews, pricing_mentions, decision_makers,
+                   active_eval_accounts, segment_sample, budget_data
+    """
+    entries: list[dict[str, Any]] = []
+    data = card.get("objection_data") or {}
+    total_reviews = int(data.get("total_reviews") or card.get("total_reviews") or 0)
+    if total_reviews:
+        entries.append({
+            "label": "Reviews analyzed",
+            "value": total_reviews,
+            "scope": "all_reviews",
+            "wording": f"{total_reviews:,} reviews analyzed across sources",
+        })
+    price_rate = data.get("price_complaint_rate")
+    if price_rate is not None:
+        pct = round(float(price_rate) * 100, 1)
+        base = int(round(float(price_rate) * total_reviews)) if total_reviews else None
+        base_text = f" ({base:,} of {total_reviews:,} reviews)" if base else ""
+        entries.append({
+            "label": "Price complaint rate",
+            "value": f"{pct}%",
+            "scope": "pricing_mentions",
+            "wording": f"{pct}% of reviews mention pricing as a pain point{base_text}",
+        })
+    dm_rate = data.get("dm_churn_rate")
+    if dm_rate is not None:
+        pct = round(float(dm_rate) * 100, 1)
+        entries.append({
+            "label": "Decision-maker churn signal rate",
+            "value": f"{pct}%",
+            "scope": "decision_makers",
+            "wording": f"{pct}% of decision-maker reviews show churn signals",
+        })
+    density = data.get("churn_signal_density")
+    if density is not None:
+        entries.append({
+            "label": "Churn signal density",
+            "value": round(float(density), 1),
+            "scope": "all_reviews",
+            "wording": f"{round(float(density), 1)}% of all reviews contain a churn signal",
+        })
+    avg_urgency = data.get("avg_urgency")
+    if avg_urgency is not None:
+        entries.append({
+            "label": "Average urgency score",
+            "value": round(float(avg_urgency), 1),
+            "scope": "all_reviews",
+            "wording": (
+                f"average urgency {round(float(avg_urgency), 1)}/10 across all reviews"
+            ),
+        })
+    acct_metrics = card.get("account_pressure_metrics") or {}
+    eval_count = acct_metrics.get("active_eval_count")
+    if eval_count is not None:
+        entries.append({
+            "label": "Active evaluation accounts",
+            "value": int(eval_count),
+            "scope": "active_eval_accounts",
+            "wording": f"{int(eval_count)} accounts actively evaluating alternatives",
+        })
+    budget = data.get("budget_context") or {}
+    price_inc_count = budget.get("price_increase_count")
+    price_inc_rate = budget.get("price_increase_rate")
+    if price_inc_count and price_inc_rate is not None:
+        pct = round(float(price_inc_rate) * 100, 1)
+        entries.append({
+            "label": "Price increase mentions",
+            "value": int(price_inc_count),
+            "scope": "budget_data",
+            "wording": (
+                f"{int(price_inc_count)} reviews mention a price increase "
+                f"({pct}% of all reviews)"
+            ),
+        })
+    for seg in (card.get("segment_playbook") or {}).get("priority_segments") or []:
+        if not isinstance(seg, dict):
+            continue
+        seg_name = str(seg.get("segment") or "").strip()
+        sample = seg.get("sample_size")
+        if seg_name and sample is not None:
+            entries.append({
+                "label": f"Segment sample: {seg_name}",
+                "value": int(sample),
+                "scope": "segment_sample",
+                "wording": (
+                    f"{int(sample)} reviews from {seg_name} accounts "
+                    f"(sample n={int(sample)})"
+                ),
+            })
+    return entries
 
 
 def _build_battle_card_locked_facts(card: dict[str, Any]) -> dict[str, Any]:
@@ -2121,6 +2370,34 @@ def _infer_driver_from_reasons(reasons: list[str], fallback: str | None = None) 
     return fallback
 
 
+def _get_vendor_reasoning(
+    vendor: str,
+    *,
+    synthesis_views: dict[str, Any] | None = None,
+    reasoning_lookup: dict[str, dict] | None = None,
+) -> dict[str, Any]:
+    """Get reasoning entry for a vendor, preferring SynthesisView.
+
+    Returns the same dict shape as reasoning_lookup entries: archetype,
+    confidence, executive_summary, key_signals, etc.  When a SynthesisView
+    is available, reads directly from it; otherwise falls back to the
+    pre-built reasoning_lookup shim.
+    """
+    if synthesis_views:
+        view = synthesis_views.get(vendor)
+        # Canonicalized fallback: try lowered/stripped key
+        if view is None and vendor:
+            canon = vendor.strip().lower()
+            for vn, v in synthesis_views.items():
+                if vn.strip().lower() == canon:
+                    view = v
+                    break
+        if view is not None:
+            from ._b2b_synthesis_reader import synthesis_view_to_reasoning_entry
+            return synthesis_view_to_reasoning_entry(view)
+    return (reasoning_lookup or {}).get(vendor, {})
+
+
 def _build_market_shift_signal(
     category: str,
     highest_vendor: str,
@@ -2128,13 +2405,15 @@ def _build_market_shift_signal(
     total_reviews: int,
     emerging: str,
     reasoning_lookup: dict[str, dict],
+    synthesis_views: dict[str, Any] | None = None,
 ) -> str:
     """Build market shift signal with archetype context when available."""
     base = (
         f"Based on {total_reviews} reviews, {highest_vendor} shows "
         f"{churn_density}% churn-signal density in {category}."
     )
-    arch = reasoning_lookup.get(highest_vendor, {}).get("archetype", "")
+    _rc = _get_vendor_reasoning(highest_vendor, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
+    arch = _rc.get("archetype", "")
     if arch:
         base += f" Classified as {arch} pattern."
     challenger_part = (
@@ -2331,6 +2610,17 @@ def _validate_battle_card_sales_copy(
             for term in low_gap_terms:
                 if term and term in lowered:
                     warnings.append(f"{path} elevates low-evidence feature gap '{term}' to a headline")
+        overreach = _battle_card_overreach_violations(text)
+        if overreach:
+            warnings.append(
+                f"{path} uses overreaching language: {overreach[0]!r}"
+            )
+    pain_quote_meta: dict[str, dict[str, Any]] = {}
+    for _pq in card.get("customer_pain_quotes") or []:
+        if isinstance(_pq, dict):
+            _qt = str(_pq.get("quote") or "").strip()
+            if _qt:
+                pain_quote_meta[_qt] = _pq
     weaknesses = generated.get("weakness_analysis")
     if allowed_quotes and isinstance(weaknesses, list):
         for idx, item in enumerate(weaknesses):
@@ -2341,6 +2631,32 @@ def _validate_battle_card_sales_copy(
                 warnings.append(
                     f"weakness_analysis[{idx}].customer_quote is not an exact source quote"
                 )
+            if customer_quote:
+                _meta = pain_quote_meta.get(customer_quote) or {}
+                if not _quote_has_pain_signal(
+                    customer_quote,
+                    urgency=float(_meta.get("urgency") or 0),
+                    rating=_meta.get("rating"),
+                    rating_max=_meta.get("rating_max"),
+                ):
+                    warnings.append(
+                        f"weakness_analysis[{idx}].customer_quote appears positive, not a pain signal"
+                    )
+    # Detect near-duplicate sections: collect all long string values and
+    # flag when the same substantial prefix appears in more than one field.
+    long_strings: list[tuple[str, str]] = []
+    for path, text in _battle_card_iter_text(generated):
+        if len(text.strip()) >= 80:
+            long_strings.append((path, text.strip()))
+    seen_prefixes: dict[str, str] = {}
+    for path, text in long_strings:
+        prefix = text[:80].lower()
+        if prefix in seen_prefixes and seen_prefixes[prefix] != path:
+            warnings.append(
+                f"{path} duplicates content already present in {seen_prefixes[prefix]}"
+            )
+        else:
+            seen_prefixes[prefix] = path
     return warnings
 
 
@@ -3131,6 +3447,15 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             poc.country AS company_country,
             poc.domain AS company_domain,
             poc.annual_revenue_range AS revenue_range,
+            poc.founded_year,
+            poc.total_funding,
+            poc.latest_funding_stage,
+            poc.headcount_growth_6m,
+            poc.headcount_growth_12m,
+            poc.headcount_growth_24m,
+            poc.publicly_traded_exchange,
+            poc.publicly_traded_symbol,
+            poc.short_description AS company_description,
             r.enrichment->'reviewer_context'->>'role_level' AS role_level,
             (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
             (r.enrichment->>'urgency_score')::numeric AS urgency,
@@ -3202,6 +3527,15 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             "company_country": r["company_country"],
             "company_domain": r["company_domain"],
             "revenue_range": r["revenue_range"],
+            "founded_year": r["founded_year"],
+            "total_funding": r["total_funding"],
+            "funding_stage": r["latest_funding_stage"],
+            "headcount_growth_6m": float(r["headcount_growth_6m"]) if r["headcount_growth_6m"] is not None else None,
+            "headcount_growth_12m": float(r["headcount_growth_12m"]) if r["headcount_growth_12m"] is not None else None,
+            "headcount_growth_24m": float(r["headcount_growth_24m"]) if r["headcount_growth_24m"] is not None else None,
+            "publicly_traded": r["publicly_traded_exchange"] or None,
+            "ticker": r["publicly_traded_symbol"] or None,
+            "company_description": r["company_description"],
             "role_level": r["role_level"],
             "decision_maker": r["is_dm"],
             "urgency": urgency,
@@ -3249,6 +3583,15 @@ async def _fetch_existing_company_signals(
                poc.employee_count AS verified_employee_count,
                poc.country AS company_country,
                poc.domain AS company_domain,
+               poc.founded_year,
+               poc.total_funding,
+               poc.latest_funding_stage,
+               poc.headcount_growth_6m,
+               poc.headcount_growth_12m,
+               poc.headcount_growth_24m,
+               poc.publicly_traded_exchange,
+               poc.publicly_traded_symbol,
+               poc.short_description AS company_description,
                r.enrichment->'competitors_mentioned' AS alternatives,
                r.enrichment->'quotable_phrases' AS quotes
         FROM b2b_company_signals cs
@@ -3288,6 +3631,15 @@ async def _fetch_existing_company_signals(
             "verified_employee_count": row.get("verified_employee_count"),
             "company_country": row.get("company_country"),
             "company_domain": row.get("company_domain"),
+            "founded_year": row.get("founded_year"),
+            "total_funding": row.get("total_funding"),
+            "funding_stage": row.get("latest_funding_stage"),
+            "headcount_growth_6m": float(row["headcount_growth_6m"]) if row.get("headcount_growth_6m") is not None else None,
+            "headcount_growth_12m": float(row["headcount_growth_12m"]) if row.get("headcount_growth_12m") is not None else None,
+            "headcount_growth_24m": float(row["headcount_growth_24m"]) if row.get("headcount_growth_24m") is not None else None,
+            "publicly_traded": row.get("publicly_traded_exchange") or None,
+            "ticker": row.get("publicly_traded_symbol") or None,
+            "company_description": row.get("company_description"),
             "alternatives": _safe_json(row.get("alternatives"), default=[]),
             "quotes": _safe_json(row.get("quotes"), default=[]),
         })
@@ -4052,7 +4404,7 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
         WITH ranked_quotes AS (
             SELECT vendor_name, id AS review_id, phrase.value AS quote,
                 (enrichment->>'urgency_score')::numeric AS urgency,
-                source, reviewed_at, rating,
+                source, reviewed_at, rating, rating_max,
                 reviewer_company, reviewer_title, company_size_raw,
                 COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
                 ROW_NUMBER() OVER (
@@ -4072,9 +4424,10 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
                     'quote', quote,
                     'urgency', urgency,
                     'review_id', review_id,
-                    'source', source,
+                    'source_site', source,
                     'reviewed_at', reviewed_at,
                     'rating', rating,
+                    'rating_max', rating_max,
                     'company', reviewer_company,
                     'title', reviewer_title,
                     'company_size', company_size_raw,
@@ -8223,6 +8576,50 @@ def _rank_high_intent_companies(companies: list[dict[str, Any]]) -> list[dict[st
     return sorted(companies, key=_score, reverse=True)
 
 
+def _normalize_canonical_accounts_for_battle_card(
+    accounts: list[dict[str, Any]],
+    *,
+    current_vendor: str = "",
+    blocked_names: set[str] | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Convert canonical account-intelligence rows to battle-card company shape."""
+    candidates: list[dict[str, Any]] = []
+    for a in accounts:
+        if not isinstance(a, dict):
+            continue
+        company = a.get("company_name") or a.get("name") or ""
+        if not company:
+            continue
+        role = a.get("buyer_role") or a.get("title") or ""
+        if role.lower() in ("unknown", ""):
+            role = ""
+        entry: dict[str, Any] = {
+            "company": company,
+            "urgency": float(a.get("urgency_score") or a.get("urgency") or 0),
+            "role": role or None,
+            "pain": a.get("pain_category") or None,
+            "company_size": a.get("company_size"),
+            "source": a.get("source"),
+            "buying_stage": a.get("buying_stage"),
+            "decision_maker": bool(a.get("decision_maker")),
+            "confidence_score": float(a.get("confidence_score") or 0),
+            "contract_end": a.get("contract_end"),
+            "industry": a.get("industry"),
+        }
+        if not _battle_card_company_is_display_safe(
+            entry["company"],
+            current_vendor=current_vendor,
+            blocked_names=blocked_names,
+            role=entry.get("role"),
+            company_size=entry.get("company_size"),
+            buying_stage=entry.get("buying_stage"),
+        ):
+            continue
+        candidates.append(entry)
+    return _rank_high_intent_companies(candidates)[:limit]
+
+
 def _battle_card_companies_from_evidence_vault(
     vault: dict[str, Any] | None,
     *,
@@ -8651,6 +9048,7 @@ def _build_deterministic_vendor_feed(
     company_lookup: dict[str, list],
     keyword_spike_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
+    synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     temporal_lookup: dict[str, dict] | None = None,
     limit: int = 50,
@@ -8726,8 +9124,10 @@ def _build_deterministic_vendor_feed(
             confidence = "medium"
         else:
             confidence = "low"
+        # Load reasoning once per vendor
+        _rc = _get_vendor_reasoning(vendor, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
+
         # Boost confidence when reasoning provides corroborating evidence
-        _rc = (reasoning_lookup or {}).get(vendor, {})
         if _rc.get("confidence", 0) >= 0.8 and confidence == "medium":
             confidence = "high"
 
@@ -8735,7 +9135,7 @@ def _build_deterministic_vendor_feed(
         comp_entries = competitor_lookup.get(vendor, [])
         displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
 
-        _vendor_archetype = (reasoning_lookup or {}).get(vendor, {}).get("archetype")
+        _vendor_archetype = _rc.get("archetype")
         score = _compute_churn_pressure_score(
             churn_density=churn_density,
             avg_urgency=avg_urgency,
@@ -8800,7 +9200,7 @@ def _build_deterministic_vendor_feed(
         ]
 
         # Risk level -- prefer reasoning conclusion, fall back to deterministic
-        _rc_risk = (reasoning_lookup or {}).get(vendor, {}).get("risk_level", "")
+        _rc_risk = _rc.get("risk_level", "")
         if _rc_risk:
             risk_level = _rc_risk
         elif score >= 70:
@@ -8861,20 +9261,25 @@ def _build_deterministic_vendor_feed(
             "named_accounts": named_accounts,
             "affected_segments": affected_segments,
         }
-        rc = (reasoning_lookup or {}).get(vendor, {})
-        if rc:
-            entry["archetype"] = rc.get("archetype", "")
-            entry["archetype_confidence"] = rc.get("confidence", 0)
-            entry["archetype_risk_level"] = rc.get("risk_level", "")
-            entry["reasoning_mode"] = rc.get("mode", "")
+        if _rc:
+            entry["archetype"] = _rc.get("archetype", "")
+            entry["archetype_confidence"] = _rc.get("confidence", 0)
+            entry["archetype_risk_level"] = _rc.get("risk_level", "")
+            entry["reasoning_mode"] = _rc.get("mode", "")
+            # Synthesis-native fields when available
+            if _rc.get("mode") == "synthesis":
+                entry["reasoning_source"] = "synthesis"
+                summary = _rc.get("executive_summary", "")
+                if summary:
+                    entry["reasoning_summary"] = summary
         candidates.append(entry)
 
     # Reasoning-weighted sort: vendors with high-confidence archetypes get a boost
     def _sort_key(x: dict) -> tuple:
         score = x["churn_pressure_score"]
-        rc = (reasoning_lookup or {}).get(x.get("vendor", ""), {})
-        # High-confidence reasoning adds up to 5 points to sort priority
-        reasoning_boost = min(rc.get("confidence", 0) * 5, 5.0) if rc.get("archetype") else 0
+        conf = x.get("archetype_confidence", 0)
+        has_arch = bool(x.get("archetype"))
+        reasoning_boost = min(conf * 5, 5.0) if has_arch else 0
         return (-(score + reasoning_boost),)
     candidates.sort(key=_sort_key)
     return candidates[:limit]
@@ -8885,6 +9290,7 @@ def _build_deterministic_displacement_map(
     competitor_reasons: list[dict[str, Any]],
     quote_lookup: dict[str, list],
     *,
+    synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
@@ -8894,7 +9300,32 @@ def _build_deterministic_displacement_map(
     survive.  Pure implied_preference edges are market-pain data, not displacement.
     """
     reason_lookup = _build_reason_lookup(competitor_reasons)
-    _rl = reasoning_lookup or {}
+    def _rl_get(v: str) -> dict:
+        return _get_vendor_reasoning(v, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
+    _rl = reasoning_lookup or {}  # kept for dict iteration only
+
+    def _source_vendor_wedge(vendor_name: str) -> str:
+        canon = _canonicalize_vendor(vendor_name)
+        if not canon:
+            return ""
+        if synthesis_views:
+            view = synthesis_views.get(canon)
+            if view is None:
+                for key, candidate in synthesis_views.items():
+                    if _canonicalize_vendor(key) == canon:
+                        view = candidate
+                        break
+            if view is not None:
+                wedge = getattr(view, "primary_wedge", None)
+                if wedge is not None:
+                    return str(getattr(wedge, "value", "") or "")
+                section = getattr(view, "section", None)
+                if callable(section):
+                    cn = section("causal_narrative")
+                    if isinstance(cn, dict):
+                        return str(cn.get("primary_wedge") or "")
+        return str(_rl_get(canon).get("archetype") or "")
+
     results: list[dict[str, Any]] = []
     for row in competitive_disp:
         vendor = _canonicalize_vendor(row.get("vendor") or "")
@@ -8940,7 +9371,7 @@ def _build_deterministic_displacement_map(
                     key=lambda x: (x[1], canonical_priority.get(x[0], 0)),
                 )[0]
             else:
-                # All keys failed normalization — try keyword inference on raw keys
+                # All keys failed normalization -- try keyword inference on raw keys
                 driver = _infer_driver_from_reasons(list(reason_cats.keys()))
         else:
             reasons = reason_lookup.get((vendor, competitor), [])
@@ -8955,7 +9386,7 @@ def _build_deterministic_displacement_map(
         else:
             strength = "emerging"
         # Boost signal strength when source vendor has category_disruption or feature_gap archetype
-        src_arch = _rl.get(vendor, {}).get("archetype", "")
+        src_arch = _source_vendor_wedge(vendor)
         if src_arch in ("category_disruption", "feature_gap") and strength == "emerging":
             strength = "moderate"
 
@@ -8980,8 +9411,8 @@ def _build_deterministic_displacement_map(
             "industries": row.get("industries", []),
             "company_sizes": row.get("company_sizes", []),
         }
-        _src_rc = _rl.get(vendor, {})
-        _tgt_rc = _rl.get(competitor, {})
+        _src_rc = _rl_get(vendor)
+        _tgt_rc = _rl_get(competitor)
         if _src_rc.get("archetype"):
             edge_entry["source_archetype"] = _src_rc["archetype"]
             edge_entry["source_archetype_confidence"] = _src_rc.get("confidence", 0)
@@ -9160,6 +9591,7 @@ def _build_deterministic_vendor_scorecards(
     product_profile_lookup: dict[str, dict],
     prior_reports: list[dict[str, Any]],
     inbound_displacement_lookup: dict[str, int] | None = None,
+    synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     temporal_lookup: dict[str, dict] | None = None,
     timeline_lookup: dict[str, list[dict]] | None = None,
@@ -9255,7 +9687,7 @@ def _build_deterministic_vendor_scorecards(
         else:
             confidence = "low"
         # Boost confidence when reasoning provides corroborating evidence
-        _rc = (reasoning_lookup or {}).get(vendor, {})
+        _rc = _get_vendor_reasoning(vendor, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
         if _rc.get("confidence", 0) >= 0.8 and confidence == "medium":
             confidence = "high"
 
@@ -9294,7 +9726,7 @@ def _build_deterministic_vendor_scorecards(
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
         displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
-        _vendor_archetype = (reasoning_lookup or {}).get(vendor, {}).get("archetype")
+        _vendor_archetype = _rc.get("archetype")
         churn_pressure_score = _compute_churn_pressure_score(
             churn_density=churn_density,
             avg_urgency=avg_urgency,
@@ -9478,21 +9910,23 @@ def _build_deterministic_vendor_scorecards(
         if tenures:
             sc_entry["customer_tenure_profile"] = tenures[:5]
 
-        rc = (reasoning_lookup or {}).get(vendor, {})
-        if rc:
-            sc_entry["archetype"] = rc.get("archetype", "")
-            sc_entry["archetype_confidence"] = rc.get("confidence", 0)
-            sc_entry["reasoning_summary"] = rc.get("executive_summary", "")
-            sc_entry["falsification_conditions"] = rc.get("falsification_conditions", [])
-            sc_entry["uncertainty_sources"] = rc.get("uncertainty_sources", [])
-            sc_entry["reasoning_mode"] = rc.get("mode", "")
-            rc_risk = rc.get("risk_level", "")
+        if _rc:
+            sc_entry["archetype"] = _rc.get("archetype", "")
+            sc_entry["archetype_confidence"] = _rc.get("confidence", 0)
+            sc_entry["reasoning_summary"] = _rc.get("executive_summary", "")
+            sc_entry["falsification_conditions"] = _rc.get("falsification_conditions", [])
+            sc_entry["uncertainty_sources"] = _rc.get("uncertainty_sources", [])
+            sc_entry["reasoning_mode"] = _rc.get("mode", "")
+            rc_risk = _rc.get("risk_level", "")
             if rc_risk:
                 sc_entry["risk_level"] = rc_risk
+            if _rc.get("mode") == "synthesis":
+                sc_entry["reasoning_source"] = "synthesis"
         results.append(sc_entry)
     def _sc_sort_key(x: dict) -> tuple:
-        rc = (reasoning_lookup or {}).get(x.get("vendor", ""), {})
-        reasoning_boost = min(rc.get("confidence", 0) * 5, 5.0) if rc.get("archetype") else 0
+        conf = x.get("archetype_confidence", 0)
+        has_arch = bool(x.get("archetype"))
+        reasoning_boost = min(conf * 5, 5.0) if has_arch else 0
         return (-(x["avg_urgency"] + reasoning_boost), -(x["churn_signal_density"]), x["vendor"])
     results.sort(key=_sc_sort_key)
     return results[:limit]
@@ -9510,13 +9944,18 @@ def _build_vendor_deep_dives(
     price_lookup: dict[str, float],
     sentiment_lookup: dict[str, dict[str, int]],
     buyer_auth_lookup: dict[str, dict] | None = None,
+    synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     limit: int = 60,
 ) -> list[dict[str, Any]]:
     """Build comprehensive per-vendor deep dive reports, sorted by churn pressure."""
-    _rl = reasoning_lookup or {}
+    def _rl_get(v: str) -> dict:
+        return _get_vendor_reasoning(v, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
+    _rl = reasoning_lookup or {}  # kept for dict iteration only
     _ba = buyer_auth_lookup or {}
     results: list[dict[str, Any]] = []
+    _SENT_POS = {"stable_positive", "improving"}
+    _SENT_NEG = {"consistently_negative", "declining"}
 
     for row in vendor_scores:
         v = _canonicalize_vendor(row.get("vendor_name") or "")
@@ -9531,7 +9970,7 @@ def _build_vendor_deep_dives(
         pr_rate = float(price_lookup.get(v, 0))
         comp_entries = competitor_lookup.get(v, [])
         disp_mentions = sum(int(c.get("mentions") or 0) for c in comp_entries)
-        _rc = _rl.get(v, {})
+        _rc = _rl_get(v)
 
         pressure = _compute_churn_pressure_score(
             churn_density=churn_density,
@@ -9566,12 +10005,12 @@ def _build_vendor_deep_dives(
         displacement_targets = sorted(
             [
                 {
-                    "vendor": c.get("competitor", ""),
+                    "vendor": c.get("name", ""),
                     "mention_count": int(c.get("mentions") or c.get("mention_count") or 0),
                     "primary_driver": c.get("primary_driver"),
                 }
                 for c in comp_entries
-                if c.get("competitor")
+                if c.get("name")
             ],
             key=lambda x: -x["mention_count"],
         )[:12]
@@ -9631,12 +10070,19 @@ def _build_vendor_deep_dives(
                 })
         case_studies.sort(key=lambda x: -x["urgency"])
 
-        # Sentiment breakdown
+        # Sentiment breakdown -- map direction strings to pos/neg/neutral buckets
         sent = sentiment_lookup.get(v, {})
+        _sent_pos = sum(cnt for d, cnt in sent.items() if d in _SENT_POS)
+        _sent_neg = sum(cnt for d, cnt in sent.items() if d in _SENT_NEG)
+        _sent_neu = sum(cnt for d, cnt in sent.items() if d not in _SENT_POS and d not in _SENT_NEG)
 
-        # Buyer role
+        # Buyer role -- skip "unknown" entries
         ba = _ba.get(v, {})
-        dominant_buyer_role = ba.get("dominant_role") if isinstance(ba, dict) else None
+        if isinstance(ba, dict) and ba.get("role_types"):
+            _rt = {k: n for k, n in ba["role_types"].items() if k and k != "unknown"}
+            dominant_buyer_role = max(_rt, key=_rt.get, default=None) if _rt else None
+        else:
+            dominant_buyer_role = None
 
         results.append({
             "vendor": v,
@@ -9660,9 +10106,9 @@ def _build_vendor_deep_dives(
             "company_size_distribution": size_distribution,
             "case_studies": case_studies[:5],
             "sentiment_breakdown": {
-                "positive": int(sent.get("positive") or 0),
-                "negative": int(sent.get("negative") or 0),
-                "neutral": int(sent.get("neutral") or 0),
+                "positive": _sent_pos,
+                "negative": _sent_neg,
+                "neutral": _sent_neu,
             },
         })
 
@@ -9681,6 +10127,7 @@ def _build_deterministic_category_overview(
     dm_lookup: dict[str, float],
     price_lookup: dict[str, float],
     competitor_lookup: dict[str, list[dict]],
+    synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
@@ -9691,7 +10138,9 @@ def _build_deterministic_category_overview(
         by_category.setdefault(category, []).append(row)
 
     results: list[dict[str, Any]] = []
-    _rl = reasoning_lookup or {}
+    def _rl_get(v: str) -> dict:
+        return _get_vendor_reasoning(v, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
+    _rl = reasoning_lookup or {}  # kept for dict iteration only
     for category, rows in by_category.items():
         ranked = sorted(
             rows,
@@ -9751,7 +10200,7 @@ def _build_deterministic_category_overview(
             pr_rate = float(price_lookup.get(v, 0))
             comp_ent = competitor_lookup.get(v, [])
             disp_m = sum(c.get("mentions", 0) for c in comp_ent)
-            _v_arch = _rl.get(v, {}).get("archetype")
+            _v_arch = _rl_get(v).get("archetype")
             vr_score = _compute_churn_pressure_score(
                 churn_density=cd, avg_urgency=urg, dm_churn_rate=dm_rate,
                 displacement_mention_count=disp_m, price_complaint_rate=pr_rate,
@@ -9759,7 +10208,7 @@ def _build_deterministic_category_overview(
                 archetype=_v_arch,
             )
             # Use reasoning risk_level when available (Gap #26)
-            _rc_risk = _rl.get(v, {}).get("risk_level", "")
+            _rc_risk = _rl_get(v).get("risk_level", "")
             _det_risk = "high" if vr_score >= 70 else ("medium" if vr_score >= 40 else "low")
             vendor_rankings.append({
                 "vendor": v,
@@ -9809,7 +10258,7 @@ def _build_deterministic_category_overview(
         arch_conf_sums: dict[str, float] = {}
         for r in rows:
             v = _canonicalize_vendor(r.get("vendor_name") or "")
-            _rc = _rl.get(v, {})
+            _rc = _rl_get(v)
             arch = _rc.get("archetype", "")
             if arch:
                 arch_counts[arch] = arch_counts.get(arch, 0) + 1
@@ -9829,6 +10278,7 @@ def _build_deterministic_category_overview(
             "dominant_pain": dominant_pain,
             "market_shift_signal": _build_market_shift_signal(
                 category, highest_vendor, churn_density, total_reviews, emerging, _rl,
+                synthesis_views=synthesis_views,
             ),
             "industry_distribution": top_industries,
             "company_size_distribution": top_sizes,
@@ -9839,6 +10289,58 @@ def _build_deterministic_category_overview(
         })
     results.sort(key=lambda x: x["category"])
     return results[:limit]
+
+
+def _get_battle_card_reasoning_state(
+    vendor: str,
+    *,
+    synthesis_views: dict[str, Any] | None = None,
+    reasoning_lookup: dict[str, dict] | None = None,
+    reasoning_synthesis_lookup: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Unified reasoning state for battle card builders.
+
+    Consolidates the split logic that previously read from _rc,
+    reasoning_synthesis_lookup, and _battle_card_has_confident_synthesis
+    into a single resolved dict.  No card mutation here.
+    """
+    rc = _get_vendor_reasoning(
+        vendor, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup,
+    )
+    archetype = rc.get("archetype", "")
+    confidence = rc.get("confidence", 0)
+    risk_level = rc.get("risk_level", "")
+    key_signals = rc.get("key_signals", [])
+    falsification = rc.get("falsification_conditions", [])
+    uncertainty = rc.get("uncertainty_sources", [])
+    mode = rc.get("mode", "")
+    executive_summary = rc.get("executive_summary", "")
+
+    # Determine reasoning source
+    reasoning_source = "synthesis" if mode == "synthesis" else (
+        "synthesis_fallback" if mode == "synthesis_fallback" else "legacy"
+    )
+
+    # Confident reasoning: either high-confidence archetype from unified
+    # helper, or confident synthesis from raw synthesis lookup fallback
+    has_confident = bool(archetype) and confidence >= 0.7
+    if not has_confident:
+        synth = (reasoning_synthesis_lookup or {}).get(vendor)
+        if synth is not None:
+            has_confident = _battle_card_has_confident_synthesis(synth)
+
+    return {
+        "archetype": archetype,
+        "confidence": confidence,
+        "risk_level": risk_level,
+        "key_signals": key_signals,
+        "falsification_conditions": falsification,
+        "uncertainty_sources": uncertainty,
+        "executive_summary": executive_summary,
+        "reasoning_source": reasoning_source,
+        "reasoning_mode": mode,
+        "has_confident_reasoning": has_confident,
+    }
 
 
 def _battle_card_has_confident_synthesis(synthesis: dict[str, Any] | None) -> bool:
@@ -9867,6 +10369,7 @@ def _build_deterministic_battle_cards(
     product_profile_lookup: dict[str, dict],
     competitive_disp: list[dict[str, Any]],
     competitor_reasons: list[dict[str, Any]],
+    synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     timeline_lookup: dict[str, list[dict]] | None = None,
     use_case_lookup: dict[str, list[dict]] | None = None,
@@ -9880,6 +10383,7 @@ def _build_deterministic_battle_cards(
     reasoning_synthesis_as_of_lookup: dict[str, Any] | None = None,
     synthesis_requested_as_of: date | None = None,
     category_dynamics_lookup: dict[str, dict[str, Any]] | None = None,
+    account_intel_lookup: dict[str, dict[str, Any]] | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Build per-vendor battle cards from aggregated data.
@@ -9924,14 +10428,18 @@ def _build_deterministic_battle_cards(
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
 
-        # Qualification gate -- reasoning can lower thresholds for high-confidence archetypes
-        _rc = (reasoning_lookup or {}).get(vendor, {})
-        _synth = (reasoning_synthesis_lookup or {}).get(vendor, {})
-        _has_reasoning = (
-            bool(_rc.get("archetype")) and _rc.get("confidence", 0) >= 0.7
-        ) or _battle_card_has_confident_synthesis(_synth)
+        # Resolve reasoning state once per vendor
+        reasoning_state = _get_battle_card_reasoning_state(
+            vendor,
+            synthesis_views=synthesis_views,
+            reasoning_lookup=reasoning_lookup,
+            reasoning_synthesis_lookup=reasoning_synthesis_lookup,
+        )
+
+        # Qualification gate -- reasoning can lower thresholds
+        _has_reasoning = reasoning_state["has_confident_reasoning"]
         _density_gate = 10 if _has_reasoning else 15
-        _urgency_gate = 5 if _has_reasoning else 6
+        _urgency_gate = 2.5 if _has_reasoning else 3.0
         _dm_gate = 0.2 if _has_reasoning else 0.3
         if churn_density < _density_gate and avg_urgency < _urgency_gate and dm_rate < _dm_gate:
             continue
@@ -9943,15 +10451,13 @@ def _build_deterministic_battle_cards(
             confidence = "medium"
         else:
             confidence = "low"
-        # Boost confidence when reasoning provides corroborating evidence
-        _rc = (reasoning_lookup or {}).get(vendor, {})
-        if _rc.get("confidence", 0) >= 0.8 and confidence == "medium":
+        if reasoning_state["confidence"] >= 0.8 and confidence == "medium":
             confidence = "high"
 
         comp_entries = competitor_lookup.get(vendor, [])
         displacement_mentions = sum(c.get("mentions", 0) for c in comp_entries)
 
-        _vendor_archetype = (reasoning_lookup or {}).get(vendor, {}).get("archetype")
+        _vendor_archetype = reasoning_state["archetype"]
         score = _compute_churn_pressure_score(
             churn_density=churn_density,
             avg_urgency=avg_urgency,
@@ -10025,6 +10531,15 @@ def _build_deterministic_battle_cards(
             if len(pain_quotes) >= 5:
                 break
             if isinstance(q, dict):
+                quote_text = str(q.get("quote") or "")
+                urgency = float(q.get("urgency") or 0)
+                if not _quote_has_pain_signal(
+                    quote_text,
+                    urgency=urgency,
+                    rating=q.get("rating"),
+                    rating_max=q.get("rating_max"),
+                ):
+                    continue
                 # Dedupe by review_id (exact same review)
                 rid = q.get("review_id", "")
                 if rid and rid in seen_review_ids:
@@ -10041,16 +10556,19 @@ def _build_deterministic_battle_cards(
                 if reviewer_key != ":":
                     seen_reviewers.add(reviewer_key)
                 pain_quotes.append({
-                    "quote": q.get("quote", ""),
-                    "urgency": q.get("urgency", 0),
+                    "quote": quote_text,
+                    "urgency": urgency,
                     "source_site": q.get("source_site", ""),
                     "company": q.get("company", ""),
                     "title": q.get("title", ""),
                     "company_size": q.get("company_size", ""),
                     "industry": q.get("industry", ""),
+                    "rating": q.get("rating"),
+                    "rating_max": q.get("rating_max"),
                 })
             elif isinstance(q, str):
-                pain_quotes.append({"quote": q, "urgency": 0})
+                if _quote_has_pain_signal(q):
+                    pain_quotes.append({"quote": q, "urgency": 0})
 
         # -- Section 3: Competitor Differentiators --
         differentiators: list[dict[str, Any]] = []
@@ -10142,26 +10660,36 @@ def _build_deterministic_battle_cards(
         }
 
         # -- Section 5: High-intent companies --
-        has_vault_company_signals = isinstance(vendor_vault, dict) and "company_signals" in vendor_vault
-        hi_companies = _battle_card_companies_from_evidence_vault(
-            vendor_vault,
+        # Priority: canonical account intelligence > evidence vault > churning_companies
+        acct_intel = (account_intel_lookup or {}).get(vendor, {})
+        canonical_accounts = (acct_intel.get("accounts") or []) if isinstance(acct_intel, dict) else []
+        hi_companies = _normalize_canonical_accounts_for_battle_card(
+            canonical_accounts,
             current_vendor=vendor,
             blocked_names=blocked_company_names,
             limit=5,
-        )
-        if not hi_companies and not has_vault_company_signals:
-            fallback_candidates = [
-                item for item in (company_lookup.get(vendor, []))
-                if _battle_card_company_is_display_safe(
-                    item.get("company"),
-                    current_vendor=vendor,
-                    blocked_names=blocked_company_names,
-                    role=item.get("role") or item.get("title"),
-                    company_size=item.get("company_size"),
-                    buying_stage=item.get("buying_stage"),
-                )
-            ]
-            hi_companies = _rank_high_intent_companies(fallback_candidates)[:5]
+        ) if canonical_accounts else []
+        if not hi_companies:
+            has_vault_company_signals = isinstance(vendor_vault, dict) and "company_signals" in vendor_vault
+            hi_companies = _battle_card_companies_from_evidence_vault(
+                vendor_vault,
+                current_vendor=vendor,
+                blocked_names=blocked_company_names,
+                limit=5,
+            )
+            if not hi_companies and not has_vault_company_signals:
+                fallback_candidates = [
+                    item for item in (company_lookup.get(vendor, []))
+                    if _battle_card_company_is_display_safe(
+                        item.get("company"),
+                        current_vendor=vendor,
+                        blocked_names=blocked_company_names,
+                        role=item.get("role") or item.get("title"),
+                        company_size=item.get("company_size"),
+                        buying_stage=item.get("buying_stage"),
+                    )
+                ]
+                hi_companies = _rank_high_intent_companies(fallback_candidates)[:5]
 
         # -- Section 6: Integration stack --
 
@@ -10207,8 +10735,71 @@ def _build_deterministic_battle_cards(
             tl_entries,
             limit=5,
         )
+        # Merge canonical account contract_end dates into deadlines
+        # Use hi_companies (display-safe) not raw canonical_accounts
+        if hi_companies and len(eval_deadlines) < 5:
+            seen_companies = {(d.get("company") or "").lower() for d in eval_deadlines}
+            for hc in hi_companies:
+                if not isinstance(hc, dict) or len(eval_deadlines) >= 5:
+                    break
+                c_end = hc.get("contract_end")
+                if not c_end:
+                    continue
+                c_name = hc.get("company") or ""
+                if not c_name or c_name.lower() in seen_companies:
+                    continue
+                eval_deadlines.append({
+                    "company": c_name,
+                    "evaluation_deadline": None,
+                    "contract_end": str(c_end),
+                    "decision_timeline": None,
+                    "urgency": float(hc.get("urgency") or 0),
+                    "title": hc.get("role"),
+                    "company_size": hc.get("company_size"),
+                    "industry": hc.get("industry"),
+                    "trigger_type": "contract_end",
+                    "buying_stage": hc.get("buying_stage"),
+                    "role": hc.get("role"),
+                    "pain": hc.get("pain"),
+                    "source": hc.get("source") or "account_intelligence",
+                })
+                seen_companies.add(c_name.lower())
+            eval_deadlines.sort(
+                key=lambda d: (-float(d.get("urgency") or 0),),
+            )
         if eval_deadlines:
             card_entry["active_evaluation_deadlines"] = eval_deadlines[:5]
+        # Derive account pressure summary from canonical account intelligence
+        if canonical_accounts:
+            acct_summary = acct_intel.get("summary") or {} if isinstance(acct_intel, dict) else {}
+            hi_count = int(acct_summary.get("high_intent_count") or 0)
+            ae_count = int(acct_summary.get("active_eval_signal_count") or 0)
+            dm_ct = int(acct_summary.get("decision_maker_count") or 0)
+            pparts: list[str] = []
+            if hi_count:
+                pparts.append(f"{hi_count} high-intent account{'s' if hi_count != 1 else ''}")
+            if ae_count:
+                pparts.append(f"{ae_count} active evaluation signal{'s' if ae_count != 1 else ''}")
+            if dm_ct:
+                pparts.append(f"{dm_ct} decision-maker signal{'s' if dm_ct != 1 else ''}")
+            if pparts:
+                card_entry["account_pressure_summary"] = "Detected: " + ", ".join(pparts) + "."
+                card_entry["account_pressure_metrics"] = {
+                    "high_intent_count": hi_count,
+                    "active_eval_count": ae_count,
+                    "decision_maker_count": dm_ct,
+                    "total_accounts": int(acct_summary.get("total_accounts") or 0),
+                }
+            priority_names = [
+                ca.get("company_name") or ca.get("name") or ""
+                for ca in canonical_accounts
+                if isinstance(ca, dict) and (
+                    float(ca.get("urgency_score") or 0) >= 6.0
+                    or ca.get("decision_maker")
+                )
+            ][:5]
+            if priority_names:
+                card_entry["priority_account_names"] = [n for n in priority_names if n]
         uc_entries = (use_case_lookup or {}).get(vendor, [])
         if uc_entries:
             card_entry["objection_data"]["product_depth"] = uc_entries[:5]
@@ -10219,14 +10810,14 @@ def _build_deterministic_battle_cards(
         if durations:
             card_entry["objection_data"]["tenure_churn_pattern"] = durations[:5]
 
-        rc = (reasoning_lookup or {}).get(vendor, {})
-        if rc:
-            card_entry["archetype"] = rc.get("archetype", "")
-            card_entry["archetype_confidence"] = rc.get("confidence", 0)
-            card_entry["archetype_risk_level"] = rc.get("risk_level", "")
-            card_entry["archetype_key_signals"] = rc.get("key_signals", [])
-            card_entry["falsification_conditions"] = rc.get("falsification_conditions", [])
-            card_entry["uncertainty_sources"] = rc.get("uncertainty_sources", [])
+        if reasoning_state.get("archetype"):
+            card_entry["archetype"] = reasoning_state["archetype"]
+            card_entry["archetype_confidence"] = reasoning_state["confidence"]
+            card_entry["archetype_risk_level"] = reasoning_state["risk_level"]
+            card_entry["archetype_key_signals"] = reasoning_state["key_signals"]
+            card_entry["falsification_conditions"] = reasoning_state["falsification_conditions"]
+            card_entry["uncertainty_sources"] = reasoning_state["uncertainty_sources"]
+            card_entry["reasoning_source"] = reasoning_state["reasoning_source"]
 
         # Inject category dynamics pool data for downstream council resolution
         _cat_key = card_entry.get("category") or ""
@@ -10291,8 +10882,9 @@ def _build_deterministic_battle_cards(
 
     def _bc_sort_key(x: dict) -> tuple:
         score = x["churn_pressure_score"]
-        rc = (reasoning_lookup or {}).get(x.get("vendor", ""), {})
-        reasoning_boost = min(rc.get("confidence", 0) * 5, 5.0) if rc.get("archetype") else 0
+        conf = x.get("archetype_confidence", 0)
+        has_arch = bool(x.get("archetype"))
+        reasoning_boost = min(conf * 5, 5.0) if has_arch else 0
         return (-(score + reasoning_boost),)
     cards.sort(key=_bc_sort_key)
     if limit is None:

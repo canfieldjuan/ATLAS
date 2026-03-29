@@ -410,7 +410,9 @@ async def _fetch_churn_signal(pool, vendor: str, today: date) -> dict | None:
         """
         SELECT archetype, archetype_confidence,
                reasoning_risk_level, reasoning_key_signals,
-               price_complaint_rate, decision_maker_churn_rate
+               price_complaint_rate, decision_maker_churn_rate,
+               total_reviews, churn_intent_count, avg_urgency_score,
+               top_competitors, sentiment_distribution
         FROM b2b_churn_signals
         WHERE LOWER(vendor_name) = LOWER($1)
         ORDER BY last_computed_at DESC
@@ -428,13 +430,58 @@ async def _fetch_churn_signal(pool, vendor: str, today: date) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             key_signals = []
 
+    # Compute churn_pressure_score from available columns
+    from ._b2b_shared import _compute_churn_pressure_score
+    total_reviews = int(row["total_reviews"] or 0)
+    churn_intent = int(row["churn_intent_count"] or 0)
+    churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+    avg_urgency = float(row["avg_urgency_score"] or 0)
+    dm_rate = float(row["decision_maker_churn_rate"] or 0)
+    pr_rate = float(row["price_complaint_rate"] or 0)
+    top_comps = row["top_competitors"]
+    if isinstance(top_comps, str):
+        try:
+            top_comps = json.loads(top_comps)
+        except (json.JSONDecodeError, TypeError):
+            top_comps = []
+    disp_count = len(top_comps) if isinstance(top_comps, list) else 0
+    churn_pressure_score = round(_compute_churn_pressure_score(
+        churn_density=churn_density,
+        avg_urgency=avg_urgency,
+        dm_churn_rate=dm_rate,
+        displacement_mention_count=disp_count,
+        price_complaint_rate=pr_rate,
+        total_reviews=total_reviews,
+        archetype=row["archetype"],
+    ), 1)
+
+    # Derive sentiment_direction from sentiment_distribution
+    sent_dist = row["sentiment_distribution"]
+    if isinstance(sent_dist, str):
+        try:
+            sent_dist = json.loads(sent_dist)
+        except (json.JSONDecodeError, TypeError):
+            sent_dist = {}
+    sentiment_direction = None
+    if isinstance(sent_dist, dict) and sent_dist:
+        _POS = {"stable_positive", "improving"}
+        _NEG = {"consistently_negative", "declining"}
+        pos = sum(v for k, v in sent_dist.items() if k in _POS)
+        neg = sum(v for k, v in sent_dist.items() if k in _NEG)
+        if neg > pos * 1.5:
+            sentiment_direction = "consistently_negative"
+        elif pos > neg * 1.5:
+            sentiment_direction = "stable_positive"
+        else:
+            sentiment_direction = "mixed"
+
     return {
         "archetype": row["archetype"],
         "archetype_confidence": float(row["archetype_confidence"]) if row["archetype_confidence"] is not None else None,
         "risk_level": row["reasoning_risk_level"],
         "key_signals": key_signals or [],
-        "churn_pressure_score": None,  # populated from battle card
-        "sentiment_direction": None,   # populated from battle card
+        "churn_pressure_score": churn_pressure_score,
+        "sentiment_direction": sentiment_direction,
         "price_complaint_rate": float(row["price_complaint_rate"]) if row["price_complaint_rate"] is not None else None,
         "dm_churn_rate": float(row["decision_maker_churn_rate"]) if row["decision_maker_churn_rate"] is not None else None,
     }
@@ -446,39 +493,11 @@ async def _fetch_synthesis_view(
     today: date,
     analysis_window_days: int,
 ) -> Any | None:
-    """Fetch latest reasoning synthesis view for one vendor."""
-    from ._b2b_synthesis_reader import load_synthesis_view
+    """Fetch best reasoning view for one vendor (synthesis-first, legacy fallback)."""
+    from ._b2b_synthesis_reader import load_best_reasoning_view
 
-    row = await pool.fetchrow(
-        """
-        SELECT as_of_date, schema_version, synthesis
-        FROM b2b_reasoning_synthesis
-        WHERE LOWER(vendor_name) = LOWER($1)
-          AND as_of_date <= $2
-          AND analysis_window_days = $3
-        ORDER BY as_of_date DESC, created_at DESC
-        LIMIT 1
-        """,
-        vendor,
-        today,
-        analysis_window_days,
-    )
-    if not row:
-        return None
-
-    raw = row["synthesis"]
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    if not isinstance(raw, dict):
-        return None
-    return load_synthesis_view(
-        raw,
-        vendor,
-        schema_version=row["schema_version"] or "",
-        as_of_date=row["as_of_date"],
+    return await load_best_reasoning_view(
+        pool, vendor, as_of=today, analysis_window_days=analysis_window_days,
     )
 
 
@@ -1267,6 +1286,25 @@ def _build_challenger_brief(
         if contract_gaps:
             incumbent_section["reasoning_contract_gaps"] = contract_gaps
 
+        # Phase 3 governance fields
+        wts = incumbent_synthesis_view.why_they_stay
+        if wts:
+            incumbent_section["why_they_stay"] = wts
+        cp = incumbent_synthesis_view.confidence_posture
+        if cp:
+            incumbent_section["confidence_posture"] = cp
+            limits = cp.get("limits")
+            if limits:
+                incumbent_section["confidence_limits"] = limits
+        st = incumbent_synthesis_view.switch_triggers
+        if st:
+            incumbent_section["switch_triggers"] = st
+        eg = incumbent_synthesis_view.evidence_governance
+        if eg:
+            cg = eg.get("coverage_gaps")
+            if isinstance(cg, list) and cg:
+                incumbent_section["coverage_gaps"] = cg
+
     # --- challenger_advantage ---
     challenger_strengths = []
     challenger_commonly_switched_from = []
@@ -1373,7 +1411,7 @@ def _build_challenger_brief(
         if target_accounts or total_target:
             target_accounts_source = "account_reasoning"
 
-    # --- sales_playbook (from battle card if available) ---
+    # --- sales_playbook (from battle card if available, fallback to segment_playbook) ---
     # LLM-enriched fields are added directly to the card dict (not nested).
     sales_playbook: dict[str, Any] = {}
     if battle_card:
@@ -1384,6 +1422,29 @@ def _build_challenger_brief(
             "talk_track": battle_card.get("talk_track") or battle_card.get("elevator_pitch") or "",
             "recommended_plays": battle_card.get("recommended_plays") or [],
         }
+    elif segment_playbook and isinstance(segment_playbook.get("priority_segments"), list):
+        _segs = segment_playbook["priority_segments"]
+        _plays = []
+        for _seg in _segs:
+            if not isinstance(_seg, dict):
+                continue
+            _play: dict[str, Any] = {}
+            _angle = _seg.get("best_opening_angle") or ""
+            _target = _seg.get("segment") or ""
+            _why = _seg.get("why_vulnerable") or ""
+            _disq = _seg.get("disqualifier") or ""
+            if _angle:
+                _play["play"] = _angle
+            if _target:
+                _play["target_segment"] = _target
+            if _why:
+                _play["key_message"] = _why
+            if _disq:
+                _play["timing"] = "Skip if: %s" % _disq
+            if _play:
+                _plays.append(_play)
+        if _plays:
+            sales_playbook = {"recommended_plays": _plays}
 
     # --- integration_comparison ---
     integration_comparison = _build_integration_comparison(
