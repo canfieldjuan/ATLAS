@@ -494,7 +494,7 @@ def _apply_blog_quality_gate(
     # Block nonexistent internal blog links
     internal_links = re.findall(r'/blog/([a-z0-9\-]+)', body)
     if internal_links:
-        known = set(content.get("related_slugs") or [])
+        known = set((blueprint.data_context or {}).get("_valid_internal_slugs") or [])
         fake = [lk for lk in internal_links if lk not in known and lk != blueprint.slug]
         if fake:
             blocking_issues.append(f"nonexistent_internal_links:{','.join(fake[:4])}")
@@ -695,6 +695,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         link_posts = await _fetch_related_for_linking(
             pool, blueprint.tags, blueprint.slug,
         )
+        # Store valid internal link slugs for quality gate validation
+        blueprint.data_context["_valid_internal_slugs"] = [
+            p["slug"] for p in (link_posts or []) if isinstance(p, dict) and p.get("slug")
+        ]
         content = _generate_content(
             llm, blueprint, cfg.blog_post_max_tokens,
             related_posts=link_posts,
@@ -5513,12 +5517,16 @@ def _fallback_target_keyword(blueprint: PostBlueprint) -> str:
         "vendor_alternative": f"{vendor} alternatives".strip(),
         "churn_report": f"{vendor} churn rate".strip(),
         "pricing_reality_check": f"{vendor} pricing".strip(),
-        "migration_guide": f"switch from {vendor}".strip(),
+        "migration_guide": f"switch to {vendor}".strip(),
         "switching_story": f"why teams leave {vendor}".strip(),
         "vendor_deep_dive": f"{vendor} reviews".strip(),
         "market_landscape": f"{category} software comparison".strip(),
         "pain_point_roundup": f"{category} software complaints".strip(),
-        "best_fit_guide": f"best {category} software".strip(),
+        "best_fit_guide": (
+            f"best {category} tools for {ctx.get('company_size', '').replace('_', ' ')}".strip()
+            if ctx.get("company_size") and ctx["company_size"] != "unknown"
+            else f"best {category} tools".strip()
+        ),
     }
     return kw_map.get(tt, vendor).lower() or blueprint.slug.replace("-", " ")[:50]
 
@@ -5778,11 +5786,12 @@ async def build_manual_topic_ctx(
             "slug": slug,
         })
     elif topic_type == "best_fit_guide":
-        slug = f"best-{_slugify(category)}-for-teams-{month_suffix}"
+        size = ctx.get("company_size") or "teams"
+        slug = f"best-{_slugify(category)}-for-{_slugify(size)}-{month_suffix}"
         ctx.update({
             "vendor_count": 0,
             "total_reviews": stats.get("total", 0),
-            "company_size": "small-teams",
+            "company_size": size,
             "slug": slug,
         })
     elif topic_type == "pricing_reality_check":
