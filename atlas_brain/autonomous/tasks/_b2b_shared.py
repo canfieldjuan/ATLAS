@@ -10322,8 +10322,20 @@ def _get_battle_card_reasoning_state(
     )
 
     # Confident reasoning: either high-confidence archetype from unified
-    # helper, or confident synthesis from raw synthesis lookup fallback
+    # helper, or confident synthesis view, or raw synthesis fallback
     has_confident = bool(archetype) and confidence >= 0.7
+    if not has_confident and synthesis_views:
+        view = synthesis_views.get(vendor)
+        if view is None and vendor:
+            canon = vendor.strip().lower()
+            for vn, v in synthesis_views.items():
+                if vn.strip().lower() == canon:
+                    view = v
+                    break
+        if view is not None:
+            w = getattr(view, "primary_wedge", None)
+            c = view.confidence("causal_narrative") if hasattr(view, "confidence") else ""
+            has_confident = bool(w) and c in ("medium", "high")
     if not has_confident:
         synth = (reasoning_synthesis_lookup or {}).get(vendor)
         if synth is not None:
@@ -10841,12 +10853,28 @@ def _build_deterministic_battle_cards(
         )
 
         # Inject reasoning synthesis via typed reader contract
-        synth = (reasoning_synthesis_lookup or {}).get(vendor, {})
-        if synth:
+        _synth_view = (synthesis_views or {}).get(vendor)
+        if _synth_view is None and vendor:
+            # Canonicalized fallback
+            canon = vendor.strip().lower()
+            for vn, v in (synthesis_views or {}).items():
+                if vn.strip().lower() == canon:
+                    _synth_view = v
+                    break
+        if _synth_view is not None:
+            from ._b2b_synthesis_reader import inject_synthesis_into_card
+            inject_synthesis_into_card(
+                card_entry,
+                _synth_view,
+                requested_as_of=synthesis_requested_as_of,
+                vendor_evidence=vendor_evidence,
+            )
+        elif (reasoning_synthesis_lookup or {}).get(vendor):
+            # Legacy fallback: raw synthesis dict when no typed view available
             from ._b2b_synthesis_reader import load_synthesis_view, inject_synthesis_into_card
             as_of_date = (reasoning_synthesis_as_of_lookup or {}).get(vendor)
             view = load_synthesis_view(
-                synth,
+                reasoning_synthesis_lookup[vendor],
                 vendor,
                 as_of_date=as_of_date,
             )

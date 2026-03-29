@@ -230,3 +230,86 @@ class TestCoexistenceWithSynthesisInjection:
             "V", synthesis_views=views,
         )
         assert state["has_confident_reasoning"] is True
+
+
+# ---------------------------------------------------------------------------
+# Tests: synthesis injection prefers typed views over raw dicts
+# ---------------------------------------------------------------------------
+
+from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
+    inject_synthesis_into_card,
+)
+
+
+class TestInjectionPrefersTypedViews:
+    def test_inject_from_typed_view(self):
+        """inject_synthesis_into_card should work with a SynthesisView directly."""
+        view = _make_synthesis_view()
+        card: dict[str, Any] = {"vendor": "TestVendor"}
+        inject_synthesis_into_card(card, view, requested_as_of=None)
+
+        assert card.get("reasoning_source") == "b2b_reasoning_synthesis"
+        assert card.get("synthesis_wedge") == "price_squeeze"
+        assert "reasoning_contracts" in card
+        contracts = card["reasoning_contracts"]
+        assert "vendor_core_reasoning" in contracts
+
+    def test_inject_sets_freshness(self):
+        """Injected card should have data_as_of_date from the view."""
+        view = _make_synthesis_view()
+        card: dict[str, Any] = {"vendor": "TestVendor"}
+        from datetime import date
+        inject_synthesis_into_card(
+            card, view, requested_as_of=date(2026, 3, 29),
+        )
+        assert "data_as_of_date" in card
+        assert card["data_as_of_date"] == "2026-03-29"
+
+    def test_inject_marks_stale(self):
+        """When view as_of < requested_as_of, data_stale should be True."""
+        from datetime import date
+        view = _make_synthesis_view()  # as_of = 2026-03-29
+        card: dict[str, Any] = {"vendor": "TestVendor"}
+        inject_synthesis_into_card(
+            card, view, requested_as_of=date(2026, 3, 30),
+        )
+        assert card.get("data_stale") is True
+
+    def test_inject_not_stale_when_current(self):
+        """When view as_of == requested_as_of, data_stale should be False."""
+        from datetime import date
+        view = _make_synthesis_view()  # as_of = 2026-03-29
+        card: dict[str, Any] = {"vendor": "TestVendor"}
+        inject_synthesis_into_card(
+            card, view, requested_as_of=date(2026, 3, 29),
+        )
+        assert card.get("data_stale") is False
+
+
+class TestConfidentReasoningFromViews:
+    def test_confident_from_synthesis_view_medium(self):
+        """Medium-confidence synthesis view should count as confident."""
+        view = _make_synthesis_view(confidence="medium")
+        views = {"V": view}
+        state = _get_battle_card_reasoning_state("V", synthesis_views=views)
+        assert state["has_confident_reasoning"] is True
+
+    def test_not_confident_from_synthesis_view_low(self):
+        """Low-confidence synthesis view should not count as confident."""
+        view = _make_synthesis_view(confidence="low")
+        views = {"V": view}
+        state = _get_battle_card_reasoning_state("V", synthesis_views=views)
+        # Low confidence in synthesis_view_to_reasoning_entry maps to 0.25
+        # which is < 0.7, so _rc path says no. But view has wedge + low
+        # confidence, so the synthesis_views path checks medium/high only.
+        assert state["has_confident_reasoning"] is False
+
+    def test_confident_prefers_view_over_raw_synthesis(self):
+        """When both synthesis_views and raw synthesis exist, view wins."""
+        view = _make_synthesis_view(confidence="high")
+        views = {"V": view}
+        raw_synth = {"V": _make_raw_synthesis(confidence="low")}
+        state = _get_battle_card_reasoning_state(
+            "V", synthesis_views=views, reasoning_synthesis_lookup=raw_synth,
+        )
+        assert state["has_confident_reasoning"] is True
