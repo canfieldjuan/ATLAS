@@ -449,3 +449,57 @@ def test_data_claim_allows_to_vendor_grounding():
     }
     _, report = _apply_blog_quality_gate(bp, content)
     assert not any("unsupported_data_claim" in w for w in report.get("warnings", []))
+
+
+# ---------------------------------------------------------------------------
+# Known-vendor DB lookup path tests
+# ---------------------------------------------------------------------------
+
+from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
+    _build_grounded_vendor_set,
+    _find_unsupported_data_claims,
+)
+
+
+def test_known_vendor_lookup_flags_ungrounded_known_vendor():
+    """When _known_vendors includes Magento, it should be flagged via exact
+    name match even if the regex fallback would miss it."""
+    bp = _migration_blueprint()
+    grounded = _build_grounded_vendor_set(bp)
+    body = (
+        f"{_CLAIM_PAD}\n"
+        "The top migration source is magento for mid-market teams.\n"
+    )
+    # Lowercase "magento" -- regex fallback would miss it (no capital),
+    # but known-vendor lookup matches case-insensitively.
+    flagged = _find_unsupported_data_claims(
+        body, grounded, known_vendors=["Magento", "Salesforce"],
+    )
+    assert any("Magento" in f for f in flagged)
+
+
+def test_known_vendor_lookup_skips_grounded_vendor():
+    """A known vendor that IS in the grounded set should not be flagged."""
+    bp = _migration_blueprint()
+    grounded = _build_grounded_vendor_set(bp)
+    body = (
+        f"{_CLAIM_PAD}\n"
+        "The top migration source is WooCommerce with 5 stories analyzed.\n"
+    )
+    flagged = _find_unsupported_data_claims(
+        body, grounded, known_vendors=["WooCommerce", "Magento"],
+    )
+    assert not flagged
+
+
+def test_known_vendor_lookup_empty_list_falls_back_to_regex():
+    """With no known vendors, the regex fallback should still catch
+    capitalized ungrounded names."""
+    bp = _migration_blueprint()
+    grounded = _build_grounded_vendor_set(bp)
+    body = (
+        f"{_CLAIM_PAD}\n"
+        "The top migration sources include Magento and Squarespace.\n"
+    )
+    flagged = _find_unsupported_data_claims(body, grounded, known_vendors=[])
+    assert any("Magento" in f or "Squarespace" in f for f in flagged)
