@@ -5805,7 +5805,7 @@ async def build_manual_topic_ctx(
             "slug": slug,
         })
     elif topic_type == "migration_guide":
-        slug = f"migration-from-{_slugify(vendor_name)}-{month_suffix}"
+        slug = f"switch-to-{_slugify(vendor_name)}-{month_suffix}"
         ctx.update({
             "vendor": vendor_name,
             "switch_count": 0,
