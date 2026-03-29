@@ -310,8 +310,10 @@ def _migration_blueprint() -> PostBlueprint:
 
 
 def test_data_claim_flags_ungrounded_vendor():
-    """Magento is not in chart data -- claiming it as a top source is unsupported."""
+    """Magento is not in chart data -- claiming it as a top source is unsupported.
+    Single-word vendors are caught via known-vendor lookup, not regex."""
     bp = _migration_blueprint()
+    bp.data_context["_known_vendors"] = ["Magento", "Squarespace", "Shopify"]
     content = {
         "title": "Switch to Shopify",
         "description": "desc",
@@ -492,14 +494,14 @@ def test_known_vendor_lookup_skips_grounded_vendor():
     assert not flagged
 
 
-def test_known_vendor_lookup_empty_list_falls_back_to_regex():
-    """With no known vendors, the regex fallback should still catch
-    capitalized ungrounded names."""
+def test_known_vendor_lookup_empty_list_falls_back_to_regex_for_multi_word():
+    """With no known vendors, the regex fallback catches multi-word ungrounded
+    names. Single-word names require the known-vendor path."""
     bp = _migration_blueprint()
     grounded = _build_grounded_vendor_set(bp)
     body = (
         f"{_CLAIM_PAD}\n"
-        "The top migration sources include Magento and Squarespace.\n"
+        "The top migration sources include Palo Alto Networks and Oracle Cloud.\n"
     )
     flagged = _find_unsupported_data_claims(body, grounded, known_vendors=[])
-    assert any("Magento" in f or "Squarespace" in f for f in flagged)
+    assert any("Palo Alto" in f or "Oracle Cloud" in f for f in flagged)

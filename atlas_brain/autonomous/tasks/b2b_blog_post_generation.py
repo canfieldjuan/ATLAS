@@ -171,15 +171,16 @@ def _find_unsupported_data_claims(
                 break
         if found_known:
             continue
-        # Strategy 2: regex fallback for names not in known universe
+        # Strategy 2: regex fallback for multi-word names not in known universe.
+        # Single capitalized words are too noisy (Among, Outcome, Causal, etc.)
+        # -- those are only caught via the known-vendor DB path above.
         candidates = _VENDORISH_NAME_PATTERN.findall(sentence)
         for name in candidates:
+            if " " not in name.strip():
+                continue  # single words handled by known-vendor lookup only
             normalized_name = _normalized_vendor_text(name)
             if normalized_name not in grounded and len(normalized_name) > 2:
                 if normalized_name in _VENDORISH_SKIP_WORDS:
-                    continue
-                # Skip single words that appear as labels (followed by colon)
-                if re.search(r"\b" + re.escape(name) + r"\s*:", sentence):
                     continue
                 flagged.append(f"{name}: {sentence.strip()[:120]}")
                 break
