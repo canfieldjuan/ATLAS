@@ -31,6 +31,10 @@ data/
 # Temp files
 *.tmp
 .DS_Store
+tmp/
+
+# Database backups
+backups/
 
 # Test images
 *.jpg
