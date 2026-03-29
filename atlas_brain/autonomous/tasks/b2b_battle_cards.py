@@ -1494,8 +1494,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         load_best_reasoning_views,
     )
 
-    reasoning_synthesis_lookup: dict[str, dict] = {}
-    reasoning_synthesis_as_of_lookup: dict[str, Any] = {}
     synthesis_views: dict[str, Any] = {}
     try:
         vendor_names_for_views = [
@@ -1510,11 +1508,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             as_of=today,
             analysis_window_days=window_days,
         )
-        for vn, view in synthesis_views.items():
-            canon = _canonicalize_vendor(vn)
-            if canon:
-                reasoning_synthesis_lookup[canon] = view.raw
-                reasoning_synthesis_as_of_lookup[canon] = view.as_of_date
         logger.info(
             "Loaded reasoning views for %d vendors (%d synthesis, %d legacy)",
             len(synthesis_views),
@@ -1628,8 +1621,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         keyword_spike_lookup=keyword_spike_lookup,
         evidence_vault_lookup=evidence_vault_lookup,
         account_intel_lookup=account_intel_lookup,
-        reasoning_synthesis_lookup=reasoning_synthesis_lookup,
-        reasoning_synthesis_as_of_lookup=reasoning_synthesis_as_of_lookup,
         synthesis_requested_as_of=today,
         category_dynamics_lookup=category_dynamics_lookup,
     )
