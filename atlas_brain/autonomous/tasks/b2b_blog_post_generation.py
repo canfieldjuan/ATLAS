@@ -735,7 +735,7 @@ def _apply_blog_quality_gate(
                 continue
             # Check if sentence names a vendor NOT in chart labels
             for v in (ctx.get("_known_vendors") or []):
-                if len(v) > 2 and v.lower() in s_lower and v.lower() not in chart_labels_lower:
+                if len(v) > 2 and v.lower() not in chart_labels_lower and re.search(r"\b" + re.escape(v) + r"\b", sentence, re.IGNORECASE):
                     warnings.append(
                         f"chart_scope_ambiguity:{v}: {sentence.strip()[:100]}"
                     )
