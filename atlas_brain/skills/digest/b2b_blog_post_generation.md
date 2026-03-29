@@ -106,10 +106,7 @@ If `source_name` is not provided in the quotable phrase data, use `> "quote text
   ],
   "available_charts": [...],
   "quotable_phrases": [...],
-  "related_posts": [
-    {"slug": "salesforce-deep-dive-2026-03", "title": "Salesforce Deep Dive: ..."},
-    {"slug": "hubspot-vs-salesforce-2026-03", "title": "HubSpot vs Salesforce: ..."}
-  ]
+  "related_posts": []
 }
 ```
 
@@ -145,7 +142,7 @@ Return valid JSON with exactly these keys:
   - `vendor_alternative` -> "{vendor} alternatives" (e.g., "salesforce alternatives")
   - `churn_report` -> "{vendor} churn rate" (e.g., "hubspot churn rate")
   - `pricing_reality_check` -> "{vendor} pricing" (e.g., "jira pricing")
-  - `migration_guide` -> "switch from {vendor}" (e.g., "switch from salesforce")
+  - `migration_guide` -> "switch to {vendor}" (e.g., "switch to shopify")
   - `switching_story` -> "why teams leave {vendor}" (e.g., "why teams leave asana")
   - `pain_point_roundup` -> "{category} software complaints"
   - `best_fit_guide` -> "best {category} software" (e.g., "best crm software")

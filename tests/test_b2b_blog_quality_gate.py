@@ -50,14 +50,19 @@ def test_quality_gate_sanitizes_answer_prefix_and_drops_unsourced_quotes():
             {"phrase": "Intercom support solved our issue in one day"},
         ]
     )
+    _pad = (
+        "Mailchimp and Intercom are compared using reviewer sentiment signals "
+        "and switching context from public software reviews across platforms. "
+    ) * 120
     content = {
         "title": "Mailchimp vs Intercom",
         "description": "desc",
-        "content": """
+        "content": f"""
 ## Introduction
 Answer: This analysis is based on self-selected reviewers from 2026-02 to 2026-03.
 Mailchimp and Intercom are compared using reviewer signals.
-{{chart:head2head-bar}}
+{_pad}
+{{{{chart:head2head-bar}}}}
 
 > "I just canceled my Mailchimp account after hitting plan limits" -- reviewer on Reddit
 > "Intercom support solved our issue in one day" -- reviewer on G2
@@ -103,7 +108,7 @@ def _raw_content_missing_methodology() -> str:
     filler = (
         "Mailchimp and Intercom are compared using reviewer sentiment signals, "
         "urgency patterns, and switching context from public software reviews. "
-    ) * 14
+    ) * 120
     return f"""
 ## Introduction
 This comparison focuses on reviewer sentiment signals and churn intent patterns.
@@ -114,7 +119,9 @@ This comparison focuses on reviewer sentiment signals and churn intent patterns.
 """
 
 
-def test_enforce_quality_retries_for_critical_warnings_and_passes(monkeypatch):
+def test_enforce_quality_auto_injects_methodology(monkeypatch):
+    """_ensure_methodology_context auto-adds the methodology note when missing,
+    so the quality gate should pass without needing a retry."""
     blueprint = _build_blueprint(
         quotes=[
             {"phrase": "Mailchimp pricing climbed too quickly for our team"},
@@ -131,19 +138,7 @@ def test_enforce_quality_retries_for_critical_warnings_and_passes(monkeypatch):
 
     def _fake_retry_generate(*args, **kwargs):
         calls["count"] += 1
-        feedback = kwargs.get("quality_feedback") or []
-        assert any("self-selected" in str(item).lower() for item in feedback)
-        assert any("review period" in str(item).lower() for item in feedback)
-        return {
-            "title": raw["title"],
-            "description": raw["description"],
-            "content": (
-                "## Introduction\n"
-                "This analysis covers 2026-02 to 2026-03 and uses self-selected reviewer feedback, "
-                "so findings reflect perception signals rather than universal product truth.\n"
-                + raw["content"]
-            ),
-        }
+        return raw
 
     monkeypatch.setattr(blog_mod, "_generate_content", _fake_retry_generate)
 
@@ -155,34 +150,42 @@ def test_enforce_quality_retries_for_critical_warnings_and_passes(monkeypatch):
         related_posts=None,
     )
 
-    assert calls["count"] == 1
+    # No retry needed -- methodology auto-injected
+    assert calls["count"] == 0
     assert final is not None
     assert report["status"] == "pass"
-    assert "review_period_not_explicitly_mentioned" not in (report.get("warnings") or [])
-    assert "methodology_disclaimer_missing_self_selected" not in (report.get("warnings") or [])
-    assert "2026-02 to 2026-03" in str(final.get("content") or "")
     assert "self-selected" in str(final.get("content") or "").lower()
+    assert "2026-02 to 2026-03" in str(final.get("content") or "")
 
 
-def test_enforce_quality_fails_when_critical_warnings_persist_after_retry(monkeypatch):
+def test_enforce_quality_fails_when_blocking_issues_persist_after_retry(monkeypatch):
+    """When the retry still produces content with blocking issues, the gate
+    should return None."""
     blueprint = _build_blueprint(
         quotes=[
             {"phrase": "Mailchimp pricing climbed too quickly for our team"},
             {"phrase": "Intercom onboarding helped us move faster"},
         ]
     )
+    # Content that mentions Mailchimp but NOT Intercom -> blocking vendor miss
+    _pad = (
+        "Mailchimp is a popular email marketing platform used by many teams. "
+    ) * 140
     raw = {
         "title": "Mailchimp vs Intercom",
         "description": "desc",
-        "content": _raw_content_missing_methodology(),
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_pad}\n"
+            '{{chart:head2head-bar}}\n'
+            '> "Mailchimp pricing climbed too quickly for our team" -- reviewer on Reddit\n'
+            '> "Intercom onboarding helped us move faster" -- reviewer on G2\n'
+        ).replace("Intercom", "Platform B"),
     }
 
     def _fake_retry_generate(*args, **kwargs):
-        return {
-            "title": raw["title"],
-            "description": raw["description"],
-            "content": raw["content"],
-        }
+        return dict(raw)
 
     monkeypatch.setattr(blog_mod, "_generate_content", _fake_retry_generate)
 
@@ -196,11 +199,4 @@ def test_enforce_quality_fails_when_critical_warnings_persist_after_retry(monkey
 
     assert final is None
     issues = report.get("blocking_issues") or []
-    assert any(
-        issue == "critical_warning_unresolved:review_period_not_explicitly_mentioned"
-        for issue in issues
-    )
-    assert any(
-        issue == "critical_warning_unresolved:methodology_disclaimer_missing_self_selected"
-        for issue in issues
-    )
+    assert any("missing_vendor_mentions" in issue for issue in issues)
