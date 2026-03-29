@@ -62,7 +62,13 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     _validate_scorecard_expert_take,
     _validate_report,
 )
+from atlas_brain.autonomous.tasks._b2b_synthesis_reader import load_synthesis_view
 from atlas_brain.config import settings
+
+
+def _load_synth_view(vendor: str, raw: dict) -> Any:
+    """Wrap a raw synthesis dict in a SynthesisView for test use."""
+    return load_synthesis_view(raw, vendor, schema_version="v2")
 from atlas_brain.autonomous.tasks.b2b_battle_cards import (
     _BATTLE_CARD_LLM_FIELDS,
     _apply_battle_card_quality,
@@ -2155,8 +2161,8 @@ class TestDeterministicBattleCardBuild:
             product_profile_lookup={},
             competitive_disp=[],
             competitor_reasons=[],
-            reasoning_synthesis_lookup={
-                "Zendesk": {
+            synthesis_views={
+                "Zendesk": _load_synth_view("Zendesk", {
                     "schema_version": "2.1",
                     "reasoning_contracts": {
                         "schema_version": "v1",
@@ -2198,7 +2204,7 @@ class TestDeterministicBattleCardBuild:
                             },
                         },
                     },
-                },
+                }),
             },
         )
 
@@ -2234,8 +2240,8 @@ class TestDeterministicBattleCardBuild:
             product_profile_lookup={},
             competitive_disp=[],
             competitor_reasons=[],
-            reasoning_synthesis_lookup={
-                "Close": {
+            synthesis_views={
+                "Close": _load_synth_view("Close", {
                     "schema_version": "2.1",
                     "reasoning_contracts": {
                         "schema_version": "v1",
@@ -2263,7 +2269,7 @@ class TestDeterministicBattleCardBuild:
                             },
                         },
                     },
-                },
+                }),
             },
         )
 

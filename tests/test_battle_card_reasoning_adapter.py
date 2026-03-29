@@ -83,19 +83,6 @@ def _make_legacy_lookup(
     }
 
 
-def _make_raw_synthesis(wedge: str = "price_squeeze", confidence: str = "high") -> dict:
-    return {
-        "reasoning_contracts": {
-            "vendor_core_reasoning": {
-                "causal_narrative": {
-                    "primary_wedge": wedge,
-                    "confidence": confidence,
-                },
-            },
-        },
-    }
-
-
 # ---------------------------------------------------------------------------
 # Tests: _get_battle_card_reasoning_state
 # ---------------------------------------------------------------------------
@@ -127,15 +114,15 @@ class TestBattleCardReasoningState:
         )
         assert state["has_confident_reasoning"] is False
 
-    def test_synthesis_fallback_for_confident(self):
-        """When _rc has low confidence but raw synthesis has confident wedge,
-        has_confident_reasoning should still be True."""
+    def test_synthesis_view_fallback_for_confident(self):
+        """When reasoning_lookup has low confidence but synthesis_views has
+        a confident view, has_confident_reasoning should still be True."""
         lookup = _make_legacy_lookup(confidence=0.3)
-        raw_synth = {"TestVendor": _make_raw_synthesis()}
+        view = _make_synthesis_view(confidence="high")
         state = _get_battle_card_reasoning_state(
             "TestVendor",
+            synthesis_views={"TestVendor": view},
             reasoning_lookup=lookup,
-            reasoning_synthesis_lookup=raw_synth,
         )
         assert state["has_confident_reasoning"] is True
 
@@ -304,12 +291,10 @@ class TestConfidentReasoningFromViews:
         # confidence, so the synthesis_views path checks medium/high only.
         assert state["has_confident_reasoning"] is False
 
-    def test_confident_prefers_view_over_raw_synthesis(self):
-        """When both synthesis_views and raw synthesis exist, view wins."""
+    def test_confident_from_view_only(self):
+        """Synthesis view provides confident reasoning without raw fallback."""
         view = _make_synthesis_view(confidence="high")
-        views = {"V": view}
-        raw_synth = {"V": _make_raw_synthesis(confidence="low")}
         state = _get_battle_card_reasoning_state(
-            "V", synthesis_views=views, reasoning_synthesis_lookup=raw_synth,
+            "V", synthesis_views={"V": view},
         )
         assert state["has_confident_reasoning"] is True

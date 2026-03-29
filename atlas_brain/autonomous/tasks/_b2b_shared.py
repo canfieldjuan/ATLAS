@@ -9302,7 +9302,6 @@ def _build_deterministic_displacement_map(
     reason_lookup = _build_reason_lookup(competitor_reasons)
     def _rl_get(v: str) -> dict:
         return _get_vendor_reasoning(v, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
-    _rl = reasoning_lookup or {}  # kept for dict iteration only
 
     def _source_vendor_wedge(vendor_name: str) -> str:
         canon = _canonicalize_vendor(vendor_name)
@@ -9951,7 +9950,6 @@ def _build_vendor_deep_dives(
     """Build comprehensive per-vendor deep dive reports, sorted by churn pressure."""
     def _rl_get(v: str) -> dict:
         return _get_vendor_reasoning(v, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
-    _rl = reasoning_lookup or {}  # kept for dict iteration only
     _ba = buyer_auth_lookup or {}
     results: list[dict[str, Any]] = []
     _SENT_POS = {"stable_positive", "improving"}
@@ -10140,7 +10138,6 @@ def _build_deterministic_category_overview(
     results: list[dict[str, Any]] = []
     def _rl_get(v: str) -> dict:
         return _get_vendor_reasoning(v, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
-    _rl = reasoning_lookup or {}  # kept for dict iteration only
     for category, rows in by_category.items():
         ranked = sorted(
             rows,
@@ -10277,7 +10274,8 @@ def _build_deterministic_category_overview(
             "emerging_challenger": emerging,
             "dominant_pain": dominant_pain,
             "market_shift_signal": _build_market_shift_signal(
-                category, highest_vendor, churn_density, total_reviews, emerging, _rl,
+                category, highest_vendor, churn_density, total_reviews, emerging,
+                reasoning_lookup or {},
                 synthesis_views=synthesis_views,
             ),
             "industry_distribution": top_industries,
@@ -10296,13 +10294,11 @@ def _get_battle_card_reasoning_state(
     *,
     synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
-    reasoning_synthesis_lookup: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Unified reasoning state for battle card builders.
 
-    Consolidates the split logic that previously read from _rc,
-    reasoning_synthesis_lookup, and _battle_card_has_confident_synthesis
-    into a single resolved dict.  No card mutation here.
+    Resolves vendor reasoning through synthesis_views (preferred) or
+    reasoning_lookup (fallback).  No card mutation here.
     """
     rc = _get_vendor_reasoning(
         vendor, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup,
@@ -10321,8 +10317,8 @@ def _get_battle_card_reasoning_state(
         "synthesis_fallback" if mode == "synthesis_fallback" else "legacy"
     )
 
-    # Confident reasoning: either high-confidence archetype from unified
-    # helper, or confident synthesis view, or raw synthesis fallback
+    # Confident reasoning: high-confidence archetype from unified helper,
+    # or confident synthesis view (wedge + medium/high confidence)
     has_confident = bool(archetype) and confidence >= 0.7
     if not has_confident and synthesis_views:
         view = synthesis_views.get(vendor)
@@ -10336,10 +10332,6 @@ def _get_battle_card_reasoning_state(
             w = getattr(view, "primary_wedge", None)
             c = view.confidence("causal_narrative") if hasattr(view, "confidence") else ""
             has_confident = bool(w) and c in ("medium", "high")
-    if not has_confident:
-        synth = (reasoning_synthesis_lookup or {}).get(vendor)
-        if synth is not None:
-            has_confident = _battle_card_has_confident_synthesis(synth)
 
     return {
         "archetype": archetype,
@@ -10353,17 +10345,6 @@ def _get_battle_card_reasoning_state(
         "reasoning_mode": mode,
         "has_confident_reasoning": has_confident,
     }
-
-
-def _battle_card_has_confident_synthesis(synthesis: dict[str, Any] | None) -> bool:
-    """Return True when validated synthesis provides a usable wedge."""
-    if not isinstance(synthesis, dict) or not synthesis:
-        return False
-    contracts = synthesis.get("reasoning_contracts") or {}
-    vendor_core = contracts.get("vendor_core_reasoning") or {}
-    causal = vendor_core.get("causal_narrative") or synthesis.get("causal_narrative") or {}
-    confidence = str(causal.get("confidence") or "").strip().lower()
-    return bool(causal.get("primary_wedge")) and confidence in {"medium", "high"}
 
 
 def _build_deterministic_battle_cards(
@@ -10391,8 +10372,6 @@ def _build_deterministic_battle_cards(
     buyer_auth_lookup: dict[str, dict] | None = None,
     keyword_spike_lookup: dict[str, dict] | None = None,
     evidence_vault_lookup: dict[str, dict[str, Any]] | None = None,
-    reasoning_synthesis_lookup: dict[str, dict[str, Any]] | None = None,
-    reasoning_synthesis_as_of_lookup: dict[str, Any] | None = None,
     synthesis_requested_as_of: date | None = None,
     category_dynamics_lookup: dict[str, dict[str, Any]] | None = None,
     account_intel_lookup: dict[str, dict[str, Any]] | None = None,
@@ -10445,7 +10424,6 @@ def _build_deterministic_battle_cards(
             vendor,
             synthesis_views=synthesis_views,
             reasoning_lookup=reasoning_lookup,
-            reasoning_synthesis_lookup=reasoning_synthesis_lookup,
         )
 
         # Qualification gate -- reasoning can lower thresholds
@@ -10866,21 +10844,6 @@ def _build_deterministic_battle_cards(
             inject_synthesis_into_card(
                 card_entry,
                 _synth_view,
-                requested_as_of=synthesis_requested_as_of,
-                vendor_evidence=vendor_evidence,
-            )
-        elif (reasoning_synthesis_lookup or {}).get(vendor):
-            # Legacy fallback: raw synthesis dict when no typed view available
-            from ._b2b_synthesis_reader import load_synthesis_view, inject_synthesis_into_card
-            as_of_date = (reasoning_synthesis_as_of_lookup or {}).get(vendor)
-            view = load_synthesis_view(
-                reasoning_synthesis_lookup[vendor],
-                vendor,
-                as_of_date=as_of_date,
-            )
-            inject_synthesis_into_card(
-                card_entry,
-                view,
                 requested_as_of=synthesis_requested_as_of,
                 vendor_evidence=vendor_evidence,
             )
