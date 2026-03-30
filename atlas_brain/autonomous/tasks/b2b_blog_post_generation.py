@@ -439,7 +439,7 @@ def _inject_affiliate_links(blueprint: PostBlueprint, content: dict[str, Any]) -
 
 def _normalize_quote_text(text: Any) -> str:
     raw = str(text or "")
-    raw = raw.replace("“", '"').replace("”", '"').replace("’", "'")
+    raw = raw.replace('\u201c', '"').replace('\u201d', '"').replace('\u2019', "'")
     raw = raw.strip().strip('"').strip("'")
     raw = re.sub(r"\s+", " ", raw)
     raw = re.sub(r"[^a-z0-9 ]+", " ", raw.lower())
