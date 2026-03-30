@@ -37,6 +37,7 @@ from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
     legacy_reasoning_to_contracts,
     load_best_reasoning_view,
     load_best_reasoning_views,
+    load_prior_reasoning_snapshots,
     load_synthesis_view,
     required_contracts_for_consumer,
 )
@@ -345,6 +346,49 @@ class TestLoadBestReasoningViews:
         views = await load_best_reasoning_views(pool, ["A", "B"])
         assert len(views) == 2
         assert all(v.schema_version == "v2" for v in views.values())
+
+
+class TestLoadPriorReasoningSnapshots:
+    @pytest.mark.asyncio
+    async def test_prefers_prior_synthesis_snapshot(self):
+        synth_rows = [
+            _make_synthesis_row(
+                vendor_name="Acme",
+                as_of_date=date(2026, 3, 27),
+            ),
+        ]
+        pool = _mock_pool(synth_rows=synth_rows, legacy_rows=[])
+
+        snapshots = await load_prior_reasoning_snapshots(
+            pool,
+            ["Acme"],
+            before_date=date(2026, 3, 28),
+        )
+
+        assert snapshots["Acme"]["archetype"] == "price_squeeze"
+        assert snapshots["Acme"]["confidence"] == 0.85
+        assert snapshots["Acme"]["snapshot_date"] == "2026-03-27"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_prior_legacy_snapshot(self):
+        legacy_rows = [
+            _make_legacy_row(
+                vendor_name="Beta",
+                archetype="feature_gap",
+                archetype_confidence=0.5,
+            ),
+        ]
+        pool = _mock_pool(synth_rows=[], legacy_rows=legacy_rows)
+
+        snapshots = await load_prior_reasoning_snapshots(
+            pool,
+            ["Beta"],
+            before_date=date(2026, 3, 28),
+        )
+
+        assert snapshots["Beta"]["archetype"] == "feature_gap"
+        assert snapshots["Beta"]["confidence"] == 0.5
+        assert snapshots["Beta"]["snapshot_date"] == "2026-03-27"
 
 
 # ---------------------------------------------------------------------------
