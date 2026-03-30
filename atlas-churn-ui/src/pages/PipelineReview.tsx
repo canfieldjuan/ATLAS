@@ -345,7 +345,7 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
 // ---------------------------------------------------------------------------
 
 function FailuresTab() {
-  const [statusFilter, setStatusFilter] = useState('failed')
+  const [statusFilter, setStatusFilter] = useState('')
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
