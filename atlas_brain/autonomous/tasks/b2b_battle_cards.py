@@ -2158,7 +2158,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     await record_attempt(
         pool, artifact_type="battle_card", artifact_id="batch",
         run_id=str(task.id), stage="generation",
-        status="succeeded" if bc_llm_failures == 0 else "succeeded",
+        status="succeeded" if bc_llm_failures == 0 else "failed",
         score=cards_persisted,
         blocker_count=bc_llm_failures,
         warning_count=len(gated_out_vendors),

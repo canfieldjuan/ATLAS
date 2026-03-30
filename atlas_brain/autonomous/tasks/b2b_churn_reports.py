@@ -1281,7 +1281,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     pool, artifact_type="churn_report",
                     artifact_id=report_type,
                     run_id=str(task.id), stage="persistence",
-                    status="succeeded",
+                    status="succeeded" if data else "failed",
+                    error_message="Report has no data" if not data else None,
                 )
     except Exception:
         logger.exception("Failed to persist intelligence reports")

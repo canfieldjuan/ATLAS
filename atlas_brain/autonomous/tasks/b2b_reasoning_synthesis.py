@@ -640,7 +640,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "attempts_used": max_attempts,
                 })
                 failed += 1
-                from ..visibility import emit_event
+                from ..visibility import emit_event, record_attempt
+                await record_attempt(
+                    pool, artifact_type="reasoning_synthesis",
+                    artifact_id=vendor_name,
+                    run_id=run_id, attempt_no=max_attempts,
+                    stage="persistence", status="failed",
+                    failure_step="persist",
+                    error_message=str(persist_exc)[:200],
+                )
                 await emit_event(
                     pool, stage="synthesis", event_type="persistence_failure",
                     entity_type="vendor", entity_id=vendor_name,
@@ -653,6 +661,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 return
 
             succeeded += 1
+            from ..visibility import record_attempt as _rec_ok
+            await _rec_ok(
+                pool, artifact_type="reasoning_synthesis",
+                artifact_id=vendor_name,
+                run_id=run_id, attempt_no=attempt + 1,
+                stage="complete", status="succeeded",
+                warning_count=len(vresult.warnings),
+            )
             logger.info(
                 "Reasoning synthesis v2: %s (%d tokens, %d warnings)",
                 vendor_name, vendor_tokens, len(vresult.warnings),
