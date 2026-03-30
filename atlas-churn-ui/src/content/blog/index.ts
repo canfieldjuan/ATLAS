@@ -39,6 +39,16 @@ import salesforceVsHubspot202603 from './salesforce-vs-hubspot-2026-03'
 import asanaVsMondaycom202603 from './asana-vs-mondaycom-2026-03'
 import crowdstrikeVsSentinelone202603 from './crowdstrike-vs-sentinelone-2026-03'
 import paloAltoNetworksVsMicrosoftDefenderForEndpoint202603 from './palo-alto-networks-vs-microsoft-defender-for-endpoint-2026-03'
+import jiraVsTrello202603 from './jira-vs-trello-2026-03'
+import notionVsSalesforce202603 from './notion-vs-salesforce-2026-03'
+import migrationFromShopify202603 from './migration-from-shopify-2026-03'
+import shopifyDeepDive202603 from './shopify-deep-dive-2026-03'
+import realCostOfShopify202603 from './real-cost-of-shopify-2026-03'
+import whyTeamsLeaveAzure202603 from './why-teams-leave-azure-2026-03'
+import bestB2bSoftwareFor1000202603 from './best-b2b-software-for-1000-2026-03'
+import switchToShopify202603 from './switch-to-shopify-2026-03'
+import switchToClickup202603 from './switch-to-clickup-2026-03'
+import azureVsSalesforce202603 from './azure-vs-salesforce-2026-03'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -147,4 +157,14 @@ export const POSTS: BlogPost[] = [
   asanaVsMondaycom202603,
   crowdstrikeVsSentinelone202603,
   paloAltoNetworksVsMicrosoftDefenderForEndpoint202603,
+  jiraVsTrello202603,
+  notionVsSalesforce202603,
+  migrationFromShopify202603,
+  shopifyDeepDive202603,
+  realCostOfShopify202603,
+  whyTeamsLeaveAzure202603,
+  bestB2bSoftwareFor1000202603,
+  switchToShopify202603,
+  switchToClickup202603,
+  azureVsSalesforce202603,
 ]
