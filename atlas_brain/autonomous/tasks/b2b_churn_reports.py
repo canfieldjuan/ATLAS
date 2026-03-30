@@ -1147,7 +1147,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     scorecard_guardrail_fallbacks = 0
     for sc in deterministic_vendor_scorecards:
         reasoning_summary = sc.get("reasoning_summary", "")
-        if reasoning_summary and cfg.stratified_reasoning_enabled and not sc.get("cross_vendor_comparisons"):
+        if reasoning_summary and not sc.get("cross_vendor_comparisons"):
             sc["expert_take"] = reasoning_summary
             scorecard_reasoning_reused += 1
             continue

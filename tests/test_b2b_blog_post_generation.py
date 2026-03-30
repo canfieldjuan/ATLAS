@@ -1068,3 +1068,109 @@ async def test_reranker_pure_category_batch_resolves_vendors():
 
     adjustments = result[0][3].get("_reasoning_adjustments", [])
     assert "category_regime_boost" in adjustments
+
+
+# ---------------------------------------------------------------------------
+# Cross-vendor synthesis resolution tests
+# ---------------------------------------------------------------------------
+
+from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
+    _resolve_blog_battle_summary,
+    _resolve_blog_council_summary,
+)
+
+
+class TestResolveBlogBattleSummary:
+    _SYNTH_BATTLE = {
+        "conclusion": {
+            "conclusion": "Zendesk losing to Freshdesk on pricing",
+            "winner": "Freshdesk",
+            "loser": "Zendesk",
+            "confidence": 0.85,
+            "durability_assessment": "structural",
+            "key_insights": [{"insight": "Price gap", "evidence": "0.28 vs 0.24"}],
+        },
+    }
+    _FALLBACK = {
+        "conclusion": "Old pool battle conclusion",
+        "winner": "Freshdesk",
+    }
+
+    def test_prefers_synthesis_when_present(self):
+        xv = {"battles": {("freshdesk", "zendesk"): self._SYNTH_BATTLE}}
+        result = _resolve_blog_battle_summary("Zendesk", "Freshdesk", xv, self._FALLBACK)
+        assert result["source"] == "synthesis"
+        assert result["winner"] == "Freshdesk"
+        assert "pricing" in result["conclusion"]
+
+    def test_matches_original_case_keys(self):
+        xv = {"battles": {("Freshdesk", "Zendesk"): self._SYNTH_BATTLE}}
+        result = _resolve_blog_battle_summary("zendesk", "freshdesk", xv, self._FALLBACK)
+        assert result["source"] == "synthesis"
+
+    def test_falls_back_when_no_synthesis(self):
+        xv = {"battles": {}}
+        result = _resolve_blog_battle_summary("Zendesk", "Freshdesk", xv, self._FALLBACK)
+        assert result.get("source") != "synthesis"
+        assert result["conclusion"] == "Old pool battle conclusion"
+
+    def test_falls_back_on_empty_synthesis_conclusion(self):
+        xv = {"battles": {("freshdesk", "zendesk"): {"conclusion": {"conclusion": ""}}}}
+        result = _resolve_blog_battle_summary("Zendesk", "Freshdesk", xv, self._FALLBACK)
+        assert result["conclusion"] == "Old pool battle conclusion"
+
+    def test_empty_xv_lookup_returns_fallback(self):
+        result = _resolve_blog_battle_summary("A", "B", {}, {"conclusion": "fb"})
+        assert result["conclusion"] == "fb"
+
+    def test_output_shape(self):
+        xv = {"battles": {("freshdesk", "zendesk"): self._SYNTH_BATTLE}}
+        result = _resolve_blog_battle_summary("Zendesk", "Freshdesk", xv, {})
+        for key in ("conclusion", "winner", "loser", "confidence", "durability_assessment", "key_insights"):
+            assert key in result
+
+
+class TestResolveBlogCouncilSummary:
+    _SYNTH_COUNCIL = {
+        "conclusion": {
+            "conclusion": "Price war in Helpdesk category",
+            "market_regime": "price_competition",
+            "winner": "Freshdesk",
+            "loser": "Zendesk",
+            "confidence": 0.7,
+            "durability_assessment": "structural",
+            "key_insights": [],
+        },
+    }
+    _FALLBACK = {
+        "conclusion": "Pool council fallback",
+        "market_regime": "stable",
+    }
+
+    def test_prefers_synthesis_when_present(self):
+        xv = {"councils": {"Helpdesk": self._SYNTH_COUNCIL}}
+        result = _resolve_blog_council_summary("Helpdesk", xv, self._FALLBACK)
+        assert result["source"] == "synthesis"
+        assert result["market_regime"] == "price_competition"
+
+    def test_case_insensitive_match(self):
+        xv = {"councils": {"helpdesk": self._SYNTH_COUNCIL}}
+        result = _resolve_blog_council_summary("Helpdesk", xv, self._FALLBACK)
+        assert result["source"] == "synthesis"
+
+    def test_falls_back_when_no_synthesis(self):
+        xv = {"councils": {}}
+        result = _resolve_blog_council_summary("Helpdesk", xv, self._FALLBACK)
+        assert result.get("source") != "synthesis"
+        assert result["conclusion"] == "Pool council fallback"
+
+    def test_falls_back_on_empty_synthesis(self):
+        xv = {"councils": {"Helpdesk": {"conclusion": {"conclusion": "", "market_regime": ""}}}}
+        result = _resolve_blog_council_summary("Helpdesk", xv, self._FALLBACK)
+        assert result["conclusion"] == "Pool council fallback"
+
+    def test_output_shape(self):
+        xv = {"councils": {"Helpdesk": self._SYNTH_COUNCIL}}
+        result = _resolve_blog_council_summary("Helpdesk", xv, {})
+        for key in ("conclusion", "market_regime", "winner", "confidence"):
+            assert key in result

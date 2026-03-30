@@ -41,6 +41,9 @@ for name in ("neo4j", "httpx", "httpcore", "urllib3"):
 
 logger = logging.getLogger("benchmark_reasoning")
 
+DEFAULT_VENDOR_CAP = 60
+DEFAULT_CONCURRENCY = 5
+
 # Sigs created during --fresh runs, cleaned up on exit.
 _benchmark_sigs: list[str] = []
 
@@ -517,9 +520,9 @@ async def main():
     parser.add_argument("--model-b", default="moonshotai/kimi-k2.5",
                         help="Second model (OpenRouter ID)")
     parser.add_argument("--vendors", type=int, default=None,
-                        help="Override vendor cap (default: from config stratified_reasoning_vendor_cap)")
+                        help=f"Override vendor cap (default: {DEFAULT_VENDOR_CAP})")
     parser.add_argument("--concurrency", type=int, default=None,
-                        help="Override concurrency (default: from config stratified_reasoning_concurrency)")
+                        help=f"Override concurrency (default: {DEFAULT_CONCURRENCY})")
     parser.add_argument("--max-tokens", type=int, default=32768,
                         help="Max output tokens per LLM call (includes reasoning tokens)")
     parser.add_argument("--fresh", action="store_true",
@@ -537,8 +540,8 @@ async def main():
     )
 
     cfg = settings.b2b_churn
-    vendor_cap = args.vendors or cfg.stratified_reasoning_vendor_cap
-    concurrency = args.concurrency or cfg.stratified_reasoning_concurrency
+    vendor_cap = args.vendors or DEFAULT_VENDOR_CAP
+    concurrency = args.concurrency or DEFAULT_CONCURRENCY
 
     # Save original env vars for restoration
     _saved_env = {}

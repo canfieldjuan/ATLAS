@@ -372,6 +372,90 @@ def _blog_category_reasoning_stats(category_reasoning: dict[str, Any] | None) ->
     return stats
 
 
+# -- Cross-vendor synthesis resolution helpers ----------------------
+
+def _resolve_blog_battle_summary(
+    vendor_a: str,
+    vendor_b: str,
+    xv_lookup: dict[str, Any],
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve a pairwise battle from cross-vendor synthesis or pool fallback.
+
+    Returns a blog-compatible summary dict with ``conclusion``, ``winner``,
+    ``loser``, ``confidence``, ``durability_assessment``, ``key_insights``.
+    """
+    battles = xv_lookup.get("battles") or {}
+    needle = tuple(sorted([
+        vendor_a.strip().lower(), vendor_b.strip().lower(),
+    ]))
+    # Try exact key first, then case-insensitive scan
+    entry = battles.get(needle)
+    if entry is None:
+        entry = battles.get(tuple(sorted([vendor_a.strip(), vendor_b.strip()])))
+    if entry is None:
+        for k, v in battles.items():
+            if tuple(sorted(s.lower() for s in k)) == needle:
+                entry = v
+                break
+    if entry is None:
+        return fallback or {}
+    conclusion = entry.get("conclusion") or {}
+    if not isinstance(conclusion, dict):
+        return fallback or {}
+    result = {
+        "conclusion": conclusion.get("conclusion") or "",
+        "winner": conclusion.get("winner") or "",
+        "loser": conclusion.get("loser") or "",
+        "confidence": conclusion.get("confidence"),
+        "durability_assessment": conclusion.get("durability_assessment") or "",
+        "key_insights": conclusion.get("key_insights") or [],
+        "source": "synthesis",
+    }
+    if not result["conclusion"]:
+        return fallback or {}
+    return result
+
+
+def _resolve_blog_council_summary(
+    category: str,
+    xv_lookup: dict[str, Any],
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve a category council from cross-vendor synthesis or pool fallback.
+
+    Returns a blog-compatible summary dict with ``conclusion``,
+    ``market_regime``, ``winner``, ``loser``, ``confidence``.
+    """
+    councils = xv_lookup.get("councils") or {}
+    cat_norm = (category or "").strip().lower()
+    entry = councils.get(category)
+    if entry is None:
+        # Try case-insensitive match
+        for k, v in councils.items():
+            if (k or "").strip().lower() == cat_norm:
+                entry = v
+                break
+    if entry is None:
+        return fallback or {}
+    conclusion = entry.get("conclusion") or {}
+    if not isinstance(conclusion, dict):
+        return fallback or {}
+    result = {
+        "conclusion": conclusion.get("conclusion") or "",
+        "market_regime": conclusion.get("market_regime") or "",
+        "winner": conclusion.get("winner"),
+        "loser": conclusion.get("loser"),
+        "confidence": conclusion.get("confidence"),
+        "durability_assessment": conclusion.get("durability_assessment") or "",
+        "key_insights": conclusion.get("key_insights") or [],
+        "source": "synthesis",
+    }
+    if not result["conclusion"] and not result["market_regime"]:
+        return fallback or {}
+    return result
+
+
 # -- CTA configuration --------------------------------------------
 
 _CTA_CONFIG: dict[str, dict[str, str]] = {
@@ -2859,6 +2943,17 @@ async def _load_pool_layers_for_blog(
     else:
         data["synthesis_views"] = {}
 
+    # Load cross-vendor synthesis (battles, councils, asymmetries)
+    try:
+        from ._b2b_cross_vendor_synthesis import load_cross_vendor_synthesis_lookup
+        xv_synth = await load_cross_vendor_synthesis_lookup(
+            pool, as_of=today, analysis_window_days=window_days,
+        )
+        data["xv_synthesis_lookup"] = xv_synth
+    except Exception:
+        logger.debug("Cross-vendor synthesis load failed, using pool fallback")
+        data["xv_synthesis_lookup"] = {"battles": {}, "councils": {}, "asymmetries": {}}
+
     # Extract topic-specific shortcuts for blueprint convenience
     vendor = str(
         topic_ctx.get("vendor") or topic_ctx.get("from_vendor") or ""
@@ -4286,7 +4381,11 @@ def _blueprint_vendor_showdown(ctx: dict, data: dict) -> PostBlueprint:
     disp_b_to_a = data.get("displacement_b_to_a") or {}
     edge_a = disp_a_to_b.get("edge_metrics") or {}
     edge_b = disp_b_to_a.get("edge_metrics") or {}
-    battle_a = disp_a_to_b.get("battle_summary") or {}
+    xv_lookup = data.get("xv_synthesis_lookup") or {}
+    battle_a = _resolve_blog_battle_summary(
+        vendor_a, vendor_b, xv_lookup,
+        disp_a_to_b.get("battle_summary") or {},
+    )
     flow_a = disp_a_to_b.get("flow_summary") or {}
     switch_reasons = disp_a_to_b.get("switch_reasons") or []
 
@@ -4352,10 +4451,12 @@ def _blueprint_vendor_showdown(ctx: dict, data: dict) -> PostBlueprint:
             key_stats=seg_stats,
         ))
 
-    # Category dynamics + synthesis (from reasoning pools)
+    # Category dynamics + synthesis (from reasoning pools + cross-vendor synthesis)
     cat_dyn = data.get("pool_category") or {}
     regime = cat_dyn.get("market_regime") or {}
-    council = cat_dyn.get("council_summary") or {}
+    council = _resolve_blog_council_summary(
+        category, xv_lookup, cat_dyn.get("council_summary") or {},
+    )
     synth_contracts = data.get("synthesis_contracts") or {}
     vendor_core = synth_contracts.get("vendor_core_reasoning") or {}
     category_reasoning = synth_contracts.get("category_reasoning") or {}
@@ -5120,7 +5221,10 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
     takeaway_stats: dict[str, Any] = {"category": category, "vendor_count": vendor_count}
     cat_dyn = data.get("pool_category") or {}
     regime = cat_dyn.get("market_regime") or {}
-    council = cat_dyn.get("council_summary") or {}
+    xv_lookup_ml = data.get("xv_synthesis_lookup") or {}
+    council = _resolve_blog_council_summary(
+        category, xv_lookup_ml, cat_dyn.get("council_summary") or {},
+    )
     if regime.get("regime_type"):
         takeaway_stats["market_regime"] = regime["regime_type"]
     if council.get("conclusion"):
@@ -5576,7 +5680,10 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
 
     bf_stats: dict[str, Any] = {"category": category, "vendor_count": ctx["vendor_count"]}
     cat_dyn = data.get("pool_category") or {}
-    council = cat_dyn.get("council_summary") or {}
+    xv_lookup_bf = data.get("xv_synthesis_lookup") or {}
+    council = _resolve_blog_council_summary(
+        category, xv_lookup_bf, cat_dyn.get("council_summary") or {},
+    )
     if council.get("winner"):
         bf_stats["category_winner"] = council["winner"]
     if council.get("conclusion"):

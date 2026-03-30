@@ -561,6 +561,52 @@ async def _fetch_cross_vendor_battle(
     }
 
 
+async def _resolve_cross_vendor_battle(
+    pool,
+    vendor_a: str,
+    vendor_b: str,
+    today: date,
+    xv_synthesis_lookup: dict[str, Any],
+) -> dict | None:
+    """Prefer cross-vendor synthesis battle, fall back to legacy DB query."""
+    battles = xv_synthesis_lookup.get("battles") or {}
+    needle = tuple(sorted([vendor_a.strip().lower(), vendor_b.strip().lower()]))
+
+    entry = None
+    # Try exact key, then case-insensitive scan
+    for k, v in battles.items():
+        if tuple(sorted(s.lower() for s in k)) == needle:
+            entry = v
+            break
+
+    if entry is not None:
+        conclusion = entry.get("conclusion") or {}
+        if isinstance(conclusion, dict) and conclusion.get("conclusion"):
+            key_insights = conclusion.get("key_insights") or []
+            if isinstance(key_insights, list):
+                normalized: list[dict[str, str]] = []
+                for item in key_insights:
+                    if isinstance(item, str) and item:
+                        normalized.append({"insight": item, "evidence": item})
+                    elif isinstance(item, dict):
+                        text = item.get("insight") or item.get("text") or ""
+                        evidence = item.get("evidence") or text
+                        if text:
+                            normalized.append({"insight": text, "evidence": evidence})
+                key_insights = normalized
+            return {
+                "conclusion": conclusion.get("conclusion") or "",
+                "winner": conclusion.get("winner") or "",
+                "loser": conclusion.get("loser") or "",
+                "durability": conclusion.get("durability_assessment") or "",
+                "key_insights": key_insights,
+                "confidence": float(conclusion["confidence"]) if conclusion.get("confidence") is not None else None,
+            }
+
+    # Fall back to legacy DB query
+    return await _fetch_cross_vendor_battle(pool, vendor_a, vendor_b, today)
+
+
 async def _retire_unselected_challenger_briefs(
     pool,
     *,
@@ -1638,6 +1684,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.warning("Failed to load evidence vault for challenger briefs", exc_info=True)
         evidence_vault_lookup = {}
 
+    # Load cross-vendor synthesis (preferred over legacy DB queries)
+    xv_synthesis_lookup: dict[str, Any] = {"battles": {}, "councils": {}, "asymmetries": {}}
+    try:
+        from ._b2b_cross_vendor_synthesis import load_cross_vendor_synthesis_lookup
+        xv_synthesis_lookup = await load_cross_vendor_synthesis_lookup(
+            pool, as_of=today, analysis_window_days=window_days,
+        )
+    except Exception:
+        logger.debug("Cross-vendor synthesis load failed, using legacy fallback")
+
     # --- Phase 2: Fetch artifacts and build briefs ---
     persisted = 0
     await _update_execution_progress(
@@ -1677,7 +1733,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 _fetch_product_profile(pool, challenger),
                 _fetch_churn_signal(pool, incumbent, today),
                 _fetch_synthesis_view(pool, incumbent, today, window_days),
-                _fetch_cross_vendor_battle(pool, incumbent, challenger, today),
+                _resolve_cross_vendor_battle(
+                    pool, incumbent, challenger, today, xv_synthesis_lookup,
+                ),
                 _fetch_review_pain_quotes(
                     pool,
                     incumbent,
