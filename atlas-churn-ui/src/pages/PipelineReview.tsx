@@ -774,7 +774,7 @@ export default function PipelineReview() {
     loading: summaryLoading,
     refresh: refreshSummary,
     refreshing: summaryRefreshing,
-  } = useApiData(() => fetchVisibilitySummary(24), [])
+  } = useApiData(() => fetchVisibilitySummary(720), [])
 
   const tabs: { key: TabKey; label: string }[] = [
     { key: 'queue', label: 'Queue' },
@@ -810,19 +810,19 @@ export default function PipelineReview() {
           skeleton={summaryLoading}
         />
         <StatCard
-          label="Failures 24h"
+          label="Failures 30d"
           value={summary?.failures_period ?? 0}
           icon={<XCircle className="h-4 w-4" />}
           skeleton={summaryLoading}
         />
         <StatCard
-          label="Quarantines 24h"
+          label="Quarantines 30d"
           value={summary?.quarantines_period ?? 0}
           icon={<Clock className="h-4 w-4" />}
           skeleton={summaryLoading}
         />
         <StatCard
-          label="Rejections 24h"
+          label="Rejections 30d"
           value={summary?.rejections_period ?? 0}
           icon={<CheckCircle2 className="h-4 w-4" />}
           skeleton={summaryLoading}
