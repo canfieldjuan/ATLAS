@@ -4648,9 +4648,8 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
     category_reasoning = synth_contracts.get("category_reasoning") or {}
     account_reasoning = synth_contracts.get("account_reasoning") or {}
     timing_intelligence = vendor_core.get("timing_intelligence") if isinstance(vendor_core, dict) else {}
-    contract_disp = _blog_migration_proof_stats(displacement_reasoning)
-    contract_account = _blog_account_reasoning_stats(account_reasoning)
-    contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
+    # contract_disp intentionally omitted: migration_proof is outbound-oriented,
+    # wrong direction for a switch-to guide.
     contract_category = _blog_category_reasoning_stats(category_reasoning)
 
     # Migration sources chart

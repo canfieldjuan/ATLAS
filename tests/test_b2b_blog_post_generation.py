@@ -283,55 +283,96 @@ def test_blueprint_churn_report_uses_contract_sections_when_pool_slices_are_thin
     )
 
 
-def test_blueprint_migration_guide_promotes_migration_proof_and_account_reasoning():
+def test_blueprint_migration_guide_uses_inbound_metrics_and_drops_outbound():
+    """Migration guide takeaway uses inbound-only metrics. Outbound
+    migration_proof (switching_is_real, top_destination) must NOT appear."""
     blueprint = _blueprint_migration_guide(
         {
             "vendor": "Zendesk",
             "category": "Helpdesk",
             "switch_count": 9,
             "review_total": 42,
-            "slug": "zendesk-migration-guide",
+            "slug": "switch-to-zendesk-2026-03",
         },
         {
-            "profile": {},
+            "profile": {
+                "commonly_switched_from": [
+                    {"vendor": "Freshdesk", "count": 3},
+                    {"vendor": "Intercom", "count": 2},
+                ],
+            },
             "signals": [],
-            "pool_displacement": [],
+            "pool_displacement": [
+                # Inbound edge (to_vendor = Zendesk)
+                {"from_vendor": "Freshdesk", "to_vendor": "Zendesk",
+                 "edge_metrics": {"mention_count": 10, "primary_driver": "support_quality"}},
+                # Outbound edge (from_vendor = Zendesk) -- should be filtered
+                {"from_vendor": "Zendesk", "to_vendor": "HubSpot",
+                 "edge_metrics": {"mention_count": 5, "primary_driver": "pricing"}},
+            ],
             "data_context": {},
             "synthesis_contracts": {
                 "vendor_core_reasoning": {
                     "causal_narrative": {"trigger": "Price hike"},
-                    "timing_intelligence": {
-                        "best_timing_window": "Before renewal review",
-                        "active_eval_signals": {"value": 8},
-                        "immediate_triggers": [{"trigger": "Renewal review", "type": "deadline"}],
-                    },
                 },
                 "displacement_reasoning": {
                     "migration_proof": {
                         "switching_is_real": True,
-                        "evidence_type": "explicit_switch",
                         "switch_volume": {"value": 4},
                         "top_destination": {"value": "Freshdesk"},
                     },
                 },
-                "account_reasoning": {
-                    "market_summary": "Two named accounts are in active evaluation.",
-                },
                 "category_reasoning": {"market_regime": "consolidating"},
             },
-            "synthesis_wedge": "price_squeeze",
         },
     )
 
     takeaway = _section_by_id(blueprint, "takeaway")
+    hook = _section_by_id(blueprint, "hook")
 
-    assert takeaway.key_stats["switching_is_real"] is True
-    assert takeaway.key_stats["top_destination"] == "Freshdesk"
-    assert takeaway.key_stats["account_pressure_summary"] == (
-        "Two named accounts are in active evaluation."
-    )
-    assert takeaway.key_stats["timing_summary"]
+    # Inbound metrics present
+    assert hook.key_stats["inbound_source_count"] == 2
+    assert takeaway.key_stats["inbound_source_count"] == 2
+    assert takeaway.key_stats["inbound_migration_mentions"] == 5
+    assert takeaway.key_stats["top_inbound_driver"] == "support_quality"
     assert takeaway.key_stats["market_regime"] == "consolidating"
+
+    # Outbound migration_proof must NOT be in takeaway
+    assert "switching_is_real" not in takeaway.key_stats
+    assert "top_destination" not in takeaway.key_stats
+    assert "switch_volume" not in takeaway.key_stats
+    assert "dm_churn_rate" not in takeaway.key_stats
+
+
+def test_blueprint_migration_guide_excludes_destination_vendor_from_sources_chart():
+    blueprint = _blueprint_migration_guide(
+        {
+            "vendor": "Shopify",
+            "category": "E-commerce",
+            "switch_count": 4,
+            "review_total": 1490,
+            "slug": "switch-to-shopify-2026-03",
+        },
+        {
+            "profile": {
+                "commonly_switched_from": [
+                    {"vendor": "WooCommerce", "count": 2},
+                    {"vendor": "Shopify", "count": 1},
+                    {"vendor": "BigCommerce", "count": 1},
+                ],
+            },
+            "signals": [],
+            "pool_displacement": [],
+            "data_context": {},
+            "synthesis_contracts": {},
+        },
+    )
+
+    source_chart = next(c for c in blueprint.charts if c.chart_id == "sources-bar")
+    source_names = {row["name"] for row in source_chart.data}
+    assert "Shopify" not in source_names
+    assert "WooCommerce" in source_names
+    assert "BigCommerce" in source_names
 
 
 @pytest.mark.asyncio
