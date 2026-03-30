@@ -1527,12 +1527,33 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             k: v for k, v in reasoning_lookup.items()
             if str(k or "").strip().lower() in vendor_scope
         }
-    xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
+    # Prefer cross-vendor synthesis; fall back to legacy conclusions
+    from ._b2b_cross_vendor_synthesis import load_cross_vendor_synthesis_lookup
+    try:
+        xv_synth = await load_cross_vendor_synthesis_lookup(
+            pool, as_of=today, analysis_window_days=window_days,
+        )
+    except Exception:
+        logger.debug("Cross-vendor synthesis lookup failed, using legacy", exc_info=True)
+        xv_synth = {"battles": {}, "councils": {}, "asymmetries": {}}
+    xv_legacy = await reconstruct_cross_vendor_lookup(pool, as_of=today)
+    # Merge: synthesis wins per key, legacy fills gaps
+    xv_lookup: dict[str, dict] = {"battles": {}, "councils": {}, "asymmetries": {}}
+    for bucket in ("battles", "councils", "asymmetries"):
+        merged = dict(xv_legacy.get(bucket, {}))
+        merged.update(xv_synth.get(bucket, {}))
+        xv_lookup[bucket] = merged
+    synth_count = sum(
+        1 for bucket in ("battles", "councils", "asymmetries")
+        for v in xv_lookup[bucket].values()
+        if isinstance(v, dict) and v.get("source") == "synthesis"
+    )
     logger.info(
-        "Cross-vendor enrichment: %d battles, %d councils, %d asymmetries",
+        "Cross-vendor enrichment: %d battles, %d councils, %d asymmetries (%d from synthesis)",
         len(xv_lookup.get("battles", {})),
         len(xv_lookup.get("councils", {})),
         len(xv_lookup.get("asymmetries", {})),
+        synth_count,
     )
 
     # Load category dynamics pool for council fallback
