@@ -1276,6 +1276,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     report_source_dist,
                 )
                 reports_persisted += 1
+                from ..visibility import record_attempt
+                await record_attempt(
+                    pool, artifact_type="churn_report",
+                    artifact_id=report_type,
+                    run_id=str(task.id), stage="persistence",
+                    status="succeeded",
+                )
     except Exception:
         logger.exception("Failed to persist intelligence reports")
         from ..visibility import emit_event

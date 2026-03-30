@@ -2137,6 +2137,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         cards_gated_out=len(gated_out_vendors),
     )
 
+    # Record battle card run summary to visibility system
+    from ..visibility import record_attempt, emit_event
+    await record_attempt(
+        pool, artifact_type="battle_card", artifact_id="batch",
+        run_id=str(task.id), stage="generation",
+        status="succeeded" if bc_llm_failures == 0 else "succeeded",
+        score=cards_persisted,
+        blocker_count=bc_llm_failures,
+        warning_count=len(gated_out_vendors),
+        error_message=f"{bc_llm_failures} LLM failures" if bc_llm_failures else None,
+    )
+    if bc_llm_failures > 0:
+        await emit_event(
+            pool, stage="battle_cards", event_type="llm_failures",
+            entity_type="battle_card", entity_id="batch",
+            summary=f"{bc_llm_failures}/{len(deterministic_battle_cards)} battle cards failed LLM render",
+            severity="warning", actionable=bc_llm_failures > 3,
+            run_id=str(task.id),
+            reason_code="llm_render_failure",
+            detail={"failures": bc_llm_failures, "total": len(deterministic_battle_cards),
+                    "gated_out": gated_out_vendors},
+        )
+
     return {
         "_skip_synthesis": "B2B battle cards complete",
         "cards_built": len(deterministic_battle_cards),

@@ -335,6 +335,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "Persisted reasoning synthesis for %s failed validation: %s",
                     vendor_name, persisted_vresult.summary(),
                 )
+                from ..visibility import emit_event
+                await emit_event(
+                    pool, stage="synthesis", event_type="validation_failure",
+                    entity_type="vendor", entity_id=vendor,
+                    summary=f"Synthesis validation failed: {persisted_vresult.summary()[:120]}",
+                    severity="error", actionable=True,
+                    artifact_type="reasoning_synthesis",
+                    run_id=str(task.id),
+                    reason_code="validation_blocked",
+                    detail={"errors": [str(e) for e in persisted_vresult.errors[:5]]},
+                )
                 failed_vendors.append({
                     "vendor_name": vendor_name,
                     "stage": "persisted_validation",
@@ -357,6 +368,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     }
                     for w in persisted_vresult.warnings
                 ]
+                # Emit per-rule visibility events for queryable warning surface
+                from ..visibility import emit_event
+                for w in persisted_vresult.warnings[:10]:
+                    await emit_event(
+                        pool, stage="synthesis", event_type="validation_warning",
+                        entity_type="vendor", entity_id=vendor,
+                        summary=f"{w.code}: {w.message[:100]}",
+                        severity="warning",
+                        artifact_type="reasoning_synthesis",
+                        run_id=str(task.id),
+                        reason_code=w.code,
+                        rule_code=w.code,
+                        detail={"path": w.path, "message": w.message},
+                    )
             else:
                 synthesis.pop("_validation_warnings", None)
             vresult = persisted_vresult
@@ -744,7 +769,7 @@ async def _run_cross_vendor_synthesis(
                 _failed += 1
                 return
 
-            # Persist to canonical table (upsert — reruns update with fresh synthesis).
+            # Persist to canonical table (upsert -- reruns update with fresh synthesis).
             # Uses ON CONFLICT on the named partial unique index so PostgreSQL
             # matches the correct predicate automatically.
             try:
