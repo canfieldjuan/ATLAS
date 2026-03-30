@@ -414,6 +414,84 @@ export interface BriefingDraft {
   reject_reason: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Pipeline Visibility
+// ---------------------------------------------------------------------------
+
+export interface VisibilityQueueItem {
+  id: string
+  fingerprint: string
+  status: string
+  occurrence_count: number
+  first_seen_at: string
+  last_seen_at: string
+  stage: string
+  event_type: string
+  severity: string
+  entity_type: string
+  entity_id: string
+  artifact_type?: string
+  reason_code?: string
+  rule_code?: string
+  summary: string
+  run_id?: string
+  actionable: boolean
+}
+
+export interface VisibilityEvent {
+  id: string
+  occurred_at: string
+  run_id?: string
+  stage: string
+  event_type: string
+  severity: string
+  actionable: boolean
+  entity_type: string
+  entity_id: string
+  artifact_type?: string
+  reason_code?: string
+  rule_code?: string
+  decision?: string
+  summary: string
+  detail: Record<string, unknown>
+  fingerprint?: string
+}
+
+export interface ArtifactAttempt {
+  id: string
+  artifact_type: string
+  artifact_id?: string
+  run_id?: string
+  attempt_no: number
+  stage: string
+  status: string
+  score?: number
+  threshold?: number
+  blocker_count: number
+  warning_count: number
+  blocking_issues?: string[]
+  warnings?: string[]
+  failure_step?: string
+  error_message?: string
+  started_at: string
+  completed_at?: string
+}
+
+export interface EnrichmentQuarantine {
+  id: string
+  review_id?: string
+  vendor_name?: string
+  source?: string
+  reason_code: string
+  severity: string
+  actionable: boolean
+  summary?: string
+  evidence: Record<string, unknown>
+  quarantined_at: string
+  released_at?: string
+  released_by?: string
+}
+
 export type TargetMode = 'vendor_retention' | 'challenger_intel'
 export type TargetTier = 'report' | 'dashboard' | 'api'
 export type VendorTargetOwnershipScope = 'owned' | 'legacy_global' | 'account_owned'

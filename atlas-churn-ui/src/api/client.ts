@@ -25,6 +25,10 @@ import type {
   ReviewQueueDraft,
   AuditEvent,
   BriefingDraft,
+  VisibilityQueueItem,
+  VisibilityEvent,
+  ArtifactAttempt,
+  EnrichmentQuarantine,
 } from '../types'
 import { normalizeReportDetail, normalizeVendorProfile } from '../lib/reportNormalization'
 
@@ -582,4 +586,57 @@ export async function bulkApproveBriefings(ids: string[]) {
 
 export async function bulkRejectBriefings(ids: string[], reason?: string) {
   return post<{ rejected: number; failed: { id: string; reason: string }[] }>(BRIEFINGS_BASE, '/bulk-reject', { briefing_ids: ids, reason })
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline visibility
+// ---------------------------------------------------------------------------
+const VISIBILITY_BASE = `${API_BASE}/api/v1/pipeline/visibility`
+
+export async function fetchVisibilitySummary(hours = 24) {
+  return get<{
+    period_hours: number
+    open_actionable: number
+    open_total: number
+    failures_period: number
+    quarantines_period: number
+    rejections_period: number
+  }>(VISIBILITY_BASE, '/summary', { hours })
+}
+
+export async function fetchVisibilityQueue(params?: {
+  limit?: number; offset?: number; stage?: string; severity?: string
+}) {
+  return get<{ items: VisibilityQueueItem[]; limit: number; offset: number }>(
+    VISIBILITY_BASE, '/queue', params as Record<string, string | number>
+  )
+}
+
+export async function fetchVisibilityEvents(params?: {
+  limit?: number; offset?: number; stage?: string; event_type?: string
+  severity?: string; entity_type?: string; reason_code?: string; hours?: number
+}) {
+  return get<{ events: VisibilityEvent[]; limit: number; offset: number }>(
+    VISIBILITY_BASE, '/events', params as Record<string, string | number>
+  )
+}
+
+export async function fetchArtifactAttempts(params?: {
+  artifact_type?: string; status?: string; limit?: number; offset?: number; hours?: number
+}) {
+  return get<{ attempts: ArtifactAttempt[]; limit: number; offset: number }>(
+    VISIBILITY_BASE, '/attempts', params as Record<string, string | number>
+  )
+}
+
+export async function fetchEnrichmentQuarantines(params?: {
+  reason_code?: string; vendor_name?: string; unreleased_only?: boolean; limit?: number
+}) {
+  return get<{ quarantines: EnrichmentQuarantine[]; limit: number; offset: number }>(
+    VISIBILITY_BASE, '/quarantines', params as Record<string, string | number | boolean>
+  )
+}
+
+export async function resolveVisibilityReview(reviewId: string, action: string, note?: string) {
+  return post<{ status: string }>(VISIBILITY_BASE, `/reviews/${reviewId}/resolve?action=${action}${note ? '&note=' + encodeURIComponent(note) : ''}`)
 }

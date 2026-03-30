@@ -29,6 +29,7 @@ const BlogReview = lazy(() => import('./pages/BlogReview'))
 const CampaignReview = lazy(() => import('./pages/CampaignReview'))
 const BriefingReview = lazy(() => import('./pages/BriefingReview'))
 const Prospects = lazy(() => import('./pages/Prospects'))
+const PipelineReview = lazy(() => import('./pages/PipelineReview'))
 const Report = lazy(() => import('./pages/Report'))
 
 const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password', '/methodology', '/report']
@@ -97,6 +98,7 @@ export default function App() {
             <Route path="/blog-review" element={renderLazyRoute(BlogReview)} />
             <Route path="/campaign-review" element={renderLazyRoute(CampaignReview)} />
             <Route path="/briefing-review" element={renderLazyRoute(BriefingReview)} />
+            <Route path="/pipeline-review" element={renderLazyRoute(PipelineReview)} />
             <Route path="/prospects" element={renderLazyRoute(Prospects)} />
             <Route path="/account" element={renderLazyRoute(Account)} />
             <Route path="*" element={<Navigate to="/" replace />} />

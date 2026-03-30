@@ -15,6 +15,7 @@ import {
   LogOut,
   Lock,
   X,
+  Activity,
 } from 'lucide-react'
 import AtlasRobotLogo from './AtlasRobotLogo'
 import { useAuth } from '../auth/AuthContext'
@@ -44,6 +45,7 @@ const auditLinks: SidebarLink[] = [
   { to: '/blog-review', icon: FileSearch, label: 'Blog Review' },
   { to: '/campaign-review', icon: MailSearch, label: 'Campaigns' },
   { to: '/briefing-review', icon: MailSearch, label: 'Briefings' },
+  { to: '/pipeline-review', icon: Activity, label: 'Pipeline Review' },
   { to: '/prospects', icon: Users, label: 'Prospects' },
 ]
 

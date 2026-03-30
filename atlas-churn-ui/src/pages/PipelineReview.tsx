@@ -1,0 +1,855 @@
+import { useState } from 'react'
+import {
+  Shield,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Filter,
+  RefreshCw,
+  XCircle,
+  ChevronRight,
+} from 'lucide-react'
+import { clsx } from 'clsx'
+import useApiData from '../hooks/useApiData'
+import DataTable from '../components/DataTable'
+import StatCard from '../components/StatCard'
+import type { Column } from '../components/DataTable'
+import type {
+  VisibilityQueueItem,
+  VisibilityEvent,
+  ArtifactAttempt,
+  EnrichmentQuarantine,
+} from '../types'
+import {
+  fetchVisibilitySummary,
+  fetchVisibilityQueue,
+  fetchVisibilityEvents,
+  fetchArtifactAttempts,
+  fetchEnrichmentQuarantines,
+  resolveVisibilityReview,
+} from '../api/client'
+
+type TabKey = 'queue' | 'failures' | 'quality' | 'audit'
+
+// ---------------------------------------------------------------------------
+// Severity badge
+// ---------------------------------------------------------------------------
+
+const severityStyles: Record<string, string> = {
+  critical: 'bg-red-500/20 text-red-400',
+  error: 'bg-rose-500/20 text-rose-400',
+  warning: 'bg-amber-500/20 text-amber-400',
+  info: 'bg-slate-500/20 text-slate-400',
+}
+
+function SeverityBadge({ severity }: { severity: string }) {
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+        severityStyles[severity] || 'bg-slate-500/20 text-slate-400',
+      )}
+    >
+      {severity}
+    </span>
+  )
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    open: 'bg-amber-500/20 text-amber-400',
+    acknowledged: 'bg-cyan-500/20 text-cyan-400',
+    resolved: 'bg-green-500/20 text-green-400',
+    ignored: 'bg-slate-500/20 text-slate-400',
+    accepted_risk: 'bg-purple-500/20 text-purple-400',
+    passed: 'bg-green-500/20 text-green-400',
+    failed: 'bg-red-500/20 text-red-400',
+    retried: 'bg-amber-500/20 text-amber-400',
+  }
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+        styles[status] || 'bg-slate-500/20 text-slate-400',
+      )}
+    >
+      {status.replace(/_/g, ' ')}
+    </span>
+  )
+}
+
+function StageBadge({ stage }: { stage: string }) {
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs bg-cyan-500/10 text-cyan-400">
+      {stage.replace(/_/g, ' ')}
+    </span>
+  )
+}
+
+function formatTs(ts: string | null | undefined): string {
+  if (!ts) return '--'
+  const d = new Date(ts)
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Resolve dropdown for queue items
+// ---------------------------------------------------------------------------
+
+function ResolveDropdown({
+  item,
+  onResolved,
+}: {
+  item: VisibilityQueueItem
+  onResolved: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const actions = ['acknowledge', 'resolve', 'ignore', 'accept_risk'] as const
+
+  async function handleAction(action: string) {
+    setLoading(true)
+    try {
+      await resolveVisibilityReview(item.id, action)
+      onResolved()
+    } finally {
+      setLoading(false)
+      setOpen(false)
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen(!open)
+        }}
+        disabled={loading}
+        className="px-2.5 py-1 text-xs font-medium bg-cyan-500/10 text-cyan-400 rounded-lg hover:bg-cyan-500/20 transition-colors disabled:opacity-50"
+      >
+        {loading ? 'Resolving...' : 'Resolve'}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-40 bg-slate-800 border border-slate-700/50 rounded-lg shadow-xl z-10 py-1">
+          {actions.map((a) => (
+            <button
+              key={a}
+              onClick={(e) => {
+                e.stopPropagation()
+                handleAction(a)
+              }}
+              className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-slate-700/50 transition-colors"
+            >
+              {a.replace(/_/g, ' ')}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Filter bar shared component
+// ---------------------------------------------------------------------------
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="text-xs text-slate-500">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-slate-800/50 border border-slate-700/50 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500/50"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Queue
+// ---------------------------------------------------------------------------
+
+function QueueTab({ onRefresh }: { onRefresh: () => void }) {
+  const [stageFilter, setStageFilter] = useState('')
+  const [severityFilter, setSeverityFilter] = useState('')
+
+  const { data, loading, error, refresh, refreshing } = useApiData(
+    () =>
+      fetchVisibilityQueue({
+        limit: 100,
+        stage: stageFilter || undefined,
+        severity: severityFilter || undefined,
+      }),
+    [stageFilter, severityFilter],
+  )
+
+  const handleResolved = () => {
+    refresh()
+    onRefresh()
+  }
+
+  const columns: Column<VisibilityQueueItem>[] = [
+    {
+      key: 'severity',
+      header: 'Sev',
+      render: (r) => <SeverityBadge severity={r.severity} />,
+      sortable: true,
+      sortValue: (r) => {
+        const order: Record<string, number> = { critical: 0, error: 1, warning: 2, info: 3 }
+        return order[r.severity] ?? 4
+      },
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (r) => <StatusBadge status={r.status} />,
+      sortable: true,
+      sortValue: (r) => r.status,
+    },
+    {
+      key: 'stage',
+      header: 'Stage',
+      render: (r) => <StageBadge stage={r.stage} />,
+      sortable: true,
+      sortValue: (r) => r.stage,
+    },
+    {
+      key: 'summary',
+      header: 'Summary',
+      render: (r) => (
+        <div className="max-w-sm">
+          <span className="text-white text-sm line-clamp-1">{r.summary}</span>
+          <span className="text-xs text-slate-500 block">{r.entity_type}: {r.entity_id}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'occurrences',
+      header: 'Count',
+      render: (r) => (
+        <span className="text-sm text-slate-300">{r.occurrence_count}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.occurrence_count,
+    },
+    {
+      key: 'last_seen',
+      header: 'Last Seen',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{formatTs(r.last_seen_at)}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.last_seen_at || '',
+    },
+    {
+      key: 'action',
+      header: '',
+      render: (r) =>
+        r.actionable && r.status === 'open' ? (
+          <ResolveDropdown item={r} onResolved={handleResolved} />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-slate-600" />
+        ),
+    },
+  ]
+
+  const items = data?.items ?? []
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-4">
+        <Filter className="h-4 w-4 text-slate-500" />
+        <FilterSelect
+          label="Stage"
+          value={stageFilter}
+          onChange={setStageFilter}
+          options={[
+            { value: '', label: 'All stages' },
+            { value: 'scrape', label: 'Scrape' },
+            { value: 'parse', label: 'Parse' },
+            { value: 'enrich', label: 'Enrich' },
+            { value: 'score', label: 'Score' },
+            { value: 'publish', label: 'Publish' },
+          ]}
+        />
+        <FilterSelect
+          label="Severity"
+          value={severityFilter}
+          onChange={setSeverityFilter}
+          options={[
+            { value: '', label: 'All' },
+            { value: 'critical', label: 'Critical' },
+            { value: 'error', label: 'Error' },
+            { value: 'warning', label: 'Warning' },
+            { value: 'info', label: 'Info' },
+          ]}
+        />
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {error.message}
+        </div>
+      )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        {loading ? (
+          <DataTable columns={columns} data={[]} skeletonRows={6} />
+        ) : (
+          <DataTable
+            columns={columns}
+            data={items}
+            emptyMessage="No items in the review queue"
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Failures (ArtifactAttempts)
+// ---------------------------------------------------------------------------
+
+function FailuresTab() {
+  const [statusFilter, setStatusFilter] = useState('failed')
+
+  const { data, loading, error, refresh, refreshing } = useApiData(
+    () =>
+      fetchArtifactAttempts({
+        status: statusFilter || undefined,
+        limit: 100,
+        hours: 72,
+      }),
+    [statusFilter],
+  )
+
+  const columns: Column<ArtifactAttempt>[] = [
+    {
+      key: 'status',
+      header: 'Status',
+      render: (r) => <StatusBadge status={r.status} />,
+      sortable: true,
+      sortValue: (r) => r.status,
+    },
+    {
+      key: 'artifact_type',
+      header: 'Artifact',
+      render: (r) => (
+        <span className="text-sm text-white">{r.artifact_type}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.artifact_type,
+    },
+    {
+      key: 'stage',
+      header: 'Stage',
+      render: (r) => <StageBadge stage={r.stage} />,
+      sortable: true,
+      sortValue: (r) => r.stage,
+    },
+    {
+      key: 'attempt',
+      header: 'Attempt',
+      render: (r) => (
+        <span className="text-sm text-slate-300">#{r.attempt_no}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.attempt_no,
+    },
+    {
+      key: 'issues',
+      header: 'Issues',
+      render: (r) => (
+        <div className="flex items-center gap-2">
+          {r.blocker_count > 0 && (
+            <span className="text-xs text-red-400">{r.blocker_count} blocker{r.blocker_count !== 1 ? 's' : ''}</span>
+          )}
+          {r.warning_count > 0 && (
+            <span className="text-xs text-amber-400">{r.warning_count} warn</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'error',
+      header: 'Error',
+      render: (r) => (
+        <div className="max-w-xs">
+          <span className="text-xs text-slate-400 line-clamp-1">
+            {r.error_message || r.failure_step || '--'}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: 'score',
+      header: 'Score',
+      render: (r) => (
+        <span className="text-xs text-slate-300">
+          {r.score != null ? `${r.score.toFixed(1)}${r.threshold != null ? ` / ${r.threshold}` : ''}` : '--'}
+        </span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.score ?? -1,
+    },
+    {
+      key: 'started',
+      header: 'Started',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{formatTs(r.started_at)}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.started_at || '',
+    },
+  ]
+
+  const items = data?.attempts ?? []
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-4">
+        <Filter className="h-4 w-4 text-slate-500" />
+        <FilterSelect
+          label="Status"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={[
+            { value: '', label: 'All' },
+            { value: 'failed', label: 'Failed' },
+            { value: 'passed', label: 'Passed' },
+            { value: 'retried', label: 'Retried' },
+          ]}
+        />
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {error.message}
+        </div>
+      )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        {loading ? (
+          <DataTable columns={columns} data={[]} skeletonRows={6} />
+        ) : (
+          <DataTable
+            columns={columns}
+            data={items}
+            emptyMessage="No artifact attempts in the last 72h"
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Quality Signals (Quarantines)
+// ---------------------------------------------------------------------------
+
+function QualityTab() {
+  const [unreleasedOnly, setUnreleasedOnly] = useState(true)
+
+  const { data, loading, error, refresh, refreshing } = useApiData(
+    () =>
+      fetchEnrichmentQuarantines({
+        unreleased_only: unreleasedOnly,
+        limit: 100,
+      }),
+    [unreleasedOnly],
+  )
+
+  const columns: Column<EnrichmentQuarantine>[] = [
+    {
+      key: 'severity',
+      header: 'Sev',
+      render: (r) => <SeverityBadge severity={r.severity} />,
+      sortable: true,
+      sortValue: (r) => {
+        const order: Record<string, number> = { critical: 0, error: 1, warning: 2, info: 3 }
+        return order[r.severity] ?? 4
+      },
+    },
+    {
+      key: 'vendor',
+      header: 'Vendor',
+      render: (r) => (
+        <span className="text-sm text-white">{r.vendor_name || '--'}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.vendor_name || '',
+    },
+    {
+      key: 'reason_code',
+      header: 'Reason',
+      render: (r) => (
+        <span className="text-xs text-slate-300 font-mono">{r.reason_code}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.reason_code,
+    },
+    {
+      key: 'summary',
+      header: 'Summary',
+      render: (r) => (
+        <div className="max-w-sm">
+          <span className="text-xs text-slate-400 line-clamp-1">
+            {r.summary || '--'}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: 'source',
+      header: 'Source',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{r.source || '--'}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.source || '',
+    },
+    {
+      key: 'quarantined_at',
+      header: 'Quarantined',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{formatTs(r.quarantined_at)}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.quarantined_at,
+    },
+    {
+      key: 'released',
+      header: 'Released',
+      render: (r) =>
+        r.released_at ? (
+          <span className="text-xs text-green-400">{formatTs(r.released_at)}</span>
+        ) : (
+          <span className="text-xs text-slate-600">--</span>
+        ),
+    },
+  ]
+
+  const items = data?.quarantines ?? []
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-4">
+        <Filter className="h-4 w-4 text-slate-500" />
+        <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={unreleasedOnly}
+            onChange={(e) => setUnreleasedOnly(e.target.checked)}
+            className="accent-cyan-500"
+          />
+          Unreleased only
+        </label>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {error.message}
+        </div>
+      )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        {loading ? (
+          <DataTable columns={columns} data={[]} skeletonRows={6} />
+        ) : (
+          <DataTable
+            columns={columns}
+            data={items}
+            emptyMessage="No quarantined items"
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tab: Audit Trail (all events)
+// ---------------------------------------------------------------------------
+
+function AuditTab() {
+  const [stageFilter, setStageFilter] = useState('')
+  const [severityFilter, setSeverityFilter] = useState('')
+
+  const { data, loading, error, refresh, refreshing } = useApiData(
+    () =>
+      fetchVisibilityEvents({
+        limit: 100,
+        hours: 48,
+        stage: stageFilter || undefined,
+        severity: severityFilter || undefined,
+      }),
+    [stageFilter, severityFilter],
+  )
+
+  const columns: Column<VisibilityEvent>[] = [
+    {
+      key: 'severity',
+      header: 'Sev',
+      render: (r) => <SeverityBadge severity={r.severity} />,
+      sortable: true,
+      sortValue: (r) => {
+        const order: Record<string, number> = { critical: 0, error: 1, warning: 2, info: 3 }
+        return order[r.severity] ?? 4
+      },
+    },
+    {
+      key: 'event_type',
+      header: 'Event',
+      render: (r) => (
+        <span className="text-sm text-white">{r.event_type.replace(/_/g, ' ')}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.event_type,
+    },
+    {
+      key: 'stage',
+      header: 'Stage',
+      render: (r) => <StageBadge stage={r.stage} />,
+      sortable: true,
+      sortValue: (r) => r.stage,
+    },
+    {
+      key: 'entity',
+      header: 'Entity',
+      render: (r) => (
+        <div className="max-w-xs">
+          <span className="text-xs text-slate-300">{r.entity_type}: {r.entity_id}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'summary',
+      header: 'Summary',
+      render: (r) => (
+        <div className="max-w-sm">
+          <span className="text-xs text-slate-400 line-clamp-1">{r.summary}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'decision',
+      header: 'Decision',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{r.decision || '--'}</span>
+      ),
+    },
+    {
+      key: 'occurred_at',
+      header: 'Time',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{formatTs(r.occurred_at)}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.occurred_at,
+    },
+  ]
+
+  const items = data?.events ?? []
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-4">
+        <Filter className="h-4 w-4 text-slate-500" />
+        <FilterSelect
+          label="Stage"
+          value={stageFilter}
+          onChange={setStageFilter}
+          options={[
+            { value: '', label: 'All stages' },
+            { value: 'scrape', label: 'Scrape' },
+            { value: 'parse', label: 'Parse' },
+            { value: 'enrich', label: 'Enrich' },
+            { value: 'score', label: 'Score' },
+            { value: 'publish', label: 'Publish' },
+          ]}
+        />
+        <FilterSelect
+          label="Severity"
+          value={severityFilter}
+          onChange={setSeverityFilter}
+          options={[
+            { value: '', label: 'All' },
+            { value: 'critical', label: 'Critical' },
+            { value: 'error', label: 'Error' },
+            { value: 'warning', label: 'Warning' },
+            { value: 'info', label: 'Info' },
+          ]}
+        />
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {error.message}
+        </div>
+      )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        {loading ? (
+          <DataTable columns={columns} data={[]} skeletonRows={6} />
+        ) : (
+          <DataTable
+            columns={columns}
+            data={items}
+            emptyMessage="No events in the last 48h"
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+export default function PipelineReview() {
+  const [activeTab, setActiveTab] = useState<TabKey>('queue')
+
+  const {
+    data: summary,
+    loading: summaryLoading,
+    refresh: refreshSummary,
+    refreshing: summaryRefreshing,
+  } = useApiData(() => fetchVisibilitySummary(24), [])
+
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: 'queue', label: 'Queue' },
+    { key: 'failures', label: 'Failures' },
+    { key: 'quality', label: 'Quality Signals' },
+    { key: 'audit', label: 'Audit Trail' },
+  ]
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Shield className="h-6 w-6 text-cyan-400" />
+          <h1 className="text-2xl font-bold text-white">Pipeline Review</h1>
+        </div>
+        <button
+          onClick={refreshSummary}
+          disabled={summaryRefreshing}
+          className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+        >
+          <RefreshCw className={clsx('h-4 w-4', summaryRefreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {/* Summary stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard
+          label="Open Actionable"
+          value={summary?.open_actionable ?? 0}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+        <StatCard
+          label="Failures 24h"
+          value={summary?.failures_period ?? 0}
+          icon={<XCircle className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+        <StatCard
+          label="Quarantines 24h"
+          value={summary?.quarantines_period ?? 0}
+          icon={<Clock className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+        <StatCard
+          label="Rejections 24h"
+          value={summary?.rejections_period ?? 0}
+          icon={<CheckCircle2 className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-slate-700/50">
+        {tabs.map(({ key, label }) => (
+          <button
+            key={key}
+            onClick={() => setActiveTab(key)}
+            className={clsx(
+              'px-4 py-2 text-sm font-medium transition-colors border-b-2',
+              activeTab === key
+                ? 'text-cyan-400 border-cyan-400'
+                : 'text-slate-400 border-transparent hover:text-white',
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      {activeTab === 'queue' && <QueueTab onRefresh={refreshSummary} />}
+      {activeTab === 'failures' && <FailuresTab />}
+      {activeTab === 'quality' && <QualityTab />}
+      {activeTab === 'audit' && <AuditTab />}
+    </div>
+  )
+}
