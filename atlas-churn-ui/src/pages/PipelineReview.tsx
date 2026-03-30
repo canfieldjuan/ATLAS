@@ -289,11 +289,12 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
           onChange={setStageFilter}
           options={[
             { value: '', label: 'All stages' },
-            { value: 'scrape', label: 'Scrape' },
-            { value: 'parse', label: 'Parse' },
-            { value: 'enrich', label: 'Enrich' },
-            { value: 'score', label: 'Score' },
-            { value: 'publish', label: 'Publish' },
+            { value: 'extraction', label: 'Extraction' },
+            { value: 'synthesis', label: 'Synthesis' },
+            { value: 'battle_cards', label: 'Battle Cards' },
+            { value: 'blog', label: 'Blog' },
+            { value: 'reports', label: 'Reports' },
+            { value: 'task_execution', label: 'Task Execution' },
           ]}
         />
         <FilterSelect
@@ -351,7 +352,7 @@ function FailuresTab() {
       fetchArtifactAttempts({
         status: statusFilter || undefined,
         limit: 100,
-        hours: 72,
+        hours: 720,
       }),
     [statusFilter],
   )
@@ -628,7 +629,7 @@ function AuditTab() {
     () =>
       fetchVisibilityEvents({
         limit: 100,
-        hours: 48,
+        hours: 720,
         stage: stageFilter || undefined,
         severity: severityFilter || undefined,
       }),
@@ -710,11 +711,12 @@ function AuditTab() {
           onChange={setStageFilter}
           options={[
             { value: '', label: 'All stages' },
-            { value: 'scrape', label: 'Scrape' },
-            { value: 'parse', label: 'Parse' },
-            { value: 'enrich', label: 'Enrich' },
-            { value: 'score', label: 'Score' },
-            { value: 'publish', label: 'Publish' },
+            { value: 'extraction', label: 'Extraction' },
+            { value: 'synthesis', label: 'Synthesis' },
+            { value: 'battle_cards', label: 'Battle Cards' },
+            { value: 'blog', label: 'Blog' },
+            { value: 'reports', label: 'Reports' },
+            { value: 'task_execution', label: 'Task Execution' },
           ]}
         />
         <FilterSelect
