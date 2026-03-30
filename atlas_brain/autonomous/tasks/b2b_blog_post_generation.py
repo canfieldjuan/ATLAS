@@ -741,6 +741,21 @@ def _apply_blog_quality_gate(
                     )
                     break
 
+    # Numeric consistency: check that sub-counts don't exceed headline counts
+    _COUNT_PATTERN = re.compile(
+        r"(\d[\d,]*)\s+(?:switching|churn|migration|displacement)\s+"
+        r"(?:signals?|stories|reviews?|mentions?)",
+        re.IGNORECASE,
+    )
+    count_values = [int(m.replace(",", "")) for m in _COUNT_PATTERN.findall(body)]
+    if len(count_values) >= 2:
+        headline = max(count_values)
+        sub_total = sum(v for v in count_values if v != headline)
+        if sub_total > headline and headline > 0:
+            warnings.append(
+                f"numeric_inconsistency:sub-counts ({sub_total}) exceed headline ({headline})"
+            )
+
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
     report = {
         "score": score,
