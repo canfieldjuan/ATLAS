@@ -19,6 +19,28 @@ logger = logging.getLogger("atlas.api.pipeline_visibility")
 router = APIRouter(prefix="/pipeline/visibility", tags=["pipeline-visibility"])
 
 
+def _serialize_row(row) -> dict[str, Any]:
+    """Convert asyncpg Record to JSON-safe dict."""
+    out: dict[str, Any] = {}
+    for k, v in dict(row).items():
+        if isinstance(v, UUID):
+            out[k] = str(v)
+        elif isinstance(v, datetime):
+            out[k] = v.isoformat()
+        elif isinstance(v, date):
+            out[k] = v.isoformat()
+        elif isinstance(v, str) and k in (
+            "detail", "evidence", "blocking_issues", "warnings",
+        ):
+            try:
+                out[k] = json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                out[k] = v
+        else:
+            out[k] = v
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Summary strip
 # ---------------------------------------------------------------------------
@@ -109,7 +131,7 @@ async def get_visibility_queue(
         *params, limit, offset,
     )
     return {
-        "items": [dict(r) for r in rows],
+        "items": [_serialize_row(r) for r in rows],
         "limit": limit,
         "offset": offset,
     }
@@ -169,7 +191,7 @@ async def get_visibility_events(
     )
     return {
         "events": [
-            {**dict(r), "detail": r["detail"] if isinstance(r["detail"], dict) else {}}
+            _serialize_row(r)
             for r in rows
         ],
         "limit": limit,
@@ -224,7 +246,7 @@ async def get_artifact_attempts(
         """,
         *params, limit, offset,
     )
-    return {"attempts": [dict(r) for r in rows], "limit": limit, "offset": offset}
+    return {"attempts": [_serialize_row(r) for r in rows], "limit": limit, "offset": offset}
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +291,7 @@ async def get_enrichment_quarantines(
         """,
         *params, limit, offset,
     )
-    return {"quarantines": [dict(r) for r in rows], "limit": limit, "offset": offset}
+    return {"quarantines": [_serialize_row(r) for r in rows], "limit": limit, "offset": offset}
 
 
 # ---------------------------------------------------------------------------
