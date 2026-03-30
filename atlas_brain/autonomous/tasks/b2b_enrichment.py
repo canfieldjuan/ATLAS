@@ -21,6 +21,14 @@ from ...config import settings
 from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_witnesses import (
+    derive_evidence_spans,
+    derive_operating_model_shift,
+    derive_org_pressure_type,
+    derive_productivity_delta_claim,
+    derive_replacement_mode,
+    derive_salience_flags,
+)
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
@@ -955,6 +963,14 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     cc["price_complaint"] = engine.derive_price_complaint(result)
     cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
 
+    # 8. witness-oriented deterministic evidence primitives
+    result["replacement_mode"] = derive_replacement_mode(result, source_row)
+    result["operating_model_shift"] = derive_operating_model_shift(result, source_row)
+    result["productivity_delta_claim"] = derive_productivity_delta_claim(source_row)
+    result["org_pressure_type"] = derive_org_pressure_type(source_row)
+    result["salience_flags"] = derive_salience_flags(result, source_row)
+    result["evidence_spans"] = derive_evidence_spans(result, source_row)
+
     # Mark schema version + evidence map hash for recomputation tracking
     result["enrichment_schema_version"] = 3
     result["evidence_map_hash"] = engine.map_hash
@@ -1407,6 +1423,32 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     }
     if requeued:
         result["version_upgrade_requeued"] = requeued
+
+    # Record enrichment run summary
+    from ..visibility import record_attempt, emit_event
+    total_processed = total_enriched + total_quarantined + total_failed + total_no_signal
+    await record_attempt(
+        pool, artifact_type="enrichment", artifact_id="batch",
+        run_id=str(task.id), stage="enrichment",
+        status="succeeded" if total_failed == 0 else "failed",
+        score=total_enriched,
+        blocker_count=total_failed,
+        warning_count=total_quarantined,
+        error_message=f"{total_failed} failed, {total_quarantined} quarantined" if total_failed else None,
+    )
+    if total_failed > 0 or total_quarantined > 0:
+        await emit_event(
+            pool, stage="extraction", event_type="enrichment_run_summary",
+            entity_type="pipeline", entity_id="enrichment",
+            summary=f"Enrichment: {total_enriched} enriched, {total_failed} failed, {total_quarantined} quarantined",
+            severity="warning" if total_failed > 0 else "info",
+            actionable=total_failed > 5,
+            run_id=str(task.id),
+            reason_code="enrichment_failures" if total_failed > 0 else "enrichment_quarantines",
+            detail={"enriched": total_enriched, "failed": total_failed,
+                    "quarantined": total_quarantined, "no_signal": total_no_signal},
+        )
+
     return result
 
 
@@ -1914,6 +1956,18 @@ _KNOWN_ROLE_LEVELS = {"executive", "director", "manager", "ic", "unknown"}
 _KNOWN_BUYING_STAGES = {"active_purchase", "evaluation", "renewal_decision", "post_purchase", "unknown"}
 _KNOWN_DECISION_TIMELINES = {"immediate", "within_quarter", "within_year", "unknown"}
 _KNOWN_CONTRACT_VALUE_SIGNALS = {"enterprise_high", "enterprise_mid", "mid_market", "smb", "unknown"}
+_KNOWN_REPLACEMENT_MODES = {
+    "competitor_switch", "bundled_suite_consolidation", "workflow_substitution",
+    "internal_tool", "none",
+}
+_KNOWN_OPERATING_MODEL_SHIFTS = {
+    "sync_to_async", "chat_to_docs", "chat_to_ticketing", "consolidation", "none",
+}
+_KNOWN_PRODUCTIVITY_DELTA_CLAIMS = {"more_productive", "less_productive", "no_change", "unknown"}
+_KNOWN_ORG_PRESSURE_TYPES = {
+    "procurement_mandate", "standardization_mandate", "bundle_pressure",
+    "budget_freeze", "none",
+}
 
 # Insider signal validation sets (migration 133)
 _KNOWN_CONTENT_TYPES = {"review", "community_discussion", "comment", "insider_account"}
@@ -2181,6 +2235,16 @@ _REPAIR_FEATURE_GAP_PATTERNS = (
     "missing", "lacks", "lacking", "wish it had", "wish they had",
     "need better", "needs better", "needs more", "could use", "limited",
 )
+_REPAIR_TIMELINE_PATTERNS = (
+    "renewal", "contract end", "contract expires", "deadline", "next quarter",
+    "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days",
+)
+_REPAIR_CATEGORY_SHIFT_PATTERNS = (
+    "async", "docs", "documentation", "notion", "confluence", "bundle",
+    "workspace", "microsoft 365", "google workspace", "internal tool",
+    "homegrown", "home-grown", "custom tool",
+)
+_REPAIR_CURRENCY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?", re.I)
 
 
 def _trusted_repair_sources() -> set[str]:
@@ -2214,6 +2278,12 @@ def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) ->
     feature_gaps = _normalize_text_list(result.get("feature_gaps"))
     event_mentions = result.get("event_mentions") or []
     competitors = result.get("competitors_mentioned") or []
+    salience_flags = {
+        str(flag or "").strip().lower()
+        for flag in result.get("salience_flags") or []
+        if str(flag or "").strip()
+    }
+    timeline = _coerce_json_dict(result.get("timeline"))
 
     if str(result.get("pain_category") or "").strip().lower() == "other" and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
         for field in ("specific_complaints", "pricing_phrases", "recommendation_language"):
@@ -2222,6 +2292,12 @@ def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) ->
         _add_target("competitors_mentioned")
     if not pricing_phrases and _contains_any(review_blob, _REPAIR_PRICING_PATTERNS):
         _add_target("pricing_phrases")
+    if (
+        str(result.get("pain_category") or "").strip().lower() not in {"pricing", "contract_lock_in"}
+        and (_REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
+    ):
+        for field in ("specific_complaints", "pricing_phrases"):
+            _add_target(field)
     if not complaints and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
         _add_target("specific_complaints")
     if not recommendation_language and _contains_any(review_blob, _REPAIR_RECOMMEND_PATTERNS):
@@ -2230,6 +2306,19 @@ def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) ->
         _add_target("feature_gaps")
     if not event_mentions and _contains_any(review_blob, ("renewal", "migration", "switched", "price increase", "invoice")):
         _add_target("event_mentions")
+    if (
+        _contains_any(review_blob, _REPAIR_TIMELINE_PATTERNS)
+        and _is_unknownish(timeline.get("decision_timeline"))
+        and not event_mentions
+    ):
+        _add_target("event_mentions")
+    if competitors and all(
+        not str(comp.get("reason_category") or "").strip()
+        for comp in competitors if isinstance(comp, dict)
+    ):
+        _add_target("specific_complaints")
+    if _contains_any(review_blob, _REPAIR_CATEGORY_SHIFT_PATTERNS) and not feature_gaps and not complaints:
+        _add_target("specific_complaints")
     if status == "no_signal" and source in _trusted_repair_sources() and _contains_any(
         review_blob, _REPAIR_NEGATIVE_PATTERNS + _REPAIR_COMPETITOR_PATTERNS
     ):
@@ -2672,6 +2761,68 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
     cc_val = result.get("content_classification")
     if cc_val and cc_val not in _KNOWN_CONTENT_TYPES:
         result["content_classification"] = "review"
+
+    # witness-oriented deterministic evidence fields
+    replacement_mode = str(result.get("replacement_mode") or "").strip()
+    if replacement_mode not in _KNOWN_REPLACEMENT_MODES:
+        result["replacement_mode"] = "none"
+    operating_model_shift = str(result.get("operating_model_shift") or "").strip()
+    if operating_model_shift not in _KNOWN_OPERATING_MODEL_SHIFTS:
+        result["operating_model_shift"] = "none"
+    productivity_delta_claim = str(result.get("productivity_delta_claim") or "").strip()
+    if productivity_delta_claim not in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS:
+        result["productivity_delta_claim"] = "unknown"
+    org_pressure_type = str(result.get("org_pressure_type") or "").strip()
+    if org_pressure_type not in _KNOWN_ORG_PRESSURE_TYPES:
+        result["org_pressure_type"] = "none"
+
+    salience_flags = result.get("salience_flags")
+    if salience_flags is not None:
+        if not isinstance(salience_flags, list):
+            result["salience_flags"] = []
+        else:
+            result["salience_flags"] = [
+                str(flag).strip() for flag in salience_flags if str(flag or "").strip()
+            ]
+
+    evidence_spans = result.get("evidence_spans")
+    if evidence_spans is not None:
+        if not isinstance(evidence_spans, list):
+            result["evidence_spans"] = []
+        else:
+            cleaned_spans: list[dict[str, Any]] = []
+            for idx, span in enumerate(evidence_spans):
+                if not isinstance(span, dict):
+                    continue
+                text = str(span.get("text") or "").strip()
+                if not text:
+                    continue
+                pain_category = str(span.get("pain_category") or "").strip()
+                replacement = str(span.get("replacement_mode") or "").strip()
+                operating_shift = str(span.get("operating_model_shift") or "").strip()
+                productivity = str(span.get("productivity_delta_claim") or "").strip()
+                cleaned_spans.append({
+                    "span_id": str(span.get("span_id") or f"derived:{idx}"),
+                    "_sid": str(span.get("_sid") or span.get("span_id") or f"derived:{idx}"),
+                    "text": text,
+                    "start_char": span.get("start_char"),
+                    "end_char": span.get("end_char"),
+                    "signal_type": str(span.get("signal_type") or "review_context"),
+                    "pain_category": pain_category if pain_category in _KNOWN_PAIN_CATEGORIES else None,
+                    "competitor": str(span.get("competitor") or "").strip() or None,
+                    "company_name": str(span.get("company_name") or "").strip() or None,
+                    "reviewer_title": str(span.get("reviewer_title") or "").strip() or None,
+                    "time_anchor": str(span.get("time_anchor") or "").strip() or None,
+                    "numeric_literals": span.get("numeric_literals") if isinstance(span.get("numeric_literals"), dict) else {},
+                    "flags": [
+                        str(flag).strip() for flag in (span.get("flags") or [])
+                        if str(flag or "").strip()
+                    ],
+                    "replacement_mode": replacement if replacement in _KNOWN_REPLACEMENT_MODES else result.get("replacement_mode"),
+                    "operating_model_shift": operating_shift if operating_shift in _KNOWN_OPERATING_MODEL_SHIFTS else result.get("operating_model_shift"),
+                    "productivity_delta_claim": productivity if productivity in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS else result.get("productivity_delta_claim"),
+                })
+            result["evidence_spans"] = cleaned_spans
 
     # insider_signals: validate structure if present
     insider = result.get("insider_signals")

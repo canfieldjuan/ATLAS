@@ -34,6 +34,7 @@ from ...storage.models import ScheduledTask
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_reasoning_synthesis")
 
 _SCHEMA_VERSION = "v2"
+_PACKET_SCHEMA_VERSION = "witness_packet_v1"
 
 
 def _compute_pool_hash(layers: dict[str, Any]) -> str:
@@ -52,9 +53,106 @@ def _validation_feedback(vresult: Any, limit: int) -> list[str]:
     return feedback
 
 
+def _task_run_id(task: ScheduledTask | Any) -> str | None:
+    """Return a stable run identifier for scheduled, manual, and test invocations."""
+    task_id = getattr(task, "id", None)
+    if task_id:
+        return str(task_id)
+    metadata = getattr(task, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("run_id", "task_id", "invocation_id"):
+            value = metadata.get(key)
+            if value:
+                return str(value)
+    return None
+
+
+async def _persist_packet_artifacts(
+    pool,
+    *,
+    vendor_name: str,
+    as_of_date: date,
+    analysis_window_days: int,
+    evidence_hash: str,
+    packet: Any,
+) -> None:
+    """Persist witness-backed packet artifacts for inspection and caching."""
+    packet_payload = {
+        "schema_version": _PACKET_SCHEMA_VERSION,
+        "vendor_name": vendor_name,
+        "payload": packet.to_llm_payload(),
+        "source_ids": sorted(packet.source_ids()),
+    }
+    await pool.execute(
+        """
+        INSERT INTO b2b_vendor_reasoning_packets
+            (vendor_name, as_of_date, analysis_window_days,
+             schema_version, evidence_hash, packet)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+        ON CONFLICT (vendor_name, as_of_date, analysis_window_days, schema_version)
+        DO UPDATE SET
+            evidence_hash = EXCLUDED.evidence_hash,
+            packet = EXCLUDED.packet,
+            created_at = NOW()
+        """,
+        vendor_name,
+        as_of_date,
+        analysis_window_days,
+        _PACKET_SCHEMA_VERSION,
+        evidence_hash,
+        json.dumps(packet_payload, default=str),
+    )
+    await pool.execute(
+        """
+        DELETE FROM b2b_vendor_witnesses
+        WHERE vendor_name = $1
+          AND as_of_date = $2
+          AND analysis_window_days = $3
+          AND schema_version = $4
+        """,
+        vendor_name,
+        as_of_date,
+        analysis_window_days,
+        _PACKET_SCHEMA_VERSION,
+    )
+    for witness in getattr(packet, "witness_pack", []) or []:
+        await pool.execute(
+            """
+            INSERT INTO b2b_vendor_witnesses
+                (vendor_name, as_of_date, analysis_window_days, schema_version,
+                 evidence_hash, witness_id, review_id, witness_type, excerpt_text,
+                 source, reviewed_at, reviewer_company, reviewer_title,
+                 pain_category, competitor, salience_score, selection_reason,
+                 signal_tags, source_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17, $18::jsonb, $19)
+            """,
+            vendor_name,
+            as_of_date,
+            analysis_window_days,
+            _PACKET_SCHEMA_VERSION,
+            evidence_hash,
+            str(witness.get("witness_id") or witness.get("_sid") or ""),
+            str(witness.get("review_id") or ""),
+            str(witness.get("witness_type") or ""),
+            str(witness.get("excerpt_text") or ""),
+            str(witness.get("source") or ""),
+            witness.get("reviewed_at"),
+            witness.get("reviewer_company"),
+            witness.get("reviewer_title"),
+            witness.get("pain_category"),
+            witness.get("competitor"),
+            float(witness.get("salience_score") or 0.0),
+            str(witness.get("selection_reason") or ""),
+            json.dumps(witness.get("signal_tags") or []),
+            str(witness.get("_sid") or witness.get("witness_id") or ""),
+        )
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: generate reasoning synthesis per vendor."""
     cfg = settings.b2b_churn
+    run_id = _task_run_id(task)
 
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -137,7 +235,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...reasoning.llm_utils import resolve_stratified_llm
 
     rcfg = ReasoningConfig()
-    llm = resolve_stratified_llm(rcfg)
+    llm_cfg = rcfg.model_copy(deep=True)
+    synthesis_model = str(
+        getattr(cfg, "reasoning_synthesis_model", "") or ""
+    ).strip()
+    if not synthesis_model:
+        synthesis_model = str(
+            getattr(settings.llm, "openrouter_reasoning_model", "") or ""
+        ).strip()
+    if synthesis_model:
+        llm_cfg.stratified_llm_workload = "openrouter"
+        llm_cfg.stratified_openrouter_model = synthesis_model
+        llm_cfg.stratified_openrouter_model_light = synthesis_model
+    llm = resolve_stratified_llm(llm_cfg)
     if llm is None:
         return {"_skip_synthesis": "No LLM available for reasoning synthesis"}
 
@@ -159,6 +269,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     retry_delay = float(
         getattr(cfg, "reasoning_synthesis_retry_delay_seconds", 0.5),
     )
+    llm_timeout_seconds = max(
+        1.0,
+        float(getattr(cfg, "reasoning_synthesis_timeout_seconds", 180.0)),
+    )
+    llm_max_tokens = max(
+        256,
+        min(
+            int(getattr(cfg, "reasoning_synthesis_max_tokens", rcfg.max_tokens)),
+            int(rcfg.max_tokens),
+        ),
+    )
+    llm_temperature = float(
+        getattr(cfg, "reasoning_synthesis_temperature", llm_cfg.temperature),
+    )
     feedback_limit = max(
         1, int(getattr(cfg, "reasoning_synthesis_feedback_limit", 5)),
     )
@@ -175,8 +299,26 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         nonlocal total_tokens, succeeded, failed, validation_failures, failed_vendors
         async with sem:
             packet = compress_vendor_pools(vendor_name, layers)
+            try:
+                await _persist_packet_artifacts(
+                    pool,
+                    vendor_name=vendor_name,
+                    as_of_date=today,
+                    analysis_window_days=window_days,
+                    evidence_hash=ev_hash,
+                    packet=packet,
+                )
+            except Exception:
+                logger.warning(
+                    "Witness packet persistence failed for %s",
+                    vendor_name,
+                    exc_info=True,
+                )
             payload = json.dumps(
-                packet.to_llm_payload(),
+                packet.to_llm_payload(
+                    compact_metric_ledger=True,
+                    compact_aggregates=True,
+                ),
                 separators=(",", ":"),
                 sort_keys=True,
                 default=str,
@@ -210,11 +352,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     import re
                     from ...pipelines.llm import parse_json_response
 
-                    result = await asyncio.to_thread(
-                        llm.chat,
-                        messages=messages,
-                        max_tokens=rcfg.max_tokens,
-                        temperature=rcfg.temperature,
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            llm.chat,
+                            messages=messages,
+                            max_tokens=llm_max_tokens,
+                            temperature=llm_temperature,
+                            response_format={"type": "json_object"},
+                        ),
+                        timeout=llm_timeout_seconds,
                     )
                     text = result.get("response", "").strip()
                     usage = result.get("usage", {})
@@ -252,6 +398,44 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             logger.debug(
                                 "  [%s] %s: %s", err.code, err.path, err.message,
                             )
+                except asyncio.TimeoutError:
+                    synthesis = None
+                    failure_reasons = [
+                        "TimeoutError: reasoning LLM call exceeded "
+                        f"{llm_timeout_seconds:.1f}s",
+                    ]
+                    if attempt + 1 >= max_attempts:
+                        logger.warning(
+                            "Reasoning synthesis timed out for %s after %.1fs",
+                            vendor_name,
+                            llm_timeout_seconds,
+                        )
+                        failed_vendors.append({
+                            "vendor_name": vendor_name,
+                            "stage": "llm_exception",
+                            "reasons": failure_reasons[:feedback_limit],
+                            "tokens_used": vendor_tokens,
+                            "attempts_used": attempt + 1,
+                        })
+                        failed += 1
+                        from ..visibility import record_attempt, emit_event
+                        await record_attempt(
+                            pool, artifact_type="reasoning_synthesis",
+                            artifact_id=vendor_name,
+                            run_id=run_id, attempt_no=attempt + 1,
+                            stage="llm_call", status="failed",
+                            failure_step="timeout",
+                            error_message=f"LLM call exceeded {llm_timeout_seconds:.1f}s",
+                        )
+                        await emit_event(
+                            pool, stage="synthesis", event_type="llm_timeout",
+                            entity_type="vendor", entity_id=vendor_name,
+                            summary=f"Reasoning synthesis timed out for {vendor_name}",
+                            severity="warning", actionable=True,
+                            artifact_type="reasoning_synthesis",
+                            run_id=run_id, reason_code="llm_timeout",
+                        )
+                        return
                 except Exception as exc:
                     synthesis = None
                     failure_reasons = [f"{type(exc).__name__}: {exc}"]
@@ -268,6 +452,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "attempts_used": attempt + 1,
                         })
                         failed += 1
+                        from ..visibility import record_attempt, emit_event
+                        await record_attempt(
+                            pool, artifact_type="reasoning_synthesis",
+                            artifact_id=vendor_name,
+                            run_id=run_id, attempt_no=attempt + 1,
+                            stage="llm_call", status="failed",
+                            failure_step="llm_exception",
+                            error_message=str(exc)[:200],
+                        )
+                        await emit_event(
+                            pool, stage="synthesis", event_type="llm_exception",
+                            entity_type="vendor", entity_id=vendor_name,
+                            summary=f"Reasoning synthesis exception for {vendor_name}: {type(exc).__name__}",
+                            severity="error", actionable=True,
+                            artifact_type="reasoning_synthesis",
+                            run_id=run_id, reason_code="llm_exception",
+                        )
                         return
 
                 if synthesis is not None:
@@ -301,6 +502,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "attempts_used": attempt + 1,
                         })
                     failed += 1
+                    from ..visibility import record_attempt
+                    await record_attempt(
+                        pool, artifact_type="reasoning_synthesis",
+                        artifact_id=vendor_name,
+                        run_id=run_id, attempt_no=attempt + 1,
+                        stage="validation", status="rejected",
+                        blocker_count=len(failure_reasons),
+                        blocking_issues=failure_reasons[:5],
+                        failure_step="validation" if last_validation else "llm_response",
+                        error_message=(
+                            last_validation.summary()[:200] if last_validation
+                            else "; ".join(failure_reasons[:2])[:200]
+                        ),
+                    )
                     return
 
                 logger.info(
@@ -338,11 +553,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 from ..visibility import emit_event
                 await emit_event(
                     pool, stage="synthesis", event_type="validation_failure",
-                    entity_type="vendor", entity_id=vendor,
+                    entity_type="vendor", entity_id=vendor_name,
                     summary=f"Synthesis validation failed: {persisted_vresult.summary()[:120]}",
                     severity="error", actionable=True,
                     artifact_type="reasoning_synthesis",
-                    run_id=str(task.id),
+                    run_id=run_id,
                     reason_code="validation_blocked",
                     detail={"errors": [str(e) for e in persisted_vresult.errors[:5]]},
                 )
@@ -373,11 +588,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 for w in persisted_vresult.warnings[:10]:
                     await emit_event(
                         pool, stage="synthesis", event_type="validation_warning",
-                        entity_type="vendor", entity_id=vendor,
+                        entity_type="vendor", entity_id=vendor_name,
                         summary=f"{w.code}: {w.message[:100]}",
                         severity="warning",
                         artifact_type="reasoning_synthesis",
-                        run_id=str(task.id),
+                        run_id=run_id,
                         reason_code=w.code,
                         rule_code=w.code,
                         detail={"path": w.path, "message": w.message},
@@ -412,7 +627,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     vendor_tokens,
                     getattr(llm, "model", getattr(llm, "model_id", "")),
                 )
-            except Exception:
+            except Exception as persist_exc:
                 logger.warning(
                     "Reasoning synthesis failed for %s",
                     vendor_name, exc_info=True,
@@ -425,6 +640,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "attempts_used": max_attempts,
                 })
                 failed += 1
+                from ..visibility import emit_event
+                await emit_event(
+                    pool, stage="synthesis", event_type="persistence_failure",
+                    entity_type="vendor", entity_id=vendor_name,
+                    summary=f"Failed to persist synthesis for {vendor_name}: {persist_exc}",
+                    severity="error", actionable=True,
+                    artifact_type="reasoning_synthesis",
+                    run_id=run_id,
+                    reason_code="persistence_exception",
+                )
                 return
 
             succeeded += 1
@@ -459,7 +684,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 pool=pool,
                 vendor_pools=vendor_pools,
                 llm=llm,
-                rcfg=rcfg,
+                rcfg=llm_cfg,
                 cfg=cfg,
                 today=today,
                 window_days=window_days,
@@ -709,6 +934,20 @@ async def _run_cross_vendor_synthesis(
 
     xv_sem = asyncio.Semaphore(cfg.cross_vendor_synthesis_concurrency)
     xv_max_attempts = max(1, cfg.cross_vendor_synthesis_attempts)
+    xv_llm_timeout_seconds = max(
+        1.0,
+        float(getattr(cfg, "reasoning_synthesis_timeout_seconds", 180.0)),
+    )
+    xv_llm_max_tokens = max(
+        256,
+        min(
+            int(getattr(cfg, "reasoning_synthesis_max_tokens", rcfg.max_tokens)),
+            int(rcfg.max_tokens),
+        ),
+    )
+    xv_llm_temperature = float(
+        getattr(cfg, "reasoning_synthesis_temperature", rcfg.temperature),
+    )
     _succeeded = 0
     _failed = 0
     _tokens = 0
@@ -741,11 +980,15 @@ async def _run_cross_vendor_synthesis(
                     Message(role="user", content=payload),
                 ]
                 try:
-                    result = await asyncio.to_thread(
-                        llm.chat,
-                        messages=messages,
-                        max_tokens=rcfg.max_tokens,
-                        temperature=rcfg.temperature,
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            llm.chat,
+                            messages=messages,
+                            max_tokens=xv_llm_max_tokens,
+                            temperature=xv_llm_temperature,
+                            response_format={"type": "json_object"},
+                        ),
+                        timeout=xv_llm_timeout_seconds,
                     )
                     text = result.get("response", "").strip()
                     usage = result.get("usage", {})
@@ -758,6 +1001,14 @@ async def _run_cross_vendor_synthesis(
                     if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
                         synthesis = normalize_cross_vendor_contract(parsed, analysis_type)
                         break
+                except asyncio.TimeoutError:
+                    if attempt + 1 >= xv_max_attempts:
+                        logger.warning(
+                            "Cross-vendor synthesis timed out: %s %s after %.1fs",
+                            analysis_type,
+                            vendors,
+                            xv_llm_timeout_seconds,
+                        )
                 except Exception:
                     if attempt + 1 >= xv_max_attempts:
                         logger.warning(
