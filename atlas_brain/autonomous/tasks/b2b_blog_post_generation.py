@@ -46,6 +46,7 @@ _CRITICAL_BLOG_WARNINGS = {
     "methodology_disclaimer_missing_self_selected",
     "unsupported_data_claim",
     "chart_scope_ambiguity",
+    "migration_direction_drift",
 }
 _DATA_CLAIM_MARKERS = (
     "most common",
@@ -756,6 +757,28 @@ def _apply_blog_quality_gate(
                 f"numeric_inconsistency:sub-counts ({sub_total}) exceed headline ({headline})"
             )
 
+    # Direction guard: migration_guide should stay inbound-focused
+    if blueprint.topic_type == "migration_guide":
+        dc = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+        topic_vendor = str(dc.get("vendor") or dc.get("to_vendor") or "").strip()
+        if topic_vendor:
+            _OUTBOUND_PHRASES = (
+                f"switching from {topic_vendor}".lower(),
+                f"leaving {topic_vendor}".lower(),
+                f"moving away from {topic_vendor}".lower(),
+                f"migrating from {topic_vendor}".lower(),
+                f"abandoning {topic_vendor}".lower(),
+            )
+            outbound_count = sum(
+                1 for phrase in _OUTBOUND_PHRASES
+                if phrase in body_lower
+            )
+            if outbound_count >= 2:
+                warnings.append(
+                    f"migration_direction_drift:too much outbound prose about leaving {topic_vendor} "
+                    f"in a switch-to-{topic_vendor} article ({outbound_count} outbound phrases)"
+                )
+
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
     report = {
         "score": score,
@@ -787,6 +810,12 @@ def _quality_feedback(report: dict[str, Any]) -> list[str]:
             feedback.append(
                 "Fix: A data claim references a vendor not present in any chart or data_context. "
                 "Either remove the claim or reword to cite the actual data source."
+            )
+        elif str(warning).startswith("migration_direction_drift:"):
+            feedback.append(
+                "Fix: This is a switch-TO article. Keep the primary narrative about inbound migration. "
+                "Outbound switching (people leaving the vendor) may be acknowledged in 1-2 sentences as a brief caveat, "
+                "but must not become a narrative thread. Remove or compress outbound-focused passages."
             )
         else:
             feedback.append(f"Improve: {warning}")
@@ -4641,21 +4670,22 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
         if (src.get("vendor", "") if isinstance(src, dict) else str(src)).lower().strip() != vendor.lower().strip()
     ]
 
+    inbound_source_count = len(source_data)
     charts = []
     sections = [
         SectionSpec(
             id="hook",
             heading="Introduction",
-            goal=f"Highlight the volume of migrations to {vendor}",
+            goal=f"Highlight the volume of inbound migrations to {vendor}",
             key_stats={
                 "vendor": vendor,
                 "category": category,
-                "switch_count": ctx["switch_count"],
+                "inbound_source_count": inbound_source_count,
                 "review_total": ctx["review_total"],
             },
             data_summary=(
-                f"{vendor} attracts users from {ctx['switch_count']} competitors "
-                f"based on {ctx['review_total']} total reviews."
+                f"{vendor} attracts users from {inbound_source_count} documented competitor platforms "
+                f"based on analysis of {ctx['review_total']} total reviews."
             ),
         ),
     ]
@@ -4723,14 +4753,33 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
         },
     ))
 
-    takeaway_stats: dict[str, Any] = {"vendor": vendor, "switch_count": ctx["switch_count"]}
+    # Inbound migration count from commonly_switched_from
+    inbound_migration_count = sum(
+        (src.get("count", 1) if isinstance(src, dict) else 1)
+        for src in switched_from
+        if (src.get("vendor", "") if isinstance(src, dict) else str(src)).lower().strip() != vendor.lower().strip()
+    )
+    takeaway_stats: dict[str, Any] = {
+        "vendor": vendor,
+        "inbound_source_count": len(source_data),
+        "inbound_migration_mentions": inbound_migration_count,
+    }
+
+    # Pool displacement: filter to INBOUND edges only (to_vendor = this vendor)
     pool_disp = data.get("pool_displacement") or []
-    if pool_disp:
-        top = sorted(pool_disp, key=lambda e: (e.get("edge_metrics") or {}).get("mention_count") or 0, reverse=True)
+    inbound_disp = [
+        e for e in pool_disp
+        if str(e.get("to_vendor") or "").lower().strip() == vendor.lower().strip()
+    ]
+    if inbound_disp:
+        top = sorted(inbound_disp, key=lambda e: (e.get("edge_metrics") or {}).get("mention_count") or 0, reverse=True)
         if top:
             em = top[0].get("edge_metrics") or {}
-            takeaway_stats["top_displacement_driver"] = em.get("primary_driver")
-            takeaway_stats["displacement_velocity_7d"] = em.get("velocity_7d")
+            takeaway_stats["top_inbound_driver"] = em.get("primary_driver")
+
+    # Drop outbound-oriented contract_disp (migration_proof describes why
+    # customers LEAVE, not why they JOIN -- wrong direction for this article).
+    # Only inject inbound-safe fields from reasoning.
     causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
 
     # --- Reasoning wedge injection (AEO authority) ---
@@ -4738,24 +4787,10 @@ def _blueprint_migration_guide(ctx: dict, data: dict) -> PostBlueprint:
     if wedge:
         takeaway_stats["synthesis_wedge"] = wedge
         takeaway_stats["synthesis_wedge_label"] = data.get("synthesis_wedge_label") or ""
-    causal = (data.get("synthesis_contracts") or {}).get("vendor_core_reasoning") or {}
     cn = causal.get("causal_narrative")
     if isinstance(cn, dict) and cn.get("trigger"):
         takeaway_stats["causal_trigger"] = cn["trigger"]
         takeaway_stats["causal_why_now"] = cn.get("why_now")
-    _seg = data.get("pool_segment") or {}
-    _budget = _seg.get("budget_pressure") or {}
-    if _budget.get("dm_churn_rate") is not None and "dm_churn_rate" not in takeaway_stats:
-        takeaway_stats["dm_churn_rate"] = _budget["dm_churn_rate"]
-
-    cn = causal.get("causal_narrative")
-    if isinstance(cn, dict) and cn.get("trigger"):
-        takeaway_stats["causal_trigger"] = cn["trigger"]
-    takeaway_stats.update(contract_disp)
-    if contract_account.get("account_pressure_summary"):
-        takeaway_stats["account_pressure_summary"] = contract_account["account_pressure_summary"]
-    if contract_timing.get("timing_summary"):
-        takeaway_stats["timing_summary"] = contract_timing["timing_summary"]
     if contract_category.get("market_regime"):
         takeaway_stats["market_regime"] = contract_category["market_regime"]
 
