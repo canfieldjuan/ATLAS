@@ -1148,6 +1148,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         post_id = await _assemble_and_store(pool, blueprint, content, llm)
         if not post_id:
             logger.info("Slug %s already published, skipping", blueprint.slug)
+            from ..visibility import record_dedup
+            await record_dedup(
+                pool, stage="blog", entity_type="blog_post",
+                entity_id=blueprint.slug, run_id=str(task.id),
+                reason=f"Slug {blueprint.slug} already published",
+            )
             continue
 
         # Record successful attempt

@@ -1407,7 +1407,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 json.dumps(agg, default=str),
                 exec_summary,
                 json.dumps({"vendors_analyzed": len(aggregates), "total_accounts": total_accounts}),
-                "published",
+                "published" if agg.get("total_accounts_in_motion", 0) > 0 else "failed",
                 "pipeline_deterministic",
                 agg.get("source_review_count", 0),
                 json.dumps(agg.get("source_distribution", {})),

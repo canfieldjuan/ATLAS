@@ -192,3 +192,33 @@ async def record_quarantine(
     except Exception:
         logger.debug("Failed to record quarantine: %s/%s", vendor_name, reason_code, exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Dedup decision recorder
+# ---------------------------------------------------------------------------
+
+async def record_dedup(
+    pool,
+    *,
+    stage: str,
+    entity_type: str,
+    entity_id: str,
+    reason: str,
+    run_id: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> str | None:
+    """Record a dedup/discard decision as a visibility event."""
+    return await emit_event(
+        pool,
+        stage=stage,
+        event_type="dedup_discard",
+        entity_type=entity_type,
+        entity_id=entity_id,
+        summary=reason,
+        severity="info",
+        run_id=run_id,
+        reason_code="dedup_discard",
+        decision="discarded",
+        detail=detail,
+    )

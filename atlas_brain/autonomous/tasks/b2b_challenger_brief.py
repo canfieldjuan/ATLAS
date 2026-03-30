@@ -1803,7 +1803,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "sources_present": sources_present,
                     "target_accounts": brief["total_target_accounts"],
                 }),
-                "published",
+                "published" if total_mentions > 0 else "failed",
                 "pipeline_deterministic",
                 total_mentions,
                 json.dumps(brief["displacement_summary"].get("source_distribution", {})),
