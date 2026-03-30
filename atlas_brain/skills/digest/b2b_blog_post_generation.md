@@ -173,6 +173,8 @@ Return valid JSON with exactly these keys:
     - Good: "Across the full review set, reviewers also cite WordPress as a switching trigger."
     - Bad: "The most common migration sources include BigCommerce and Magento" (when they are not in the rendered chart).
     - Rule: strongest claim language ("most common", "top sources", "primary", "where users come from") must match the chart's `data_labels`. Broader context uses hedged language ("also mention", "broader signals suggest", "displacement data includes").
+18. **Numeric consistency**: When citing multiple related counts (e.g. total switching signals, explicit switches, active evaluations), ensure they add up correctly. If 93 switching signals = 2 explicit switches + 91 active evaluations, say that. Do not state numbers that imply a different total than the headline count.
+19. **Directional focus**: If the article is about switching TO a vendor (migration_guide), keep the narrative centered on inbound migration. Outbound switching (people leaving the vendor) may be acknowledged briefly as a caveat but must not become a major narrative thread. The article's title sets the reader expectation -- honor it.
 
 ## Linking Rules
 
