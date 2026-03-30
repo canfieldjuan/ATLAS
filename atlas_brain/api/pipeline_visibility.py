@@ -30,10 +30,11 @@ async def get_visibility_summary(hours: int = Query(24, ge=1, le=168)):
     row = await pool.fetchrow(
         """
         SELECT
-            COUNT(*) FILTER (WHERE status = 'open' AND actionable) AS open_actionable,
-            COUNT(*) FILTER (WHERE status = 'open') AS open_total
-        FROM pipeline_visibility_reviews
-        WHERE last_seen_at >= NOW() - make_interval(hours => $1)
+            COUNT(*) FILTER (WHERE r.status = 'open' AND e.actionable) AS open_actionable,
+            COUNT(*) FILTER (WHERE r.status = 'open') AS open_total
+        FROM pipeline_visibility_reviews r
+        LEFT JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+        WHERE r.last_seen_at >= NOW() - make_interval(hours => $1)
         """,
         hours,
     )
@@ -73,7 +74,7 @@ async def get_visibility_queue(
     pool = get_db_pool()
     conditions = ["r.status = 'open'"]
     params: list[Any] = []
-    idx = 1
+    idx = 0
 
     if stage:
         idx += 1
