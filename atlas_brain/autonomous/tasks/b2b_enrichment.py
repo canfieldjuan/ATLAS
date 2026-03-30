@@ -910,7 +910,7 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     # 3. would_recommend
     result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
 
-    # 4. sentiment_trajectory.direction — derived deterministically from rating,
+    # 4. sentiment_trajectory.direction -- derived deterministically from rating,
     #    churn signals, and would_recommend. "declining" / "improving" require
     #    multi-review time context and are left for future cross-review jobs;
     #    per-review we classify as positive, negative, or unknown.
@@ -1527,6 +1527,17 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                     review_id,
                     json.dumps(["evidence_engine_compute_failure"]),
                 )
+                from ..visibility import record_quarantine
+                await record_quarantine(
+                    pool,
+                    review_id=str(review_id),
+                    vendor_name=row.get("vendor_name"),
+                    source=row.get("source"),
+                    reason_code="evidence_engine_compute_failure",
+                    severity="error",
+                    actionable=True,
+                    summary=f"Evidence engine failed for {row.get('vendor_name')} review",
+                )
                 return "quarantined"
 
         if result and _validate_enrichment(result, row):
@@ -1574,6 +1585,19 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 json.dumps(low_fidelity_reasons),
                 detected_at if low_fidelity_reasons else None,
             )
+
+            if low_fidelity_reasons:
+                from ..visibility import record_quarantine
+                await record_quarantine(
+                    pool,
+                    review_id=str(review_id),
+                    vendor_name=row.get("vendor_name"),
+                    source=row.get("source"),
+                    reason_code=low_fidelity_reasons[0],
+                    severity="warning",
+                    summary=f"Low-fidelity: {', '.join(low_fidelity_reasons[:3])}",
+                    evidence={"reasons": low_fidelity_reasons, "source": row.get("source")},
+                )
 
             # Fire ntfy notification for high-urgency signals (must never
             # break enrichment -- wrapped in its own try/except)

@@ -1278,6 +1278,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 reports_persisted += 1
     except Exception:
         logger.exception("Failed to persist intelligence reports")
+        from ..visibility import emit_event
+        await emit_event(
+            pool, stage="reports", event_type="persistence_failure",
+            entity_type="churn_report", entity_id="all",
+            summary="Failed to persist intelligence reports",
+            severity="critical", actionable=True,
+            run_id=str(task.id),
+            reason_code="persistence_exception",
+        )
 
     logger.info(
         "b2b_churn_reports: %d reports persisted, %d vendors, reasoning from %d vendors",

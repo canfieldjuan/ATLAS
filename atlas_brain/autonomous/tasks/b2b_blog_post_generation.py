@@ -1089,6 +1089,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
         if content is None:
             logger.warning("LLM failed for B2B topic %s, skipping", blueprint.slug)
+            from ..visibility import record_attempt, emit_event
+            await record_attempt(
+                pool, artifact_type="blog_post", artifact_id=blueprint.slug,
+                run_id=str(task.id), attempt_no=1, stage="generation",
+                status="failed", failure_step="llm_call",
+                error_message="LLM returned None",
+            )
+            await emit_event(
+                pool, stage="blog", event_type="generation_failure",
+                entity_type="blog_post", entity_id=blueprint.slug,
+                summary=f"LLM failed for {blueprint.slug} ({topic_type})",
+                severity="error", actionable=True,
+                artifact_type="blog_post", run_id=str(task.id),
+                reason_code="llm_returned_none",
+            )
             continue
 
         content, quality_report = _enforce_blog_quality(
@@ -1105,6 +1120,28 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 blueprint.topic_type,
                 ", ".join(quality_report.get("blocking_issues", [])[:4]) or "unknown issues",
             )
+            from ..visibility import record_attempt, emit_event
+            await record_attempt(
+                pool, artifact_type="blog_post", artifact_id=blueprint.slug,
+                run_id=str(task.id), attempt_no=1, stage="quality_gate",
+                status="rejected",
+                score=quality_report.get("score"),
+                blocker_count=len(quality_report.get("blocking_issues", [])),
+                warning_count=len(quality_report.get("warnings", [])),
+                blocking_issues=quality_report.get("blocking_issues"),
+                warnings=quality_report.get("warnings"),
+                failure_step="quality_gate",
+                error_message=", ".join(quality_report.get("blocking_issues", [])[:3]),
+            )
+            await emit_event(
+                pool, stage="blog", event_type="quality_gate_rejection",
+                entity_type="blog_post", entity_id=blueprint.slug,
+                summary=f"Quality gate rejected {blueprint.slug} ({topic_type})",
+                severity="warning", actionable=True,
+                artifact_type="blog_post", run_id=str(task.id),
+                reason_code=quality_report.get("blocking_issues", ["unknown"])[0][:80] if quality_report.get("blocking_issues") else "unknown",
+                detail=quality_report,
+            )
             continue
         blueprint.data_context["generation_quality"] = quality_report
 
@@ -1112,6 +1149,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if not post_id:
             logger.info("Slug %s already published, skipping", blueprint.slug)
             continue
+
+        # Record successful attempt
+        from ..visibility import record_attempt
+        await record_attempt(
+            pool, artifact_type="blog_post", artifact_id=blueprint.slug,
+            run_id=str(task.id), attempt_no=1, stage="quality_gate",
+            status="succeeded",
+            score=quality_report.get("score"),
+            blocker_count=len(quality_report.get("blocking_issues", [])),
+            warning_count=len(quality_report.get("warnings", [])),
+            warnings=quality_report.get("warnings"),
+        )
 
         n_charts = len(blueprint.charts)
         results.append({
