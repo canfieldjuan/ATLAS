@@ -1270,7 +1270,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     json.dumps(data, default=str),
                     _exec_summaries.get(report_type, _fallback_summary),
                     json.dumps(report_density),
-                    "published",
+                    "published" if data else "failed",
                     report_llm_model,
                     report_source_review_count,
                     report_source_dist,

@@ -1539,10 +1539,26 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     xv_legacy = await reconstruct_cross_vendor_lookup(pool, as_of=today)
     # Merge: synthesis wins per key, legacy fills gaps
     xv_lookup: dict[str, dict] = {"battles": {}, "councils": {}, "asymmetries": {}}
+    dedup_overrides = 0
     for bucket in ("battles", "councils", "asymmetries"):
         merged = dict(xv_legacy.get(bucket, {}))
-        merged.update(xv_synth.get(bucket, {}))
+        synth_bucket = xv_synth.get(bucket, {})
+        for k, v in synth_bucket.items():
+            if k in merged:
+                dedup_overrides += 1
+            merged[k] = v
         xv_lookup[bucket] = merged
+    if dedup_overrides > 0:
+        from ..visibility import emit_event
+        await emit_event(
+            pool, stage="battle_cards", event_type="xv_dedup_override",
+            entity_type="cross_vendor", entity_id="batch",
+            summary=f"Synthesis replaced {dedup_overrides} legacy cross-vendor entries",
+            severity="info",
+            run_id=str(task.id),
+            reason_code="synthesis_preferred",
+            detail={"overrides": dedup_overrides},
+        )
     synth_count = sum(
         1 for bucket in ("battles", "councils", "asymmetries")
         for v in xv_lookup[bucket].values()
