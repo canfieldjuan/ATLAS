@@ -1,7 +1,6 @@
 """Regression tests for archetype context propagation across B2B surfaces.
 
 Covers:
-- _fetch_prior_archetypes helper
 - _build_vendor_comparison_summary with archetype params
 - archetype-shift change event detection
 - vendor/challenger context archetype injection
@@ -39,7 +38,6 @@ for _mod in (
 
 from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
     _build_vendor_comparison_summary,
-    _fetch_prior_archetypes,
 )
 
 
@@ -102,71 +100,6 @@ class TestVendorComparisonSummaryArchetype:
             comparison_archetype=None,
         )
         assert "Archetype" not in result
-
-
-# ---------------------------------------------------------------------------
-# _fetch_prior_archetypes helper
-# ---------------------------------------------------------------------------
-
-
-class TestFetchPriorArchetypes:
-    """Verify the reusable helper returns correct structure."""
-
-    @pytest.mark.asyncio
-    async def test_empty_vendor_list(self):
-        pool = AsyncMock()
-        result = await _fetch_prior_archetypes(pool, [])
-        assert result == {}
-        pool.fetch.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_returns_dict_keyed_by_vendor(self):
-        pool = AsyncMock()
-        pool.fetch.return_value = [
-            {
-                "vendor_name": "Acme",
-                "archetype": "pricing_shock",
-                "archetype_confidence": 0.82,
-                "snapshot_date": date(2026, 2, 15),
-            },
-        ]
-        result = await _fetch_prior_archetypes(pool, ["Acme"])
-        assert "Acme" in result
-        assert result["Acme"]["archetype"] == "pricing_shock"
-        assert result["Acme"]["confidence"] == 0.82
-        assert result["Acme"]["snapshot_date"] == "2026-02-15"
-
-    @pytest.mark.asyncio
-    async def test_none_confidence_returns_none(self):
-        pool = AsyncMock()
-        pool.fetch.return_value = [
-            {
-                "vendor_name": "Beta",
-                "archetype": "feature_gap",
-                "archetype_confidence": None,
-                "snapshot_date": date(2026, 2, 10),
-            },
-        ]
-        result = await _fetch_prior_archetypes(pool, ["Beta"])
-        assert result["Beta"]["confidence"] is None
-
-    @pytest.mark.asyncio
-    async def test_default_days_ago(self):
-        pool = AsyncMock()
-        pool.fetch.return_value = []
-        await _fetch_prior_archetypes(pool, ["X"])
-        # Verify the days_ago default (28) is passed as the second parameter
-        call_args = pool.fetch.call_args
-        assert call_args[0][1] == ["X"]
-        assert call_args[0][2] == 28
-
-    @pytest.mark.asyncio
-    async def test_custom_days_ago(self):
-        pool = AsyncMock()
-        pool.fetch.return_value = []
-        await _fetch_prior_archetypes(pool, ["X"], days_ago=14)
-        call_args = pool.fetch.call_args
-        assert call_args[0][2] == 14
 
 
 # ---------------------------------------------------------------------------
@@ -764,6 +697,7 @@ class TestBattleCardPrimaryCategorySelection:
         from atlas_brain.autonomous.tasks._b2b_shared import (
             _build_deterministic_battle_cards,
         )
+        from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
 
         cards = _build_deterministic_battle_cards(
             [{"vendor_name": "Acme", "product_category": "CRM", "total_reviews": 100,
@@ -773,17 +707,22 @@ class TestBattleCardPrimaryCategorySelection:
             sentiment_lookup={}, dm_lookup={"Acme": 0.25}, company_lookup={},
             product_profile_lookup={}, competitive_disp=[], competitor_reasons=[],
             reasoning_lookup={},
-            reasoning_synthesis_lookup={
-                "Acme": {
-                    "reasoning_contracts": {
-                        "vendor_core_reasoning": {
-                            "causal_narrative": {
-                                "primary_wedge": "price_squeeze",
-                                "confidence": "high",
+            synthesis_views={
+                "Acme": SynthesisView(
+                    "Acme",
+                    {
+                        "reasoning_contracts": {
+                            "vendor_core_reasoning": {
+                                "causal_narrative": {
+                                    "primary_wedge": "price_squeeze",
+                                    "confidence": "high",
+                                },
                             },
                         },
                     },
-                },
+                    "v2",
+                    date(2026, 3, 29),
+                ),
             },
             limit=10,
         )
@@ -831,11 +770,11 @@ class TestBattleCardQuoteDedupe:
         )
 
         quotes = [
-            {"quote": "Quote A", "urgency": 8, "review_id": "r1",
+            {"quote": "Pricing keeps rising and support is slow.", "urgency": 8, "review_id": "r1",
              "company": "X", "title": "VP"},
-            {"quote": "Quote B", "urgency": 7, "review_id": "r1",
+            {"quote": "Pricing keeps rising and support is slow again.", "urgency": 7, "review_id": "r1",
              "company": "X", "title": "VP"},
-            {"quote": "Quote C", "urgency": 6, "review_id": "r2",
+            {"quote": "Bugs and support delays are hurting rollout.", "urgency": 6, "review_id": "r2",
              "company": "Y", "title": "CTO"},
         ]
         cards = _build_deterministic_battle_cards(
@@ -850,8 +789,8 @@ class TestBattleCardQuoteDedupe:
         assert len(cards) == 1
         # Quote B (same review_id as A) should be deduplicated
         assert len(cards[0]["customer_pain_quotes"]) == 2
-        assert cards[0]["customer_pain_quotes"][0]["quote"] == "Quote A"
-        assert cards[0]["customer_pain_quotes"][1]["quote"] == "Quote C"
+        assert cards[0]["customer_pain_quotes"][0]["quote"] == "Pricing keeps rising and support is slow."
+        assert cards[0]["customer_pain_quotes"][1]["quote"] == "Bugs and support delays are hurting rollout."
 
     def test_same_reviewer_different_reviews_deduped(self):
         from atlas_brain.autonomous.tasks._b2b_shared import (
@@ -859,11 +798,11 @@ class TestBattleCardQuoteDedupe:
         )
 
         quotes = [
-            {"quote": "Quote A", "urgency": 8, "review_id": "r1",
+            {"quote": "Pricing pressure is forcing extra approval cycles.", "urgency": 8, "review_id": "r1",
              "company": "Acme Corp", "title": "Head of Marketing"},
-            {"quote": "Quote B", "urgency": 7, "review_id": "r2",
+            {"quote": "Pricing pressure is still an issue for our team.", "urgency": 7, "review_id": "r2",
              "company": "Acme Corp", "title": "Head of Marketing"},
-            {"quote": "Quote C", "urgency": 6, "review_id": "r3",
+            {"quote": "Support remains slow and onboarding is clunky.", "urgency": 6, "review_id": "r3",
              "company": "Other Inc", "title": "CTO"},
         ]
         cards = _build_deterministic_battle_cards(
@@ -878,8 +817,8 @@ class TestBattleCardQuoteDedupe:
         assert len(cards) == 1
         # Quote B (same reviewer as A) should be deduplicated
         assert len(cards[0]["customer_pain_quotes"]) == 2
-        assert cards[0]["customer_pain_quotes"][0]["quote"] == "Quote A"
-        assert cards[0]["customer_pain_quotes"][1]["quote"] == "Quote C"
+        assert cards[0]["customer_pain_quotes"][0]["quote"] == "Pricing pressure is forcing extra approval cycles."
+        assert cards[0]["customer_pain_quotes"][1]["quote"] == "Support remains slow and onboarding is clunky."
 
 
 class TestBattleCardSentimentDirection:
@@ -1667,49 +1606,6 @@ class TestReconstructCrossVendorLookup:
         assert result["asymmetries"][("A", "B")]["conclusion"]["conclusion"] == "asymmetry"
 
 
-class TestSpecificCrossVendorEcosystemEvidence:
-    def test_build_specific_cross_vendor_ecosystem_evidence_prefers_specific_categories(self):
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
-            _build_specific_cross_vendor_ecosystem_evidence,
-        )
-
-        specific = _build_specific_cross_vendor_ecosystem_evidence(
-            ecosystem_evidence={
-                "B2B Software": {
-                    "category": "B2B Software",
-                    "vendor_count": 40,
-                    "displacement_intensity": 1.2,
-                },
-            },
-            vendor_scores=[
-                {"vendor_name": "Zendesk", "product_category": "B2B Software"},
-                {"vendor_name": "Freshdesk", "product_category": "B2B Software"},
-                {"vendor_name": "Intercom", "product_category": "B2B Software"},
-            ],
-            reasoning_lookup={
-                "zendesk": {"archetype": "price_squeeze"},
-                "freshdesk": {"archetype": "price_squeeze"},
-                "intercom": {"archetype": "platform_gap"},
-            },
-            evidence_lookup={
-                "zendesk": {"product_category": "Helpdesk"},
-                "freshdesk": {"product_category": "Helpdesk"},
-                "intercom": {"product_category": "Helpdesk"},
-            },
-            competitive_disp=[
-                {"vendor": "zendesk"},
-                {"vendor": "freshdesk"},
-                {"vendor": "intercom"},
-            ],
-            preferred_profile_categories={},
-        )
-
-        assert "B2B Software" not in specific
-        assert specific["Helpdesk"]["vendor_count"] == 3
-        assert specific["Helpdesk"]["displacement_intensity"] == 1.0
-        assert specific["Helpdesk"]["dominant_archetype"] == "price_squeeze"
-
-
 class TestCrossVendorSchemaContract:
     """Validate CROSS_VENDOR_JSON_SCHEMA accepts expected LLM output shapes."""
 
@@ -2262,16 +2158,16 @@ class TestScorecardNarrativeLLMInput:
             assert _scorecard_narrative_max_tokens() == 1200
 
 
-class TestVendorReasoningCap:
-    """Verify the vendor cap limits evidence building and reasoning."""
+class TestTemporalVendorLimit:
+    """Verify the temporal enrichment vendor limit remains configured."""
 
     def test_evidence_map_capped(self):
-        """Evidence map should only build for capped vendors."""
+        """Temporal enrichment should keep a sane vendor limit."""
         from atlas_brain.config import settings
         cfg = settings.b2b_churn
-        assert hasattr(cfg, "stratified_reasoning_vendor_cap")
-        assert cfg.stratified_reasoning_vendor_cap > 0
-        assert cfg.stratified_reasoning_vendor_cap <= 100
+        assert hasattr(cfg, "temporal_analysis_vendor_limit")
+        assert cfg.temporal_analysis_vendor_limit > 0
+        assert cfg.temporal_analysis_vendor_limit <= 100
 
 
 # ---------------------------------------------------------------------------

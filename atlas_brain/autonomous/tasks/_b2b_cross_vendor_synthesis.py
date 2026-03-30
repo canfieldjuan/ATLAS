@@ -29,8 +29,11 @@ def _canon(name: str) -> str:
     return (name or "").strip().lower()
 
 
-def _sorted_vendors(*names: str) -> list[str]:
-    return sorted(set(n.strip() for n in names if n and n.strip()))
+def _sorted_vendors(*names: str | None) -> list[str]:
+    return sorted(set(
+        s for n in names
+        if isinstance(n, str) and (s := n.strip())
+    ))
 
 
 # ---------------------------------------------------------------------------

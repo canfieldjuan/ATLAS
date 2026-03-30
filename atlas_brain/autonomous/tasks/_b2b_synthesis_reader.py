@@ -757,9 +757,7 @@ def synthesis_view_to_reasoning_entry(view: SynthesisView) -> dict[str, Any]:
 
     confidence_str = view.confidence("causal_narrative")
     # Map confidence label -> numeric for backward compat
-    confidence_num = {
-        "high": 0.85, "medium": 0.55, "low": 0.25, "insufficient": 0.0,
-    }.get(confidence_str, 0.0)
+    confidence_num = _confidence_label_to_numeric(confidence_str)
 
     # Build summary from available fields -- v2.3 uses trigger/why_now/causal_chain
     executive_summary = cn.get("summary") or cn.get("executive_summary") or ""
@@ -927,6 +925,15 @@ def legacy_reasoning_to_contracts(
 # ---------------------------------------------------------------------------
 
 _logger = logging.getLogger("atlas.b2b.synthesis_reader")
+
+
+def _confidence_label_to_numeric(confidence_label: str) -> float:
+    return {
+        "high": 0.85,
+        "medium": 0.55,
+        "low": 0.25,
+        "insufficient": 0.0,
+    }.get(str(confidence_label or "").strip().lower(), 0.0)
 
 
 async def load_best_reasoning_view(
@@ -1175,3 +1182,101 @@ async def load_best_reasoning_views(
         )
 
     return views
+
+
+async def load_prior_reasoning_snapshots(
+    pool,
+    vendor_names: list[str],
+    *,
+    before_date: date | None = None,
+    analysis_window_days: int = 30,
+) -> dict[str, dict[str, Any]]:
+    """Load the most recent prior reasoning snapshot before a cutoff date."""
+    snapshots: dict[str, dict[str, Any]] = {}
+    if not vendor_names:
+        return snapshots
+
+    import json as _json
+
+    cutoff = before_date or date.today()
+    requested_by_lower: dict[str, str] = {}
+    lower_names: list[str] = []
+    for vendor_name in vendor_names:
+        raw_name = str(vendor_name or "").strip()
+        if not raw_name:
+            continue
+        lowered = raw_name.lower()
+        if lowered in requested_by_lower:
+            continue
+        requested_by_lower[lowered] = raw_name
+        lower_names.append(lowered)
+    if not lower_names:
+        return snapshots
+
+    synth_rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (LOWER(vendor_name))
+               vendor_name, as_of_date, schema_version, synthesis
+        FROM b2b_reasoning_synthesis
+        WHERE LOWER(vendor_name) = ANY($1)
+          AND as_of_date < $2
+          AND analysis_window_days = $3
+        ORDER BY LOWER(vendor_name), as_of_date DESC, created_at DESC
+        """,
+        lower_names,
+        cutoff,
+        analysis_window_days,
+    )
+    unresolved = set(lower_names)
+    for row in synth_rows:
+        lowered = str(row.get("vendor_name") or "").strip().lower()
+        requested_name = requested_by_lower.get(lowered)
+        if not requested_name:
+            continue
+        raw = row["synthesis"]
+        if isinstance(raw, str):
+            raw = _json.loads(raw)
+        view = load_synthesis_view(
+            raw,
+            vendor_name=row["vendor_name"],
+            schema_version=str(row.get("schema_version") or ""),
+            as_of_date=row["as_of_date"],
+        )
+        snapshots[requested_name] = {
+            "archetype": view.primary_wedge.value if view.primary_wedge else "",
+            "confidence": _confidence_label_to_numeric(view.confidence("causal_narrative")),
+            "snapshot_date": view.as_of_date_iso,
+        }
+        unresolved.discard(lowered)
+
+    if unresolved:
+        legacy_rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (LOWER(vendor_name))
+                   vendor_name, archetype, archetype_confidence, last_computed_at
+            FROM b2b_churn_signals
+            WHERE LOWER(vendor_name) = ANY($1)
+              AND last_computed_at::date < $2
+              AND archetype IS NOT NULL
+            ORDER BY LOWER(vendor_name), last_computed_at DESC
+            """,
+            list(unresolved),
+            cutoff,
+        )
+        for row in legacy_rows:
+            lowered = str(row.get("vendor_name") or "").strip().lower()
+            requested_name = requested_by_lower.get(lowered)
+            if not requested_name:
+                continue
+            last_computed_at = row.get("last_computed_at")
+            if last_computed_at is not None and hasattr(last_computed_at, "date"):
+                snapshot_date = last_computed_at.date().isoformat()
+            else:
+                snapshot_date = str(last_computed_at or "")
+            snapshots[requested_name] = {
+                "archetype": row.get("archetype") or "",
+                "confidence": float(row["archetype_confidence"]) if row.get("archetype_confidence") is not None else None,
+                "snapshot_date": snapshot_date,
+            }
+
+    return snapshots

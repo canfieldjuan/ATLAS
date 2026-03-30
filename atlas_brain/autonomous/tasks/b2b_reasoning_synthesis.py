@@ -413,11 +413,43 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         for vn, layers, eh in vendors_to_reason
     ])
 
+    vendor_elapsed = round(time.monotonic() - t0, 1)
+    logger.info(
+        "Reasoning synthesis v2 vendor phase: %d succeeded, %d failed "
+        "(%d validation), %d skipped, %d tokens, %.1fs",
+        succeeded, failed, validation_failures, skipped, total_tokens, vendor_elapsed,
+    )
+
+    # ------------------------------------------------------------------
+    # Phase 2: Cross-vendor synthesis (battles, councils, asymmetry)
+    # ------------------------------------------------------------------
+    xv_succeeded = 0
+    xv_failed = 0
+    xv_tokens = 0
+    xv_mirrored = 0
+
+    if cfg.cross_vendor_synthesis_enabled:
+        try:
+            xv_succeeded, xv_failed, xv_tokens, xv_mirrored = await _run_cross_vendor_synthesis(
+                pool=pool,
+                vendor_pools=vendor_pools,
+                llm=llm,
+                rcfg=rcfg,
+                cfg=cfg,
+                today=today,
+                window_days=window_days,
+            )
+            total_tokens += xv_tokens
+        except Exception:
+            logger.exception("Cross-vendor synthesis phase failed")
+
     elapsed = round(time.monotonic() - t0, 1)
     logger.info(
-        "Reasoning synthesis v2 complete: %d succeeded, %d failed "
-        "(%d validation), %d skipped, %d tokens, %.1fs",
-        succeeded, failed, validation_failures, skipped, total_tokens, elapsed,
+        "Reasoning synthesis v2 complete: vendors=%d/%d, xv=%d/%d, "
+        "tokens=%d, %.1fs",
+        succeeded, succeeded + failed,
+        xv_succeeded, xv_succeeded + xv_failed,
+        total_tokens, elapsed,
     )
 
     return {
@@ -430,4 +462,410 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "total_tokens": total_tokens,
         "elapsed_seconds": elapsed,
         "schema_version": _SCHEMA_VERSION,
+        "cross_vendor_succeeded": xv_succeeded,
+        "cross_vendor_failed": xv_failed,
+        "cross_vendor_tokens": xv_tokens,
+        "cross_vendor_mirrored": xv_mirrored,
     }
+
+
+# ---------------------------------------------------------------------------
+# Cross-vendor synthesis phase
+# ---------------------------------------------------------------------------
+
+_XV_SCHEMA_VERSION = "synthesis_v1"
+
+
+async def _run_cross_vendor_synthesis(
+    *,
+    pool,
+    vendor_pools: dict[str, dict],
+    llm,
+    rcfg,
+    cfg,
+    today: date,
+    window_days: int,
+) -> tuple[int, int, int, int]:
+    """Run cross-vendor synthesis: battles, councils, asymmetry.
+
+    Returns (succeeded, failed, tokens_used, mirrored_to_legacy).
+    """
+    import re
+
+    from ...reasoning.cross_vendor_selection import (
+        select_asymmetry_pairs,
+        select_battles,
+        select_categories,
+    )
+    from ...reasoning.single_pass_prompts.category_council_synthesis import (
+        CATEGORY_COUNCIL_SYNTHESIS_PROMPT,
+    )
+    from ...reasoning.single_pass_prompts.cross_vendor_battle_synthesis import (
+        CROSS_VENDOR_BATTLE_SYNTHESIS_PROMPT,
+    )
+    from ...reasoning.single_pass_prompts.resource_asymmetry_synthesis import (
+        RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT,
+    )
+    from ...services.protocols import Message
+    from ._b2b_cross_vendor_synthesis import (
+        _sorted_vendors,
+        build_category_council_packet,
+        build_pairwise_battle_packet,
+        build_resource_asymmetry_packet,
+        compute_cross_vendor_evidence_hash,
+        normalize_cross_vendor_contract,
+        to_legacy_cross_vendor_conclusion,
+    )
+
+    # Reconstruct inputs for selectors from pool layers
+    # Build churn signal rows from pool cores
+    vendor_scores: list[dict[str, Any]] = []
+    evidence_lookup: dict[str, dict[str, Any]] = {}
+    product_profiles: dict[str, dict[str, Any]] = {}
+
+    for vname, layers in vendor_pools.items():
+        core = layers.get("core") or layers.get("churn_signal") or {}
+        evidence_lookup[vname] = core
+        vendor_scores.append({
+            "vendor_name": vname,
+            "avg_urgency_score": core.get("avg_urgency_score") or core.get("avg_urgency") or 0,
+            "total_reviews": core.get("total_reviews") or core.get("review_count") or 0,
+            "product_category": core.get("product_category") or "",
+        })
+
+    # Load product profiles
+    try:
+        profile_rows = await pool.fetch(
+            "SELECT vendor_name, product_category, strengths, weaknesses, "
+            "top_integrations, primary_use_cases, typical_company_size, typical_industries "
+            "FROM b2b_product_profiles"
+        )
+        for r in profile_rows:
+            product_profiles[r["vendor_name"]] = dict(r)
+    except Exception:
+        logger.debug("Product profile fetch failed for xv synthesis")
+
+    # Build displacement map
+    try:
+        disp_rows = await pool.fetch(
+            "SELECT from_vendor, to_vendor, mention_count, primary_driver, "
+            "signal_strength, velocity_7d, evidence_breakdown "
+            "FROM b2b_displacement_edges "
+            "WHERE as_of_date = (SELECT MAX(as_of_date) FROM b2b_displacement_edges)"
+        )
+        displacement_edges = [dict(r) for r in disp_rows]
+    except Exception:
+        logger.debug("Displacement edge fetch failed for xv synthesis")
+        displacement_edges = []
+
+    # Build ecosystem evidence for category selection
+    ecosystem_evidence: dict[str, dict[str, Any]] = {}
+    try:
+        eco_rows = await pool.fetch(
+            "SELECT category, hhi, market_structure, displacement_intensity, "
+            "dominant_archetype, archetype_distribution "
+            "FROM b2b_category_dynamics "
+            "WHERE as_of_date = (SELECT MAX(as_of_date) FROM b2b_category_dynamics)"
+        )
+        for r in eco_rows:
+            ecosystem_evidence[r["category"]] = dict(r)
+    except Exception:
+        logger.debug("Category dynamics fetch failed for xv synthesis")
+
+    # Build vendor membership map for category selection.
+    # select_categories() only uses the mapping keys to count vendors with
+    # evidence in each category; it does not consume legacy archetype values.
+    category_vendor_lookup: dict[str, dict[str, Any]] = {}
+    for vname, ev in evidence_lookup.items():
+        if (ev or {}).get("product_category"):
+            category_vendor_lookup[vname] = {}
+
+    # --- Select targets ---
+    battles = await select_battles(
+        pool,
+        displacement_edges,
+        evidence_lookup,
+        product_profiles=product_profiles,
+        max_battles=cfg.cross_vendor_max_battles,
+        min_context_score=cfg.cross_vendor_battle_min_context_score,
+    )
+    categories = select_categories(
+        ecosystem_evidence,
+        category_vendor_lookup,
+        evidence_lookup,
+        min_vendors=cfg.cross_vendor_category_min_vendors,
+        min_context_vendors=cfg.cross_vendor_category_min_context_vendors,
+        min_displacement_intensity=cfg.cross_vendor_category_min_displacement_intensity,
+        max_categories=cfg.cross_vendor_max_categories,
+    )
+    asymmetry_pairs = await select_asymmetry_pairs(
+        vendor_scores,
+        evidence_lookup,
+        product_profiles,
+        max_pairs=cfg.cross_vendor_max_asymmetry,
+        pressure_delta_max=cfg.cross_vendor_asymmetry_pressure_delta_max,
+        review_ratio_min=cfg.cross_vendor_asymmetry_review_ratio_min,
+        segment_divergence_bonus=cfg.cross_vendor_asymmetry_segment_divergence_bonus,
+        min_divergence_score=cfg.cross_vendor_asymmetry_min_divergence_score,
+        min_context_score=cfg.cross_vendor_asymmetry_min_context_score,
+    )
+
+    logger.info(
+        "Cross-vendor synthesis targets: %d battles, %d councils, %d asymmetries",
+        len(battles), len(categories), len(asymmetry_pairs),
+    )
+
+    # --- Build packets ---
+    work_items: list[tuple[str, str, list[str], str | None, dict[str, Any]]] = []
+
+    for vendor_a, vendor_b, edge in battles:
+        packet = build_pairwise_battle_packet(
+            vendor_a, vendor_b, edge, vendor_pools, product_profiles,
+        )
+        work_items.append((
+            "pairwise_battle",
+            CROSS_VENDOR_BATTLE_SYNTHESIS_PROMPT,
+            _sorted_vendors(vendor_a, vendor_b),
+            None,
+            packet,
+        ))
+
+    for cat, eco_ev in categories:
+        packet = build_category_council_packet(
+            cat, eco_ev, vendor_pools, product_profiles, displacement_edges,
+        )
+        cat_lower = (cat or "").strip().lower()
+        cat_vendors = [
+            vn for vn, pp in product_profiles.items()
+            if (pp.get("product_category") or "").strip().lower() == cat_lower
+        ]
+        work_items.append((
+            "category_council",
+            CATEGORY_COUNCIL_SYNTHESIS_PROMPT,
+            sorted(cat_vendors),
+            cat,
+            packet,
+        ))
+
+    for vendor_a, vendor_b in asymmetry_pairs:
+        packet = build_resource_asymmetry_packet(
+            vendor_a, vendor_b, vendor_pools, product_profiles,
+        )
+        work_items.append((
+            "resource_asymmetry",
+            RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT,
+            _sorted_vendors(vendor_a, vendor_b),
+            None,
+            packet,
+        ))
+
+    if not work_items:
+        logger.info("No cross-vendor synthesis targets selected")
+        return 0, 0, 0, 0
+
+    # --- Check existing hashes to skip unchanged ---
+    existing_xv = await pool.fetch(
+        """
+        SELECT analysis_type, vendors, category, evidence_hash
+        FROM b2b_cross_vendor_reasoning_synthesis
+        WHERE as_of_date = $1 AND analysis_window_days = $2
+          AND schema_version = $3
+        """,
+        today, window_days, _XV_SCHEMA_VERSION,
+    )
+    existing_xv_hashes: dict[str, str] = {}
+    for r in existing_xv:
+        v_key = "|".join(sorted(r["vendors"])) if r["vendors"] else ""
+        key = f"{r['analysis_type']}:{v_key}:{r['category'] or ''}"
+        existing_xv_hashes[key] = r["evidence_hash"]
+
+    # --- Process each work item ---
+    from ...pipelines.llm import parse_json_response
+
+    xv_sem = asyncio.Semaphore(cfg.cross_vendor_synthesis_concurrency)
+    xv_max_attempts = max(1, cfg.cross_vendor_synthesis_attempts)
+    _succeeded = 0
+    _failed = 0
+    _tokens = 0
+    _mirrored = 0
+    llm_model_name = getattr(llm, "model", getattr(llm, "model_id", ""))
+
+    async def _xv_one(
+        analysis_type: str,
+        prompt: str,
+        vendors: list[str],
+        category: str | None,
+        packet: dict[str, Any],
+    ) -> None:
+        nonlocal _succeeded, _failed, _tokens, _mirrored
+
+        ev_hash = compute_cross_vendor_evidence_hash(packet)
+        v_key = "|".join(sorted(vendors))
+        cache_key = f"{analysis_type}:{v_key}:{category or ''}"
+        if existing_xv_hashes.get(cache_key) == ev_hash:
+            return  # unchanged
+
+        async with xv_sem:
+            payload = json.dumps(packet, separators=(",", ":"), sort_keys=True, default=str)
+            synthesis: dict[str, Any] | None = None
+            item_tokens = 0
+
+            for attempt in range(xv_max_attempts):
+                messages = [
+                    Message(role="system", content=prompt),
+                    Message(role="user", content=payload),
+                ]
+                try:
+                    result = await asyncio.to_thread(
+                        llm.chat,
+                        messages=messages,
+                        max_tokens=rcfg.max_tokens,
+                        temperature=rcfg.temperature,
+                    )
+                    text = result.get("response", "").strip()
+                    usage = result.get("usage", {})
+                    tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                    item_tokens += tokens
+                    _tokens += tokens
+
+                    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                    parsed = parse_json_response(text, recover_truncated=True)
+                    if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                        synthesis = normalize_cross_vendor_contract(parsed, analysis_type)
+                        break
+                except Exception:
+                    if attempt + 1 >= xv_max_attempts:
+                        logger.warning(
+                            "Cross-vendor synthesis failed: %s %s",
+                            analysis_type, vendors, exc_info=True,
+                        )
+
+            if synthesis is None:
+                _failed += 1
+                return
+
+            # Persist to canonical table (upsert — reruns update with fresh synthesis).
+            # Uses ON CONFLICT on the named partial unique index so PostgreSQL
+            # matches the correct predicate automatically.
+            try:
+                if analysis_type == "category_council":
+                    await pool.execute(
+                        """
+                        INSERT INTO b2b_cross_vendor_reasoning_synthesis
+                            (analysis_type, vendors, category, as_of_date,
+                             analysis_window_days, schema_version, evidence_hash,
+                             synthesis, tokens_used, llm_model)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+                        ON CONFLICT (analysis_type, category, as_of_date,
+                                     analysis_window_days, schema_version)
+                            WHERE analysis_type = 'category_council'
+                        DO UPDATE SET
+                            evidence_hash = EXCLUDED.evidence_hash,
+                            synthesis = EXCLUDED.synthesis,
+                            tokens_used = EXCLUDED.tokens_used,
+                            llm_model = EXCLUDED.llm_model,
+                            vendors = EXCLUDED.vendors,
+                            created_at = NOW()
+                        """,
+                        analysis_type, vendors, category, today,
+                        window_days, _XV_SCHEMA_VERSION, ev_hash,
+                        json.dumps(synthesis, default=str),
+                        item_tokens, llm_model_name,
+                    )
+                else:
+                    await pool.execute(
+                        """
+                        INSERT INTO b2b_cross_vendor_reasoning_synthesis
+                            (analysis_type, vendors, category, as_of_date,
+                             analysis_window_days, schema_version, evidence_hash,
+                             synthesis, tokens_used, llm_model)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+                        ON CONFLICT (analysis_type, vendors, as_of_date,
+                                     analysis_window_days, schema_version)
+                            WHERE analysis_type IN ('pairwise_battle', 'resource_asymmetry')
+                        DO UPDATE SET
+                            evidence_hash = EXCLUDED.evidence_hash,
+                            synthesis = EXCLUDED.synthesis,
+                            tokens_used = EXCLUDED.tokens_used,
+                            llm_model = EXCLUDED.llm_model,
+                            category = EXCLUDED.category,
+                            created_at = NOW()
+                        """,
+                        analysis_type, vendors, category, today,
+                        window_days, _XV_SCHEMA_VERSION, ev_hash,
+                        json.dumps(synthesis, default=str),
+                        item_tokens, llm_model_name,
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to persist xv synthesis: %s %s",
+                    analysis_type, vendors, exc_info=True,
+                )
+                _failed += 1
+                return
+
+            # Mirror into legacy b2b_cross_vendor_conclusions (idempotent: delete-then-insert)
+            try:
+                legacy = to_legacy_cross_vendor_conclusion(
+                    synthesis, analysis_type, vendors,
+                    category=category,
+                    evidence_hash=ev_hash,
+                    tokens_used=item_tokens,
+                )
+                # Delete any existing synthesis-produced mirror row for this
+                # (type, vendors, date) combo, then insert fresh.  The legacy
+                # table has no unique constraint, so upsert is not possible.
+                await pool.execute(
+                    """
+                    DELETE FROM b2b_cross_vendor_conclusions
+                    WHERE analysis_type = $1
+                      AND vendors = $2::text[]
+                      AND computed_date = $3
+                      AND evidence_hash LIKE 'synth_%'
+                    """,
+                    analysis_type,
+                    vendors,
+                    today,
+                )
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_cross_vendor_conclusions
+                        (analysis_type, vendors, category, conclusion,
+                         confidence, evidence_hash, tokens_used, cached,
+                         computed_date)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
+                    """,
+                    legacy["analysis_type"],
+                    legacy["vendors"],
+                    legacy["category"],
+                    json.dumps(legacy["conclusion"], default=str),
+                    legacy["confidence"],
+                    f"synth_{ev_hash}",
+                    legacy["tokens_used"],
+                    legacy["cached"],
+                    today,
+                )
+                _mirrored += 1
+            except Exception:
+                logger.debug(
+                    "Legacy mirror failed for %s %s", analysis_type, vendors,
+                    exc_info=True,
+                )
+
+            _succeeded += 1
+            logger.info(
+                "Cross-vendor synthesis: %s %s (%d tokens)",
+                analysis_type, vendors, item_tokens,
+            )
+
+    await asyncio.gather(*[
+        _xv_one(at, prompt, vendors, cat, packet)
+        for at, prompt, vendors, cat, packet in work_items
+    ])
+
+    logger.info(
+        "Cross-vendor synthesis complete: %d succeeded, %d failed, "
+        "%d mirrored, %d tokens",
+        _succeeded, _failed, _mirrored, _tokens,
+    )
+    return _succeeded, _failed, _tokens, _mirrored

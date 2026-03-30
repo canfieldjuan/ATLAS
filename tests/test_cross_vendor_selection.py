@@ -97,6 +97,35 @@ def test_select_categories_requires_reasoned_and_context_rich_vendors():
     assert [category for category, _eco in result] == ["CRM"]
 
 
+def test_select_categories_uses_vendor_membership_not_archetype_payload():
+    ecosystem = {
+        "CRM": {"vendor_count": 10, "displacement_intensity": 2.2},
+    }
+    # Values intentionally contain no archetype-era fields; only the keys matter.
+    category_vendor_lookup = {
+        "HubSpot": {},
+        "Salesforce": {},
+        "Pipedrive": {},
+    }
+    evidence = {
+        "HubSpot": {"product_category": "CRM", "top_use_cases": ["lead management"]},
+        "Salesforce": {"product_category": "CRM", "buyer_authority": {"role_types": {"sales": 5}}},
+        "Pipedrive": {"product_category": "CRM", "competitors": [{"name": "HubSpot"}]},
+    }
+
+    result = select_categories(
+        ecosystem,
+        category_vendor_lookup,
+        evidence,
+        min_vendors=3,
+        min_context_vendors=3,
+        min_displacement_intensity=1.0,
+        max_categories=5,
+    )
+
+    assert [category for category, _eco in result] == ["CRM"]
+
+
 @pytest.mark.asyncio
 async def test_select_asymmetry_pairs_require_overlap_and_resource_divergence():
     vendor_scores = [

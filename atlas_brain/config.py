@@ -2449,9 +2449,9 @@ class B2BChurnConfig(BaseSettings):
         default=18,
         description="Max vendor score rows to include in exploratory_overview payload",
     )
-    stratified_reasoning_vendor_limit: int = Field(
+    temporal_analysis_vendor_limit: int = Field(
         default=100,
-        description="Max vendors for temporal analysis + stratified reasoning per intel run (independent of LLM payload trimming)",
+        description="Max vendors for temporal analysis per intelligence run (independent of LLM payload trimming)",
     )
     intelligence_exploratory_high_intent_limit: int = Field(
         default=8,
@@ -2611,9 +2611,6 @@ class B2BChurnConfig(BaseSettings):
     vendor_briefing_gate_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for briefing gate landing page")
     vendor_briefing_gate_expiry_days: int = Field(default=7, description="Gate token expiry in days")
 
-    # Stratified reasoning integration (global intelligence run)
-    stratified_reasoning_enabled: bool = Field(default=False, description="Route vendors through stratified reasoner during global intelligence run")
-    stratified_reasoning_concurrency: int = Field(default=5, description="Max concurrent vendor reasoning tasks")
     reasoning_synthesis_attempts: int = Field(
         default=2,
         ge=1,
@@ -2632,24 +2629,19 @@ class B2BChurnConfig(BaseSettings):
         le=10,
         description="Max validator issues to feed back into synthesis repair retries",
     )
-    stratified_reasoning_vendor_cap: int = Field(default=60, description="Max vendors to send through stratified reasoning (top N by urgency)")
-    intelligence_focus_categories: str = Field(
-        default="all",
+    reasoning_synthesis_enabled: bool = Field(
+        default=True,
         description=(
-            "Comma-separated product categories to include in reasoning phase. "
-            "'all' = no filter (default). Only affects stratified reasoning and "
-            "cross-vendor analysis. Signals, vaults, and segments still build "
-            "for all vendors."
+            "Enable vendor reasoning synthesis as the canonical post-core reasoning pass. "
+            "When true, legacy stratified vendor reasoning inside b2b_churn_intelligence "
+            "is skipped to avoid duplicate LLM spend."
         ),
     )
     executive_summary_llm_enabled: bool = Field(default=False, description="Use LLM-synthesized executive summaries instead of deterministic templates")
 
-    # Cross-vendor reasoning (battles, category councils, asymmetry)
-    cross_vendor_reasoning_enabled: bool = Field(default=False, description="Enable cross-vendor LLM reasoning (battles, category councils, asymmetry)")
     cross_vendor_max_battles: int = Field(default=5, ge=0, le=20, description="Max pairwise battle reasoning calls per run")
     cross_vendor_max_categories: int = Field(default=3, ge=0, le=10, description="Max category council reasoning calls per run")
     cross_vendor_max_asymmetry: int = Field(default=3, ge=0, le=10, description="Max resource-asymmetry reasoning calls per run")
-    cross_vendor_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor LLM calls")
     cross_vendor_battle_min_context_score: float = Field(default=2.0, ge=0.0, le=10.0, description="Min deterministic overlap score before a displacement pair gets battle reasoning")
     cross_vendor_category_min_vendors: int = Field(default=3, ge=1, le=20, description="Min reasoned vendors in a category before council reasoning")
     cross_vendor_category_min_context_vendors: int = Field(default=2, ge=1, le=20, description="Min context-rich vendors in a category before council reasoning")
@@ -2659,6 +2651,12 @@ class B2BChurnConfig(BaseSettings):
     cross_vendor_asymmetry_segment_divergence_bonus: float = Field(default=5.0, ge=0.0, le=20.0, description="Divergence bonus when vendors tilt toward different company-size segments")
     cross_vendor_asymmetry_min_divergence_score: float = Field(default=2.0, ge=0.0, le=50.0, description="Min divergence score before asymmetry reasoning")
     cross_vendor_asymmetry_min_context_score: float = Field(default=2.0, ge=0.0, le=10.0, description="Min deterministic overlap score before asymmetry reasoning")
+
+    # Cross-vendor synthesis (runs in b2b_reasoning_synthesis after vendor synthesis)
+    cross_vendor_synthesis_enabled: bool = Field(default=True, description="Enable cross-vendor synthesis (battles, councils, asymmetry) in the reasoning synthesis task")
+    cross_vendor_synthesis_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor synthesis LLM calls")
+    cross_vendor_synthesis_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per cross-vendor packet")
+    cross_vendor_synthesis_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back per retry")
 
     battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")

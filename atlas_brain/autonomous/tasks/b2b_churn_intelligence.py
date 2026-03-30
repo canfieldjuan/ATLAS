@@ -1,16 +1,15 @@
 """
-B2B churn intelligence: aggregate enriched review data, feed to LLM
-for synthesis, persist intelligence products, and notify.
+B2B churn intelligence: aggregate enriched review data, persist canonical pools,
+and hand off reasoning/narrative synthesis to follow-up tasks.
 
-Runs weekly (default Sunday 9 PM). Produces 4 report types:
-  - weekly_churn_feed: ranked companies showing churn intent
-  - vendor_scorecard: per-vendor health metrics
-  - displacement_report: competitive flow map
-  - category_overview: cross-vendor trends
+Runs weekly (default Sunday 9 PM). Its job is deterministic:
+  - build and persist churn signals
+  - persist evidence, segment, temporal, displacement, category, and account pools
+  - write the core completion marker consumed by downstream synthesis/report tasks
 
-Handles its own LLM call, report persistence, churn_signals upserts,
-and ntfy notification -- returns _skip_synthesis so the runner does
-not double-synthesize.
+Vendor reasoning and cross-vendor reasoning no longer run here. Those LLM stages
+now live in ``b2b_reasoning_synthesis`` and the synthesis-first consumers that
+follow it.
 """
 
 import asyncio
@@ -68,7 +67,6 @@ from ._b2b_shared import (  # noqa: E402
     _safe_json,
     _intelligence_source_allowlist,
     _eligible_review_filters,
-    _build_vendor_evidence,
     _build_deterministic_vendor_feed,
     _build_deterministic_displacement_map,
     _build_exploratory_payload,
@@ -143,7 +141,6 @@ from ._b2b_shared import (  # noqa: E402
     _fetch_keyword_spikes,
     _build_validated_executive_summary,
     _executive_source_list,
-    filter_vendors_by_focus_categories,
 )
 
 
@@ -184,10 +181,6 @@ def _resolve_vendor_category(
 
 
 def _should_persist_category_dynamics(scoped_vendors: list[str] | None) -> bool:
-    return not bool(scoped_vendors)
-
-
-def _should_persist_cross_vendor_conclusions(scoped_vendors: list[str] | None) -> bool:
     return not bool(scoped_vendors)
 
 
@@ -317,75 +310,6 @@ def _normalize_cross_vendor_conclusion(
             ):
                 normalized["resource_advantage"] = ""
     return normalized
-
-
-def _build_specific_cross_vendor_ecosystem_evidence(
-    *,
-    ecosystem_evidence: dict[str, Any],
-    vendor_scores: list[dict[str, Any]],
-    reasoning_lookup: dict[str, dict[str, Any]],
-    evidence_lookup: dict[str, dict[str, Any]],
-    competitive_disp: list[dict[str, Any]],
-    preferred_profile_categories: dict[str, str] | None = None,
-) -> dict[str, dict[str, Any]]:
-    specific: dict[str, dict[str, Any]] = {
-        str(cat): dict(eco)
-        for cat, eco in (ecosystem_evidence or {}).items()
-        if _should_use_cross_vendor_category(str(cat))
-    }
-    category_vendors: dict[str, list[str]] = {}
-    archetype_counts: dict[str, dict[str, int]] = {}
-    vendor_category: dict[str, str] = {}
-    vendor_score_lookup = {
-        _canonicalize_vendor(vs.get("vendor_name") or ""): vs
-        for vs in vendor_scores
-        if _canonicalize_vendor(vs.get("vendor_name") or "")
-    }
-    for vendor in reasoning_lookup:
-        canonical_vendor = _canonicalize_vendor(vendor)
-        evidence = evidence_lookup.get(vendor) or evidence_lookup.get(canonical_vendor) or {}
-        vs = vendor_score_lookup.get(canonical_vendor) or {}
-        category = _resolve_vendor_category(
-            canonical_vendor,
-            str(evidence.get("product_category") or vs.get("product_category") or ""),
-            preferred_profile_categories,
-        )
-        if not _should_use_cross_vendor_category(category):
-            continue
-        vendor_category[canonical_vendor] = category
-        category_vendors.setdefault(category, []).append(vendor)
-        archetype = str((reasoning_lookup.get(vendor) or {}).get("archetype") or "").strip()
-        if archetype:
-            archetype_counts.setdefault(category, {})
-            archetype_counts[category][archetype] = archetype_counts[category].get(archetype, 0) + 1
-
-    flow_counts: dict[str, int] = {}
-    for flow in competitive_disp or []:
-        flow_vendor = _canonicalize_vendor(
-            flow.get("vendor") or flow.get("from_vendor") or ""
-        )
-        category = vendor_category.get(flow_vendor)
-        if category:
-            flow_counts[category] = flow_counts.get(category, 0) + 1
-
-    for category, vendors in category_vendors.items():
-        eco = dict(specific.get(category) or {})
-        eco["category"] = category
-        eco["vendor_count"] = max(int(eco.get("vendor_count") or 0), len(vendors))
-        if eco.get("displacement_intensity") is None:
-            eco["displacement_intensity"] = round(
-                flow_counts.get(category, 0) / max(len(vendors), 1),
-                2,
-            )
-        if not eco.get("archetype_distribution") and archetype_counts.get(category):
-            eco["archetype_distribution"] = archetype_counts[category]
-        if not eco.get("dominant_archetype") and archetype_counts.get(category):
-            eco["dominant_archetype"] = max(
-                archetype_counts[category].items(),
-                key=lambda item: item[1],
-            )[0]
-        specific[category] = eco
-    return specific
 
 
 def _compact_vendor_churn_scores_for_llm(
@@ -1147,37 +1071,6 @@ async def reconstruct_cross_vendor_lookup(
     return {"battles": battles, "councils": councils, "asymmetries": asymmetries}
 
 
-async def _fetch_prior_archetypes(
-    pool,
-    vendor_names: list[str],
-    days_ago: int = 28,
-) -> dict[str, dict]:
-    """Fetch archetype snapshots from N days ago for comparison."""
-    if not vendor_names:
-        return {}
-    rows = await pool.fetch(
-        """
-        SELECT DISTINCT ON (vendor_name)
-            vendor_name, archetype, archetype_confidence, snapshot_date
-        FROM b2b_vendor_snapshots
-        WHERE vendor_name = ANY($1)
-          AND snapshot_date <= CURRENT_DATE - $2::int
-          AND archetype IS NOT NULL
-        ORDER BY vendor_name, snapshot_date DESC
-        """,
-        vendor_names,
-        days_ago,
-    )
-    return {
-        r["vendor_name"]: {
-            "archetype": r["archetype"],
-            "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else None,
-            "snapshot_date": str(r["snapshot_date"]),
-        }
-        for r in rows
-    }
-
-
 async def _detect_change_events(
     pool,
     vendor_scores: list[dict[str, Any]],
@@ -1905,25 +1798,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         tracer.end_span(span, status="completed", output_data={"skipped": "no enriched reviews"})
         return {"_skip_synthesis": "No enriched B2B reviews to analyze"}
 
-    _focus_scores = filter_vendors_by_focus_categories(vendor_scores, cfg.intelligence_focus_categories)
-    _reasoning_cap = max(0, int(cfg.stratified_reasoning_vendor_cap or 0))
     _reasoning_seen: set[str] = set()
     reasoning_target = 0
-    for vs in _focus_scores:
+    for vs in vendor_scores:
         vn = _canonicalize_vendor(vs.get("vendor_name") or "")
         if not vn or vn in _reasoning_seen:
             continue
         _reasoning_seen.add(vn)
         reasoning_target += 1
-        if reasoning_target >= _reasoning_cap:
-            break
 
     await _update_execution_progress(
         task,
         stage=_STAGE_REASONING,
         progress_current=0,
         progress_total=reasoning_target,
-        progress_message="Running temporal and stratified reasoning over vendor evidence.",
+        progress_message="Building deterministic temporal context before synthesis handoff.",
         vendors_analyzed=analyzed_vendor_count,
         high_intent_companies=len(high_intent),
         fetcher_failures=fetcher_failures,
@@ -1977,7 +1866,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         temporal_engine = TemporalEngine(pool)
         temporal_summaries = []
-        _temporal_vendors = vendor_scores[:cfg.stratified_reasoning_vendor_limit]
+        _temporal_vendors = vendor_scores[:cfg.temporal_analysis_vendor_limit]
         for vs in _temporal_vendors:
             vname = vs["vendor_name"]
             try:
@@ -2017,7 +1906,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.debug("Temporal/archetype enrichment unavailable", exc_info=True)
 
     market_regimes: dict[str, Any] = {}
-    if cfg.stratified_reasoning_enabled and _temporal_lookup:
+    if _temporal_lookup:
         try:
             from atlas_brain.reasoning.market_pulse import MarketPulseReasoner
             from atlas_brain.reasoning.temporal import TemporalEvidence, VendorVelocity
@@ -2073,469 +1962,25 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         except Exception:
             logger.debug("Market pulse analysis skipped", exc_info=True)
 
-    # --- Stratified reasoning: recall/reconstitute/reason per vendor ---
-    # Runs BEFORE reports so conclusions feed into all builders + LLM prompts.
-    # When stratified_reasoning_enabled, builds rich evidence dicts first.
+    # Vendor and cross-vendor LLM reasoning now run in the dedicated
+    # b2b_reasoning_synthesis follow-up task. Keep the shared fallback shape
+    # stable here so snapshots, feeds, and change detection still build.
     reasoning_lookup: dict[str, dict] = {}
-    evidence_for_reasoning: dict[str, dict[str, Any]] | None = None
-    if cfg.stratified_reasoning_enabled:
-        _pre_pain = _build_pain_lookup(pain_dist)
-        _pre_comp = _build_competitor_lookup(competitive_disp)
-        _pre_fg = _build_feature_gap_lookup(feature_gaps)
-        _pre_kw = _build_keyword_spike_lookup(keyword_spikes)
-        _pre_dm = {r["vendor"]: r["dm_churn_rate"] for r in dm_rates}
-        _pre_price = {r["vendor"]: r["price_complaint_rate"] for r in price_rates}
-        _pre_quote = {r["vendor"]: r["quotes"] for r in quotable_evidence}
-        _pre_budget = {r["vendor"]: {k: v for k, v in r.items() if k != "vendor"} for r in budget_signals}
-        _pre_ba = _build_buyer_auth_lookup(buyer_auth)
-        _pre_uc = _build_use_case_lookup(use_case_dist)
-
-        # Displacement velocity per vendor for evidence (7d + 30d detail)
-        _vel_detail_rows = await pool.fetch(
-            """
-            SELECT from_vendor,
-                   SUM(COALESCE(velocity_7d, 0)) AS velocity_7d,
-                   SUM(COALESCE(velocity_30d, 0)) AS velocity_30d
-            FROM b2b_displacement_edges
-            WHERE computed_date = (SELECT MAX(computed_date) FROM b2b_displacement_edges)
-            GROUP BY from_vendor
-            """,
-        )
-        _pre_velocity: dict[str, dict] = {
-            r["from_vendor"]: {"velocity_7d": float(r["velocity_7d"]), "velocity_30d": float(r["velocity_30d"])}
-            for r in _vel_detail_rows
-        }
-
-        evidence_for_reasoning = {}
-        # Filter by focus categories FIRST so dedup keeps the right row
-        # when a vendor spans multiple categories (GROUP BY vendor, category).
-        _focused_ev = filter_vendors_by_focus_categories(vendor_scores, cfg.intelligence_focus_categories)
-        _seen_ev: set[str] = set()
-        _deduped_ev: list[dict[str, Any]] = []
-        for vs in _focused_ev:
-            vn = _canonicalize_vendor(vs.get("vendor_name") or "")
-            if vn and vn not in _seen_ev:
-                _seen_ev.add(vn)
-                _deduped_ev.append(vs)
-        if cfg.intelligence_focus_categories.strip().lower() != "all":
-            # Count unique vendors in unfiltered set for the log ratio
-            _all_unique = len({_canonicalize_vendor(vs.get("vendor_name") or "") for vs in vendor_scores} - {""})
-            logger.info(
-                "Reasoning focus: %d/%d vendors after category filter (%s)",
-                len(_deduped_ev), _all_unique, cfg.intelligence_focus_categories,
-            )
-        for vs in _deduped_ev[:_reasoning_cap]:
-            vname = _canonicalize_vendor(vs.get("vendor_name") or "")
-            if vname:
-                evidence_for_reasoning[vname] = _build_vendor_evidence(
-                    vs,
-                    pain_lookup=_pre_pain,
-                    competitor_lookup=_pre_comp,
-                    feature_gap_lookup=_pre_fg,
-                    insider_lookup=insider_lookup,
-                    keyword_spike_lookup=_pre_kw,
-                    temporal_lookup=_temporal_lookup or None,
-                    archetype_lookup=_archetype_lookup or None,
-                    dm_lookup=_pre_dm,
-                    price_lookup=_pre_price,
-                    quote_lookup=_pre_quote,
-                    budget_lookup=_pre_budget,
-                    buyer_auth_lookup=_pre_ba,
-                    use_case_lookup=_pre_uc,
-                    velocity_lookup=_pre_velocity or None,
-                    market_regime_lookup=_market_regime_lookup or None,
-                )
-                evidence_for_reasoning[vname]["product_category"] = _resolve_vendor_category(
-                    vname,
-                    str(
-                        evidence_for_reasoning[vname].get("product_category")
-                        or vs.get("product_category")
-                        or ""
-                    ),
-                    preferred_profile_categories,
-                )
-
-    try:
-        from atlas_brain.reasoning import get_stratified_reasoner, init_stratified_reasoner
-        from atlas_brain.reasoning.tiers import Tier, gather_tier_context
-
-        reasoner = get_stratified_reasoner()
-        if reasoner is None:
-            # Lazy-init for standalone/manual runs (main app lifespan not active)
-            await init_stratified_reasoner(pool)
-            reasoner = get_stratified_reasoner()
-        if reasoner is not None:
-            sem = asyncio.Semaphore(cfg.stratified_reasoning_concurrency)
-            total_tokens = 0
-            mode_counts: dict[str, int] = {}
-            reasoning_completed = 0
-            reasoning_progress_lock = asyncio.Lock()
-
-            async def _analyze_one(vs: dict[str, Any]) -> None:
-                nonlocal total_tokens
-                nonlocal reasoning_completed
-                vname = _canonicalize_vendor(vs.get("vendor_name") or "")
-                if not vname:
-                    return
-                evidence = (evidence_for_reasoning or {}).get(vname, vs)
-                category = _resolve_vendor_category(
-                    vname,
-                    str(evidence.get("product_category") or vs.get("product_category") or ""),
-                    preferred_profile_categories,
-                )
-                async with sem:
-                    try:
-                        tier_ctx = await gather_tier_context(
-                            reasoner._cache, Tier.VENDOR_ARCHETYPE,
-                            vendor_name=vname, product_category=category,
-                        )
-                        sr = await reasoner.analyze(
-                            vendor_name=vname,
-                            evidence=evidence,
-                            product_category=category,
-                            tier_context=tier_ctx,
-                        )
-                        conclusion = sr.conclusion or {}
-                        reasoning_lookup[vname] = {
-                            "archetype": conclusion.get("archetype") or None,
-                            "confidence": sr.confidence,
-                            "risk_level": conclusion.get("risk_level") or None,
-                            "executive_summary": conclusion.get("executive_summary") or None,
-                            "key_signals": conclusion.get("key_signals", []),
-                            "falsification_conditions": conclusion.get("falsification_conditions", []),
-                            "uncertainty_sources": conclusion.get("uncertainty_sources", []),
-                            "mode": sr.mode,
-                            "tokens_used": sr.tokens_used,
-                            "reasoning_steps": sr.reasoning_steps,
-                            "boundary_conditions": sr.boundary_conditions,
-                        }
-                        total_tokens += sr.tokens_used
-                        mode_counts[sr.mode] = mode_counts.get(sr.mode, 0) + 1
-                    except Exception:
-                        logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
-                    finally:
-                        async with reasoning_progress_lock:
-                            reasoning_completed += 1
-                            completed = reasoning_completed
-                            successful = len(reasoning_lookup)
-                        await _update_execution_progress(
-                            task,
-                            stage=_STAGE_REASONING,
-                            progress_current=completed,
-                            progress_total=reasoning_target,
-                            progress_message="Running temporal and stratified reasoning over vendor evidence.",
-                            vendors_analyzed=analyzed_vendor_count,
-                            high_intent_companies=len(high_intent),
-                            fetcher_failures=fetcher_failures,
-                            synced_firmographics=synced_firmographics,
-                            reasoning_vendors=successful,
-                        )
-
-            reasoning_vendors = _deduped_ev[:cfg.stratified_reasoning_vendor_cap]
-            logger.info(
-                "Reasoning over %d/%d vendors (cap=%d)",
-                len(reasoning_vendors), analyzed_vendor_count,
-                cfg.stratified_reasoning_vendor_cap,
-            )
-            await asyncio.gather(*[
-                _analyze_one(vs)
-                for vs in reasoning_vendors
-            ])
-
-            if reasoning_lookup:
-                mode_summary = ", ".join(f"{m}={c}" for m, c in sorted(mode_counts.items()))
-                logger.info(
-                    "Stratified reasoning: %d vendors, modes: %s, total_tokens: %d",
-                    len(reasoning_lookup), mode_summary, total_tokens,
-                )
-                # Fetch prior archetypes for temporal context
-                prior_archetypes = await _fetch_prior_archetypes(
-                    pool, list(reasoning_lookup.keys()),
-                )
-                # Inject summary into payload for exploratory overview LLM
-                payload["stratified_intelligence"] = [
-                    {
-                        "vendor": vname,
-                        "archetype": rc.get("archetype", ""),
-                        "confidence": rc.get("confidence", 0),
-                        "risk_level": rc.get("risk_level", ""),
-                        "executive_summary": rc.get("executive_summary", ""),
-                        "key_signals": rc.get("key_signals", []),
-                        "archetype_was": prior_archetypes.get(vname, {}).get("archetype"),
-                        "confidence_was": prior_archetypes.get(vname, {}).get("confidence"),
-                        "archetype_changed": (
-                            prior_archetypes.get(vname, {}).get("archetype") != rc.get("archetype")
-                            if vname in prior_archetypes and prior_archetypes[vname].get("archetype")
-                            else None
-                        ),
-                    }
-                    for vname, rc in reasoning_lookup.items()
-                ]
-                payload_size = len(json.dumps(payload, default=str))
-    except Exception:
-        logger.debug("Stratified reasoning integration skipped", exc_info=True)
-
-    # --- Cross-vendor ecosystem analysis (category-level intelligence) ---
-    ecosystem_evidence: dict[str, Any] = {}
-    if cfg.stratified_reasoning_enabled and reasoning_lookup:
-        try:
-            from atlas_brain.reasoning.ecosystem import EcosystemAnalyzer
-
-            # Run Ecosystem Analyzer (Neo4j based)
-            eco = EcosystemAnalyzer(pool)
-            eco_results = await eco.analyze_all_categories()
-            for cat, ev in eco_results.items():
-                ecosystem_evidence[cat] = {
-                    "category": cat,
-                    "vendor_count": getattr(ev.health, "vendor_count", 0),
-                    "hhi": getattr(ev.health, "hhi", None),
-                    "market_structure": getattr(ev.health, "market_structure", None),
-                    "displacement_intensity": getattr(ev.health, "displacement_intensity", None),
-                    "dominant_archetype": getattr(ev.health, "dominant_archetype", None),
-                    "archetype_distribution": ev.archetype_distribution or {},
-                }
-
-            if ecosystem_evidence:
-                logger.info("Ecosystem analysis: %d categories", len(ecosystem_evidence))
-        except Exception:
-            logger.debug("Ecosystem analysis skipped", exc_info=True)
-
-    # --- Cross-vendor reasoning (battles + category councils + asymmetry) ---
-    cross_vendor_lookup: dict[str, dict] = {}
-    if (
-        cfg.cross_vendor_reasoning_enabled
-        and reasoning_lookup
-        and evidence_for_reasoning
-    ):
-        try:
-            from atlas_brain.reasoning.cross_vendor import CrossVendorReasoner
-            from atlas_brain.reasoning.cross_vendor_selection import (
-                select_asymmetry_pairs,
-                select_battles,
-                select_categories,
-            )
-            from atlas_brain.reasoning import get_stratified_reasoner
-
-            _xv_reasoner_src = get_stratified_reasoner()
-            if _xv_reasoner_src is not None:
-                xv_reasoner = CrossVendorReasoner(_xv_reasoner_src._cache)
-                xv_sem = asyncio.Semaphore(cfg.cross_vendor_concurrency)
-
-                # Build temporary displacement map for selection (pre-persistence)
-                _xv_disp_map = _build_deterministic_displacement_map(
-                    competitive_disp,
-                    competitor_reasons,
-                    {r["vendor"]: r["quotes"] for r in quotable_evidence},
-                    reasoning_lookup=reasoning_lookup,
-                )
-
-                # Build product_profile_lookup early (needed for asymmetry)
-                _xv_pp_lookup: dict[str, dict] = {}
-                for pp in product_profiles_raw:
-                    vn = _canonicalize_vendor(pp.get("vendor_name", ""))
-                    if vn and vn not in _xv_pp_lookup:
-                        _xv_pp_lookup[vn] = pp
-
-                # Select targets
-                battles = await select_battles(
-                    pool, _xv_disp_map, evidence_for_reasoning,
-                    product_profiles=_xv_pp_lookup,
-                    max_battles=cfg.cross_vendor_max_battles,
-                    min_context_score=cfg.cross_vendor_battle_min_context_score,
-                )
-                council_ecosystem_evidence = _build_specific_cross_vendor_ecosystem_evidence(
-                    ecosystem_evidence=ecosystem_evidence,
-                    vendor_scores=vendor_scores,
-                    reasoning_lookup=reasoning_lookup,
-                    evidence_lookup=evidence_for_reasoning,
-                    competitive_disp=competitive_disp,
-                    preferred_profile_categories=preferred_profile_categories,
-                )
-                categories = select_categories(
-                    council_ecosystem_evidence,
-                    reasoning_lookup,
-                    evidence_for_reasoning,
-                    min_vendors=cfg.cross_vendor_category_min_vendors,
-                    min_context_vendors=cfg.cross_vendor_category_min_context_vendors,
-                    min_displacement_intensity=cfg.cross_vendor_category_min_displacement_intensity,
-                    max_categories=cfg.cross_vendor_max_categories,
-                )
-                categories = [
-                    (cat, eco)
-                    for cat, eco in categories
-                    if _should_use_cross_vendor_category(cat)
-                ]
-                asymmetry_pairs = await select_asymmetry_pairs(
-                    vendor_scores, evidence_for_reasoning, _xv_pp_lookup,
-                    max_pairs=cfg.cross_vendor_max_asymmetry,
-                    pressure_delta_max=cfg.cross_vendor_asymmetry_pressure_delta_max,
-                    review_ratio_min=cfg.cross_vendor_asymmetry_review_ratio_min,
-                    segment_divergence_bonus=cfg.cross_vendor_asymmetry_segment_divergence_bonus,
-                    min_divergence_score=cfg.cross_vendor_asymmetry_min_divergence_score,
-                    min_context_score=cfg.cross_vendor_asymmetry_min_context_score,
-                )
-
-                # Run all cross-vendor reasoning concurrently
-                from atlas_brain.reasoning.cross_vendor import CrossVendorResult
-                xv_results: list[CrossVendorResult] = []
-
-                async def _xv_battle(va: str, vb: str, edge: dict) -> None:
-                    ev_a = evidence_for_reasoning.get(va)
-                    ev_b = evidence_for_reasoning.get(vb)
-                    if not ev_a or not ev_b:
-                        return
-                    async with xv_sem:
-                        try:
-                            r = await xv_reasoner.analyze_battle(
-                                va, vb,
-                                evidence_a=ev_a,
-                                evidence_b=ev_b,
-                                displacement_edge=edge,
-                                product_profile_a=_xv_pp_lookup.get(va),
-                                product_profile_b=_xv_pp_lookup.get(vb),
-                            )
-                            xv_results.append(r)
-                        except Exception:
-                            logger.debug("Battle reasoning failed: %s vs %s", va, vb, exc_info=True)
-
-                async def _xv_category(cat: str, eco: dict) -> None:
-                    if not _should_use_cross_vendor_category(cat):
-                        return
-                    cat_evidence = {
-                        v: evidence_for_reasoning[v]
-                        for v in evidence_for_reasoning
-                        if _resolve_vendor_category(
-                            v,
-                            str(evidence_for_reasoning[v].get("product_category") or ""),
-                            preferred_profile_categories,
-                        ) == cat
-                    }
-                    if len(cat_evidence) < 3:
-                        return
-                    cat_flows = [
-                        e for e in _xv_disp_map
-                        if e.get("from_vendor") in cat_evidence or e.get("to_vendor") in cat_evidence
-                    ]
-                    async with xv_sem:
-                        try:
-                            r = await xv_reasoner.analyze_category(
-                                cat,
-                                vendor_evidence=cat_evidence,
-                                ecosystem=eco,
-                                displacement_flows=cat_flows,
-                                market_regime=asdict(market_regimes.get(cat)) if market_regimes.get(cat) else None,
-                            )
-                            # Tag conclusion with category for persistence
-                            r.conclusion["_category"] = cat
-                            xv_results.append(r)
-                        except Exception:
-                            logger.debug("Category council failed: %s", cat, exc_info=True)
-
-                async def _xv_asymmetry(va: str, vb: str) -> None:
-                    ev_a = evidence_for_reasoning.get(va)
-                    ev_b = evidence_for_reasoning.get(vb)
-                    if not ev_a or not ev_b:
-                        return
-                    async with xv_sem:
-                        try:
-                            r = await xv_reasoner.analyze_asymmetry(
-                                va, vb,
-                                evidence_a=ev_a,
-                                evidence_b=ev_b,
-                                profile_a=_xv_pp_lookup.get(va),
-                                profile_b=_xv_pp_lookup.get(vb),
-                            )
-                            xv_results.append(r)
-                        except Exception:
-                            logger.debug("Asymmetry reasoning failed: %s vs %s", va, vb, exc_info=True)
-
-                await asyncio.gather(
-                    *[_xv_battle(va, vb, e) for va, vb, e in battles],
-                    *[_xv_category(cat, eco) for cat, eco in categories],
-                    *[_xv_asymmetry(va, vb) for va, vb in asymmetry_pairs],
-                )
-
-                # Build cross_vendor_lookup for downstream consumers
-                xv_tokens_total = 0
-                xv_cached = 0
-                for r in xv_results:
-                    key = f"{r.analysis_type}:{':'.join(sorted(r.vendors))}"
-                    cross_vendor_lookup[key] = r.conclusion
-                    xv_tokens_total += r.tokens_used
-                    if r.cached:
-                        xv_cached += 1
-
-                if xv_results:
-                    logger.info(
-                        "Cross-vendor reasoning: %d results (%d cached), tokens: %d",
-                        len(xv_results), xv_cached, xv_tokens_total,
-                    )
-
-                # Persist conclusions to DB
-                if not _should_persist_cross_vendor_conclusions(scoped_vendors):
-                    logger.info(
-                        "Skipping cross-vendor conclusion persistence for scoped run covering %d vendors",
-                        len(scoped_vendors),
-                    )
-                else:
-                    for r in xv_results:
-                        if r.conclusion.get("error"):
-                            continue
-                        try:
-                            sorted_vendors = sorted(_normalized_vendor_refs(r.vendors))
-                            category_val = r.conclusion.pop("_category", None)
-                            if (
-                                r.analysis_type == "category_council"
-                                and not _should_use_cross_vendor_category(category_val or "")
-                            ):
-                                continue
-                            if r.analysis_type in {"pairwise_battle", "resource_asymmetry"} and len(sorted_vendors) < 2:
-                                continue
-                            sanitized_conclusion = _normalize_cross_vendor_conclusion(
-                                r.conclusion,
-                                analysis_type=r.analysis_type,
-                                vendors=sorted_vendors,
-                            )
-                            if (
-                                r.analysis_type == "resource_asymmetry"
-                                and not (
-                                    sanitized_conclusion.get("conclusion")
-                                    or sanitized_conclusion.get("resource_advantage")
-                                )
-                            ):
-                                continue
-                            await pool.execute(
-                                """
-                                INSERT INTO b2b_cross_vendor_conclusions
-                                    (analysis_type, vendors, category, conclusion, confidence,
-                                     evidence_hash, tokens_used, cached)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                                """,
-                                r.analysis_type,
-                                sorted_vendors,
-                                category_val,
-                                json.dumps(sanitized_conclusion, default=str),
-                                r.confidence,
-                                r.evidence_hash,
-                                r.tokens_used,
-                                r.cached,
-                            )
-                        except Exception:
-                            logger.debug("Failed to persist cross-vendor conclusion", exc_info=True)
-        except Exception:
-            logger.debug("Cross-vendor reasoning phase skipped", exc_info=True)
+    logger.info(
+        "Vendor and cross-vendor reasoning is deferred to b2b_reasoning_synthesis",
+    )
 
     await _update_execution_progress(
         task,
         stage=_STAGE_REASONING,
-        progress_current=len(reasoning_lookup),
+        progress_current=reasoning_target,
         progress_total=reasoning_target,
-        progress_message="Running temporal and stratified reasoning over vendor evidence.",
+        progress_message="Prepared deterministic vendor context for b2b_reasoning_synthesis.",
         vendors_analyzed=analyzed_vendor_count,
         high_intent_companies=len(high_intent),
         fetcher_failures=fetcher_failures,
         synced_firmographics=synced_firmographics,
-        reasoning_vendors=len(reasoning_lookup),
+        reasoning_vendors=0,
     )
 
     # Exploratory overview LLM, post-processing, and report validation are

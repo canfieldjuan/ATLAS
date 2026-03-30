@@ -96,6 +96,190 @@ def _make_account_item(
     )
 
 
+def _make_full_coverage_layers() -> dict:
+    return {
+        "evidence_vault": {
+            "metric_snapshot": {
+                "total_reviews": 200,
+                "reviews_in_analysis_window": 180,
+                "reviews_in_recent_window": 40,
+                "churn_density": 0.42,
+                "avg_urgency": 6.5,
+                "recommend_yes": 65,
+                "recommend_no": 35,
+                "recommend_ratio": 0.65,
+                "price_complaint_rate": 0.31,
+                "dm_churn_rate": 0.22,
+                "positive_review_pct": 0.44,
+                "displacement_mention_count": 18,
+                "keyword_spike_count": 3,
+                "avg_rating": 3.6,
+                "negative_review_pct": 0.41,
+            },
+            "provenance": {
+                "enrichment_window_start": "2026-01-01",
+                "enrichment_window_end": "2026-03-28",
+            },
+            "company_signals": [
+                {
+                    "company_name": "Acme Corp",
+                    "urgency_score": 8.8,
+                    "buying_stage": "evaluation",
+                    "decision_maker": True,
+                    "review_id": "r1",
+                },
+                {
+                    "company_name": "Beta Inc",
+                    "urgency_score": 7.4,
+                    "buying_stage": "active_purchase",
+                    "decision_maker": False,
+                    "review_id": "r2",
+                },
+            ],
+            "weakness_evidence": [
+                {
+                    "key": "pricing",
+                    "mention_count_total": 30,
+                    "mention_count_recent": 10,
+                    "avg_urgency": 7.3,
+                },
+                {
+                    "key": "security",
+                    "mention_count_total": 6,
+                    "mention_count_recent": 2,
+                    "avg_urgency": 8.4,
+                },
+            ],
+            "strength_evidence": [
+                {
+                    "key": "integrations",
+                    "mention_count_total": 24,
+                    "mention_count_recent": 7,
+                    "summary": "Broad ecosystem",
+                },
+                {
+                    "key": "support",
+                    "mention_count_total": 12,
+                    "mention_count_recent": 4,
+                    "summary": "Responsive support",
+                },
+            ],
+        },
+        "segment": {
+            "affected_departments": [
+                {"department": "Finance", "review_count": 18, "churn_rate": 0.55},
+            ],
+            "affected_roles": [
+                {"role_type": "Engineering", "review_count": 22, "churn_rate": 0.61},
+            ],
+            "contract_segments": [
+                {"segment": "Annual", "count": 14, "churn_rate": 0.47},
+            ],
+            "usage_duration_segments": [
+                {"duration": "0-6 months", "count": 16, "churn_rate": 0.58},
+            ],
+            "top_use_cases_under_pressure": [
+                {"use_case": "Reporting", "mention_count": 15, "confidence_score": 0.7},
+            ],
+            "budget_pressure": {
+                "dm_churn_rate": 0.28,
+                "price_increase_rate": 0.19,
+                "price_increase_count": 9,
+                "annual_spend_signals": ["budget", "renewal"],
+                "price_per_seat_signals": ["seat expansion"],
+            },
+            "affected_company_sizes": {
+                "avg_seat_count": 180,
+                "median_seat_count": 90,
+                "max_seat_count": 600,
+                "size_distribution": [
+                    {"segment": "100-500", "review_count": 21, "churn_rate": 0.49},
+                ],
+            },
+            "buying_stage_distribution": [
+                {"stage": "evaluation", "count": 8},
+                {"stage": "renewal", "count": 3},
+            ],
+        },
+        "temporal": {
+            "timeline_signal_summary": {
+                "evaluation_deadline_signals": 5,
+                "contract_end_signals": 4,
+                "renewal_signals": 6,
+                "budget_cycle_signals": 3,
+            },
+            "keyword_spikes": {
+                "spike_count": 2,
+                "keyword_details": [
+                    {"keyword": "migration", "magnitude": 2.6, "change_pct": 0.8, "volume": 9},
+                ],
+            },
+            "sentiment_trajectory": {
+                "declining": 14,
+                "stable": 6,
+                "improving": 4,
+                "total": 24,
+                "declining_pct": 0.58,
+                "improving_pct": 0.17,
+            },
+            "immediate_triggers": [
+                {"trigger_type": "timeline_signal", "label": "Renewal pressure", "urgency": 8.1},
+            ],
+            "evaluation_deadlines": [
+                {"trigger_type": "deadline", "deadline": "Q2 cutoff", "urgency": 8.6},
+            ],
+            "turning_points": [
+                {"trigger": "pricing reset", "mentions": 7},
+            ],
+            "sentiment_tenure": [
+                {"tenure": "6-12 months", "count": 9},
+            ],
+        },
+        "displacement": [
+            {
+                "to_vendor": "HubSpot",
+                "flow_summary": {
+                    "mention_count": 11,
+                    "explicit_switch_count": 4,
+                    "active_evaluation_count": 3,
+                },
+            },
+        ],
+        "category": {
+            "vendor_count": 11,
+            "displacement_flow_count": 7,
+            "market_regime": {
+                "regime_type": "price_consolidation",
+                "confidence": 0.72,
+                "avg_churn_velocity": 0.41,
+                "avg_price_pressure": 0.36,
+            },
+            "council_summary": {"confidence": 0.63},
+        },
+        "accounts": {
+            "summary": {
+                "decision_maker_count": 2,
+            },
+            "accounts": [
+                {
+                    "company_name": "Acme Corp",
+                    "urgency_score": 8.9,
+                    "decision_maker": True,
+                    "buying_stage": "evaluation",
+                    "review_ids": ["r1"],
+                },
+                {
+                    "company_name": "Gamma LLC",
+                    "urgency_score": 7.1,
+                    "decision_maker": False,
+                    "buying_stage": "active_purchase",
+                    "review_ids": ["r2"],
+                },
+            ],
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests: _build_metric_ledger
 # ---------------------------------------------------------------------------
@@ -498,3 +682,29 @@ class TestCompressVendorPoolsIntegration:
         assert "minority_signals" in payload
         assert "coverage_gaps" in payload
         assert "retention_proof" in payload
+
+    def test_metric_ledger_covers_all_claimable_packet_aggregates(self):
+        packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
+
+        aggregate_source_ids = {agg.source_id for agg in packet.aggregates}
+        ledger_source_ids = {entry["_sid"] for entry in packet.metric_ledger}
+        intentional_exclusions = {
+            "vault:provenance:enrichment_window_start",
+            "vault:provenance:enrichment_window_end",
+        }
+        claimable_source_ids = aggregate_source_ids - intentional_exclusions
+        unexpected_uncovered = sorted(claimable_source_ids - ledger_source_ids)
+
+        coverage_counts = (
+            len(aggregate_source_ids),
+            len(claimable_source_ids & ledger_source_ids),
+            len(intentional_exclusions),
+            len(unexpected_uncovered),
+        )
+
+        assert unexpected_uncovered == [], (
+            f"metric_ledger missing claimable aggregate source_ids: {unexpected_uncovered}; "
+            f"coverage_counts={coverage_counts}"
+        )
+        assert aggregate_source_ids & intentional_exclusions == intentional_exclusions
+        assert coverage_counts == (68, 66, 2, 0)

@@ -1354,6 +1354,7 @@ def _build_metric_ledger(
         "regime_avg_price_pressure": ("category_dynamics", _INTERNAL),
         # Temporal signals
         "keyword_spike_count": ("temporal_spikes", _INTERNAL),
+        "spike_count": ("temporal_spikes", _INTERNAL),
         "evaluation_deadline_signals": ("temporal_signals", _INTERNAL),
         "contract_end_signals": ("temporal_signals", _INTERNAL),
         "renewal_signals": ("temporal_signals", _INTERNAL),
@@ -1384,11 +1385,12 @@ def _build_metric_ledger(
     }
 
     ledger: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for agg in aggregates:
-        if agg.label in seen:
+        dedupe_key = (agg.label, agg.source_id)
+        if dedupe_key in seen:
             continue
-        seen.add(agg.label)
+        seen.add(dedupe_key)
         reg = _METRIC_REGISTRY.get(agg.label)
         if reg is not None:
             scope_category, surfaces = reg

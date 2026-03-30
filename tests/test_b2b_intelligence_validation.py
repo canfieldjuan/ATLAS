@@ -2340,26 +2340,9 @@ class TestChurnIntelligenceExecutionProgress:
     async def test_run_updates_reasoning_progress_per_completed_vendor(self, monkeypatch):
         progress = AsyncMock()
         pool = type("Pool", (), {"is_initialized": True, "fetch": AsyncMock(return_value=[])})()
-        reasoning_pkg = __import__("atlas_brain.reasoning", fromlist=["dummy"])
-        tiers_mod = __import__("atlas_brain.reasoning.tiers", fromlist=["dummy"])
 
         class StopAfterReasoning(RuntimeError):
             pass
-
-        class FakeReasoner:
-            def __init__(self):
-                self._cache = object()
-
-            async def analyze(self, **kwargs):
-                vendor = kwargs["vendor_name"]
-                return SimpleNamespace(
-                    conclusion={"archetype": f"{vendor}_shape", "risk_level": "high", "executive_summary": vendor, "key_signals": []},
-                    confidence=0.8,
-                    mode="reason",
-                    tokens_used=11,
-                    reasoning_steps=[],
-                    boundary_conditions={},
-                )
 
         async def fake_gather(*coros, **kwargs):
             if len(coros) == 34:
@@ -2411,23 +2394,15 @@ class TestChurnIntelligenceExecutionProgress:
 
         monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "enabled", True, raising=False)
         monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
-        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "stratified_reasoning_enabled", True, raising=False)
-        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "cross_vendor_reasoning_enabled", False, raising=False)
-        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "stratified_reasoning_vendor_cap", 2, raising=False)
-        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "stratified_reasoning_vendor_limit", 0, raising=False)
+        monkeypatch.setattr(churn_intel_mod.settings.b2b_churn, "temporal_analysis_vendor_limit", 0, raising=False)
         monkeypatch.setattr(churn_intel_mod, "_update_execution_progress", progress)
         monkeypatch.setattr(churn_intel_mod, "get_db_pool", lambda: pool)
         monkeypatch.setattr(churn_intel_mod, "_warm_vendor_cache", AsyncMock())
         monkeypatch.setattr(churn_intel_mod, "_sync_vendor_firmographics", AsyncMock(return_value=42))
         monkeypatch.setattr(churn_intel_mod, "_fetch_prior_reports", AsyncMock(return_value=[]))
-        monkeypatch.setattr(churn_intel_mod, "_fetch_prior_archetypes", AsyncMock(return_value={}))
         monkeypatch.setattr(churn_intel_mod, "_build_exploratory_payload", lambda *args, **kwargs: ({}, 0))
-        monkeypatch.setattr(churn_intel_mod, "_build_vendor_evidence", lambda vs, **kwargs: {"vendor_name": vs["vendor_name"], "product_category": vs.get("product_category", "")})
         monkeypatch.setattr(churn_intel_mod, "_build_deterministic_displacement_map", lambda *args, **kwargs: (_ for _ in ()).throw(StopAfterReasoning()))
         monkeypatch.setattr(churn_intel_mod.asyncio, "gather", fake_gather)
-        monkeypatch.setattr(reasoning_pkg, "get_stratified_reasoner", lambda: FakeReasoner())
-        monkeypatch.setattr(reasoning_pkg, "init_stratified_reasoner", AsyncMock())
-        monkeypatch.setattr(tiers_mod, "gather_tier_context", AsyncMock(return_value={}))
 
         task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
         with pytest.raises(StopAfterReasoning):
@@ -2438,9 +2413,10 @@ class TestChurnIntelligenceExecutionProgress:
             if call.kwargs.get("stage") == churn_intel_mod._STAGE_REASONING
         ]
         progress_values = [call["progress_current"] for call in reasoning_calls if "progress_current" in call]
-        assert progress_values[:3] == [0, 1, 2]
+        assert progress_values == [0, 2]
         assert progress_values[-1] == 2
         assert reasoning_calls[0]["progress_total"] == 2
+        assert reasoning_calls[-1]["progress_message"] == "Prepared deterministic vendor context for b2b_reasoning_synthesis."
 
     def test_openrouter_backend_uses_override_when_present(self):
         cfg = type("Cfg", (), {
