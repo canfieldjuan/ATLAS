@@ -106,6 +106,24 @@ If `source_name` is not provided in the quotable phrase data, use `> "quote text
   ],
   "available_charts": [...],
   "quotable_phrases": [...],
+  "anchor_examples": {
+    "common_pattern": [...],
+    "outlier_or_named_account": [...],
+    "counterevidence": [...]
+  },
+  "witness_highlights": [...],
+  "reference_ids": {"witness_ids": [...], "metric_ids": [...]},
+  "claim_plan": {
+    "primary_thesis": "Optional deterministic reasoning summary",
+    "timing_hook": "Optional live timing trigger",
+    "counterevidence": "Optional stay/retention context",
+    "market_regime": "Optional category regime",
+    "proof_anchors": [...]
+  },
+  "anchor_examples_b": {...},
+  "witness_highlights_b": [...],
+  "reference_ids_b": {"witness_ids": [...], "metric_ids": [...]},
+  "claim_plan_b": {...},
   "related_posts": []
 }
 ```
@@ -175,6 +193,9 @@ Return valid JSON with exactly these keys:
     - Rule: strongest claim language ("most common", "top sources", "primary", "where users come from") must match the chart's `data_labels`. Broader context uses hedged language ("also mention", "broader signals suggest", "displacement data includes").
 18. **Numeric consistency**: When citing multiple related counts (e.g. total switching signals, explicit switches, active evaluations), ensure they add up correctly. If 93 switching signals = 2 explicit switches + 91 active evaluations, say that. Do not state numbers that imply a different total than the headline count.
 19. **Directional focus**: If the article is about switching TO a vendor (migration_guide), keep the narrative centered on inbound migration. Outbound switching (people leaving the vendor) may be acknowledged briefly as a caveat but must not become a major narrative thread. The article's title sets the reader expectation -- honor it.
+20. **Use witness-backed anchors when present**: When `anchor_examples`, `witness_highlights`, or `claim_plan` are present, the article must use at least one concrete proof anchor in the core narrative. Prefer timing windows, spend or seat signals, named competitors, or specific pain/workflow details over abstract summary language.
+21. **Do not quote anchor context directly unless it also appears in `quotable_phrases`**: The witness-backed anchor fields exist to sharpen claims, not to bypass the quote attribution rules. Use them to make the narrative specific, then use `quotable_phrases` for blockquotes with proper attribution.
+22. **Protect company privacy in anchor context**: Anchor fields may already be sanitized. Do not infer or invent company names from them. Never reveal an actual company name unless it is explicitly allowed elsewhere in the input.
 
 ## Linking Rules
 

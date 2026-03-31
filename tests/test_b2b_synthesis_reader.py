@@ -439,6 +439,54 @@ class TestConsumerContracts:
         gaps = contract_gaps_for_consumer(view, "battle_card")
         assert gaps == []
 
+    def test_consumer_context_resolves_anchor_examples_and_reference_ids(self):
+        synth = _make_synthesis_row(
+            synthesis={
+                "reasoning_contracts": {
+                    "schema_version": "2.2",
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                        },
+                    },
+                    "displacement_reasoning": {
+                        "migration_proof": {"confidence": "medium"},
+                    },
+                    "category_reasoning": {"market_regime": "consolidating"},
+                    "account_reasoning": {"total_accounts": 12},
+                },
+                "reference_ids": {
+                    "metric_ids": ["vault:metric:total_reviews"],
+                    "witness_ids": ["witness:r1:0"],
+                },
+                "packet_artifacts": {
+                    "witness_pack": [
+                        {
+                            "witness_id": "witness:r1:0",
+                            "_sid": "witness:r1:0",
+                            "excerpt_text": "Hack Club said the renewal jumped to $200k/year.",
+                            "reviewer_company": "Hack Club",
+                            "time_anchor": "Q2 renewal",
+                            "salience_score": 9.4,
+                        },
+                    ],
+                    "section_packets": {
+                        "anchor_examples": {
+                            "outlier_or_named_account": ["witness:r1:0"],
+                        },
+                    },
+                },
+            },
+        )
+        view = load_synthesis_view(synth["synthesis"], "Acme", schema_version="v2")
+
+        context = view.consumer_context("battle_card")
+
+        assert context["reference_ids"]["witness_ids"] == ["witness:r1:0"]
+        assert context["anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Hack Club"
+        assert context["witness_highlights"][0]["witness_id"] == "witness:r1:0"
+
 
 # ---------------------------------------------------------------------------
 # Tests: synthesis_view_to_reasoning_entry and build_reasoning_lookup_from_views

@@ -201,6 +201,53 @@ def test_apply_reasoning_synthesis_to_briefing_promotes_account_reasoning():
     assert briefing["named_accounts"][0]["reasoning_backed"] is True
 
 
+def test_apply_reasoning_synthesis_to_briefing_surfaces_anchor_examples_and_reference_ids():
+    briefing = {}
+    feed_entry = {
+        "vendor": "Zendesk",
+        "reasoning_contracts": {
+            "schema_version": "v1",
+            "vendor_core_reasoning": {
+                "schema_version": "v1",
+                "causal_narrative": {"trigger": "Price hike"},
+            },
+            "displacement_reasoning": {
+                "schema_version": "v1",
+                "migration_proof": {"confidence": "medium"},
+            },
+            "account_reasoning": {
+                "schema_version": "v1",
+                "market_summary": "Two accounts are actively evaluating alternatives.",
+            },
+        },
+        "reference_ids": {"witness_ids": ["witness:r1:0"]},
+        "packet_artifacts": {
+            "witness_pack": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "_sid": "witness:r1:0",
+                    "excerpt_text": "Hack Club said the renewal jumped to $200k/year.",
+                    "reviewer_company": "Hack Club",
+                    "time_anchor": "Q2 renewal",
+                    "salience_score": 9.1,
+                },
+            ],
+            "section_packets": {
+                "anchor_examples": {
+                    "outlier_or_named_account": ["witness:r1:0"],
+                },
+            },
+        },
+    }
+
+    used = briefing_mod._apply_reasoning_synthesis_to_briefing(briefing, feed_entry)
+
+    assert used is True
+    assert briefing["reasoning_anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Hack Club"
+    assert briefing["reasoning_witness_highlights"][0]["witness_id"] == "witness:r1:0"
+    assert briefing["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
+
+
 def test_apply_reasoning_synthesis_to_briefing_does_not_backfill_missing_explicit_contracts():
     briefing = {}
     feed_entry = {

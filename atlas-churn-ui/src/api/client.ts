@@ -18,6 +18,7 @@ import type {
   CampaignStats,
   VendorTarget,
   BlogDraftSummary,
+  BlogDraftSummaryRollup,
   BlogDraft,
   BlogEvidence,
   Prospect,
@@ -29,6 +30,9 @@ import type {
   VisibilityEvent,
   ArtifactAttempt,
   EnrichmentQuarantine,
+  SynthesisValidationResult,
+  DedupDecision,
+  PipelineReviewAction,
 } from '../types'
 import { normalizeReportDetail, normalizeVendorProfile } from '../lib/reportNormalization'
 
@@ -449,6 +453,10 @@ export async function fetchBlogDrafts(status?: string) {
   return get<BlogDraftSummary[]>(BLOG_ADMIN_BASE, '/drafts', { status })
 }
 
+export async function fetchBlogDraftSummary() {
+  return get<BlogDraftSummaryRollup>(BLOG_ADMIN_BASE, '/drafts/summary')
+}
+
 export async function fetchBlogDraft(id: string) {
   return get<BlogDraft>(BLOG_ADMIN_BASE, `/drafts/${id}`)
 }
@@ -504,6 +512,12 @@ export async function fetchReviewQueueSummary() {
     suppressed: number
     oldest_draft_age_hours: number | null
     by_partner: { partner_name: string; count: number }[]
+    quality_pass: number
+    quality_fail: number
+    quality_missing: number
+    blocker_total: number
+    by_boundary: { boundary: string; count: number }[]
+    top_blockers: { reason: string; count: number }[]
   }>(CAMPAIGNS_BASE, '/review-queue/summary')
 }
 
@@ -601,6 +615,7 @@ export async function fetchVisibilitySummary(hours = 24) {
     failures_period: number
     quarantines_period: number
     rejections_period: number
+    recovered_validation_retries_period: number
   }>(VISIBILITY_BASE, '/summary', { hours })
 }
 
@@ -634,6 +649,33 @@ export async function fetchEnrichmentQuarantines(params?: {
 }) {
   return get<{ quarantines: EnrichmentQuarantine[]; limit: number; offset: number }>(
     VISIBILITY_BASE, '/quarantines', params as Record<string, string | number | boolean>
+  )
+}
+
+export async function fetchSynthesisValidationResults(params?: {
+  vendor_name?: string; rule_code?: string; severity?: string; passed?: boolean
+  run_id?: string; retry_only?: boolean; limit?: number; offset?: number
+}) {
+  return get<{ results: SynthesisValidationResult[]; limit: number; offset: number }>(
+    VISIBILITY_BASE, '/synthesis-validation', params as Record<string, string | number | boolean>
+  )
+}
+
+export async function fetchDedupDecisions(params?: {
+  stage?: string; entity_type?: string; reason_code?: string; run_id?: string
+  limit?: number; offset?: number
+}) {
+  return get<{ decisions: DedupDecision[]; limit: number; offset: number }>(
+    VISIBILITY_BASE, '/dedup-decisions', params as Record<string, string | number>
+  )
+}
+
+export async function fetchVisibilityReviewActions(params?: {
+  review_id?: string; target_entity_type?: string; target_entity_id?: string
+  limit?: number; offset?: number
+}) {
+  return get<{ actions: PipelineReviewAction[]; limit: number; offset: number }>(
+    VISIBILITY_BASE, '/review-actions', params as Record<string, string | number>
   )
 }
 

@@ -59,6 +59,44 @@ function CampaignStatusBadge({ status }: { status: string }) {
   )
 }
 
+function CampaignQualityBadge({ status }: { status?: string | null }) {
+  if (!status) return null
+  const styles: Record<string, string> = {
+    pass: 'bg-green-500/15 text-green-300',
+    fail: 'bg-red-500/15 text-red-300',
+  }
+  return (
+    <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', styles[status] || 'bg-slate-500/20 text-slate-300')}>
+      quality: {status}
+    </span>
+  )
+}
+
+function CampaignQualitySummary({
+  blockerCount,
+  warningCount,
+  latestErrorSummary,
+}: {
+  blockerCount?: number
+  warningCount?: number
+  latestErrorSummary?: string | null
+}) {
+  const blockers = blockerCount ?? 0
+  const warnings = warningCount ?? 0
+  if (blockers === 0 && warnings === 0 && !latestErrorSummary) return null
+  return (
+    <div className="mt-2 rounded-lg border border-slate-700/40 bg-slate-800/40 p-2">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        {blockers > 0 && <span className="text-red-400">{blockers} blocker{blockers === 1 ? '' : 's'}</span>}
+        {warnings > 0 && <span className="text-amber-400">{warnings} warning{warnings === 1 ? '' : 's'}</span>}
+      </div>
+      {latestErrorSummary && (
+        <p className="mt-1 text-xs text-slate-400">{latestErrorSummary}</p>
+      )}
+    </div>
+  )
+}
+
 function AuditTimeline({ campaignId }: { campaignId: string }) {
   const { data, loading } = useApiData(
     () => fetchCampaignAuditLog(campaignId),
@@ -195,6 +233,60 @@ export default function CampaignReview() {
         />
       </div>
 
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard
+          label="Quality Fail"
+          value={summaryData?.quality_fail ?? 0}
+          icon={<AlertTriangle className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+        <StatCard
+          label="Quality Pass"
+          value={summaryData?.quality_pass ?? 0}
+          icon={<CheckCircle2 className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+        <StatCard
+          label="Missing Audit"
+          value={summaryData?.quality_missing ?? 0}
+          icon={<MailSearch className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+        <StatCard
+          label="Blocker Signals"
+          value={summaryData?.blocker_total ?? 0}
+          icon={<Clock className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+      </div>
+
+      {((summaryData?.top_blockers?.length ?? 0) > 0 || (summaryData?.by_boundary?.length ?? 0) > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-white mb-3">Top Campaign Blockers</h3>
+            <div className="space-y-2">
+              {(summaryData?.top_blockers ?? []).map((item) => (
+                <div key={item.reason} className="flex items-start justify-between gap-3 text-sm">
+                  <span className="text-slate-300 break-words">{item.reason}</span>
+                  <span className="text-red-400 shrink-0">{item.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <h3 className="text-sm font-medium text-white mb-3">Blocked At</h3>
+            <div className="space-y-2">
+              {(summaryData?.by_boundary ?? []).map((item) => (
+                <div key={item.boundary} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-slate-300">{item.boundary}</span>
+                  <span className="text-cyan-400">{item.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Status tabs */}
       <div className="flex items-center justify-between">
         <div className="flex gap-1 border-b border-slate-700/50">
@@ -309,6 +401,7 @@ export default function CampaignReview() {
                             <div className="flex items-center gap-2 mb-2 flex-wrap">
                               <PersonaBadge persona={draft.target_persona} />
                               <CampaignStatusBadge status={draft.status} />
+                              <CampaignQualityBadge status={draft.quality_status} />
                               {draft.is_suppressed > 0 && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">
                                   suppressed
@@ -356,6 +449,11 @@ export default function CampaignReview() {
                               {draft.cta && (
                                 <p className="text-xs text-cyan-400 mt-2">{draft.cta}</p>
                               )}
+                              <CampaignQualitySummary
+                                blockerCount={draft.blocker_count}
+                                warningCount={draft.warning_count}
+                                latestErrorSummary={draft.latest_error_summary}
+                              />
                             </div>
 
                             {/* Audit timeline toggle */}

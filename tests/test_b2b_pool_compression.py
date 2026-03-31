@@ -41,6 +41,10 @@ from atlas_brain.autonomous.tasks._b2b_pool_compression import (
     _build_retention_proof,
     compress_vendor_pools,
 )
+from atlas_brain.autonomous.tasks._b2b_witnesses import (
+    build_vendor_witness_artifacts,
+    compute_witness_hash,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +281,95 @@ def _make_full_coverage_layers() -> dict:
                 },
             ],
         },
+        "reviews": [
+            {
+                "id": "r1",
+                "source": "g2",
+                "rating": 2.0,
+                "rating_max": 5,
+                "summary": "Renewal pricing shock",
+                "review_text": "We were quoted $50k at renewal and started evaluating HubSpot.",
+                "pros": "",
+                "cons": "",
+                "reviewer_title": "VP Finance",
+                "reviewer_company": "Acme Corp",
+                "reviewed_at": "2026-03-20T00:00:00+00:00",
+                "raw_metadata": {"source_weight": 1.0},
+                "enrichment": {
+                    "churn_signals": {
+                        "intent_to_leave": True,
+                        "actively_evaluating": True,
+                        "contract_renewal_mentioned": True,
+                        "migration_in_progress": False,
+                    },
+                    "reviewer_context": {"decision_maker": True},
+                    "would_recommend": False,
+                    "pain_categories": [{"category": "pricing", "severity": "primary"}],
+                    "evidence_spans": [
+                        {
+                            "span_id": "review:r1:span:0-20",
+                            "_sid": "review:r1:span:0-20",
+                            "text": "quoted $50k at renewal",
+                            "signal_type": "pricing_backlash",
+                            "pain_category": "pricing",
+                            "competitor": "HubSpot",
+                            "company_name": "Acme Corp",
+                            "reviewer_title": "VP Finance",
+                            "time_anchor": "renewal",
+                            "numeric_literals": {"currency_mentions": ["$50k"]},
+                            "flags": ["explicit_dollar", "named_org", "deadline", "named_competitor"],
+                            "replacement_mode": "competitor_switch",
+                            "operating_model_shift": "none",
+                            "productivity_delta_claim": "unknown",
+                        },
+                    ],
+                },
+            },
+            {
+                "id": "r2",
+                "source": "reddit",
+                "rating": 4.0,
+                "rating_max": 5,
+                "summary": "Docs workflow works better",
+                "review_text": "We are more productive with docs and async updates than we were in chat.",
+                "pros": "",
+                "cons": "",
+                "reviewer_title": "Ops Lead",
+                "reviewer_company": "Gamma LLC",
+                "reviewed_at": "2026-03-18T00:00:00+00:00",
+                "raw_metadata": {"source_weight": 0.7},
+                "enrichment": {
+                    "churn_signals": {
+                        "intent_to_leave": False,
+                        "actively_evaluating": False,
+                        "contract_renewal_mentioned": False,
+                        "migration_in_progress": False,
+                    },
+                    "reviewer_context": {"decision_maker": False},
+                    "would_recommend": True,
+                    "sentiment_trajectory": {"direction": "stable_positive"},
+                    "pain_categories": [{"category": "pricing", "severity": "primary"}],
+                    "evidence_spans": [
+                        {
+                            "span_id": "review:r2:span:0-20",
+                            "_sid": "review:r2:span:0-20",
+                            "text": "more productive with docs and async updates",
+                            "signal_type": "positive_anchor",
+                            "pain_category": "pricing",
+                            "competitor": None,
+                            "company_name": "Gamma LLC",
+                            "reviewer_title": "Ops Lead",
+                            "time_anchor": None,
+                            "numeric_literals": {},
+                            "flags": ["named_org", "workflow_substitution", "sync_to_async"],
+                            "replacement_mode": "workflow_substitution",
+                            "operating_model_shift": "sync_to_async",
+                            "productivity_delta_claim": "more_productive",
+                        },
+                    ],
+                },
+            },
+        ],
     }
 
 
@@ -550,6 +643,8 @@ class TestPacketPayloadIntegration:
             minority_signals=[{"label": "security", "urgency": 8.5, "_sid": "vault:minority:security"}],
             coverage_gaps=[{"type": "missing_pool", "area": "displacement"}],
             retention_proof=[{"area": "integrations", "_sid": "vault:strength:integrations"}],
+            witness_pack=[{"witness_id": "witness:r1:0", "_sid": "witness:r1:0", "excerpt_text": "quoted $50k"}],
+            section_packets={"causal_packet": {"witness_ids": ["witness:r1:0"]}},
         )
         payload = packet.to_llm_payload()
 
@@ -559,6 +654,87 @@ class TestPacketPayloadIntegration:
         assert "minority_signals" in payload
         assert "coverage_gaps" in payload
         assert "retention_proof" in payload
+        assert "witness_pack" in payload
+        assert "section_packets" in payload
+
+    def test_compact_metric_ledger_omits_redundant_fields(self):
+        packet = CompressedPacket(
+            vendor_name="TestVendor",
+            pools={},
+            aggregates=[],
+            metric_ledger=[{
+                "label": "total_reviews",
+                "value": 100,
+                "scope": "review_volume",
+                "time_window_days": 90,
+                "allowed_surfaces": ["report"],
+                "_sid": "vault:metric:total_reviews",
+            }],
+        )
+
+        payload = packet.to_llm_payload(compact_metric_ledger=True)
+
+        assert payload["metric_ledger"] == [{
+            "label": "total_reviews",
+            "scope": "review_volume",
+            "_sid": "vault:metric:total_reviews",
+        }]
+
+    def test_compact_aggregates_only_keeps_reasoning_relevant_entries(self):
+        packet = CompressedPacket(
+            vendor_name="TestVendor",
+            pools={
+                "evidence_vault": [
+                    ScoredItem(
+                        data={"key": "pricing"},
+                        score=1.0,
+                        source_ref=SourceRef(pool="vault", kind="weakness", key="pricing"),
+                    ),
+                ],
+            },
+            aggregates=[
+                TrackedAggregate("total_reviews", 100, "vault:metric:total_reviews"),
+                TrackedAggregate(
+                    "vault_weakness_pricing_mention_count_total",
+                    12,
+                    "vault:weakness:pricing:mention_count_total",
+                ),
+                TrackedAggregate(
+                    "vault_weakness_support_mention_count_total",
+                    4,
+                    "vault:weakness:support:mention_count_total",
+                ),
+            ],
+            metric_ledger=[
+                {"label": "total_reviews", "value": 100, "scope": "review_volume", "_sid": "vault:metric:total_reviews"},
+                {
+                    "label": "vault_weakness_pricing_mention_count_total",
+                    "value": 12,
+                    "scope": "weakness_mentions",
+                    "_sid": "vault:weakness:pricing:mention_count_total",
+                },
+                {
+                    "label": "vault_weakness_support_mention_count_total",
+                    "value": 4,
+                    "scope": "weakness_mentions",
+                    "_sid": "vault:weakness:support:mention_count_total",
+                },
+            ],
+        )
+
+        payload = packet.to_llm_payload(
+            compact_metric_ledger=True,
+            compact_aggregates=True,
+        )
+
+        assert set(payload["precomputed_aggregates"]) == {
+            "total_reviews",
+            "vault_weakness_pricing_mention_count_total",
+        }
+        assert {entry["_sid"] for entry in payload["metric_ledger"]} == {
+            "vault:metric:total_reviews",
+            "vault:weakness:pricing:mention_count_total",
+        }
 
     def test_empty_governance_sections_omitted(self):
         packet = CompressedPacket(
@@ -572,6 +748,8 @@ class TestPacketPayloadIntegration:
         assert "minority_signals" not in payload
         assert "coverage_gaps" not in payload
         assert "retention_proof" not in payload
+        assert "witness_pack" not in payload
+        assert "section_packets" not in payload
 
     def test_governance_source_ids_in_packet(self):
         packet = CompressedPacket(
@@ -588,6 +766,16 @@ class TestPacketPayloadIntegration:
         assert "segment:contradiction:y" in sids
         assert "gap:missing_pool:displacement" in sids
         assert "vault:strength:z" in sids
+
+    def test_witness_source_ids_in_packet(self):
+        packet = CompressedPacket(
+            vendor_name="TestVendor",
+            pools={},
+            aggregates=[],
+            witness_pack=[{"witness_id": "witness:r1:0", "_sid": "witness:r1:0", "excerpt_text": "quoted $50k"}],
+        )
+
+        assert "witness:r1:0" in packet.source_ids()
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +870,7 @@ class TestCompressVendorPoolsIntegration:
         assert "minority_signals" in payload
         assert "coverage_gaps" in payload
         assert "retention_proof" in payload
+        assert "witness_pack" not in payload
 
     def test_metric_ledger_covers_all_claimable_packet_aggregates(self):
         packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
@@ -708,3 +897,174 @@ class TestCompressVendorPoolsIntegration:
         )
         assert aggregate_source_ids & intentional_exclusions == intentional_exclusions
         assert coverage_counts == (68, 66, 2, 0)
+
+    def test_full_compression_includes_witness_pack(self):
+        packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
+
+        assert packet.witness_pack
+        assert packet.section_packets["causal_packet"]["witness_ids"]
+        witness_ids = {w["witness_id"] for w in packet.witness_pack}
+        assert any(witness_id.startswith("witness:r1") for witness_id in witness_ids)
+
+
+class TestWitnessGovernance:
+    def test_witness_hash_ignores_selection_metadata(self):
+        witness = {
+            "witness_id": "witness:r1:0",
+            "_sid": "witness:r1:0",
+            "review_id": "r1",
+            "excerpt_text": "At renewal we were quoted $50,000 for 120 seats.",
+            "source": "g2",
+            "source_span_id": "span-1",
+            "signal_type": "negative_signal",
+            "pain_category": "pricing",
+            "competitor": "CompetitorA",
+            "time_anchor": "Q2 renewal",
+            "replacement_mode": "suite_consolidation",
+            "operating_model_shift": "async_to_sync",
+            "productivity_delta_claim": "less_productive",
+            "signal_tags": ["explicit_dollar"],
+            "witness_type": "timing",
+            "selection_reason": "selected_for_timing",
+            "specificity_score": 7.5,
+            "generic_reason": None,
+        }
+
+        alternate = dict(witness)
+        alternate["witness_type"] = "flex"
+        alternate["selection_reason"] = "selected_for_flex"
+        alternate["specificity_score"] = 6.0
+        alternate["generic_reason"] = "low_specificity_score"
+
+        assert compute_witness_hash(witness) == compute_witness_hash(alternate)
+
+    def test_witness_hash_changes_when_excerpt_changes(self):
+        witness = {
+            "witness_id": "witness:r1:0",
+            "_sid": "witness:r1:0",
+            "review_id": "r1",
+            "excerpt_text": "Quoted $50,000 at renewal.",
+            "source": "g2",
+            "signal_type": "negative_signal",
+            "pain_category": "pricing",
+            "signal_tags": [],
+        }
+        changed = dict(witness)
+        changed["excerpt_text"] = "Quoted $75,000 at renewal."
+
+        assert compute_witness_hash(witness) != compute_witness_hash(changed)
+
+    def test_generic_excerpt_is_filtered_from_normal_witness_pack(self):
+        reviews = [{
+            "id": "r1",
+            "source": "g2",
+            "enrichment": {
+                "pain_categories": [{"category": "pricing", "severity": "primary"}],
+                "evidence_spans": [{
+                    "text": "Great tool, easy to use, very helpful.",
+                    "pain_category": "pricing",
+                    "flags": [],
+                    "signal_type": "negative_signal",
+                }],
+            },
+        }]
+
+        selected, section_packets = build_vendor_witness_artifacts(
+            "GenericVendor",
+            reviews,
+            min_specificity_score=2.0,
+            fallback_min_witnesses=0,
+        )
+
+        assert selected == []
+        assert section_packets["_witness_governance"]["filtered_generic_candidates"] == 1
+        assert section_packets["_witness_governance"]["thin_specific_witness_pool"] is False
+
+    def test_specific_excerpt_survives_with_hash_and_specificity_score(self):
+        reviews = [{
+            "id": "r1",
+            "source": "g2",
+            "reviewer_company": "Acme Corp",
+            "enrichment": {
+                "pain_categories": [{"category": "pricing", "severity": "primary"}],
+                "reviewer_context": {"decision_maker": True},
+                "churn_signals": {"contract_renewal_mentioned": True},
+                "evidence_spans": [{
+                    "text": (
+                        "At renewal we were quoted $50,000 for 120 seats and started "
+                        "evaluating CompetitorA because pricing no longer worked."
+                    ),
+                    "pain_category": "pricing",
+                    "competitor": "CompetitorA",
+                    "flags": ["explicit_dollar"],
+                    "signal_type": "negative_signal",
+                    "time_anchor": "Q2 renewal",
+                }],
+            },
+        }]
+
+        selected, _section_packets = build_vendor_witness_artifacts(
+            "SpecificVendor",
+            reviews,
+            min_specificity_score=2.0,
+            fallback_min_witnesses=0,
+        )
+
+        assert selected
+        assert selected[0]["specificity_score"] >= 2.0
+        assert not selected[0].get("generic_reason")
+        assert selected[0]["witness_hash"]
+
+    def test_generic_fallback_marks_thin_pool(self):
+        reviews = [{
+            "id": "r1",
+            "source": "g2",
+            "enrichment": {
+                "pain_categories": [{"category": "pricing", "severity": "primary"}],
+                "evidence_spans": [{
+                    "text": "Good platform, works well, very helpful.",
+                    "pain_category": "pricing",
+                    "flags": [],
+                    "signal_type": "negative_signal",
+                }],
+            },
+        }]
+
+        selected, section_packets = build_vendor_witness_artifacts(
+            "FallbackVendor",
+            reviews,
+            min_specificity_score=2.0,
+            fallback_min_witnesses=1,
+        )
+
+        assert len(selected) == 1
+        assert selected[0]["selection_reason"].endswith("generic_fallback")
+        assert selected[0]["generic_reason"]
+        assert section_packets["_witness_governance"]["thin_specific_witness_pool"] is True
+
+    def test_specificity_policy_can_be_overridden(self):
+        reviews = [{
+            "id": "r1",
+            "source": "g2",
+            "enrichment": {
+                "pain_categories": [{"category": "pricing", "severity": "primary"}],
+                "evidence_spans": [{
+                    "text": "pricing issue",
+                    "pain_category": "pricing",
+                    "flags": [],
+                    "signal_type": "negative_signal",
+                }],
+            },
+        }]
+
+        selected, _section_packets = build_vendor_witness_artifacts(
+            "PolicyVendor",
+            reviews,
+            min_specificity_score=0.5,
+            fallback_min_witnesses=0,
+            concrete_patterns=["pricing issue"],
+            short_excerpt_chars=5,
+            specificity_weights={"concrete_pattern": 1.0},
+        )
+
+        assert selected

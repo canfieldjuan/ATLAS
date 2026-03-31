@@ -1247,43 +1247,88 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         report_llm_model = str(
                             getattr(settings.llm, "openrouter_reasoning_model", "") or "pipeline_mixed"
                         )
-                await conn.execute(
+                report_status = "published" if data else "failed"
+                latest_failure_step = None if data else "no_data"
+                latest_error_code = None if data else "no_data"
+                latest_error_summary = None if data else "Report has no data"
+                blocker_count = 0 if data else 1
+                report_row = await conn.fetchrow(
                     """
                     INSERT INTO b2b_intelligence (
                         report_date, report_type, intelligence_data,
                         executive_summary, data_density, status, llm_model,
-                        source_review_count, source_distribution
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        source_review_count, source_distribution,
+                        latest_run_id, latest_attempt_no, latest_failure_step,
+                        latest_error_code, latest_error_summary,
+                        blocker_count, warning_count, quality_score
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                              $10, $11, $12, $13, $14, $15, $16, $17)
                     ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
                                  LOWER(COALESCE(category_filter,'')),
                                  COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
                     DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
                                   executive_summary = EXCLUDED.executive_summary,
                                   data_density = EXCLUDED.data_density,
+                                  status = EXCLUDED.status,
                                   llm_model = EXCLUDED.llm_model,
                                   source_review_count = EXCLUDED.source_review_count,
                                   source_distribution = EXCLUDED.source_distribution,
+                                  latest_run_id = EXCLUDED.latest_run_id,
+                                  latest_attempt_no = EXCLUDED.latest_attempt_no,
+                                  latest_failure_step = EXCLUDED.latest_failure_step,
+                                  latest_error_code = EXCLUDED.latest_error_code,
+                                  latest_error_summary = EXCLUDED.latest_error_summary,
+                                  blocker_count = EXCLUDED.blocker_count,
+                                  warning_count = EXCLUDED.warning_count,
+                                  quality_score = EXCLUDED.quality_score,
                                   created_at = now()
+                    RETURNING id
                     """,
                     today,
                     report_type,
                     json.dumps(data, default=str),
                     _exec_summaries.get(report_type, _fallback_summary),
                     json.dumps(report_density),
-                    "published" if data else "failed",
+                    report_status,
                     report_llm_model,
                     report_source_review_count,
                     report_source_dist,
+                    str(task.id),
+                    1,
+                    latest_failure_step,
+                    latest_error_code,
+                    latest_error_summary,
+                    blocker_count,
+                    0,
+                    ((data or {}).get("battle_card_quality") or {}).get("score") if isinstance(data, dict) else None,
                 )
                 reports_persisted += 1
                 from ..visibility import record_attempt
                 await record_attempt(
                     pool, artifact_type="churn_report",
-                    artifact_id=report_type,
+                    artifact_id=str(report_row["id"]),
                     run_id=str(task.id), stage="persistence",
                     status="succeeded" if data else "failed",
-                    error_message="Report has no data" if not data else None,
+                    failure_step=latest_failure_step,
+                    error_message=latest_error_summary,
                 )
+                if not data:
+                    from ..visibility import emit_event
+                    await emit_event(
+                        pool,
+                        stage="reports",
+                        event_type="report_failed",
+                        entity_type="churn_report",
+                        entity_id=str(report_row["id"]),
+                        artifact_type="churn_report",
+                        run_id=str(task.id),
+                        severity="warning",
+                        actionable=False,
+                        reason_code="no_data",
+                        summary=f"{report_type} produced no data",
+                        source_table="b2b_intelligence",
+                        source_id=str(report_row["id"]),
+                    )
     except Exception:
         logger.exception("Failed to persist intelligence reports")
         from ..visibility import emit_event

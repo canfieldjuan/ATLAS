@@ -540,6 +540,9 @@ async def test_generate_churning_company_campaigns_attaches_comparison_asset(mon
 
     assert payload["comparison_asset"]["qualified"] is True
     assert payload["comparison_asset"]["alternative_vendor"] == "ClickUp"
+    assert payload["reasoning_anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Acme Co"
+    assert payload["reasoning_witness_highlights"][0]["witness_id"] == "campaign_witness:rev-1:0"
+    assert payload["reasoning_reference_ids"]["witness_ids"] == ["campaign_witness:rev-1:0"]
     assert payload["selling"]["primary_blog_post"]["url"] == (
         "https://atlas.test/blog/monday-clickup-pricing"
     )
@@ -774,6 +777,8 @@ async def test_list_churning_company_review_candidates_returns_mid_band_named_ac
     candidate = result["candidates"][0]
     assert candidate["company_name"] == "Acme Co"
     assert candidate["comparison_asset"]["alternative_vendor"] == "ClickUp"
+    assert candidate["reasoning_anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Acme Co"
+    assert candidate["reasoning_reference_ids"]["witness_ids"] == ["campaign_witness:rev-1:0"]
     assert candidate["qualification"]["qualified"] is True
     assert candidate["generate_request"]["min_score"] == 67
     assert result["summary"]["qualified"] == 1
@@ -936,6 +941,247 @@ async def test_generate_content_appends_signoff_when_missing(monkeypatch):
     assert "Best,<br>Juan Canfield<br>Founder, Atlas Intel" in result["body"]
 
 
+@pytest.mark.asyncio
+async def test_generate_content_retries_when_anchor_backed_context_is_ignored(monkeypatch):
+    responses = [
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": (
+                "<p>Teams are seeing broad pressure right now across pricing, support, and evaluation behavior. "
+                "We are seeing the pattern show up in multiple accounts and the signal mix is getting harder to dismiss.</p>"
+                "<p>If you are still seeing this in active opportunities, I can share the pattern we are tracking and where it is showing up first.</p>"
+            ),
+            "cta": "Book time",
+        }),
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": (
+                "<p>Teams are hitting a $200k/year renewal flashpoint in Q2, which makes the pricing risk concrete instead of theoretical. "
+                "That timing window is where we keep seeing the signal compress into active evaluation.</p>"
+                "<p>Freshdesk keeps showing up in those pricing conversations, so the competitive angle is now visible enough to act on before the renewal locks in.</p>"
+            ),
+            "cta": "Book time",
+        }),
+    ]
+
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
+        return responses.pop(0)
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_followup",
+        "briefing_context": {
+            "reasoning_anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "witness:r1:0",
+                        "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                        "time_anchor": "Q2 renewal",
+                        "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                        "competitor": "Freshdesk",
+                        "pain_category": "pricing",
+                    },
+                ],
+            },
+            "reasoning_witness_highlights": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Freshdesk",
+                    "pain_category": "pricing",
+                },
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
+        },
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    assert result is not None
+    assert "$200k/year" in result["body"]
+    assert "Q2" in result["body"]
+
+
+@pytest.mark.asyncio
+async def test_generate_content_retries_when_top_level_anchor_context_is_ignored(monkeypatch):
+    responses = [
+        json.dumps({
+            "subject": "Switch signal",
+            "body": (
+                "<p>Teams are seeing broad commercial pressure and the pattern is widening.</p>"
+                "<p>We can share the signal map if it helps.</p>"
+            ),
+            "cta": "Book time",
+        }),
+        json.dumps({
+            "subject": "Switch signal",
+            "body": (
+                "<p>Teams are running into a 120-seat pricing problem inside a 30-day evaluation window.</p>"
+                "<p>ClickUp is showing up in that workflow-specific comparison often enough to sharpen the next step.</p>"
+            ),
+            "cta": "Book time",
+        }),
+    ]
+
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
+        return responses.pop(0)
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_followup",
+        "reasoning_anchor_examples": {
+            "outlier_or_named_account": [
+                {
+                    "witness_id": "campaign_witness:rev-1:0",
+                    "excerpt_text": "pricing keeps going up",
+                    "reviewer_company": "Acme Co",
+                    "time_anchor": "30 days",
+                    "numeric_literals": {"seat_count": ["120"]},
+                    "competitor": "ClickUp",
+                    "pain_category": "pricing",
+                },
+            ],
+        },
+        "reasoning_witness_highlights": [
+            {
+                "witness_id": "campaign_witness:rev-1:0",
+                "excerpt_text": "pricing keeps going up",
+                "reviewer_company": "Acme Co",
+                "time_anchor": "30 days",
+                "numeric_literals": {"seat_count": ["120"]},
+                "competitor": "ClickUp",
+                "pain_category": "pricing",
+            },
+        ],
+        "reasoning_reference_ids": {"witness_ids": ["campaign_witness:rev-1:0"]},
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    assert result is not None
+    assert "120-seat" in result["body"]
+    assert "30-day" in result["body"]
+    assert "ClickUp" in result["body"]
+
+
+@pytest.mark.asyncio
+async def test_generate_content_records_generation_audit_on_success(monkeypatch):
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
+        return json.dumps({
+            "subject": "Renewal pressure",
+            "body": (
+                "<p>The Q2 renewal now carries a $200k/year pricing issue.</p>"
+                "<p>Freshdesk is showing up in those active evaluations.</p>"
+            ),
+            "cta": "Book time",
+        })
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_followup",
+        "briefing_context": {
+            "reasoning_anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "witness:r1:0",
+                        "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                        "time_anchor": "Q2 renewal",
+                        "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                        "competitor": "Freshdesk",
+                        "pain_category": "pricing",
+                    },
+                ],
+            },
+            "reasoning_witness_highlights": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Freshdesk",
+                    "pain_category": "pricing",
+                },
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
+        },
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    assert result is not None
+    assert payload["_generation_audit"]["status"] == "succeeded"
+    assert payload["_generation_audit"]["specificity"]["status"] == "pass"
+    assert payload["_campaign_specificity_context"]["reference_ids"]["witness_ids"] == ["witness:r1:0"]
+
+
+def test_campaign_storage_metadata_includes_specificity_context_and_audit():
+    payload = {
+        "_campaign_specificity_context": {
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {"witness_id": "witness:r1:0", "excerpt_text": "a customer hit a $200k/year renewal"}
+                ],
+            },
+            "witness_highlights": [
+                {"witness_id": "witness:r1:0", "excerpt_text": "a customer hit a $200k/year renewal"}
+            ],
+            "reference_ids": {"witness_ids": ["witness:r1:0"]},
+        },
+        "_generation_audit": {
+            "status": "succeeded",
+            "specificity": {
+                "status": "pass",
+                "blocking_issues": [],
+                "warnings": ["timing anchor exists but content does not mention the live trigger window"],
+            },
+        },
+    }
+
+    metadata = mod._campaign_storage_metadata(payload)
+
+    assert metadata["reasoning_anchor_examples"]["outlier_or_named_account"][0]["witness_id"] == "witness:r1:0"
+    assert metadata["generation_audit"]["status"] == "succeeded"
+    assert metadata["latest_specificity_audit"]["status"] == "pass"
+
+
 # ---------------------------------------------------------------------------
 # _briefing_context_from_data: new fields from Sources 10-12
 # ---------------------------------------------------------------------------
@@ -1067,6 +1313,43 @@ def test_briefing_context_extracts_pain_urgency():
     # features has no avg_urgency, excluded
     categories = [u["category"] for u in urgency]
     assert "features" not in categories
+
+
+def test_briefing_context_surfaces_sanitized_reasoning_anchor_examples():
+    briefing_data = json.dumps({
+        "reasoning_anchor_examples": {
+            "outlier_or_named_account": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                    "reviewer_company": "Hack Club",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Google Chat",
+                    "pain_category": "pricing",
+                },
+            ],
+        },
+        "reasoning_witness_highlights": [
+            {
+                "witness_id": "witness:r1:0",
+                "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                "reviewer_company": "Hack Club",
+                "time_anchor": "Q2 renewal",
+                "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                "competitor": "Google Chat",
+                "pain_category": "pricing",
+            },
+        ],
+        "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
+    })
+
+    context = mod._briefing_context_from_data(briefing_data)
+
+    anchor = context["reasoning_anchor_examples"]["outlier_or_named_account"][0]
+    assert anchor["excerpt_text"].startswith("a customer said Slack")
+    assert "reviewer_company" not in anchor
+    assert context["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
 
 
 # ---------------------------------------------------------------------------

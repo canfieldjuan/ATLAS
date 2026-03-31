@@ -122,6 +122,7 @@ def build_post_ts(
     secondary_keywords: list[str] | None = None,
     faq: list[dict] | None = None,
     related_slugs: list[str] | None = None,
+    cta: dict | None = None,
 ) -> tuple[str, str]:
     """Build a complete .ts file for a blog post.
 
@@ -162,6 +163,8 @@ def build_post_ts(
         seo_lines += f"  faq: {faq_str},\n"
     if related_slugs:
         seo_lines += f"  related_slugs: {json.dumps(related_slugs)},\n"
+    if cta:
+        seo_lines += f"  cta: {json.dumps(cta, indent=2, default=str)},\n"
 
     ts_content = f"""import type {{ BlogPost }} from './index'
 

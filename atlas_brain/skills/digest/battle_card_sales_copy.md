@@ -46,7 +46,7 @@ A JSON object with:
 - `archetype` (if present): the authoritative churn angle label. When `synthesis_wedge` is present, `archetype` has already been overridden to match -- use this as the single source of truth for the primary attack angle. Examples: "price_squeeze", "ux_regression", "support_erosion", "feature_parity", "stable".
 - `synthesis_wedge` / `synthesis_wedge_label` (if present): the wedge type and human label from reasoning synthesis. This IS the archetype when present.
 - `archetype_risk_level` (if present): "low", "medium", "high", or "critical"
-- `archetype_key_signals` (if present): list of key evidence signals from stratified reasoning
+- `archetype_key_signals` (if present): list of key evidence signals from vendor reasoning
 - Older payloads may contain flat compatibility mirrors such as `causal_narrative` or `migration_proof`, but modern render packets are contract-first. Use the contract blocks as source of truth.
 - `evidence_depth_warning` (if present): short warning about thin evidence window. Surface this caveat early in the card.
 - `objection_data`: metrics including:
@@ -72,6 +72,9 @@ A JSON object with:
 - `active_evaluation_deadlines` (if present): active timing signals that may indicate near-term buying windows
 - `falsification_conditions` / `uncertainty_sources` (if present): conditions that would weaken the churn thesis -- use them to calibrate claim strength
 - `metric_ledger` (if present): list of scoped metric entries, each with `label`, `value`, `scope`, and `wording`. Use `wording` verbatim when citing a metric in copy -- do not rephrase the number or change its scope. Valid scopes: `all_reviews` (whole review corpus), `pricing_mentions` (only reviews mentioning pricing), `decision_makers` (decision-maker subset), `active_eval_accounts` (accounts in active evaluation), `segment_sample` (a specific segment slice), `budget_data` (budget-signal subset). Never transfer a metric from one scope to another in copy -- e.g., do not use a `pricing_mentions` count as if it represents `all_reviews`.
+- `anchor_examples` (if present): witness-backed anchor slots selected upstream. Keys may include `common_pattern`, `outlier_or_named_account`, and `counterevidence`. Each row contains a deterministic excerpt, witness metadata, and any money/timing/company details already extracted upstream. Prefer these over generic paraphrase.
+- `witness_highlights` (if present): compact list of the highest-salience witnesses. Use these to sharpen claims, targeting, and timing. Do not cite a qualitative claim unless it clearly maps to at least one witness.
+- `reference_ids` (if present): traced metric and witness IDs used upstream. Treat `witness_ids` as proof that witness-backed specifics are available and should show up in seller copy.
 - `locked_facts` (if present): authoritative structured facts that synthesis must not contradict:
   - `vendor`
   - `archetype`
@@ -157,6 +160,9 @@ A JSON object with:
 - Treat individual feature gaps with fewer than 5 mentions as supporting evidence, not the headline, unless the quote evidence is unusually specific.
 - Prefer the most specific and operationally meaningful quote available. Avoid generic quotes like "not a fit" or "would not recommend" when a more detailed quote exists.
 - If the evidence is mixed, say so indirectly by narrowing the scope of the recommendation rather than pretending the signal is universal.
+- When `anchor_examples` or `witness_highlights` are present, the executive summary or talk track must include at least one concrete anchor: a named account, a dollar/spend signal, a live timing trigger, or a named competitor. Do not leave the copy at the level of generic category prose.
+- If `anchor_examples.outlier_or_named_account` contains a named company or explicit spend signal, surface that anchor in either the executive summary, a proof point, or a recommended play.
+- If `anchor_examples.common_pattern` is present, use it to ground the headline vulnerability in a repeatable pattern rather than abstract wording.
 
 ### Section counts
 - Prefer the minimum number of items that still covers distinct angles. Do not pad sections just to hit a quota.

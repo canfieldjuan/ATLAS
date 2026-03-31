@@ -133,6 +133,12 @@ export interface Report {
   vendor_filter: string | null
   category_filter?: string | null
   status: string | null
+  latest_failure_step?: string | null
+  latest_error_code?: string | null
+  latest_error_summary?: string | null
+  blocker_count?: number
+  warning_count?: number
+  unresolved_issue_count?: number
   quality_status?: string | null
   quality_score?: number | null
   created_at: string | null
@@ -252,7 +258,7 @@ export interface ClickSummary {
   click_count: number
 }
 
-export type CampaignStatus = 'draft' | 'approved' | 'sent' | 'expired'
+export type CampaignStatus = 'draft' | 'approved' | 'queued' | 'sent' | 'cancelled' | 'expired'
 
 export interface Campaign {
   id: string
@@ -271,6 +277,10 @@ export interface Campaign {
   created_at: string | null
   approved_at: string | null
   sent_at: string | null
+  quality_status?: string | null
+  blocker_count?: number
+  warning_count?: number
+  latest_error_summary?: string | null
 }
 
 export interface CampaignStats {
@@ -278,6 +288,15 @@ export interface CampaignStats {
   by_channel: Record<string, number>
   top_vendors: { vendor_name: string; count: number }[]
   total: number
+  quality?: {
+    pass: number
+    fail: number
+    missing: number
+    blocker_total: number
+    warning_total: number
+    by_boundary: Record<string, number>
+    top_blockers: { reason: string; count: number }[]
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +312,16 @@ export interface BlogDraftSummary {
   llm_model: string | null
   created_at: string | null
   published_at: string | null
+  rejected_at?: string | null
+  rejection_reason?: string | null
+  quality_score?: number | null
+  quality_threshold?: number | null
+  blocker_count?: number
+  warning_count?: number
+  latest_failure_step?: string | null
+  latest_error_code?: string | null
+  latest_error_summary?: string | null
+  unresolved_issue_count?: number
 }
 
 export interface BlogDraft extends BlogDraftSummary {
@@ -303,6 +332,34 @@ export interface BlogDraft extends BlogDraftSummary {
   data_context: Record<string, unknown> | null
   reviewer_notes: string | null
   source_report_date: string | null
+  seo_title?: string | null
+  seo_description?: string | null
+  target_keyword?: string | null
+  secondary_keywords?: unknown[] | null
+  faq?: unknown[] | null
+  related_slugs?: string[] | null
+  cta?: {
+    headline?: string
+    body?: string
+    button_text?: string
+    report_type?: string
+    vendor_filter?: string | null
+    category_filter?: string | null
+  } | null
+}
+
+export interface BlogDraftSummaryRollup {
+  by_status: Record<string, number>
+  quality: {
+    clean: number
+    warning_only: number
+    failing: number
+    unresolved: number
+    blocker_total: number
+    warning_total: number
+    by_failure_step: { step: string; count: number }[]
+    top_blockers: { reason: string; count: number }[]
+  }
 }
 
 export interface BlogEvidence {
@@ -379,6 +436,10 @@ export interface ReviewQueueDraft {
   prospect_seniority: string | null
   prospect_email_status: string | null
   created_at: string | null
+  quality_status?: string | null
+  blocker_count?: number
+  warning_count?: number
+  latest_error_summary?: string | null
 }
 
 export interface AuditEvent {
@@ -455,6 +516,50 @@ export interface VisibilityEvent {
   summary: string
   detail: Record<string, unknown>
   fingerprint?: string
+}
+
+export interface SynthesisValidationResult {
+  id: string
+  vendor_name: string
+  as_of_date: string
+  analysis_window_days: number
+  schema_version: string
+  run_id?: string
+  attempt_no: number
+  rule_code: string
+  severity: string
+  passed: boolean
+  summary: string
+  field_path?: string
+  detail: Record<string, unknown>
+  created_at: string
+}
+
+export interface DedupDecision {
+  id: string
+  run_id?: string
+  stage: string
+  entity_type: string
+  survivor_entity_id?: string
+  discarded_entity_id: string
+  reason_code: string
+  comparison_metrics: Record<string, unknown>
+  actor_type: string
+  actor_id?: string
+  decided_at: string
+}
+
+export interface PipelineReviewAction {
+  id: string
+  review_id: string
+  fingerprint: string
+  target_entity_type: string
+  target_entity_id: string
+  action: string
+  note?: string
+  actor_id?: string
+  actor_type: string
+  created_at: string
 }
 
 export interface ArtifactAttempt {

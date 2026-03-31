@@ -110,9 +110,15 @@ async def test_get_report_handles_null_battle_card_quality():
             "status": "completed",
             "llm_model": "pipeline_deterministic",
             "created_at": "2026-03-22T18:00:00",
+            "latest_failure_step": None,
+            "latest_error_code": None,
+            "latest_error_summary": None,
+            "blocker_count": 0,
+            "warning_count": 0,
             "account_id": None,
         }
     )
+    pool.fetchval = AsyncMock(return_value=0)
 
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         result = await b2b_dashboard.get_report("2ea3fd03-7fd9-4b72-8f24-117667f723e9", None)

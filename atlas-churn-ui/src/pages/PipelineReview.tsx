@@ -19,6 +19,7 @@ import type {
   VisibilityEvent,
   ArtifactAttempt,
   EnrichmentQuarantine,
+  SynthesisValidationResult,
 } from '../types'
 import {
   fetchVisibilitySummary,
@@ -26,6 +27,7 @@ import {
   fetchVisibilityEvents,
   fetchArtifactAttempts,
   fetchEnrichmentQuarantines,
+  fetchSynthesisValidationResults,
   resolveVisibilityReview,
 } from '../api/client'
 
@@ -63,8 +65,11 @@ function StatusBadge({ status }: { status: string }) {
     ignored: 'bg-slate-500/20 text-slate-400',
     accepted_risk: 'bg-purple-500/20 text-purple-400',
     passed: 'bg-green-500/20 text-green-400',
+    succeeded: 'bg-green-500/20 text-green-400',
     failed: 'bg-red-500/20 text-red-400',
+    rejected: 'bg-red-500/20 text-red-400',
     retried: 'bg-amber-500/20 text-amber-400',
+    skipped: 'bg-slate-500/20 text-slate-400',
   }
   return (
     <span
@@ -95,6 +100,22 @@ function formatTs(ts: string | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+const visibilityCodeLabels: Record<string, string> = {
+  unknown_packet_citation: 'Unknown packet citation',
+  thin_specific_witness_pool: 'Thin specific witness pool',
+  missing_citations: 'Missing citations',
+  empty_category_reasoning: 'Empty category reasoning',
+  repeated_validation_retry: 'Repeated recovered retries',
+  costly_validation_retry: 'Costly recovered retries',
+  validation_retry_rejected: 'Recovered retry',
+}
+
+function formatVisibilityCode(code: string | null | undefined): string {
+  const key = String(code || '').trim()
+  if (!key) return '--'
+  return visibilityCodeLabels[key] || key.replace(/_/g, ' ')
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +264,10 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
       render: (r) => (
         <div className="max-w-sm">
           <span className="text-white text-sm line-clamp-1">{r.summary}</span>
-          <span className="text-xs text-slate-500 block">{r.entity_type}: {r.entity_id}</span>
+          <span className="text-xs text-slate-500 block">
+            {r.reason_code ? `${formatVisibilityCode(r.reason_code)} · ` : ''}
+            {r.entity_type}: {r.entity_id}
+          </span>
         </div>
       ),
     },
@@ -449,9 +473,10 @@ function FailuresTab() {
           onChange={setStatusFilter}
           options={[
             { value: '', label: 'All' },
+            { value: 'rejected', label: 'Rejected' },
             { value: 'failed', label: 'Failed' },
-            { value: 'passed', label: 'Passed' },
-            { value: 'retried', label: 'Retried' },
+            { value: 'succeeded', label: 'Succeeded' },
+            { value: 'skipped', label: 'Skipped' },
           ]}
         />
         <button
@@ -486,19 +511,44 @@ function FailuresTab() {
 }
 
 // ---------------------------------------------------------------------------
-// Tab: Quality Signals (Quarantines)
+// Tab: Quality Signals
 // ---------------------------------------------------------------------------
 
 function QualityTab() {
   const [unreleasedOnly, setUnreleasedOnly] = useState(true)
+  const [severityFilter, setSeverityFilter] = useState('')
+  const [retryOnly, setRetryOnly] = useState(false)
 
-  const { data, loading, error, refresh, refreshing } = useApiData(
+  const {
+    data: quarantineData,
+    loading: quarantinesLoading,
+    error: quarantinesError,
+    refresh: refreshQuarantines,
+    refreshing: quarantinesRefreshing,
+  } = useApiData(
     () =>
       fetchEnrichmentQuarantines({
         unreleased_only: unreleasedOnly,
         limit: 100,
       }),
     [unreleasedOnly],
+  )
+
+  const {
+    data: validationData,
+    loading: validationsLoading,
+    error: validationsError,
+    refresh: refreshValidations,
+    refreshing: validationsRefreshing,
+  } = useApiData(
+    () =>
+      fetchSynthesisValidationResults({
+        severity: severityFilter || undefined,
+        passed: false,
+        retry_only: retryOnly,
+        limit: 100,
+      }),
+    [severityFilter, retryOnly],
   )
 
   const columns: Column<EnrichmentQuarantine>[] = [
@@ -571,7 +621,76 @@ function QualityTab() {
     },
   ]
 
-  const items = data?.quarantines ?? []
+  const validationColumns: Column<SynthesisValidationResult>[] = [
+    {
+      key: 'severity',
+      header: 'Sev',
+      render: (r) => <SeverityBadge severity={r.severity} />,
+      sortable: true,
+      sortValue: (r) => {
+        const order: Record<string, number> = { critical: 0, error: 1, warning: 2, info: 3 }
+        return order[r.severity] ?? 4
+      },
+    },
+    {
+      key: 'vendor_name',
+      header: 'Vendor',
+      render: (r) => <span className="text-sm text-white">{r.vendor_name}</span>,
+      sortable: true,
+      sortValue: (r) => r.vendor_name,
+    },
+    {
+      key: 'attempt_no',
+      header: 'Attempt',
+      render: (r) => <span className="text-xs text-slate-300">#{r.attempt_no}</span>,
+      sortable: true,
+      sortValue: (r) => r.attempt_no,
+    },
+    {
+      key: 'rule_code',
+      header: 'Rule',
+      render: (r) => (
+        <div className="max-w-[14rem]" title={r.rule_code}>
+          <span className="text-xs text-slate-300">{formatVisibilityCode(r.rule_code)}</span>
+          <span className="text-[11px] text-slate-600 block font-mono">{r.rule_code}</span>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (r) => r.rule_code,
+    },
+    {
+      key: 'summary',
+      header: 'Summary',
+      render: (r) => (
+        <div className="max-w-sm">
+          <span className="text-xs text-slate-400 line-clamp-2">{r.summary}</span>
+          <span className="text-[11px] text-slate-600 block">
+            {r.field_path || '--'}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: 'created_at',
+      header: 'Seen',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{formatTs(r.created_at)}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.created_at,
+    },
+  ]
+
+  const quarantines = quarantineData?.quarantines ?? []
+  const validations = validationData?.results ?? []
+  const loading = quarantinesLoading || validationsLoading
+  const refreshing = quarantinesRefreshing || validationsRefreshing
+  const error = quarantinesError || validationsError
+
+  const refresh = () => {
+    refreshQuarantines()
+    refreshValidations()
+  }
 
   return (
     <div className="space-y-4">
@@ -585,6 +704,25 @@ function QualityTab() {
             className="accent-cyan-500"
           />
           Unreleased only
+        </label>
+        <FilterSelect
+          label="Validation Sev"
+          value={severityFilter}
+          onChange={setSeverityFilter}
+          options={[
+            { value: '', label: 'All validation findings' },
+            { value: 'error', label: 'Error only' },
+            { value: 'warning', label: 'Warning only' },
+          ]}
+        />
+        <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={retryOnly}
+            onChange={(e) => setRetryOnly(e.target.checked)}
+            className="accent-cyan-500"
+          />
+          Retry-only findings
         </label>
         <button
           onClick={refresh}
@@ -602,16 +740,38 @@ function QualityTab() {
         </div>
       )}
 
-      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
-        {loading ? (
-          <DataTable columns={columns} data={[]} skeletonRows={6} />
-        ) : (
-          <DataTable
-            columns={columns}
-            data={items}
-            emptyMessage="No quarantined items"
-          />
-        )}
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">Synthesis Validation</h2>
+            <p className="text-xs text-slate-500">Failed and warning rule rows from reasoning synthesis</p>
+          </div>
+          {loading ? (
+            <DataTable columns={validationColumns} data={[]} skeletonRows={6} />
+          ) : (
+            <DataTable
+              columns={validationColumns}
+              data={validations}
+              emptyMessage="No synthesis validation findings"
+            />
+          )}
+        </div>
+
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">Enrichment Quarantines</h2>
+            <p className="text-xs text-slate-500">Input suppression and release state</p>
+          </div>
+          {loading ? (
+            <DataTable columns={columns} data={[]} skeletonRows={6} />
+          ) : (
+            <DataTable
+              columns={columns}
+              data={quarantines}
+              emptyMessage="No quarantined items"
+            />
+          )}
+        </div>
       </div>
     </div>
   )
@@ -802,7 +962,7 @@ export default function PipelineReview() {
       </div>
 
       {/* Summary stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <StatCard
           label="Open Actionable"
           value={summary?.open_actionable ?? 0}
@@ -825,6 +985,12 @@ export default function PipelineReview() {
           label="Rejections 30d"
           value={summary?.rejections_period ?? 0}
           icon={<CheckCircle2 className="h-4 w-4" />}
+          skeleton={summaryLoading}
+        />
+        <StatCard
+          label="Recovered Retries 30d"
+          value={summary?.recovered_validation_retries_period ?? 0}
+          icon={<RefreshCw className="h-4 w-4" />}
           skeleton={summaryLoading}
         />
       </div>

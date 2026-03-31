@@ -30,7 +30,7 @@ You will receive a JSON object with:
 - `competitor_overlap`: top competitors with mention counts
 - `trend`: "worsening", "improving", "stable", or "new"
 - `sentiment_direction`: "declining", "stable", "improving", or "insufficient_history"
-- `reasoning_conclusion` (if present): stratified reasoning output with:
+- `reasoning_conclusion` (if present): persisted vendor reasoning output with:
   - `archetype`: reasoning archetype (e.g., "pricing_shock", "feature_gap", "acquisition_decay")
   - `confidence`: archetype confidence (0-1)
   - `executive_summary`: 2-3 sentence reasoning assessment

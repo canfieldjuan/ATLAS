@@ -89,6 +89,34 @@ def _card_with_governance(**overrides) -> dict[str, Any]:
     )
 
 
+def _anchor_support() -> dict[str, Any]:
+    return {
+        "anchor_examples": {
+            "outlier_or_named_account": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "Hack Club said Slack tried to charge $200k/year at renewal.",
+                    "reviewer_company": "Hack Club",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Google Chat",
+                },
+            ],
+        },
+        "witness_highlights": [
+            {
+                "witness_id": "witness:r1:0",
+                "excerpt_text": "Hack Club said Slack tried to charge $200k/year at renewal.",
+                "reviewer_company": "Hack Club",
+                "time_anchor": "Q2 renewal",
+                "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                "competitor": "Google Chat",
+            },
+        ],
+        "reference_ids": {"witness_ids": ["witness:r1:0"]},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests: render payload includes governance context
 # ---------------------------------------------------------------------------
@@ -129,6 +157,13 @@ class TestRenderPayloadGovernance:
         card = _card_with_governance()
         payload = _build_battle_card_render_payload(card)
         assert "metric_ledger" in payload
+
+    def test_anchor_examples_and_witness_highlights_in_payload(self):
+        card = _card_with_governance(**_anchor_support())
+        payload = _build_battle_card_render_payload(card)
+        assert payload["anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Hack Club"
+        assert payload["witness_highlights"][0]["witness_id"] == "witness:r1:0"
+        assert payload["reference_ids"]["witness_ids"] == ["witness:r1:0"]
 
 
 # ---------------------------------------------------------------------------
@@ -227,3 +262,31 @@ class TestCopyLevelGovernance:
         quality = _evaluate_battle_card_quality(card, phase="final")
         assert not any("absolute language" in b for b in quality["failed_checks"])
         assert not any("strong claims" in w for w in quality["warnings"])
+
+    def test_anchor_backed_specificity_blocks_generic_copy(self):
+        card = _card_with_governance(
+            executive_summary="The vendor faces broad commercial pressure right now.",
+            talk_track="Lead with a pricing benchmark and test urgency in discovery.",
+            **_anchor_support(),
+        )
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert any(
+            "witness-backed anchor" in blocker
+            for blocker in quality["failed_checks"]
+        )
+
+    def test_anchor_backed_specificity_accepts_concrete_copy(self):
+        card = _card_with_governance(
+            executive_summary="Hack Club flagged a $200k/year renewal shock, which makes pricing pressure concrete right now.",
+            talk_track="Use the Hack Club renewal story to test whether this account is facing a similar Q2 renewal or Google Chat evaluation.",
+            **_anchor_support(),
+        )
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert not any(
+            "witness-backed anchor" in blocker
+            for blocker in quality["failed_checks"]
+        )
+        assert not any(
+            "named-account anchor exists" in warning
+            for warning in quality["warnings"]
+        )

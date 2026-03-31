@@ -7,6 +7,7 @@ signal strength, data availability, and resource divergence.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger("atlas.reasoning.cross_vendor_selection")
@@ -14,6 +15,11 @@ logger = logging.getLogger("atlas.reasoning.cross_vendor_selection")
 
 def _canonical_vendor(name: str) -> str:
     return str(name or "").strip().lower().replace(" ", "_")
+
+
+def _canonical_category(name: Any) -> str:
+    normalized = str(name or "").strip().lower().replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "", normalized)
 
 
 def _lookup_vendor_evidence(
@@ -98,6 +104,19 @@ def _segment_tokens(profile: dict[str, Any] | None) -> set[str]:
         if any(token in size for token in ("mid", "51-200", "201-500", "201-1000")):
             segments.add("midmarket")
     return segments
+
+
+def _vendor_category(
+    evidence: dict[str, Any] | None,
+    profile: dict[str, Any] | None,
+) -> str:
+    if isinstance(evidence, dict):
+        category = _canonical_category(evidence.get("product_category"))
+        if category:
+            return category
+    if isinstance(profile, dict):
+        return _canonical_category(profile.get("product_category"))
+    return ""
 
 
 def _context_overlap_score(
@@ -298,11 +317,12 @@ async def select_asymmetry_pairs(
     """Select vendor pairs with similar pressure but different resources.
 
     Criteria:
-    1. pressure_score (or avg_urgency) within the configured delta
-    2. Pair has enough deterministic overlap to be comparable
-    3. Resource divergence: one has configured review-share gap, or one is
+    1. Vendors must belong to the same product category
+    2. pressure_score (or avg_urgency) within the configured delta
+    3. Pair has enough deterministic overlap to be comparable
+    4. Resource divergence: one has configured review-share gap, or one is
        enterprise-tilted while the other is SMB-tilted
-    4. Both have per-vendor evidence
+    5. Both have per-vendor evidence
     """
     # Build vendor pressure list from vendor_scores
     vendor_pressure: list[tuple[str, float, int]] = []
@@ -335,6 +355,8 @@ async def select_asymmetry_pairs(
                 continue
             profile_a = _lookup_vendor_record(product_profiles, va)
             profile_b = _lookup_vendor_record(product_profiles, vb)
+            if _vendor_category(evidence_a, profile_a) != _vendor_category(evidence_b, profile_b):
+                continue
             context_score = _context_overlap_score(
                 va,
                 vb,

@@ -60,6 +60,7 @@ async def emit_event(
     detail: dict[str, Any] | None = None,
     source_table: str | None = None,
     source_id: str | None = None,
+    update_review_state: bool = True,
 ) -> str | None:
     """Emit an immutable visibility event. Returns event ID or None on failure."""
     fp = _fingerprint(stage, event_type, entity_type, entity_id, reason_code, rule_code)
@@ -80,26 +81,26 @@ async def emit_event(
             json.dumps(detail or {}, default=str),
             fp, source_table, source_id,
         )
-        # Upsert review state
-        await pool.execute(
-            """
-            INSERT INTO pipeline_visibility_reviews
-                (fingerprint, status, latest_event_id, occurrence_count,
-                 first_seen_at, last_seen_at)
-            VALUES ($1, 'open', $2, 1, NOW(), NOW())
-            ON CONFLICT (fingerprint) DO UPDATE SET
-                latest_event_id = EXCLUDED.latest_event_id,
-                occurrence_count = pipeline_visibility_reviews.occurrence_count + 1,
-                last_seen_at = NOW(),
-                updated_at = NOW(),
-                status = CASE
-                    WHEN pipeline_visibility_reviews.status IN ('resolved', 'ignored')
-                    THEN 'open'
-                    ELSE pipeline_visibility_reviews.status
-                END
-            """,
-            fp, event_id,
-        )
+        if update_review_state:
+            await pool.execute(
+                """
+                INSERT INTO pipeline_visibility_reviews
+                    (fingerprint, status, latest_event_id, occurrence_count,
+                     first_seen_at, last_seen_at)
+                VALUES ($1, 'open', $2, 1, NOW(), NOW())
+                ON CONFLICT (fingerprint) DO UPDATE SET
+                    latest_event_id = EXCLUDED.latest_event_id,
+                    occurrence_count = pipeline_visibility_reviews.occurrence_count + 1,
+                    last_seen_at = NOW(),
+                    updated_at = NOW(),
+                    status = CASE
+                        WHEN pipeline_visibility_reviews.status IN ('resolved', 'ignored')
+                        THEN 'open'
+                        ELSE pipeline_visibility_reviews.status
+                    END
+                """,
+                fp, event_id,
+            )
         return event_id
     except Exception:
         logger.debug("Failed to emit visibility event: %s/%s", stage, event_type, exc_info=True)
@@ -188,6 +189,22 @@ async def record_quarantine(
             json.dumps(evidence or {}, default=str),
             run_id,
         )
+        await emit_event(
+            pool,
+            stage="enrichment",
+            event_type="quarantine_recorded",
+            entity_type="review",
+            entity_id=str(review_id or vendor_name or qid),
+            summary=summary or reason_code,
+            severity="warning" if severity == "warning" else severity,
+            actionable=actionable,
+            artifact_type="enrichment",
+            reason_code=reason_code,
+            run_id=run_id,
+            detail=evidence or {},
+            source_table="enrichment_quarantines",
+            source_id=qid,
+        )
         return qid
     except Exception:
         logger.debug("Failed to record quarantine: %s/%s", vendor_name, reason_code, exc_info=True)
@@ -205,10 +222,29 @@ async def record_dedup(
     entity_type: str,
     entity_id: str,
     reason: str,
+    survivor_entity_id: str | None = None,
     run_id: str | None = None,
     detail: dict[str, Any] | None = None,
 ) -> str | None:
     """Record a dedup/discard decision as a visibility event."""
+    try:
+        await pool.execute(
+            """
+            INSERT INTO dedup_decisions
+                (run_id, stage, entity_type, survivor_entity_id,
+                 discarded_entity_id, reason_code, comparison_metrics)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+            """,
+            run_id,
+            stage,
+            entity_type,
+            survivor_entity_id,
+            entity_id,
+            "dedup_discard",
+            json.dumps(detail or {}, default=str),
+        )
+    except Exception:
+        logger.debug("Failed to record dedup row: %s/%s", stage, entity_id, exc_info=True)
     return await emit_event(
         pool,
         stage=stage,
@@ -222,3 +258,87 @@ async def record_dedup(
         decision="discarded",
         detail=detail,
     )
+
+
+async def record_synthesis_validation_results(
+    pool,
+    *,
+    vendor_name: str,
+    as_of_date,
+    analysis_window_days: int,
+    schema_version: str,
+    run_id: str | None,
+    attempt_no: int,
+    results: list[dict[str, Any]],
+) -> None:
+    """Persist one row per synthesis validation rule result."""
+    if not results:
+        return
+    try:
+        await pool.executemany(
+            """
+            INSERT INTO synthesis_validation_results
+                (vendor_name, as_of_date, analysis_window_days, schema_version,
+                 run_id, attempt_no, rule_code, severity, passed, summary,
+                 field_path, detail)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+            """,
+            [
+                (
+                    vendor_name,
+                    as_of_date,
+                    analysis_window_days,
+                    schema_version,
+                    run_id,
+                    attempt_no,
+                    str(item.get("rule_code") or ""),
+                    str(item.get("severity") or "warning"),
+                    bool(item.get("passed")),
+                    str(item.get("summary") or ""),
+                    item.get("field_path"),
+                    json.dumps(item.get("detail") or {}, default=str),
+                )
+                for item in results
+                if item.get("rule_code")
+            ],
+        )
+    except Exception:
+        logger.debug("Failed to record synthesis validation rows: %s", vendor_name, exc_info=True)
+
+
+async def record_review_action(
+    pool,
+    *,
+    review_id: str,
+    fingerprint: str,
+    target_entity_type: str,
+    target_entity_id: str,
+    action: str,
+    note: str | None = None,
+    actor_id: str | None = None,
+    actor_type: str = "human",
+) -> str | None:
+    """Persist an immutable operator review action."""
+    action_id = str(uuid4())
+    try:
+        await pool.execute(
+            """
+            INSERT INTO pipeline_review_actions
+                (id, review_id, fingerprint, target_entity_type, target_entity_id,
+                 action, note, actor_id, actor_type)
+            VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9)
+            """,
+            action_id,
+            review_id,
+            fingerprint,
+            target_entity_type,
+            target_entity_id,
+            action,
+            note,
+            actor_id,
+            actor_type,
+        )
+        return action_id
+    except Exception:
+        logger.debug("Failed to record review action: %s/%s", review_id, action, exc_info=True)
+        return None

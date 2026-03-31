@@ -30,6 +30,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_witnesses import compute_witness_hash
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_reasoning_synthesis")
 
@@ -53,6 +54,232 @@ def _validation_feedback(vresult: Any, limit: int) -> list[str]:
     return feedback
 
 
+def _validation_rows(vresult: Any) -> list[dict[str, Any]]:
+    """Normalize validator findings into row payloads."""
+    rows: list[dict[str, Any]] = []
+    for passed_group, findings in (
+        (False, list(getattr(vresult, "errors", []) or [])),
+        (False, list(getattr(vresult, "warnings", []) or [])),
+    ):
+        for finding in findings:
+            rows.append(
+                {
+                    "rule_code": getattr(finding, "code", "") or "unknown",
+                    "severity": getattr(finding, "severity", "") or "warning",
+                    "passed": passed_group,
+                    "summary": getattr(finding, "message", "") or "validation finding",
+                    "field_path": getattr(finding, "path", None),
+                    "detail": {
+                        "path": getattr(finding, "path", None),
+                        "message": getattr(finding, "message", ""),
+                    },
+                }
+            )
+    return rows
+
+
+async def _record_validation_attempt(
+    pool,
+    *,
+    vendor_name: str,
+    run_id: str | None,
+    as_of_date: date,
+    analysis_window_days: int,
+    attempt_no: int,
+    vresult: Any,
+    feedback_limit: int,
+    attempt_tokens: int = 0,
+    escalation_window_hours: int = 24,
+    repeat_rule_threshold: int = 3,
+    cost_min_retries: int = 2,
+    cost_tokens_threshold: int = 80000,
+    emit_retry_event: bool = False,
+) -> None:
+    from ..visibility import (
+        emit_event,
+        record_attempt,
+        record_synthesis_validation_results,
+    )
+
+    blocking_issues = _validation_feedback(vresult, feedback_limit)
+    warning_messages = [
+        getattr(warning, "message", "") or "validation warning"
+        for warning in list(getattr(vresult, "warnings", []) or [])
+    ]
+    await record_attempt(
+        pool,
+        artifact_type="reasoning_synthesis",
+        artifact_id=vendor_name,
+        run_id=run_id,
+        attempt_no=attempt_no,
+        stage="validation",
+        status="rejected",
+        blocker_count=len(list(getattr(vresult, "errors", []) or [])),
+        warning_count=len(list(getattr(vresult, "warnings", []) or [])),
+        blocking_issues=blocking_issues[:5],
+        warnings=warning_messages[:5],
+        feedback_summary=vresult.summary(),
+        failure_step="validation",
+        error_message=vresult.summary()[:200],
+    )
+    await record_synthesis_validation_results(
+        pool,
+        vendor_name=vendor_name,
+        as_of_date=as_of_date,
+        analysis_window_days=analysis_window_days,
+        schema_version=_SCHEMA_VERSION,
+        run_id=run_id,
+        attempt_no=attempt_no,
+        results=_validation_rows(vresult),
+    )
+    if emit_retry_event:
+        rule_codes = sorted({
+            str(getattr(err, "code", "") or "").strip()
+            for err in list(getattr(vresult, "errors", []) or [])
+            if str(getattr(err, "code", "") or "").strip()
+        })
+        await emit_event(
+            pool,
+            stage="synthesis",
+            event_type="validation_retry_rejected",
+            entity_type="vendor",
+            entity_id=vendor_name,
+            summary=f"Synthesis retry rejected for {vendor_name}: {vresult.summary()[:100]}",
+            severity="warning",
+            actionable=False,
+            artifact_type="reasoning_synthesis",
+            run_id=run_id,
+            reason_code="validation_retry_rejected",
+            detail={
+                "attempt_no": attempt_no,
+                "tokens_used": int(attempt_tokens or 0),
+                "rule_codes": rule_codes,
+                "errors": [
+                    {
+                        "path": getattr(err, "path", None),
+                        "code": getattr(err, "code", None),
+                        "message": getattr(err, "message", None),
+                    }
+                    for err in list(getattr(vresult, "errors", []) or [])[:5]
+                ],
+            },
+            update_review_state=False,
+        )
+        fetchval = getattr(pool, "fetchval", None)
+        fetchrow = getattr(pool, "fetchrow", None)
+        if callable(fetchval):
+            for rule_code in rule_codes:
+                try:
+                    retry_count = await fetchval(
+                        """
+                        SELECT COUNT(*)
+                        FROM pipeline_visibility_events
+                        WHERE stage = 'synthesis'
+                          AND event_type = 'validation_retry_rejected'
+                          AND entity_type = 'vendor'
+                          AND entity_id = $1
+                          AND occurred_at >= NOW() - make_interval(hours => $2)
+                          AND detail->'rule_codes' ? $3
+                        """,
+                        vendor_name,
+                        escalation_window_hours,
+                        rule_code,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to count repeated retry events for %s/%s",
+                        vendor_name,
+                        rule_code,
+                        exc_info=True,
+                    )
+                    continue
+                if int(retry_count or 0) >= repeat_rule_threshold:
+                    await emit_event(
+                        pool,
+                        stage="synthesis",
+                        event_type="validation_retry_escalated",
+                        entity_type="vendor",
+                        entity_id=vendor_name,
+                        summary=(
+                            f"Recovered validation retries repeated for {vendor_name}: "
+                            f"{rule_code} hit {int(retry_count)} times in "
+                            f"{escalation_window_hours}h"
+                        ),
+                        severity="warning",
+                        actionable=True,
+                        artifact_type="reasoning_synthesis",
+                        run_id=run_id,
+                        reason_code="repeated_validation_retry",
+                        rule_code=rule_code,
+                        detail={
+                            "attempt_no": attempt_no,
+                            "rule_code": rule_code,
+                            "retry_count": int(retry_count or 0),
+                            "window_hours": escalation_window_hours,
+                            "threshold": repeat_rule_threshold,
+                        },
+                    )
+        if callable(fetchrow):
+            try:
+                cost_row = await fetchrow(
+                    """
+                    SELECT
+                        COUNT(*) AS retry_count,
+                        COALESCE(
+                            SUM(COALESCE(NULLIF(detail->>'tokens_used', ''), '0')::int),
+                            0
+                        ) AS retry_tokens
+                    FROM pipeline_visibility_events
+                    WHERE stage = 'synthesis'
+                      AND event_type = 'validation_retry_rejected'
+                      AND entity_type = 'vendor'
+                      AND entity_id = $1
+                      AND occurred_at >= NOW() - make_interval(hours => $2)
+                    """,
+                    vendor_name,
+                    escalation_window_hours,
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to compute retry token escalation for %s",
+                    vendor_name,
+                    exc_info=True,
+                )
+            else:
+                cost_data = dict(cost_row) if cost_row else {}
+                retry_count = int(cost_data.get("retry_count", 0) or 0)
+                retry_tokens = int(cost_data.get("retry_tokens", 0) or 0)
+                if (
+                    retry_count >= cost_min_retries
+                    and retry_tokens >= cost_tokens_threshold
+                ):
+                    await emit_event(
+                        pool,
+                        stage="synthesis",
+                        event_type="validation_retry_escalated",
+                        entity_type="vendor",
+                        entity_id=vendor_name,
+                        summary=(
+                            f"Recovered validation retries costly for {vendor_name}: "
+                            f"{retry_tokens} tokens across {retry_count} retries in "
+                            f"{escalation_window_hours}h"
+                        ),
+                        severity="warning",
+                        actionable=True,
+                        artifact_type="reasoning_synthesis",
+                        run_id=run_id,
+                        reason_code="costly_validation_retry",
+                        detail={
+                            "attempt_no": attempt_no,
+                            "retry_count": retry_count,
+                            "retry_tokens": retry_tokens,
+                            "window_hours": escalation_window_hours,
+                            "min_retries": cost_min_retries,
+                            "tokens_threshold": cost_tokens_threshold,
+                        },
+                    )
+
+
 def _task_run_id(task: ScheduledTask | Any) -> str | None:
     """Return a stable run identifier for scheduled, manual, and test invocations."""
     task_id = getattr(task, "id", None)
@@ -65,6 +292,47 @@ def _task_run_id(task: ScheduledTask | Any) -> str | None:
             if value:
                 return str(value)
     return None
+
+
+def _coerce_timestamptz(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "witness_id": str(witness.get("witness_id") or witness.get("_sid") or ""),
+        "review_id": str(witness.get("review_id") or ""),
+        "witness_type": str(witness.get("witness_type") or ""),
+        "excerpt_text": str(witness.get("excerpt_text") or ""),
+        "source": str(witness.get("source") or ""),
+        "reviewed_at": _coerce_timestamptz(witness.get("reviewed_at")),
+        "reviewer_company": witness.get("reviewer_company"),
+        "reviewer_title": witness.get("reviewer_title"),
+        "pain_category": witness.get("pain_category"),
+        "competitor": witness.get("competitor"),
+        "salience_score": float(witness.get("salience_score") or 0.0),
+        "selection_reason": str(witness.get("selection_reason") or ""),
+        "signal_tags": json.dumps(witness.get("signal_tags") or []),
+        "source_id": str(witness.get("_sid") or witness.get("witness_id") or ""),
+        "specificity_score": float(witness.get("specificity_score") or 0.0),
+        "generic_reason": str(witness.get("generic_reason") or "").strip() or None,
+        "witness_hash": str(witness.get("witness_hash") or "").strip()
+        or compute_witness_hash(witness),
+    }
 
 
 async def _persist_packet_artifacts(
@@ -102,9 +370,10 @@ async def _persist_packet_artifacts(
         evidence_hash,
         json.dumps(packet_payload, default=str),
     )
-    await pool.execute(
+    existing_rows = await pool.fetch(
         """
-        DELETE FROM b2b_vendor_witnesses
+        SELECT witness_id, witness_hash
+        FROM b2b_vendor_witnesses
         WHERE vendor_name = $1
           AND as_of_date = $2
           AND analysis_window_days = $3
@@ -115,7 +384,39 @@ async def _persist_packet_artifacts(
         analysis_window_days,
         _PACKET_SCHEMA_VERSION,
     )
-    for witness in getattr(packet, "witness_pack", []) or []:
+    existing_hashes = {
+        str(row["witness_id"]): str(row["witness_hash"] or "")
+        for row in existing_rows
+    }
+    incoming_rows = [
+        _witness_row_payload(witness)
+        for witness in (getattr(packet, "witness_pack", []) or [])
+        if isinstance(witness, dict)
+    ]
+    incoming_ids = {
+        row["witness_id"] for row in incoming_rows
+        if row["witness_id"]
+    }
+    stale_ids = sorted(set(existing_hashes) - incoming_ids)
+    if stale_ids:
+        await pool.execute(
+            """
+            DELETE FROM b2b_vendor_witnesses
+            WHERE vendor_name = $1
+              AND as_of_date = $2
+              AND analysis_window_days = $3
+              AND schema_version = $4
+              AND witness_id = ANY($5::text[])
+            """,
+            vendor_name,
+            as_of_date,
+            analysis_window_days,
+            _PACKET_SCHEMA_VERSION,
+            stale_ids,
+        )
+    for witness in incoming_rows:
+        if existing_hashes.get(witness["witness_id"]) == witness["witness_hash"]:
+            continue
         await pool.execute(
             """
             INSERT INTO b2b_vendor_witnesses
@@ -123,29 +424,54 @@ async def _persist_packet_artifacts(
                  evidence_hash, witness_id, review_id, witness_type, excerpt_text,
                  source, reviewed_at, reviewer_company, reviewer_title,
                  pain_category, competitor, salience_score, selection_reason,
-                 signal_tags, source_id)
+                 signal_tags, source_id, specificity_score, generic_reason,
+                 witness_hash)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17, $18::jsonb, $19)
+                    $14, $15, $16, $17, $18::jsonb, $19, $20, $21, $22)
+            ON CONFLICT (
+                vendor_name, as_of_date, analysis_window_days, schema_version, witness_id
+            )
+            DO UPDATE SET
+                evidence_hash = EXCLUDED.evidence_hash,
+                review_id = EXCLUDED.review_id,
+                witness_type = EXCLUDED.witness_type,
+                excerpt_text = EXCLUDED.excerpt_text,
+                source = EXCLUDED.source,
+                reviewed_at = EXCLUDED.reviewed_at,
+                reviewer_company = EXCLUDED.reviewer_company,
+                reviewer_title = EXCLUDED.reviewer_title,
+                pain_category = EXCLUDED.pain_category,
+                competitor = EXCLUDED.competitor,
+                salience_score = EXCLUDED.salience_score,
+                selection_reason = EXCLUDED.selection_reason,
+                signal_tags = EXCLUDED.signal_tags,
+                source_id = EXCLUDED.source_id,
+                specificity_score = EXCLUDED.specificity_score,
+                generic_reason = EXCLUDED.generic_reason,
+                witness_hash = EXCLUDED.witness_hash
             """,
             vendor_name,
             as_of_date,
             analysis_window_days,
             _PACKET_SCHEMA_VERSION,
             evidence_hash,
-            str(witness.get("witness_id") or witness.get("_sid") or ""),
-            str(witness.get("review_id") or ""),
-            str(witness.get("witness_type") or ""),
-            str(witness.get("excerpt_text") or ""),
-            str(witness.get("source") or ""),
-            witness.get("reviewed_at"),
-            witness.get("reviewer_company"),
-            witness.get("reviewer_title"),
-            witness.get("pain_category"),
-            witness.get("competitor"),
-            float(witness.get("salience_score") or 0.0),
-            str(witness.get("selection_reason") or ""),
-            json.dumps(witness.get("signal_tags") or []),
-            str(witness.get("_sid") or witness.get("witness_id") or ""),
+            witness["witness_id"],
+            witness["review_id"],
+            witness["witness_type"],
+            witness["excerpt_text"],
+            witness["source"],
+            witness["reviewed_at"],
+            witness["reviewer_company"],
+            witness["reviewer_title"],
+            witness["pain_category"],
+            witness["competitor"],
+            witness["salience_score"],
+            witness["selection_reason"],
+            witness["signal_tags"],
+            witness["source_id"],
+            witness["specificity_score"],
+            witness["generic_reason"],
+            witness["witness_hash"],
         )
 
 
@@ -209,6 +535,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Filter to vendors needing reasoning
     force = bool((task.metadata or {}).get("force"))
+    force_cross_vendor = bool((task.metadata or {}).get("force_cross_vendor"))
     vendors_to_reason: list[tuple[str, dict, str]] = []
     for vendor_name, layers in vendor_pools.items():
         ev_hash = _compute_pool_hash(layers)
@@ -222,13 +549,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         len(vendors_to_reason), skipped,
     )
 
-    if not vendors_to_reason:
+    if not vendors_to_reason and not (
+        cfg.cross_vendor_synthesis_enabled and force_cross_vendor
+    ):
         return {
             "vendors_total": len(vendor_pools),
             "vendors_reasoned": 0,
             "vendors_skipped": skipped,
             "_skip_synthesis": "All vendors unchanged",
         }
+    if not vendors_to_reason and cfg.cross_vendor_synthesis_enabled and force_cross_vendor:
+        logger.info(
+            "Reasoning synthesis v2: vendor phase skipped; force_cross_vendor enabled",
+        )
 
     # Resolve LLM
     from ...reasoning.config import ReasoningConfig
@@ -391,6 +724,34 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             break
                         synthesis = None
                         last_validation = vresult
+                        await _record_validation_attempt(
+                            pool,
+                            vendor_name=vendor_name,
+                            run_id=run_id,
+                            as_of_date=today,
+                            analysis_window_days=window_days,
+                            attempt_no=attempt + 1,
+                            vresult=vresult,
+                            feedback_limit=feedback_limit,
+                            attempt_tokens=tokens,
+                            escalation_window_hours=max(
+                                1,
+                                int(getattr(cfg, "reasoning_retry_escalation_window_hours", 24)),
+                            ),
+                            repeat_rule_threshold=max(
+                                2,
+                                int(getattr(cfg, "reasoning_retry_repeat_rule_threshold", 3)),
+                            ),
+                            cost_min_retries=max(
+                                1,
+                                int(getattr(cfg, "reasoning_retry_cost_min_retries", 2)),
+                            ),
+                            cost_tokens_threshold=max(
+                                1000,
+                                int(getattr(cfg, "reasoning_retry_cost_tokens_threshold", 80000)),
+                            ),
+                            emit_retry_event=(attempt + 1) < max_attempts,
+                        )
                         failure_reasons = _validation_feedback(
                             vresult, feedback_limit,
                         ) or [vresult.summary()]
@@ -502,20 +863,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "attempts_used": attempt + 1,
                         })
                     failed += 1
-                    from ..visibility import record_attempt
-                    await record_attempt(
-                        pool, artifact_type="reasoning_synthesis",
-                        artifact_id=vendor_name,
-                        run_id=run_id, attempt_no=attempt + 1,
-                        stage="validation", status="rejected",
-                        blocker_count=len(failure_reasons),
-                        blocking_issues=failure_reasons[:5],
-                        failure_step="validation" if last_validation else "llm_response",
-                        error_message=(
-                            last_validation.summary()[:200] if last_validation
-                            else "; ".join(failure_reasons[:2])[:200]
-                        ),
-                    )
+                    if last_validation is None:
+                        from ..visibility import record_attempt
+                        await record_attempt(
+                            pool, artifact_type="reasoning_synthesis",
+                            artifact_id=vendor_name,
+                            run_id=run_id, attempt_no=attempt + 1,
+                            stage="validation", status="rejected",
+                            blocker_count=len(failure_reasons),
+                            blocking_issues=failure_reasons[:5],
+                            failure_step="llm_response",
+                            error_message="; ".join(failure_reasons[:2])[:200],
+                        )
                     return
 
                 logger.info(
@@ -550,7 +909,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "Persisted reasoning synthesis for %s failed validation: %s",
                     vendor_name, persisted_vresult.summary(),
                 )
-                from ..visibility import emit_event
+                from ..visibility import emit_event, record_synthesis_validation_results
+                await record_synthesis_validation_results(
+                    pool,
+                    vendor_name=vendor_name,
+                    as_of_date=today,
+                    analysis_window_days=window_days,
+                    schema_version=_SCHEMA_VERSION,
+                    run_id=run_id,
+                    attempt_no=attempt + 1,
+                    results=_validation_rows(persisted_vresult),
+                )
                 await emit_event(
                     pool, stage="synthesis", event_type="validation_failure",
                     entity_type="vendor", entity_id=vendor_name,
@@ -575,6 +944,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 failed += 1
                 return
             if persisted_vresult.warnings:
+                from ..visibility import record_synthesis_validation_results
+                await record_synthesis_validation_results(
+                    pool,
+                    vendor_name=vendor_name,
+                    as_of_date=today,
+                    analysis_window_days=window_days,
+                    schema_version=_SCHEMA_VERSION,
+                    run_id=run_id,
+                    attempt_no=attempt + 1,
+                    results=_validation_rows(persisted_vresult),
+                )
                 synthesis["_validation_warnings"] = [
                     {
                         "path": w.path,
@@ -598,6 +978,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         detail={"path": w.path, "message": w.message},
                     )
             else:
+                from ..visibility import record_synthesis_validation_results
+                await record_synthesis_validation_results(
+                    pool,
+                    vendor_name=vendor_name,
+                    as_of_date=today,
+                    analysis_window_days=window_days,
+                    schema_version=_SCHEMA_VERSION,
+                    run_id=run_id,
+                    attempt_no=attempt + 1,
+                    results=_validation_rows(persisted_vresult),
+                )
                 synthesis.pop("_validation_warnings", None)
             vresult = persisted_vresult
 
@@ -704,6 +1095,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 cfg=cfg,
                 today=today,
                 window_days=window_days,
+                force=force_cross_vendor,
             )
             total_tokens += xv_tokens
         except Exception:
@@ -751,6 +1143,7 @@ async def _run_cross_vendor_synthesis(
     cfg,
     today: date,
     window_days: int,
+    force: bool = False,
 ) -> tuple[int, int, int, int]:
     """Run cross-vendor synthesis: battles, councils, asymmetry.
 
@@ -783,20 +1176,116 @@ async def _run_cross_vendor_synthesis(
         to_legacy_cross_vendor_conclusion,
     )
 
+    def _selector_evidence_from_layers(layers: dict[str, Any]) -> dict[str, Any]:
+        evidence_vault = layers.get("evidence_vault") or {}
+        segment = layers.get("segment") or {}
+        accounts = layers.get("accounts") or {}
+        displacement = layers.get("displacement") or []
+        category = layers.get("category") or {}
+
+        product_category = str(
+            category.get("category")
+            or evidence_vault.get("product_category")
+            or ""
+        ).strip()
+
+        pain_categories: list[dict[str, Any]] = []
+        seen_pains: set[str] = set()
+        for item in segment.get("affected_roles") or []:
+            if not isinstance(item, dict):
+                continue
+            category_name = str(item.get("top_pain") or "").strip()
+            if not category_name or category_name in seen_pains:
+                continue
+            seen_pains.add(category_name)
+            pain_categories.append({
+                "category": category_name,
+                "count": int(item.get("review_count") or 0),
+            })
+
+        competitor_rows: list[dict[str, Any]] = []
+        for item in displacement:
+            if not isinstance(item, dict):
+                continue
+            competitor = str(item.get("to_vendor") or "").strip()
+            if not competitor:
+                continue
+            mentions = 0
+            flow_summary = item.get("flow_summary") or {}
+            edge_metrics = item.get("edge_metrics") or {}
+            try:
+                mentions = int(
+                    flow_summary.get("total_flow_mentions")
+                    or edge_metrics.get("mention_count")
+                    or 0,
+                )
+            except (TypeError, ValueError):
+                mentions = 0
+            competitor_rows.append({
+                "name": competitor,
+                "mentions": mentions,
+            })
+
+        buyer_role_counts: dict[str, int] = {}
+        for item in accounts.get("accounts") or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("buyer_role") or "").strip().lower()
+            if not role or role == "unknown":
+                continue
+            buyer_role_counts[role] = buyer_role_counts.get(role, 0) + 1
+        for item in segment.get("affected_roles") or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role_type") or "").strip().lower()
+            if not role or role == "unknown":
+                continue
+            buyer_role_counts[role] = buyer_role_counts.get(role, 0) + int(
+                item.get("review_count") or 0,
+            )
+
+        top_use_cases: list[str] = []
+        for item in segment.get("top_use_cases_under_pressure") or []:
+            if not isinstance(item, dict):
+                continue
+            label = str(
+                item.get("use_case")
+                or item.get("name")
+                or item.get("label")
+                or ""
+            ).strip()
+            if label and label not in top_use_cases:
+                top_use_cases.append(label)
+
+        evidence: dict[str, Any] = {
+            "product_category": product_category,
+            "total_reviews": evidence_vault.get("metric_snapshot", {}).get("total_reviews")
+            or 0,
+            "pain_categories": pain_categories[:5],
+            "competitors": competitor_rows[:10],
+            "top_use_cases": top_use_cases[:5],
+        }
+        if buyer_role_counts:
+            evidence["buyer_authority"] = {"role_types": buyer_role_counts}
+        return evidence
+
     # Reconstruct inputs for selectors from pool layers
-    # Build churn signal rows from pool cores
+    # Build selector evidence from the persisted pool layers.
     vendor_scores: list[dict[str, Any]] = []
     evidence_lookup: dict[str, dict[str, Any]] = {}
     product_profiles: dict[str, dict[str, Any]] = {}
 
     for vname, layers in vendor_pools.items():
-        core = layers.get("core") or layers.get("churn_signal") or {}
-        evidence_lookup[vname] = core
+        selector_evidence = _selector_evidence_from_layers(layers)
+        evidence_lookup[vname] = selector_evidence
+        accounts_summary = (layers.get("accounts") or {}).get("summary") or {}
+        metric_snapshot = (layers.get("evidence_vault") or {}).get("metric_snapshot") or {}
         vendor_scores.append({
             "vendor_name": vname,
-            "avg_urgency_score": core.get("avg_urgency_score") or core.get("avg_urgency") or 0,
-            "total_reviews": core.get("total_reviews") or core.get("review_count") or 0,
-            "product_category": core.get("product_category") or "",
+            "avg_urgency": metric_snapshot.get("avg_urgency_score") or 0,
+            "total_reviews": metric_snapshot.get("total_reviews") or 0,
+            "product_category": selector_evidence.get("product_category") or "",
+            "high_intent_count": accounts_summary.get("high_intent_count") or 0,
         })
 
     # Load product profiles
@@ -815,9 +1304,9 @@ async def _run_cross_vendor_synthesis(
     try:
         disp_rows = await pool.fetch(
             "SELECT from_vendor, to_vendor, mention_count, primary_driver, "
-            "signal_strength, velocity_7d, evidence_breakdown "
+            "signal_strength, velocity_7d "
             "FROM b2b_displacement_edges "
-            "WHERE as_of_date = (SELECT MAX(as_of_date) FROM b2b_displacement_edges)"
+            "WHERE computed_date = (SELECT MAX(computed_date) FROM b2b_displacement_edges)"
         )
         displacement_edges = [dict(r) for r in disp_rows]
     except Exception:
@@ -836,7 +1325,47 @@ async def _run_cross_vendor_synthesis(
         for r in eco_rows:
             ecosystem_evidence[r["category"]] = dict(r)
     except Exception:
-        logger.debug("Category dynamics fetch failed for xv synthesis")
+        logger.debug("Category dynamics flat fetch failed for xv synthesis")
+        try:
+            eco_rows = await pool.fetch(
+                "SELECT category, dynamics "
+                "FROM b2b_category_dynamics "
+                "WHERE as_of_date = (SELECT MAX(as_of_date) FROM b2b_category_dynamics)"
+            )
+            for r in eco_rows:
+                raw = r["dynamics"]
+                dynamics = raw if isinstance(raw, dict) else {}
+                if isinstance(raw, str):
+                    try:
+                        dynamics = json.loads(raw)
+                    except Exception:
+                        dynamics = {}
+                market_regime = dynamics.get("market_regime")
+                market_regime = market_regime if isinstance(market_regime, dict) else {}
+                displacement_intensity = (
+                    dynamics.get("displacement_intensity")
+                    or dynamics.get("displacement_flow_count")
+                    or 0
+                )
+                try:
+                    displacement_intensity = float(displacement_intensity)
+                except (TypeError, ValueError):
+                    displacement_intensity = 0.0
+                ecosystem_evidence[r["category"]] = {
+                    "category": r["category"],
+                    "hhi": dynamics.get("hhi"),
+                    "market_structure": (
+                        dynamics.get("market_structure")
+                        or market_regime.get("regime_type")
+                    ),
+                    "displacement_intensity": displacement_intensity,
+                    "dominant_archetype": dynamics.get("dominant_archetype"),
+                    "archetype_distribution": (
+                        dynamics.get("archetype_distribution") or {}
+                    ),
+                }
+        except Exception:
+            logger.debug("Category dynamics JSON fetch failed for xv synthesis")
 
     # Build vendor membership map for category selection.
     # select_categories() only uses the mapping keys to count vendors with
@@ -982,7 +1511,7 @@ async def _run_cross_vendor_synthesis(
         ev_hash = compute_cross_vendor_evidence_hash(packet)
         v_key = "|".join(sorted(vendors))
         cache_key = f"{analysis_type}:{v_key}:{category or ''}"
-        if existing_xv_hashes.get(cache_key) == ev_hash:
+        if not force and existing_xv_hashes.get(cache_key) == ev_hash:
             return  # unchanged
 
         async with xv_sem:

@@ -199,10 +199,9 @@ _DEFAULT_WEIGHTS = {
     "price_complaints": 0.10,
 }
 
-# Archetype-specific weight overrides.  When the stratified reasoner
-# classifies a vendor into an archetype, the corresponding weight set
-# is used instead of the default, biasing the score toward the signal
-# that matters most for that churn pattern.
+# Archetype-specific weight overrides. When vendor reasoning identifies
+# an archetype-style churn pattern, the corresponding weight set is used
+# instead of the default, biasing the score toward the most relevant signal.
 _ARCHETYPE_WEIGHT_OVERRIDES: dict[str, dict[str, float]] = {
     "pricing_shock":        {"churn_density": 0.20, "urgency": 0.20, "dm_churn_rate": 0.15, "displacement": 0.10, "price_complaints": 0.35},
     "feature_gap":          {"churn_density": 0.25, "urgency": 0.20, "dm_churn_rate": 0.15, "displacement": 0.30, "price_complaints": 0.10},
@@ -2690,7 +2689,7 @@ def _compute_churn_pressure_score(
     Default weights: churn density 30%, urgency 25%, DM churn rate 20%,
     displacement mentions 15%, price complaints 10%.
 
-    When *archetype* is provided (from the stratified reasoner), the weights
+    When *archetype* is provided from a reasoning layer, the weights
     shift to emphasise the signal most relevant to that churn pattern --
     e.g. ``pricing_shock`` boosts price_complaints to 35%.
 
@@ -4741,6 +4740,63 @@ async def fetch_all_pool_layers(
                 layers["category"] = cat_map[cat]
     except Exception:
         logger.debug("Category dynamics unavailable", exc_info=True)
+
+    # Review candidates for witness-pack building.
+    try:
+        review_rows = await pool.fetch(
+            """
+                SELECT
+                    vendor_name,
+                    id,
+                    source,
+                rating,
+                rating_max,
+                summary,
+                review_text,
+                pros,
+                cons,
+                reviewer_title,
+                reviewer_company,
+                reviewed_at,
+                imported_at,
+                raw_metadata,
+                enrichment
+                FROM b2b_reviews
+                WHERE enrichment_status = 'enriched'
+                  AND COALESCE(reviewed_at, imported_at) <= ($1::date + INTERVAL '1 day')
+                  AND COALESCE(reviewed_at, imported_at) >= ($1::date - ($2::int * INTERVAL '1 day'))
+                ORDER BY
+                    vendor_name,
+                    COALESCE(reviewed_at, imported_at) DESC,
+                imported_at DESC,
+                id DESC
+            """,
+            as_of,
+            analysis_window_days,
+        )
+        for row in review_rows:
+            vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+            if not vendor:
+                continue
+            review = {
+                "id": str(row.get("id") or ""),
+                "source": row.get("source"),
+                "rating": row.get("rating"),
+                "rating_max": row.get("rating_max"),
+                "summary": row.get("summary"),
+                "review_text": row.get("review_text"),
+                "pros": row.get("pros"),
+                "cons": row.get("cons"),
+                "reviewer_title": row.get("reviewer_title"),
+                "reviewer_company": row.get("reviewer_company"),
+                "reviewed_at": row.get("reviewed_at"),
+                "imported_at": row.get("imported_at"),
+                "raw_metadata": _safe_json(row.get("raw_metadata"), default={}),
+                "enrichment": _safe_json(row.get("enrichment"), default={}),
+            }
+            result.setdefault(vendor, {}).setdefault("reviews", []).append(review)
+    except Exception:
+        logger.debug("Review candidates unavailable", exc_info=True)
 
     return result
 
@@ -8704,7 +8760,7 @@ def _build_vendor_evidence(
     market_regime_lookup: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Merge vendor score row + all available lookups into a single evidence
-    dict for the stratified reasoner.
+    dict for synthesis and deterministic reasoning consumers.
 
     Includes pain, competitors, feature gaps, insider signals, keyword spikes,
     temporal velocities, archetype pre-scores, and optionally DM rate, price

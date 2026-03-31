@@ -78,6 +78,9 @@ _BATTLE_CARD_RENDER_INPUT_KEYS = (
     "low_confidence_sections",
     "section_disclaimers",
     "evidence_conclusions",
+    "anchor_examples",
+    "witness_highlights",
+    "reference_ids",
 )
 
 _BATTLE_CARD_SALES_COPY_JSON_SCHEMA: dict[str, Any] = {
@@ -537,6 +540,81 @@ def _drop_llm_sales_copy(card: dict[str, Any]) -> None:
         card.pop(field, None)
 
 
+def _battle_card_anchor_examples(card: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    raw = card.get("anchor_examples")
+    if not isinstance(raw, dict):
+        return {}
+    resolved: dict[str, list[dict[str, Any]]] = {}
+    for label, rows in raw.items():
+        if not isinstance(rows, list):
+            continue
+        clean_rows = [dict(row) for row in rows if isinstance(row, dict)]
+        if clean_rows:
+            resolved[str(label)] = clean_rows
+    return resolved
+
+
+def _battle_card_witness_highlights(card: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = card.get("witness_highlights")
+    return [dict(row) for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+
+
+def _battle_card_render_text(card: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for field in _BATTLE_CARD_LLM_FIELDS:
+        value = card.get(field)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            parts.append(value)
+        else:
+            parts.append(json.dumps(value, default=str))
+    return " ".join(part for part in parts if part).lower()
+
+
+def _witness_numeric_tokens(witness: dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    numeric_literals = witness.get("numeric_literals")
+    if not isinstance(numeric_literals, dict):
+        return tokens
+    for values in numeric_literals.values():
+        if isinstance(values, list):
+            for value in values:
+                token = str(value or "").strip().lower()
+                if token:
+                    tokens.add(token)
+        else:
+            token = str(values or "").strip().lower()
+            if token:
+                tokens.add(token)
+    return tokens
+
+
+def _battle_card_anchor_signal_terms(card: dict[str, Any]) -> dict[str, set[str]]:
+    companies: set[str] = set()
+    timing_terms: set[str] = set()
+    numeric_terms: set[str] = set()
+    competitor_terms: set[str] = set()
+    for rows in _battle_card_anchor_examples(card).values():
+        for witness in rows:
+            company = str(witness.get("reviewer_company") or "").strip().lower()
+            if company:
+                companies.add(company)
+            competitor = str(witness.get("competitor") or "").strip().lower()
+            if competitor:
+                competitor_terms.add(competitor)
+            time_anchor = str(witness.get("time_anchor") or "").strip().lower()
+            if time_anchor:
+                timing_terms.add(time_anchor)
+            numeric_terms.update(_witness_numeric_tokens(witness))
+    return {
+        "companies": companies,
+        "timing_terms": timing_terms,
+        "numeric_terms": numeric_terms,
+        "competitor_terms": competitor_terms,
+    }
+
+
 def _evaluate_battle_card_quality(
     card: dict[str, Any],
     *,
@@ -582,6 +660,19 @@ def _evaluate_battle_card_quality(
         hard_blockers.append("source data is stale for requested report date")
     if bool(card.get("evidence_window_is_thin")):
         warnings.append("evidence window is thin; confidence may improve with more data")
+
+    anchors = _battle_card_anchor_examples(card)
+    witness_highlights = _battle_card_witness_highlights(card)
+    reference_ids = card.get("reference_ids") if isinstance(card.get("reference_ids"), dict) else {}
+    witness_refs = [
+        str(value).strip()
+        for value in (reference_ids.get("witness_ids") or [])
+        if str(value or "").strip()
+    ]
+    if witness_refs and not anchors:
+        warnings.append("witness-backed references exist but no anchor examples were surfaced")
+    if anchors and not witness_highlights:
+        warnings.append("anchor examples are present but witness highlights are missing from the render packet")
 
     evidence_window_days = _reasoning_int(card.get("evidence_window_days"))
     if evidence_window_days is None:
@@ -699,6 +790,28 @@ def _evaluate_battle_card_quality(
             for field in _BATTLE_CARD_LLM_FIELDS
             if field in card
         }
+        if anchors and generated:
+            render_text = _battle_card_render_text(card)
+            signal_terms = _battle_card_anchor_signal_terms(card)
+            anchor_hits = any(
+                term in render_text
+                for term in (
+                    signal_terms["companies"]
+                    | signal_terms["timing_terms"]
+                    | signal_terms["numeric_terms"]
+                    | signal_terms["competitor_terms"]
+                )
+            )
+            if not anchor_hits:
+                hard_blockers.append(
+                    "seller copy does not reference any witness-backed anchor despite anchors being available"
+                )
+            if signal_terms["companies"] and not any(term in render_text for term in signal_terms["companies"]):
+                warnings.append("named-account anchor exists but seller copy does not mention a named example")
+            if signal_terms["numeric_terms"] and not any(term in render_text for term in signal_terms["numeric_terms"]):
+                warnings.append("money-backed outlier anchor exists but seller copy does not mention the concrete spend signal")
+            if signal_terms["timing_terms"] and not any(term in render_text for term in signal_terms["timing_terms"]):
+                warnings.append("timing anchor exists but seller copy does not mention the live trigger window")
         if generated:
             copy_issues = _validate_battle_card_sales_copy(card, generated)
             if copy_issues:
@@ -895,6 +1008,15 @@ def _build_battle_card_render_payload(
     metric_ledger = _build_metric_ledger(card)
     if metric_ledger:
         payload["metric_ledger"] = metric_ledger
+    anchor_examples = _battle_card_anchor_examples(card)
+    if anchor_examples:
+        payload["anchor_examples"] = anchor_examples
+    witness_highlights = _battle_card_witness_highlights(card)
+    if witness_highlights:
+        payload["witness_highlights"] = witness_highlights
+    reference_ids = card.get("reference_ids")
+    if isinstance(reference_ids, dict) and reference_ids:
+        payload["reference_ids"] = reference_ids
 
     # Phase 8: inject governance context so LLM can calibrate
     contracts = card.get("reasoning_contracts")

@@ -16,8 +16,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
+from ..autonomous.tasks._b2b_specificity import (
+    merge_specificity_contexts,
+    specificity_audit_snapshot,
+    specificity_quality_summary,
+    surface_specificity_context,
+)
 from ..config import settings
 from ..storage.database import get_db_pool
+from ..autonomous.visibility import emit_event, record_attempt
 from ..autonomous.tasks.campaign_audit import log_campaign_event
 
 logger = logging.getLogger("atlas.api.b2b_campaigns")
@@ -30,6 +37,15 @@ def _pool_or_503():
     if not pool.is_initialized:
         raise HTTPException(status_code=503, detail="Database not ready")
     return pool
+
+
+def _campaign_scope_clause(alias: str, user: AuthUser | None) -> tuple[str, list[Any]]:
+    if not user:
+        return "", []
+    return (
+        f" WHERE {alias}.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)",
+        [user.account_id],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +133,161 @@ def _affected_rows(result: str) -> int:
         return -1
 
 
+def _coerce_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _campaign_specificity_context(
+    metadata: Any,
+    company_context: Any,
+) -> dict[str, Any]:
+    metadata_context = surface_specificity_context(
+        _coerce_json_dict(metadata),
+        surface="campaign",
+        nested_keys=("briefing_context",),
+    )
+    company_specificity = surface_specificity_context(
+        _coerce_json_dict(company_context),
+        surface="campaign",
+        nested_keys=("briefing_context",),
+    )
+    return merge_specificity_contexts(metadata_context, company_specificity)
+
+
+def _campaign_revalidation_audit(
+    *,
+    campaign: dict[str, Any],
+    company_context: Any = None,
+) -> dict[str, Any]:
+    context = _campaign_specificity_context(
+        campaign.get("metadata"),
+        company_context,
+    )
+    if not context:
+        return {}
+    return specificity_audit_snapshot(
+        str(campaign.get("body") or ""),
+        anchor_examples=context.get("anchor_examples"),
+        witness_highlights=context.get("witness_highlights"),
+        reference_ids=context.get("reference_ids"),
+        allow_company_names=False,
+        min_anchor_hits=int(settings.b2b_campaign.specificity_min_anchor_hits),
+        require_anchor_support=bool(settings.b2b_campaign.specificity_require_anchor_support),
+        require_timing_or_numeric_when_available=bool(
+            settings.b2b_campaign.specificity_require_timing_or_numeric_when_available
+        ),
+        include_competitor_terms=str(campaign.get("channel") or "") != "email_cold",
+    )
+
+
+def _campaign_response_quality(metadata: Any) -> dict[str, Any]:
+    summary = specificity_quality_summary(_coerce_json_dict(metadata))
+    return {
+        "quality_status": summary.get("quality_status"),
+        "blocker_count": summary.get("blocker_count"),
+        "warning_count": summary.get("warning_count"),
+        "latest_error_summary": summary.get("latest_error_summary"),
+    }
+
+
+async def _persist_campaign_revalidation(
+    pool,
+    *,
+    campaign_id: _uuid.UUID,
+    metadata: dict[str, Any],
+    audit: dict[str, Any],
+    action: str,
+) -> None:
+    merged_metadata = dict(metadata)
+    merged_metadata["latest_specificity_audit"] = {
+        **audit,
+        "boundary": action,
+    }
+    await pool.execute(
+        "UPDATE b2b_campaigns SET metadata = $1::jsonb WHERE id = $2",
+        json.dumps(merged_metadata, default=str),
+        campaign_id,
+    )
+
+
+async def _enforce_campaign_revalidation(
+    pool,
+    *,
+    campaign_id: _uuid.UUID,
+    campaign: dict[str, Any],
+    company_context: Any,
+    action: str,
+) -> None:
+    audit = _campaign_revalidation_audit(
+        campaign=campaign,
+        company_context=company_context,
+    )
+    if not audit:
+        return
+    metadata = _coerce_json_dict(campaign.get("metadata"))
+    await _persist_campaign_revalidation(
+        pool,
+        campaign_id=campaign_id,
+        metadata=metadata,
+        audit=audit,
+        action=action,
+    )
+    if audit.get("status") != "fail":
+        return
+    blocking_issues = list(audit.get("blocking_issues") or [])
+    warnings = list(audit.get("warnings") or [])
+    summary = blocking_issues[0] if blocking_issues else "campaign_revalidation_failed"
+    await log_campaign_event(
+        pool,
+        event_type="revalidation_blocked",
+        source="api",
+        campaign_id=campaign_id,
+        sequence_id=campaign.get("sequence_id"),
+        step_number=campaign.get("step_number"),
+        recipient_email=campaign.get("recipient_email"),
+        subject=campaign.get("subject"),
+        error_detail=summary,
+        metadata={"boundary": action, "audit": audit},
+    )
+    await record_attempt(
+        pool,
+        artifact_type="campaign",
+        artifact_id=str(campaign_id),
+        attempt_no=1,
+        stage=action,
+        status="rejected",
+        blocker_count=len(blocking_issues),
+        warning_count=len(warnings),
+        blocking_issues=blocking_issues,
+        warnings=warnings,
+        failure_step=action,
+        error_message=summary,
+    )
+    await emit_event(
+        pool,
+        stage="campaign",
+        event_type="revalidation_blocked",
+        entity_type="campaign",
+        entity_id=str(campaign_id),
+        summary=f"Campaign {action} blocked by specificity revalidation",
+        severity="warning",
+        actionable=True,
+        artifact_type="campaign",
+        reason_code=summary[:80],
+        decision="blocked",
+        detail={"boundary": action, "audit": audit},
+    )
+    raise HTTPException(status_code=409, detail=summary)
+
+
 # ---------------------------------------------------------------------------
 # LIST campaigns
 # ---------------------------------------------------------------------------
@@ -173,7 +344,7 @@ async def list_campaigns(
                bc.opportunity_score, bc.urgency_score, bc.channel, bc.subject,
                bc.body, bc.cta,
                bc.status, bc.batch_id, bc.llm_model, bc.created_at, bc.approved_at, bc.sent_at,
-               bc.partner_id, bc.industry, bc.recipient_email,
+               bc.partner_id, bc.industry, bc.recipient_email, bc.metadata,
                cs.company_context
         FROM b2b_campaigns bc
         LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
@@ -187,6 +358,8 @@ async def list_campaigns(
     campaigns = []
     for r in rows:
         cc = r.get("company_context")
+        metadata = _coerce_json_dict(r.get("metadata"))
+        quality = _campaign_response_quality(metadata)
         persona = None
         if cc and isinstance(cc, dict):
             persona = cc.get("target_persona")
@@ -211,6 +384,10 @@ async def list_campaigns(
             "industry": r["industry"],
             "recipient_email": r["recipient_email"],
             "target_persona": persona,
+            "quality_status": quality["quality_status"],
+            "blocker_count": quality["blocker_count"],
+            "warning_count": quality["warning_count"],
+            "latest_error_summary": quality["latest_error_summary"],
         })
 
     return {"campaigns": campaigns, "count": len(campaigns)}
@@ -226,31 +403,73 @@ async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
     """KPI summary: counts by status, top vendors, top channels."""
     pool = _pool_or_503()
 
-    scope = ""
-    scope_params: list[Any] = []
-    if user:
-        scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
-        scope_params = [user.account_id]
+    scope, scope_params = _campaign_scope_clause("bc", user)
 
     status_rows = await pool.fetch(
-        f"SELECT status, COUNT(*) AS cnt FROM b2b_campaigns{scope} GROUP BY status LIMIT 50",
+        f"SELECT bc.status, COUNT(*) AS cnt FROM b2b_campaigns bc{scope} GROUP BY bc.status LIMIT 50",
         *scope_params,
     )
     channel_rows = await pool.fetch(
-        f"SELECT channel, COUNT(*) AS cnt FROM b2b_campaigns{scope} GROUP BY channel ORDER BY cnt DESC LIMIT 50",
+        f"SELECT bc.channel, COUNT(*) AS cnt FROM b2b_campaigns bc{scope} GROUP BY bc.channel ORDER BY cnt DESC LIMIT 50",
         *scope_params,
     )
     vendor_rows = await pool.fetch(
         f"""
-        SELECT vendor_name, COUNT(*) AS cnt
-        FROM b2b_campaigns
+        SELECT bc.vendor_name, COUNT(*) AS cnt
+        FROM b2b_campaigns bc
         {scope}
-        GROUP BY vendor_name
+        GROUP BY bc.vendor_name
         ORDER BY cnt DESC
         LIMIT 10
         """,
         *scope_params,
     )
+    quality_row = await pool.fetchrow(
+        f"""
+        SELECT
+            COUNT(*) FILTER (
+                WHERE COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'pass'
+            ) AS quality_pass,
+            COUNT(*) FILTER (
+                WHERE COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'fail'
+            ) AS quality_fail,
+            COUNT(*) FILTER (
+                WHERE COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = ''
+            ) AS quality_missing,
+            COALESCE(SUM(jsonb_array_length(COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb))), 0) AS blocker_total,
+            COALESCE(SUM(jsonb_array_length(COALESCE(bc.metadata->'latest_specificity_audit'->'warnings', '[]'::jsonb))), 0) AS warning_total
+        FROM b2b_campaigns bc
+        {scope}
+        """,
+        *scope_params,
+    )
+    boundary_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(bc.metadata->'latest_specificity_audit'->>'boundary', 'missing') AS boundary,
+               COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        {scope}
+        GROUP BY boundary
+        ORDER BY cnt DESC
+        LIMIT 10
+        """,
+        *scope_params,
+    )
+    blocker_rows = await pool.fetch(
+        f"""
+        SELECT blocker.reason AS reason, COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        JOIN LATERAL jsonb_array_elements_text(
+            COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
+        ) AS blocker(reason) ON TRUE
+        {scope}
+        GROUP BY blocker.reason
+        ORDER BY cnt DESC, blocker.reason ASC
+        LIMIT 5
+        """,
+        *scope_params,
+    )
+    quality = dict(quality_row or {})
 
     return {
         "by_status": {r["status"]: r["cnt"] for r in status_rows},
@@ -260,6 +479,21 @@ async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
             for r in vendor_rows
         ],
         "total": sum(r["cnt"] for r in status_rows),
+        "quality": {
+            "pass": int(quality.get("quality_pass") or 0),
+            "fail": int(quality.get("quality_fail") or 0),
+            "missing": int(quality.get("quality_missing") or 0),
+            "blocker_total": int(quality.get("blocker_total") or 0),
+            "warning_total": int(quality.get("warning_total") or 0),
+            "by_boundary": {
+                str(r["boundary"] or "missing"): int(r["cnt"] or 0)
+                for r in boundary_rows
+            },
+            "top_blockers": [
+                {"reason": str(r["reason"] or ""), "count": int(r["cnt"] or 0)}
+                for r in blocker_rows
+            ],
+        },
     }
 
 
@@ -667,7 +901,7 @@ async def review_queue(
         f"""
         SELECT bc.id, bc.company_name, bc.vendor_name, bc.channel,
                bc.subject, bc.body, bc.cta, bc.status, bc.step_number,
-               bc.recipient_email, bc.partner_id, bc.created_at,
+               bc.recipient_email, bc.partner_id, bc.created_at, bc.metadata,
                cs.recipient_email AS seq_recipient, cs.open_count, cs.click_count,
                cs.status AS seq_status, cs.current_step, cs.max_steps,
                cs.company_context,
@@ -693,11 +927,14 @@ async def review_queue(
     drafts = []
     for r in rows:
         d = _row_to_dict(r)
+        quality = _campaign_response_quality(r.get("metadata"))
         # Extract persona from company_context, then drop the large blob
         cc = r.get("company_context")
         if cc and isinstance(cc, dict):
             d["target_persona"] = cc.get("target_persona")
         d.pop("company_context", None)
+        d.pop("metadata", None)
+        d.update(quality)
         drafts.append(d)
 
     return {
@@ -789,8 +1026,9 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = require_b2b_plan(
         campaign = await pool.fetchrow(
             """
             SELECT bc.id, bc.status, bc.recipient_email, bc.sequence_id,
-                   bc.step_number, bc.subject,
-                   cs.recipient_email AS seq_recipient
+                   bc.step_number, bc.subject, bc.body, bc.channel, bc.metadata,
+                   cs.recipient_email AS seq_recipient,
+                   cs.company_context
             FROM b2b_campaigns bc
             LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
             WHERE bc.id = $1
@@ -823,6 +1061,18 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = require_b2b_plan(
             continue
 
         if body.action == "approve":
+            if settings.b2b_campaign.revalidate_before_manual_approval:
+                try:
+                    await _enforce_campaign_revalidation(
+                        pool,
+                        campaign_id=cid,
+                        campaign=dict(campaign),
+                        company_context=campaign.get("company_context"),
+                        action="manual_approval",
+                    )
+                except HTTPException as exc:
+                    failed.append({"id": cid_str, "reason": str(exc.detail)})
+                    continue
             result = await pool.execute(
                 "UPDATE b2b_campaigns SET status = 'approved', approved_at = $1 WHERE id = $2 AND status = 'draft'",
                 now, cid,
@@ -848,6 +1098,21 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = require_b2b_plan(
         if sup:
             failed.append({"id": cid_str, "reason": f"recipient suppressed ({sup['reason']})"})
             continue
+
+        if settings.b2b_campaign.revalidate_before_queue_send:
+            try:
+                queued_campaign = dict(campaign)
+                queued_campaign["recipient_email"] = recipient
+                await _enforce_campaign_revalidation(
+                    pool,
+                    campaign_id=cid,
+                    campaign=queued_campaign,
+                    company_context=campaign.get("company_context"),
+                    action="queue_send",
+                )
+            except HTTPException as exc:
+                failed.append({"id": cid_str, "reason": str(exc.detail)})
+                continue
 
         result = await pool.execute(
             """
@@ -969,8 +1234,58 @@ async def review_queue_summary():
         ORDER BY count DESC
         """
     )
+    quality_row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (
+                WHERE bc.status = 'draft'
+                  AND COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'pass'
+            ) AS quality_pass,
+            COUNT(*) FILTER (
+                WHERE bc.status = 'draft'
+                  AND COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'fail'
+            ) AS quality_fail,
+            COUNT(*) FILTER (
+                WHERE bc.status = 'draft'
+                  AND COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = ''
+            ) AS quality_missing,
+            COALESCE(SUM(
+                CASE
+                    WHEN bc.status = 'draft'
+                    THEN jsonb_array_length(COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb))
+                    ELSE 0
+                END
+            ), 0) AS blocker_total
+        FROM b2b_campaigns bc
+        """
+    )
+    boundary_rows = await pool.fetch(
+        """
+        SELECT COALESCE(bc.metadata->'latest_specificity_audit'->>'boundary', 'missing') AS boundary,
+               COUNT(*) AS count
+        FROM b2b_campaigns bc
+        WHERE bc.status = 'draft'
+        GROUP BY boundary
+        ORDER BY count DESC
+        LIMIT 10
+        """
+    )
+    blocker_rows = await pool.fetch(
+        """
+        SELECT blocker.reason AS reason, COUNT(*) AS count
+        FROM b2b_campaigns bc
+        JOIN LATERAL jsonb_array_elements_text(
+            COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
+        ) AS blocker(reason) ON TRUE
+        WHERE bc.status = 'draft'
+        GROUP BY blocker.reason
+        ORDER BY count DESC, blocker.reason ASC
+        LIMIT 5
+        """
+    )
 
     r = dict(row)
+    quality = dict(quality_row or {})
     return {
         "pending_review": r["pending_review"],
         "pending_recipient": r["pending_recipient"],
@@ -978,6 +1293,18 @@ async def review_queue_summary():
         "suppressed": r["suppressed"],
         "oldest_draft_age_hours": round(r["oldest_draft_age_hours"], 1) if r["oldest_draft_age_hours"] is not None else None,
         "by_partner": [{"partner_name": p["name"], "count": p["count"]} for p in by_partner],
+        "quality_pass": int(quality.get("quality_pass") or 0),
+        "quality_fail": int(quality.get("quality_fail") or 0),
+        "quality_missing": int(quality.get("quality_missing") or 0),
+        "blocker_total": int(quality.get("blocker_total") or 0),
+        "by_boundary": [
+            {"boundary": str(item["boundary"] or "missing"), "count": int(item["count"] or 0)}
+            for item in boundary_rows
+        ],
+        "top_blockers": [
+            {"reason": str(item["reason"] or ""), "count": int(item["count"] or 0)}
+            for item in blocker_rows
+        ],
     }
 
 
@@ -1398,6 +1725,7 @@ async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optiona
             raise HTTPException(status_code=403, detail="Campaign vendor not in your tracked list")
 
     r = dict(row)
+    quality = _campaign_response_quality(r.get("metadata"))
     r["id"] = str(r["id"])
     if r.get("partner_id"):
         r["partner_id"] = str(r["partner_id"])
@@ -1406,6 +1734,7 @@ async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optiona
             r[ts_field] = r[ts_field].isoformat()
     if r.get("source_review_ids"):
         r["source_review_ids"] = [str(u) for u in r["source_review_ids"]]
+    r.update(quality)
     return r
 
 
@@ -1463,6 +1792,31 @@ async def approve_campaign(
 
     pool = _pool_or_503()
 
+    campaign = await pool.fetchrow(
+        """
+        SELECT bc.*, cs.company_context
+        FROM b2b_campaigns bc
+        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
+        WHERE bc.id = $1
+        """,
+        cid,
+    )
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if campaign["status"] != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Campaign is '{campaign['status']}', can only approve drafts",
+        )
+    if settings.b2b_campaign.revalidate_before_manual_approval:
+        await _enforce_campaign_revalidation(
+            pool,
+            campaign_id=cid,
+            campaign=dict(campaign),
+            company_context=campaign.get("company_context"),
+            action="manual_approval",
+        )
+
     now = datetime.now(timezone.utc)
     row = await pool.fetchrow(
         """
@@ -1474,14 +1828,9 @@ async def approve_campaign(
         now, cid,
     )
     if not row:
-        existing = await pool.fetchval(
-            "SELECT status FROM b2b_campaigns WHERE id = $1", cid
-        )
-        if existing is None:
-            raise HTTPException(status_code=404, detail="Campaign not found")
         raise HTTPException(
             status_code=409,
-            detail=f"Campaign is '{existing}', can only approve drafts",
+            detail="Campaign status changed concurrently",
         )
 
     await log_campaign_event(
@@ -1511,7 +1860,13 @@ async def queue_campaign_for_send(
     pool = _pool_or_503()
 
     campaign = await pool.fetchrow(
-        "SELECT * FROM b2b_campaigns WHERE id = $1", cid
+        """
+        SELECT bc.*, cs.company_context
+        FROM b2b_campaigns bc
+        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
+        WHERE bc.id = $1
+        """,
+        cid,
     )
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -1547,6 +1902,17 @@ async def queue_campaign_for_send(
         raise HTTPException(
             status_code=409,
             detail=f"Recipient is suppressed ({sup['reason']})"
+        )
+
+    if settings.b2b_campaign.revalidate_before_queue_send:
+        queued_campaign = dict(campaign)
+        queued_campaign["recipient_email"] = recipient
+        await _enforce_campaign_revalidation(
+            pool,
+            campaign_id=cid,
+            campaign=queued_campaign,
+            company_context=campaign.get("company_context"),
+            action="queue_send",
         )
 
     result = await pool.execute(

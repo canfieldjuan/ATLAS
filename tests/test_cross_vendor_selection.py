@@ -170,3 +170,49 @@ async def test_select_asymmetry_pairs_require_overlap_and_resource_divergence():
 
     assert ("HubSpot", "Salesforce") in result
     assert all("Canva" not in pair for pair in result)
+
+
+@pytest.mark.asyncio
+async def test_select_asymmetry_pairs_require_same_category_even_with_shared_context():
+    vendor_scores = [
+        {"vendor_name": "Metabase", "avg_urgency": 6.4, "total_reviews": 80},
+        {"vendor_name": "HubSpot", "avg_urgency": 6.5, "total_reviews": 420},
+        {"vendor_name": "Tableau", "avg_urgency": 6.6, "total_reviews": 500},
+    ]
+    evidence = {
+        "Metabase": {
+            "product_category": "Data & Analytics",
+            "top_use_cases": ["dashboarding"],
+            "buyer_authority": {"role_types": {"operations": 3}},
+        },
+        "HubSpot": {
+            "product_category": "Marketing Automation",
+            "top_use_cases": ["dashboarding"],
+            "buyer_authority": {"role_types": {"operations": 4}},
+        },
+        "Tableau": {
+            "product_category": "Data and Analytics",
+            "top_use_cases": ["dashboarding"],
+            "buyer_authority": {"role_types": {"operations": 2}},
+        },
+    }
+    profiles = {
+        "Metabase": {"typical_company_size": ["smb"], "product_category": "Data & Analytics"},
+        "HubSpot": {"typical_company_size": ["enterprise"], "product_category": "Marketing Automation"},
+        "Tableau": {"typical_company_size": ["enterprise"], "product_category": "Data and Analytics"},
+    }
+
+    result = await select_asymmetry_pairs(
+        vendor_scores,
+        evidence,
+        profiles,
+        max_pairs=5,
+        pressure_delta_max=1.5,
+        review_ratio_min=3.0,
+        segment_divergence_bonus=5.0,
+        min_divergence_score=2.0,
+        min_context_score=2.0,
+    )
+
+    assert ("Metabase", "Tableau") in result
+    assert all("HubSpot" not in pair for pair in result)

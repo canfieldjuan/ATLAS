@@ -1,5 +1,9 @@
 # Stratified Reasoning Architecture
 
+> Historical document: this captures the pre-synthesis architecture plan. The
+> current production B2B pipeline is synthesis-first and no longer runs the
+> in-core stratified reasoner described below.
+
 ## B2B Churn Intelligence — Deep Reasoning Revamp
 
 **Lead**: Claude (AI)

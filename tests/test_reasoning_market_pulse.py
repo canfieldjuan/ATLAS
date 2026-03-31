@@ -1,47 +1,7 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from atlas_brain.reasoning.market_pulse import MarketPulseReasoner
 from atlas_brain.reasoning.temporal import TemporalEvidence, VendorVelocity
-
-@pytest.mark.asyncio
-async def test_category_payload_includes_market_regime():
-    """Verify _build_category_payload accepts and includes market_regime."""
-    from atlas_brain.reasoning.cross_vendor import _build_category_payload
-    
-    payload = _build_category_payload(
-        "CRM", 
-        vendor_evidence={}, 
-        ecosystem={}, 
-        displacement_flows=[], 
-        market_regime={"regime_type": "high_churn"}
-    )
-    assert "market_pulse" in payload
-    assert payload["market_pulse"]["regime_type"] == "high_churn"
-
-@pytest.mark.asyncio
-async def test_analyze_category_signature():
-    """Verify CrossVendorReasoner.analyze_category accepts market_regime."""
-    from atlas_brain.reasoning.cross_vendor import CrossVendorReasoner
-    
-    cv = CrossVendorReasoner(MagicMock())
-    cv._call_llm = AsyncMock()
-    
-    await cv.analyze_category(
-        "CRM", 
-        vendor_evidence={}, 
-        ecosystem={}, 
-        displacement_flows=[], 
-        market_regime={"regime_type": "test"}
-    )
-    
-    # Check if _call_llm was called
-    assert cv._call_llm.called
-    # Check payload passed to _call_llm
-    call_args = cv._call_llm.call_args
-    payload = call_args[0][1] # 2nd arg
-    assert "market_pulse" in payload
-    assert payload["market_pulse"]["regime_type"] == "test"
 
 @pytest.mark.asyncio
 async def test_temporal_evidence_reconstruction_logic():

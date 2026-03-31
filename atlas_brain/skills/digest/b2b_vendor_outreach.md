@@ -45,6 +45,9 @@ You receive a JSON object with:
   - `top_displacement_targets`
   - `top_feature_gaps`
   - `pain_labels`
+  - `reasoning_anchor_examples`
+  - `reasoning_witness_highlights`
+  - `reasoning_reference_ids`
 - `channel`: "email_cold" | "email_followup"
 - `cold_email_context` (only on `email_followup`): `{subject, body}` of the cold email already sent
 
@@ -151,5 +154,7 @@ Return a JSON object:
    - If `top_feature_gaps` or `pain_labels` is present, use it to tighten the angle.
    - If `top_displacement_targets` is present, reserve competitor naming for the follow-up.
    - `priority_account_names` is internal targeting context only. Never reveal those names in the email.
+   - If `reasoning_anchor_examples` or `reasoning_witness_highlights` is present, use at least one concrete proof anchor such as a timing trigger, spend signal, pain-specific detail, or competitor pattern when allowed for the channel.
+   - Never reveal a private account name from those anchor fields. Use the detail, not the identity.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

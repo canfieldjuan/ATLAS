@@ -20,6 +20,12 @@ from ...config import settings
 from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ..visibility import emit_event, record_attempt
+from ._b2b_specificity import (
+    merge_specificity_contexts,
+    specificity_audit_snapshot,
+    surface_specificity_context,
+)
 from ._b2b_shared import _battle_card_company_is_display_safe
 from .b2b_vendor_briefing import build_gate_url
 from .campaign_audit import log_campaign_event
@@ -257,6 +263,118 @@ def _validate_campaign_content(
     parsed = {**parsed, "subject": subject, "body": body, "cta": cta}
     return parsed, issues
 
+
+def _campaign_artifact_key(
+    *,
+    company_name: str,
+    batch_id: str | None,
+    channel: str,
+) -> str:
+    company = str(company_name or "").strip() or "unknown_company"
+    batch = str(batch_id or "").strip() or "no_batch"
+    ch = str(channel or "").strip() or "unknown_channel"
+    return f"{batch}:{company}:{ch}"
+
+
+def _campaign_specificity_context(payload: dict[str, Any]) -> dict[str, Any]:
+    direct = surface_specificity_context(
+        payload,
+        surface="campaign",
+        nested_keys=("briefing_context",),
+    )
+    company_context = payload.get("company_context")
+    nested = surface_specificity_context(
+        company_context,
+        surface="campaign",
+        nested_keys=("briefing_context",),
+    ) if isinstance(company_context, dict) else {}
+    return merge_specificity_contexts(direct, nested)
+
+
+def _campaign_specificity_audit(
+    *,
+    body: str,
+    channel: str,
+    specificity_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    context = specificity_context if isinstance(specificity_context, dict) else {}
+    return specificity_audit_snapshot(
+        body,
+        anchor_examples=context.get("anchor_examples"),
+        witness_highlights=context.get("witness_highlights"),
+        reference_ids=context.get("reference_ids"),
+        allow_company_names=False,
+        min_anchor_hits=int(settings.b2b_campaign.specificity_min_anchor_hits),
+        require_anchor_support=bool(
+            settings.b2b_campaign.specificity_require_anchor_support
+        ),
+        require_timing_or_numeric_when_available=bool(
+            settings.b2b_campaign.specificity_require_timing_or_numeric_when_available
+        ),
+        include_competitor_terms=channel != "email_cold",
+    )
+
+
+def _campaign_storage_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    specificity_context = payload.get("_campaign_specificity_context")
+    if isinstance(specificity_context, dict):
+        if specificity_context.get("anchor_examples"):
+            metadata["reasoning_anchor_examples"] = specificity_context["anchor_examples"]
+        if specificity_context.get("witness_highlights"):
+            metadata["reasoning_witness_highlights"] = specificity_context["witness_highlights"]
+        if specificity_context.get("reference_ids"):
+            metadata["reasoning_reference_ids"] = specificity_context["reference_ids"]
+    generation_audit = payload.get("_generation_audit")
+    if isinstance(generation_audit, dict) and generation_audit:
+        metadata["generation_audit"] = generation_audit
+        specificity = generation_audit.get("specificity")
+        if isinstance(specificity, dict) and specificity:
+            metadata["latest_specificity_audit"] = specificity
+    return metadata
+
+
+async def _record_campaign_generation_failure(
+    pool,
+    *,
+    artifact_id: str,
+    company_name: str,
+    channel: str,
+    generation_audit: dict[str, Any] | None,
+) -> None:
+    audit = generation_audit if isinstance(generation_audit, dict) else {}
+    specificity = audit.get("specificity") if isinstance(audit.get("specificity"), dict) else {}
+    blocking_issues = list(specificity.get("blocking_issues") or [])
+    warnings = list(specificity.get("warnings") or [])
+    failure_reason = str(audit.get("failure_reason") or "generation_failed")
+    await record_attempt(
+        pool,
+        artifact_type="campaign",
+        artifact_id=artifact_id,
+        attempt_no=1,
+        stage="generation",
+        status="failed",
+        blocker_count=len(blocking_issues),
+        warning_count=len(warnings),
+        blocking_issues=blocking_issues,
+        warnings=warnings,
+        failure_step="generation",
+        error_message=failure_reason,
+    )
+    await emit_event(
+        pool,
+        stage="campaign_generation",
+        event_type="generation_failure",
+        entity_type="campaign",
+        entity_id=artifact_id,
+        summary=f"Campaign generation failed for {company_name} / {channel}",
+        severity="warning",
+        actionable=True,
+        artifact_type="campaign",
+        reason_code=failure_reason[:80],
+        detail=audit,
+    )
+
 # Reuse scoring constants from b2b_affiliates
 _ROLE_SCORES = {
     "decision_maker": 20,
@@ -464,6 +582,14 @@ def _briefing_context_from_data(briefing_data: Any) -> dict[str, Any]:
             }
             for p in pain_with_urgency[:4]
         ]
+
+    specificity = surface_specificity_context(briefing, surface="campaign")
+    if specificity.get("anchor_examples"):
+        context["reasoning_anchor_examples"] = specificity["anchor_examples"]
+    if specificity.get("witness_highlights"):
+        context["reasoning_witness_highlights"] = specificity["witness_highlights"]
+    if specificity.get("reference_ids"):
+        context["reasoning_reference_ids"] = specificity["reference_ids"]
 
     return context
 
@@ -1154,6 +1280,9 @@ async def list_churning_company_review_candidates(
             "pain_categories": base_context.get("pain_categories") or [],
             "key_quotes": base_context.get("key_quotes") or [],
             "competitors_considering": base_context.get("competitors_considering") or [],
+            "reasoning_anchor_examples": base_context.get("reasoning_anchor_examples") or {},
+            "reasoning_witness_highlights": base_context.get("reasoning_witness_highlights") or [],
+            "reasoning_reference_ids": base_context.get("reasoning_reference_ids") or {},
             "comparison_asset": comparison_asset,
             "primary_blog_post": prepared["primary_blog_post"],
             "supporting_blog_posts": prepared["ordered_blog_posts"],
@@ -1379,6 +1508,11 @@ async def _generate_churning_company_campaigns(
 
             for channel in cfg.channels:
                 payload = {**persona_context, "channel": channel}
+                artifact_id = _campaign_artifact_key(
+                    company_name=company_name,
+                    batch_id=persona_batch_id,
+                    channel=channel,
+                )
 
                 # Inject cold email context for follow-up
                 if channel == "email_followup" and cold_email_content:
@@ -1395,6 +1529,17 @@ async def _generate_churning_company_campaigns(
                             "subject": content.get("subject", ""),
                             "body": content.get("body", ""),
                         }
+                    metadata = _campaign_storage_metadata(payload)
+                    generation_audit = (
+                        payload.get("_generation_audit")
+                        if isinstance(payload.get("_generation_audit"), dict)
+                        else {}
+                    )
+                    specificity = (
+                        generation_audit.get("specificity")
+                        if isinstance(generation_audit.get("specificity"), dict)
+                        else {}
+                    )
 
                     try:
                         review_ids = [o["review_id"] for o in opps if o.get("review_id")][:20]
@@ -1408,13 +1553,13 @@ async def _generate_churning_company_campaigns(
                                 key_quotes, source_review_ids,
                                 channel, subject, body, cta,
                                 status, batch_id, llm_model,
-                                partner_id, industry, target_mode,
+                                partner_id, industry, target_mode, metadata,
                                 score_components
                             ) VALUES (
                                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                                 $11, $12, $13, $14, $15, $16, $17, $18,
-                                $19, $20, $21, $22, $23, $24,
-                                $25::jsonb
+                                $19, $20, $21, $22, $23, $24, $25::jsonb,
+                                $26::jsonb
                             )
                             """,
                             company_name,
@@ -1441,15 +1586,48 @@ async def _generate_churning_company_campaigns(
                             _uuid.UUID(partner_id) if partner_id else None,
                             persona_context.get("industry"),
                             "churning_company",
+                            json.dumps(metadata, default=str),
                             json.dumps(best.get("score_components")),
+                        )
+                        await record_attempt(
+                            pool,
+                            artifact_type="campaign",
+                            artifact_id=artifact_id,
+                            attempt_no=1,
+                            stage="generation",
+                            status="succeeded",
+                            blocker_count=len(specificity.get("blocking_issues") or []),
+                            warning_count=len(specificity.get("warnings") or []),
+                            warnings=list(specificity.get("warnings") or []),
                         )
                         generated += 1
                     except Exception:
                         logger.exception(
                             "Failed to store campaign for %s/%s/%s", company_name, persona, channel
                         )
+                        await record_attempt(
+                            pool,
+                            artifact_type="campaign",
+                            artifact_id=artifact_id,
+                            attempt_no=1,
+                            stage="storage",
+                            status="failed",
+                            blocker_count=len(specificity.get("blocking_issues") or []),
+                            warning_count=len(specificity.get("warnings") or []),
+                            blocking_issues=list(specificity.get("blocking_issues") or []),
+                            warnings=list(specificity.get("warnings") or []),
+                            failure_step="storage",
+                            error_message="campaign_storage_failed",
+                        )
                         failed += 1
                 else:
+                    await _record_campaign_generation_failure(
+                        pool,
+                        artifact_id=artifact_id,
+                        company_name=company_name,
+                        channel=channel,
+                        generation_audit=payload.get("_generation_audit"),
+                    )
                     failed += 1
 
             # Create campaign sequence for the cold email (if sequences enabled)
@@ -1888,6 +2066,11 @@ async def _generate_vendor_campaigns(
                 ),
                 "channel": channel,
             }
+            artifact_id = _campaign_artifact_key(
+                company_name=vendor_name,
+                batch_id=batch_id,
+                channel=channel,
+            )
             if channel == "email_followup" and cold_email_content:
                 payload["cold_email_context"] = cold_email_content
 
@@ -1901,6 +2084,17 @@ async def _generate_vendor_campaigns(
                         "subject": content.get("subject", ""),
                         "body": content.get("body", ""),
                     }
+                metadata = _campaign_storage_metadata(payload)
+                generation_audit = (
+                    payload.get("_generation_audit")
+                    if isinstance(payload.get("_generation_audit"), dict)
+                    else {}
+                )
+                specificity = (
+                    generation_audit.get("specificity")
+                    if isinstance(generation_audit.get("specificity"), dict)
+                    else {}
+                )
                 try:
                     await pool.execute(
                         """
@@ -1911,13 +2105,13 @@ async def _generate_vendor_campaigns(
                             decision_timeline, buying_stage, role_type,
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
-                            status, batch_id, llm_model, industry, target_mode,
+                            status, batch_id, llm_model, industry, target_mode, metadata,
                             recipient_email, score_components
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23, $24,
-                            $25::jsonb
+                            $19, $20, $21, $22, $23, $24::jsonb,
+                            $25, $26::jsonb
                         )
                         """,
                         vendor_name,  # company_name = the vendor we're targeting
@@ -1943,14 +2137,47 @@ async def _generate_vendor_campaigns(
                         llm_model_name,
                         best.get("industry"),
                         "vendor_retention",
+                        json.dumps(metadata, default=str),
                         target.get("contact_email"),
                         json.dumps(best.get("score_components")),
+                    )
+                    await record_attempt(
+                        pool,
+                        artifact_type="campaign",
+                        artifact_id=artifact_id,
+                        attempt_no=1,
+                        stage="generation",
+                        status="succeeded",
+                        blocker_count=len(specificity.get("blocking_issues") or []),
+                        warning_count=len(specificity.get("warnings") or []),
+                        warnings=list(specificity.get("warnings") or []),
                     )
                     generated += 1
                 except Exception:
                     logger.exception("Failed to store vendor campaign for %s/%s", vendor_name, channel)
+                    await record_attempt(
+                        pool,
+                        artifact_type="campaign",
+                        artifact_id=artifact_id,
+                        attempt_no=1,
+                        stage="storage",
+                        status="failed",
+                        blocker_count=len(specificity.get("blocking_issues") or []),
+                        warning_count=len(specificity.get("warnings") or []),
+                        blocking_issues=list(specificity.get("blocking_issues") or []),
+                        warnings=list(specificity.get("warnings") or []),
+                        failure_step="storage",
+                        error_message="campaign_storage_failed",
+                    )
                     failed += 1
             else:
+                await _record_campaign_generation_failure(
+                    pool,
+                    artifact_id=artifact_id,
+                    company_name=vendor_name,
+                    channel=channel,
+                    generation_audit=payload.get("_generation_audit"),
+                )
                 failed += 1
 
         # Create campaign sequence for the cold email (if sequences enabled)
@@ -2320,6 +2547,11 @@ async def _generate_challenger_campaigns(
                 ),
                 "channel": channel,
             }
+            artifact_id = _campaign_artifact_key(
+                company_name=challenger_name,
+                batch_id=batch_id,
+                channel=channel,
+            )
             if channel == "email_followup" and cold_email_content:
                 payload["cold_email_context"] = cold_email_content
 
@@ -2333,6 +2565,17 @@ async def _generate_challenger_campaigns(
                         "subject": content.get("subject", ""),
                         "body": content.get("body", ""),
                     }
+                metadata = _campaign_storage_metadata(payload)
+                generation_audit = (
+                    payload.get("_generation_audit")
+                    if isinstance(payload.get("_generation_audit"), dict)
+                    else {}
+                )
+                specificity = (
+                    generation_audit.get("specificity")
+                    if isinstance(generation_audit.get("specificity"), dict)
+                    else {}
+                )
                 try:
                     await pool.execute(
                         """
@@ -2343,13 +2586,13 @@ async def _generate_challenger_campaigns(
                             decision_timeline, buying_stage, role_type,
                             key_quotes, source_review_ids,
                             channel, subject, body, cta,
-                            status, batch_id, llm_model, industry, target_mode,
+                            status, batch_id, llm_model, industry, target_mode, metadata,
                             recipient_email, score_components
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                             $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23, $24,
-                            $25::jsonb
+                            $19, $20, $21, $22, $23, $24::jsonb,
+                            $25, $26::jsonb
                         )
                         """,
                         challenger_name,  # company_name = the challenger we're targeting
@@ -2375,14 +2618,47 @@ async def _generate_challenger_campaigns(
                         llm_model_name,
                         best.get("industry"),
                         "challenger_intel",
+                        json.dumps(metadata, default=str),
                         target.get("contact_email"),
                         json.dumps(best.get("score_components")),
+                    )
+                    await record_attempt(
+                        pool,
+                        artifact_type="campaign",
+                        artifact_id=artifact_id,
+                        attempt_no=1,
+                        stage="generation",
+                        status="succeeded",
+                        blocker_count=len(specificity.get("blocking_issues") or []),
+                        warning_count=len(specificity.get("warnings") or []),
+                        warnings=list(specificity.get("warnings") or []),
                     )
                     generated += 1
                 except Exception:
                     logger.exception("Failed to store challenger campaign for %s/%s", challenger_name, channel)
+                    await record_attempt(
+                        pool,
+                        artifact_type="campaign",
+                        artifact_id=artifact_id,
+                        attempt_no=1,
+                        stage="storage",
+                        status="failed",
+                        blocker_count=len(specificity.get("blocking_issues") or []),
+                        warning_count=len(specificity.get("warnings") or []),
+                        blocking_issues=list(specificity.get("blocking_issues") or []),
+                        warnings=list(specificity.get("warnings") or []),
+                        failure_step="storage",
+                        error_message="campaign_storage_failed",
+                    )
                     failed += 1
             else:
+                await _record_campaign_generation_failure(
+                    pool,
+                    artifact_id=artifact_id,
+                    company_name=challenger_name,
+                    channel=channel,
+                    generation_audit=payload.get("_generation_audit"),
+                )
                 failed += 1
 
         # Create campaign sequence for the cold email (if sequences enabled)
@@ -2659,6 +2935,183 @@ def _parse_json_field(val) -> list:
     return []
 
 
+def _campaign_quote_texts(value: Any) -> list[str]:
+    phrases = _parse_json_field(value)
+    texts: list[str] = []
+    for phrase in phrases:
+        if isinstance(phrase, str):
+            text = phrase.strip()
+        elif isinstance(phrase, dict):
+            text = str(
+                phrase.get("text")
+                or phrase.get("phrase")
+                or phrase.get("quote")
+                or phrase.get("best_quote")
+                or ""
+            ).strip()
+        else:
+            text = ""
+        if text and text not in texts:
+            texts.append(text)
+    return texts
+
+
+def _campaign_primary_pain_category(opp: dict[str, Any]) -> str:
+    for item in _parse_json_field(opp.get("pain_json")):
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        if category:
+            return category
+    return ""
+
+
+def _campaign_numeric_literals(opp: dict[str, Any]) -> dict[str, list[str]]:
+    literals: dict[str, list[str]] = {}
+    seat_count = opp.get("seat_count")
+    try:
+        seats = int(seat_count) if seat_count not in (None, "") else 0
+    except (TypeError, ValueError):
+        seats = 0
+    if seats > 0:
+        literals["seat_count"] = [str(seats)]
+    return literals
+
+
+def _build_churning_company_anchor_context(
+    best: dict[str, Any],
+    all_opps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    pain_counts: dict[str, int] = {}
+    for opp in all_opps:
+        category = _campaign_primary_pain_category(opp)
+        if category:
+            pain_counts[category.lower()] = pain_counts.get(category.lower(), 0) + 1
+    dominant_pain = ""
+    if pain_counts:
+        dominant_pain = max(
+            pain_counts.items(),
+            key=lambda item: (item[1], item[0]),
+        )[0]
+
+    candidates: list[dict[str, Any]] = []
+    for opp in all_opps:
+        review_id = str(opp.get("review_id") or "").strip()
+        quote_texts = _campaign_quote_texts(opp.get("quotable_phrases"))
+        excerpt = quote_texts[0] if quote_texts else ""
+        if not excerpt:
+            continue
+
+        competitor = ""
+        competitors = opp.get("competitors") or []
+        if isinstance(competitors, list):
+            for item in competitors:
+                if isinstance(item, dict):
+                    competitor = str(item.get("name") or "").strip()
+                else:
+                    competitor = str(item or "").strip()
+                if competitor:
+                    break
+
+        feature_gaps: list[str] = []
+        for gap in _parse_json_field(opp.get("feature_gaps")):
+            if isinstance(gap, dict):
+                label = str(
+                    gap.get("feature") or gap.get("name") or gap.get("gap") or ""
+                ).strip()
+            else:
+                label = str(gap or "").strip()
+            if label and label not in feature_gaps:
+                feature_gaps.append(label)
+
+        numeric_literals = _campaign_numeric_literals(opp)
+        pain_category = _campaign_primary_pain_category(opp)
+        time_anchor = str(
+            opp.get("contract_end") or opp.get("decision_timeline") or ""
+        ).strip()
+        witness_id = (
+            f"campaign_witness:{review_id}:0"
+            if review_id
+            else f"campaign_witness:{str(best.get('vendor_name') or '').lower()}:{len(candidates)}"
+        )
+        candidates.append({
+            "witness_id": witness_id,
+            "excerpt_text": excerpt,
+            "reviewer_company": str(opp.get("reviewer_company") or "").strip(),
+            "time_anchor": time_anchor,
+            "competitor": competitor,
+            "pain_category": pain_category,
+            "signal_tags": feature_gaps[:3],
+            "numeric_literals": numeric_literals,
+            "_urgency": _safe_float(opp.get("urgency"), 0),
+            "_has_numeric": bool(numeric_literals),
+            "_has_time": bool(time_anchor),
+            "_has_competitor": bool(competitor),
+            "_is_common_pattern": bool(
+                dominant_pain and pain_category and pain_category.lower() == dominant_pain
+            ),
+        })
+
+    if not candidates:
+        return {}
+
+    candidates.sort(
+        key=lambda item: (
+            item["_has_numeric"],
+            item["_has_time"],
+            item["_has_competitor"],
+            item["_is_common_pattern"],
+            item["_urgency"],
+            len(str(item.get("excerpt_text") or "")),
+            str(item.get("witness_id") or ""),
+        ),
+        reverse=True,
+    )
+
+    anchor_examples: dict[str, list[dict[str, Any]]] = {}
+    used_ids: set[str] = set()
+    for label, predicate in (
+        ("outlier_or_named_account", lambda item: True),
+        ("common_pattern", lambda item: bool(item.get("_is_common_pattern"))),
+    ):
+        for candidate in candidates:
+            witness_id = str(candidate.get("witness_id") or "")
+            if witness_id in used_ids or not predicate(candidate):
+                continue
+            anchor_examples[label] = [
+                {
+                    key: value
+                    for key, value in candidate.items()
+                    if not key.startswith("_")
+                },
+            ]
+            used_ids.add(witness_id)
+            break
+
+    limit = max(1, int(settings.b2b_churn.reasoning_witness_highlight_limit))
+    witness_highlights = [
+        {
+            key: value
+            for key, value in candidate.items()
+            if not key.startswith("_")
+        }
+        for candidate in candidates[:limit]
+    ]
+    reference_ids = {
+        "witness_ids": [
+            str(item.get("witness_id") or "").strip()
+            for item in witness_highlights
+            if str(item.get("witness_id") or "").strip()
+        ],
+    }
+
+    return {
+        "reasoning_anchor_examples": anchor_examples,
+        "reasoning_witness_highlights": witness_highlights,
+        "reasoning_reference_ids": reference_ids,
+    }
+
+
 def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
     """Build rich context dict for LLM from grouped opportunities."""
     pain_cats: dict[str, str] = {}
@@ -2704,7 +3157,7 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
             if isinstance(s, str) and s not in all_integrations:
                 all_integrations.append(s)
 
-    return {
+    context = {
         "company": best.get("reviewer_company") or best["vendor_name"],
         "churning_from": best["vendor_name"],
         "category": best.get("product_category", ""),
@@ -2727,6 +3180,8 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
         "integration_stack": all_integrations[:5],
         "sentiment_direction": best.get("sentiment_direction"),
     }
+    context.update(_build_churning_company_anchor_context(best, all_opps))
+    return context
 
 
 # ------------------------------------------------------------------
@@ -2933,17 +3388,23 @@ async def _generate_content(
     """Call LLM, validate output, retry once if word count exceeded."""
     from ...pipelines.llm import clean_llm_output
 
+    request_payload = payload
+    working_payload = dict(payload)
     channel = payload.get("channel", "")
     tier = payload.get("tier", "")
     last_wc = 0
     last_max = 0
+    retry_reasons: list[str] = []
+    specificity_context = _campaign_specificity_context(request_payload)
+    if specificity_context:
+        request_payload["_campaign_specificity_context"] = specificity_context
 
     for attempt in range(2):
-        user_content = json.dumps(payload, separators=(",", ":"), default=str)
+        user_content = json.dumps(working_payload, separators=(",", ":"), default=str)
 
         # On retry, prepend a revision instruction
         if attempt == 1:
-            revision = payload.pop("_revision", None)
+            revision = working_payload.pop("_revision", None)
             if revision:
                 user_content = f"{revision}\n\n{user_content}"
             elif last_wc and last_max:
@@ -2956,6 +3417,12 @@ async def _generate_content(
 
         text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
         if not text:
+            request_payload["_generation_audit"] = {
+                "status": "failed",
+                "attempts": attempt + 1,
+                "retry_reasons": retry_reasons,
+                "failure_reason": "llm_returned_empty",
+            }
             return None
 
         try:
@@ -2963,10 +3430,22 @@ async def _generate_content(
             parsed = json.loads(text)
         except json.JSONDecodeError:
             logger.warning("Failed to parse campaign generation JSON: %.200s", text)
+            request_payload["_generation_audit"] = {
+                "status": "failed",
+                "attempts": attempt + 1,
+                "retry_reasons": retry_reasons,
+                "failure_reason": "invalid_json",
+            }
             return None
 
         if not isinstance(parsed, dict) or "body" not in parsed:
             logger.warning("Campaign generation missing 'body' field")
+            request_payload["_generation_audit"] = {
+                "status": "failed",
+                "attempts": attempt + 1,
+                "retry_reasons": retry_reasons,
+                "failure_reason": "missing_body",
+            }
             return None
 
         # Validate and fix
@@ -2974,10 +3453,24 @@ async def _generate_content(
 
         if issues.get("missing_field"):
             logger.warning("Campaign missing required field: %s", issues["missing_field"])
+            request_payload["_generation_audit"] = {
+                "status": "failed",
+                "attempts": attempt + 1,
+                "retry_reasons": retry_reasons,
+                "failure_reason": f"missing_field:{issues['missing_field']}",
+                "validation_issues": issues,
+            }
             return None
 
         if issues.get("placeholders"):
             logger.warning("Campaign body contains placeholder brackets, rejecting")
+            request_payload["_generation_audit"] = {
+                "status": "failed",
+                "attempts": attempt + 1,
+                "retry_reasons": retry_reasons,
+                "failure_reason": "placeholders",
+                "validation_issues": issues,
+            }
             return None
 
         # Retry on spam trigger in subject line
@@ -2986,7 +3479,8 @@ async def _generate_content(
                 "Subject contains spam trigger %r, retrying",
                 issues["subject_spam_trigger"],
             )
-            payload = {**payload, "_revision": (
+            retry_reasons.append("subject_spam_trigger")
+            working_payload = {**working_payload, "_revision": (
                 f"REVISION REQUIRED: The subject line contains the spam "
                 f"trigger word '{issues['subject_spam_trigger']}'. Rewrite "
                 f"the subject line without urgency/alarm language. Use "
@@ -3002,6 +3496,7 @@ async def _generate_content(
                 "Campaign body %d words (max %d), retrying with correction",
                 last_wc, last_max,
             )
+            retry_reasons.append("word_count")
             continue
 
         if issues.get("word_count"):
@@ -3010,7 +3505,55 @@ async def _generate_content(
                 issues["word_count"], issues["max_words"],
             )
 
-        validated["body"] = _append_signoff(validated["body"], payload)
+        if specificity_context:
+            specificity = _campaign_specificity_audit(
+                body=validated.get("body") or "",
+                channel=channel,
+                specificity_context=specificity_context,
+            )
+            if specificity.get("blocking_issues"):
+                if attempt == 0:
+                    retry_reasons.append("specificity")
+                    working_payload = {
+                        **working_payload,
+                        "_revision": (
+                            "REVISION REQUIRED: The body is still too generic for the witness-backed briefing context. "
+                            "Use at least one concrete anchor from the provided reasoning context, such as a timing trigger, "
+                            "spend signal, pain-specific detail, or competitive alternative when allowed for the channel. "
+                            "Do not reveal private account names or review sources."
+                        ),
+                    }
+                    continue
+                logger.warning(
+                    "Campaign specificity gate failed: %s",
+                    "; ".join(specificity["blocking_issues"]),
+                )
+                request_payload["_generation_audit"] = {
+                    "status": "failed",
+                    "attempts": attempt + 1,
+                    "retry_reasons": retry_reasons,
+                    "failure_reason": "specificity_gate",
+                    "validation_issues": issues,
+                    "specificity": specificity,
+                }
+                return None
+        else:
+            specificity = None
+
+        validated["body"] = _append_signoff(validated["body"], request_payload)
+        request_payload["_generation_audit"] = {
+            "status": "succeeded",
+            "attempts": attempt + 1,
+            "retry_reasons": retry_reasons,
+            "validation_issues": issues,
+            "specificity": specificity,
+        }
         return validated
 
+    request_payload["_generation_audit"] = {
+        "status": "failed",
+        "attempts": 2,
+        "retry_reasons": retry_reasons,
+        "failure_reason": "exhausted_retries",
+    }
     return None

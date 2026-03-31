@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ._b2b_shared import _canonicalize_competitor, _segment_role_multiplier
+from ._b2b_witnesses import build_vendor_witness_artifacts
 
 # ---------------------------------------------------------------------------
 # Scoring coefficients (weights must sum to 1.0)
@@ -47,6 +48,59 @@ MIN_EVIDENCE_WINDOW_DAYS = 14
 
 # Do not surface tiny segments to sales-facing synthesis.
 MIN_SEGMENT_SAMPLE_SIZE = 5
+
+_REASONING_CORE_AGGREGATE_LABELS = frozenset({
+    "total_reviews",
+    "reviews_in_analysis_window",
+    "reviews_in_recent_window",
+    "churn_density",
+    "avg_urgency",
+    "recommend_yes",
+    "recommend_no",
+    "recommend_ratio",
+    "avg_rating",
+    "negative_review_pct",
+    "positive_review_pct",
+    "price_complaint_rate",
+    "dm_churn_rate",
+    "displacement_mention_count",
+    "total_explicit_switches",
+    "total_active_evaluations",
+    "total_flow_mentions",
+    "vendor_count",
+    "displacement_flow_count",
+    "regime_confidence",
+    "regime_avg_churn_velocity",
+    "regime_avg_price_pressure",
+    "keyword_spike_count",
+    "spike_count",
+    "evaluation_deadline_signals",
+    "contract_end_signals",
+    "renewal_signals",
+    "budget_cycle_signals",
+    "sentiment_declining",
+    "sentiment_stable",
+    "sentiment_improving",
+    "sentiment_total",
+    "declining_pct",
+    "improving_pct",
+    "price_increase_rate",
+    "price_increase_count",
+    "annual_spend_signal_count",
+    "price_per_seat_signal_count",
+    "segment_active_eval_signal_count",
+    "company_signal_count",
+    "company_signal_high_urgency_count",
+    "company_signal_evaluation_count",
+    "company_signal_active_purchase_count",
+    "company_signal_decision_maker_count",
+    "total_accounts",
+    "decision_maker_count",
+    "high_intent_count",
+    "active_eval_signal_count",
+    "enrichment_window_start",
+    "enrichment_window_end",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +196,8 @@ class CompressedPacket:
     minority_signals: list[dict[str, Any]] = field(default_factory=list)
     coverage_gaps: list[dict[str, Any]] = field(default_factory=list)
     retention_proof: list[dict[str, Any]] = field(default_factory=list)
+    witness_pack: list[dict[str, Any]] = field(default_factory=list)
+    section_packets: dict[str, Any] = field(default_factory=dict)
 
     def source_ids(self) -> frozenset[str]:
         """All valid source IDs in this packet."""
@@ -172,9 +228,37 @@ class CompressedPacket:
             sid = entry.get("_sid")
             if sid:
                 ids.add(sid)
+        for witness in self.witness_pack:
+            sid = witness.get("_sid") or witness.get("witness_id")
+            if sid:
+                ids.add(str(sid))
         return frozenset(ids)
 
-    def to_llm_payload(self) -> dict[str, Any]:
+    def _reasoning_aggregate_source_ids(self) -> set[str]:
+        """Aggregate IDs worth sending to the reasoning model."""
+        retained_prefixes = {
+            item.source_ref.source_id
+            for items in self.pools.values()
+            for item in items
+        }
+        allowed: set[str] = set()
+        for agg in self.aggregates:
+            sid = agg.source_id
+            if agg.label in _REASONING_CORE_AGGREGATE_LABELS:
+                allowed.add(sid)
+                continue
+            for prefix in retained_prefixes:
+                if sid == prefix or sid.startswith(f"{prefix}:"):
+                    allowed.add(sid)
+                    break
+        return allowed
+
+    def to_llm_payload(
+        self,
+        *,
+        compact_metric_ledger: bool = False,
+        compact_aggregates: bool = False,
+    ) -> dict[str, Any]:
         """Serialize to JSON-ready dict with ``_sid`` on every item."""
         payload: dict[str, Any] = {}
         for pool_name, items in self.pools.items():
@@ -185,14 +269,37 @@ class CompressedPacket:
                 pool_out.append(entry)
             payload[pool_name] = pool_out
 
+        allowed_aggregate_ids = (
+            self._reasoning_aggregate_source_ids()
+            if compact_aggregates
+            else None
+        )
         agg_out: dict[str, dict[str, Any]] = {}
         for agg in self.aggregates:
+            if allowed_aggregate_ids is not None and agg.source_id not in allowed_aggregate_ids:
+                continue
             agg_out[agg.label] = {"value": agg.value, "_sid": agg.source_id}
         payload["precomputed_aggregates"] = agg_out
 
         # Governance / tension signals
         if self.metric_ledger:
-            payload["metric_ledger"] = self.metric_ledger
+            metric_ledger = self.metric_ledger
+            if allowed_aggregate_ids is not None:
+                metric_ledger = [
+                    entry for entry in self.metric_ledger
+                    if str(entry.get("_sid") or "") in allowed_aggregate_ids
+                ]
+            if compact_metric_ledger:
+                payload["metric_ledger"] = [
+                    {
+                        "label": entry.get("label"),
+                        "scope": entry.get("scope"),
+                        "_sid": entry.get("_sid"),
+                    }
+                    for entry in metric_ledger
+                ]
+            else:
+                payload["metric_ledger"] = metric_ledger
         if self.contradiction_rows:
             payload["contradiction_rows"] = self.contradiction_rows
         if self.minority_signals:
@@ -201,6 +308,10 @@ class CompressedPacket:
             payload["coverage_gaps"] = self.coverage_gaps
         if self.retention_proof:
             payload["retention_proof"] = self.retention_proof
+        if self.witness_pack:
+            payload["witness_pack"] = self.witness_pack
+        if self.section_packets:
+            payload["section_packets"] = self.section_packets
 
         return payload
 
@@ -1727,11 +1838,40 @@ def compress_vendor_pools(
             )
 
     # Build governance / tension signals
+    from ...config import settings
+
+    cfg = settings.b2b_churn
     metric_ledger = _build_metric_ledger(all_aggregates)
     contradiction_rows = _build_contradiction_rows(all_pools)
     minority_signals = _build_minority_signals(all_pools, all_aggregates)
     coverage_gaps = _build_coverage_gaps(all_pools, all_aggregates)
     retention_proof = _build_retention_proof(all_pools)
+    witness_pack, section_packets = build_vendor_witness_artifacts(
+        vendor_name,
+        layers.get("reviews") or [],
+        max_witnesses=int(getattr(cfg, "reasoning_witness_max_witnesses", 12)),
+        min_specificity_score=float(
+            getattr(cfg, "witness_specificity_min_score", 2.0),
+        ),
+        fallback_min_witnesses=int(
+            getattr(cfg, "witness_specificity_fallback_min_witnesses", 4),
+        ),
+        generic_patterns=list(
+            getattr(cfg, "witness_specificity_generic_patterns", []) or [],
+        ),
+        concrete_patterns=list(
+            getattr(cfg, "witness_specificity_concrete_patterns", []) or [],
+        ),
+        short_excerpt_chars=int(
+            getattr(cfg, "witness_specificity_short_excerpt_chars", 55),
+        ),
+        long_excerpt_chars=int(
+            getattr(cfg, "witness_specificity_long_excerpt_chars", 80),
+        ),
+        specificity_weights=dict(
+            getattr(cfg, "witness_specificity_weights", {}) or {},
+        ),
+    )
 
     return CompressedPacket(
         vendor_name=vendor_name,
@@ -1743,4 +1883,6 @@ def compress_vendor_pools(
         minority_signals=minority_signals,
         coverage_gaps=coverage_gaps,
         retention_proof=retention_proof,
+        witness_pack=witness_pack,
+        section_packets=section_packets,
     )

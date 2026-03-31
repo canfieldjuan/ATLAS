@@ -24,6 +24,8 @@ import type {
   FeatureGapViewModel,
   ObjectionHandlerViewModel,
   RecommendedPlayViewModel,
+  ReasoningAnchorExamplesViewModel,
+  ReasoningWitnessViewModel,
   TalkTrackViewModel,
   VendorDeepDiveViewModel,
   VendorScorecardViewModel,
@@ -85,6 +87,70 @@ function riskColor(level: string | undefined): string {
   return colors[level ?? ''] ?? 'text-slate-300'
 }
 
+const REASONING_ANCHOR_PRIORITY = ['outlier_or_named_account', 'common_pattern', 'counterevidence'] as const
+
+const REASONING_ANCHOR_LABELS: Record<string, string> = {
+  outlier_or_named_account: 'Named Account / Outlier',
+  common_pattern: 'Common Pattern',
+  counterevidence: 'Counterevidence',
+}
+
+function reasoningWitnessKey(witness: ReasoningWitnessViewModel): string {
+  return witness.witness_id ?? witness._sid ?? `${witness.reviewer_company ?? ''}:${witness.excerpt_text ?? ''}`
+}
+
+function reasoningAnchorRows(
+  anchorExamples: ReasoningAnchorExamplesViewModel | undefined,
+  witnessHighlights: ReasoningWitnessViewModel[] | undefined,
+): Array<{ label?: string; witness: ReasoningWitnessViewModel }> {
+  const seen = new Set<string>()
+  const rows: Array<{ label?: string; witness: ReasoningWitnessViewModel }> = []
+
+  const addRow = (witness: ReasoningWitnessViewModel, label?: string) => {
+    const key = reasoningWitnessKey(witness)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    rows.push({ label, witness })
+  }
+
+  const anchors = anchorExamples ?? {}
+  const orderedLabels = [
+    ...REASONING_ANCHOR_PRIORITY,
+    ...Object.keys(anchors).filter((label) => !REASONING_ANCHOR_PRIORITY.includes(label as (typeof REASONING_ANCHOR_PRIORITY)[number])).sort(),
+  ]
+  for (const label of orderedLabels) {
+    const match = (anchors[label] ?? []).find((witness) => Boolean(reasoningWitnessKey(witness)))
+    if (match) addRow(match, label)
+  }
+  if (rows.length > 0) return rows
+
+  for (const witness of witnessHighlights ?? []) addRow(witness)
+  return rows
+}
+
+function reasoningNumericTokens(witness: ReasoningWitnessViewModel): string[] {
+  const numericLiterals = witness.numeric_literals
+  if (!numericLiterals || typeof numericLiterals !== 'object') return []
+  const tokens: string[] = []
+  for (const [key, value] of Object.entries(numericLiterals)) {
+    const values = Array.isArray(value) ? value : [value]
+    const formatted = values
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean)
+      .join(', ')
+    if (formatted) tokens.push(`${key.replace(/_/g, ' ')}: ${formatted}`)
+  }
+  return tokens
+}
+
+function reasoningWitnessDetails(witness: ReasoningWitnessViewModel): string[] {
+  const details: string[] = []
+  if (witness.reviewer_company) details.push(witness.reviewer_company)
+  if (witness.time_anchor) details.push(witness.time_anchor)
+  if (witness.competitor) details.push(`vs ${witness.competitor}`)
+  return details.concat(reasoningNumericTokens(witness))
+}
+
 function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
   const disp = data.displacement_summary
   const inc = data.incumbent_profile
@@ -94,6 +160,13 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
   const playbook = data.sales_playbook
   const integ = data.integration_comparison
   const sources = data.data_sources
+  const anchorExamples = Object.keys(inc.reasoning_anchor_examples ?? {}).length > 0
+    ? inc.reasoning_anchor_examples
+    : data.reasoning_anchor_examples
+  const witnessHighlights = (inc.reasoning_witness_highlights && inc.reasoning_witness_highlights.length > 0)
+    ? inc.reasoning_witness_highlights
+    : data.reasoning_witness_highlights
+  const anchorRows = reasoningAnchorRows(anchorExamples, witnessHighlights)
 
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
@@ -199,6 +272,43 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
               ))}
             </div>
           )}
+        </SectionCard>
+      )}
+
+      {anchorRows.length > 0 && (
+        <SectionCard title="Reasoning Anchors" icon={<Crosshair className="h-4 w-4 text-cyan-400" />}>
+          <div className="space-y-3">
+            {anchorRows.map(({ label, witness }) => {
+              const details = reasoningWitnessDetails(witness)
+              const witnessKey = reasoningWitnessKey(witness)
+              return (
+                <div key={`${label ?? 'witness'}:${witnessKey}`} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3">
+                  {label && (
+                    <p className="text-[10px] uppercase tracking-wide text-cyan-300 mb-2">
+                      {REASONING_ANCHOR_LABELS[label] ?? label.replace(/_/g, ' ')}
+                    </p>
+                  )}
+                  {witness.excerpt_text && (
+                    <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 break-words whitespace-pre-wrap">
+                      "{witness.excerpt_text}"
+                    </blockquote>
+                  )}
+                  {details.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {details.map((detail) => (
+                        <span
+                          key={`${witnessKey}:${detail}`}
+                          className="px-2 py-0.5 rounded text-xs font-medium bg-slate-900 text-slate-300"
+                        >
+                          {detail}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </SectionCard>
       )}
 

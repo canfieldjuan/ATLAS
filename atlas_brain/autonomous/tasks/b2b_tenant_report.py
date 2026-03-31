@@ -37,10 +37,17 @@ def _tenant_report_data_density(
     *,
     llm_usage: dict[str, Any] | None = None,
     narrative_evidence_count: int = 0,
-    stratified_reasoning_count: int = 0,
+    vendor_reasoning_count: int = 0,
+    stratified_reasoning_count: int | None = None,
     synthesis_contract_vendor_count: int = 0,
 ) -> str:
-    """Build persisted density/provenance metadata for tenant reports."""
+    """Build persisted density/provenance metadata for tenant reports.
+
+    `stratified_reasoning_count` and `stratified_reasoning_vendors` are retained
+    as compatibility aliases for older consumers of tenant-report artifacts.
+    """
+    if stratified_reasoning_count is not None and not vendor_reasoning_count:
+        vendor_reasoning_count = int(stratified_reasoning_count)
     density: dict[str, Any] = {
         "vendors_analyzed": result["vendors_analyzed"],
         "high_intent_companies": result["high_intent_companies"],
@@ -48,7 +55,8 @@ def _tenant_report_data_density(
         "pain_categories": result.get("pain_categories", 0),
         "feature_gaps": result.get("feature_gaps", 0),
         "narrative_evidence_vendors": narrative_evidence_count,
-        "stratified_reasoning_vendors": stratified_reasoning_count,
+        "vendor_reasoning_vendors": vendor_reasoning_count,
+        "stratified_reasoning_vendors": vendor_reasoning_count,
         "synthesis_contract_vendors": synthesis_contract_vendor_count,
     }
     usage = llm_usage or {}
@@ -975,7 +983,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         payload = result["payload"]
         narrative_evidence_count = 0
-        stratified_reasoning_count = 0
+        vendor_reasoning_count = 0
 
         # Skip if no data
         if not payload.get("vendor_churn_scores") and not payload.get("high_intent_companies"):
@@ -1039,68 +1047,70 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         except Exception:
             logger.debug("Narrative engine enrichment skipped", exc_info=True)
 
-        # --- Stratified reasoning: recall/reconstitute/reason per vendor ---
+        # --- Vendor reasoning context: synthesis-first per vendor ---
         try:
-            from atlas_brain.reasoning import get_stratified_reasoner
-            from atlas_brain.reasoning.tiers import Tier, gather_tier_context
+            from ._b2b_synthesis_reader import (
+                load_best_reasoning_views,
+                load_prior_reasoning_snapshots,
+                synthesis_view_to_reasoning_entry,
+            )
 
-            reasoner = get_stratified_reasoner()
-            if reasoner is not None:
-                stratified_results = []
-                for vs in (payload.get("vendor_churn_scores") or []):
-                    vname = vs.get("vendor_name") or vs.get("vendor") or ""
-                    if not vname:
-                        continue
-                    category = vs.get("product_category") or vs.get("category") or ""
-                    try:
-                        tier_ctx = await gather_tier_context(
-                            reasoner._cache, Tier.VENDOR_ARCHETYPE,
-                            vendor_name=vname, product_category=category,
-                        )
-                        sr = await reasoner.analyze(
-                            vendor_name=vname,
-                            evidence=vs,
-                            product_category=category,
-                            tier_context=tier_ctx,
-                        )
-                        stratified_results.append({
-                            "vendor_name": vname,
-                            "mode": sr.mode,
-                            "archetype": sr.conclusion.get("archetype", ""),
-                            "confidence": sr.confidence,
-                            "tokens_used": sr.tokens_used,
-                            "conclusion": sr.conclusion,
-                        })
-                    except Exception:
-                        logger.debug("Stratified reasoning failed for %s", vname, exc_info=True)
-
-                if stratified_results:
-                    # Fetch prior archetypes for temporal context
-                    from .b2b_churn_intelligence import _fetch_prior_archetypes
-
-                    sr_vendor_names = [r["vendor_name"] for r in stratified_results if r.get("vendor_name")]
-                    prior_archetypes = await _fetch_prior_archetypes(pool, sr_vendor_names)
-
-                    for sr in stratified_results:
-                        vname = sr.get("vendor_name", "")
-                        prior = prior_archetypes.get(vname, {})
-                        sr["archetype_was"] = prior.get("archetype")
-                        sr["confidence_was"] = prior.get("confidence")
-                        sr["archetype_changed"] = (
-                            prior.get("archetype") != sr.get("archetype")
-                            if prior.get("archetype") and sr.get("archetype")
+            vendor_names = [
+                (vs.get("vendor_name") or vs.get("vendor") or "").strip()
+                for vs in (payload.get("vendor_churn_scores") or [])
+                if (vs.get("vendor_name") or vs.get("vendor") or "").strip()
+            ]
+            reasoning_views = await load_best_reasoning_views(
+                pool,
+                vendor_names,
+                as_of=today,
+                analysis_window_days=cfg.intelligence_window_days,
+            )
+            if reasoning_views:
+                prior_reasoning = await load_prior_reasoning_snapshots(
+                    pool,
+                    list(reasoning_views.keys()),
+                    before_date=today,
+                    analysis_window_days=cfg.intelligence_window_days,
+                )
+                vendor_reasoning = []
+                for current_name, view in reasoning_views.items():
+                    entry = synthesis_view_to_reasoning_entry(view)
+                    prior = prior_reasoning.get(current_name, {})
+                    vendor_reasoning.append({
+                        "vendor_name": current_name,
+                        "mode": entry.get("mode"),
+                        "archetype": entry.get("archetype", ""),
+                        "confidence": entry.get("confidence"),
+                        "tokens_used": 0,
+                        "conclusion": {
+                            "archetype": entry.get("archetype", ""),
+                            "risk_level": entry.get("risk_level", ""),
+                            "executive_summary": entry.get("executive_summary", ""),
+                            "key_signals": entry.get("key_signals", []),
+                            "falsification_conditions": entry.get("falsification_conditions", []),
+                            "uncertainty_sources": entry.get("uncertainty_sources", []),
+                        },
+                        "archetype_was": prior.get("archetype"),
+                        "confidence_was": prior.get("confidence"),
+                        "archetype_changed": (
+                            prior.get("archetype") != entry.get("archetype")
+                            if prior.get("archetype") and entry.get("archetype")
                             else None
-                        )
+                        ),
+                    })
 
-                    payload["stratified_reasoning"] = stratified_results
-                    stratified_reasoning_count = len(stratified_results)
-                    logger.info(
-                        "Stratified reasoning: %d vendors (%s)",
-                        len(stratified_results),
-                        ", ".join(f"{r['vendor_name']}={r['mode']}" for r in stratified_results),
-                    )
+                payload["vendor_reasoning"] = vendor_reasoning
+                # Legacy payload alias retained for downstream compatibility.
+                payload["stratified_reasoning"] = vendor_reasoning
+                vendor_reasoning_count = len(vendor_reasoning)
+                logger.info(
+                    "Vendor reasoning context: %d vendors (%s)",
+                    len(vendor_reasoning),
+                    ", ".join(f"{r['vendor_name']}={r['mode']}" for r in vendor_reasoning),
+                )
         except Exception:
-            logger.debug("Stratified reasoning integration skipped", exc_info=True)
+            logger.debug("Vendor reasoning context integration skipped", exc_info=True)
 
         raw_artifacts = result.get("raw_artifacts")
         try:
@@ -1173,7 +1183,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             result,
             llm_usage=llm_usage,
             narrative_evidence_count=narrative_evidence_count,
-            stratified_reasoning_count=stratified_reasoning_count,
+            vendor_reasoning_count=vendor_reasoning_count,
             synthesis_contract_vendor_count=synthesis_contract_vendor_count,
         )
         llm_model = _tenant_report_llm_model(llm_usage)
@@ -1181,13 +1191,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         try:
             async with pool.transaction() as conn:
                 for report_type, data in report_types:
-                    await conn.execute(
+                    report_status = "published" if data else "failed"
+                    latest_failure_step = None if data else "no_data"
+                    latest_error_code = None if data else "no_data"
+                    latest_error_summary = None if data else "Report has no data"
+                    blocker_count = 0 if data else 1
+                    report_row = await conn.fetchrow(
                         """
                         INSERT INTO b2b_intelligence (
                             report_date, report_type, intelligence_data,
                             executive_summary, data_density, status,
-                            llm_model, account_id
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            llm_model, account_id,
+                            latest_run_id, latest_attempt_no, latest_failure_step,
+                            latest_error_code, latest_error_summary,
+                            blocker_count, warning_count
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                                  $9, $10, $11, $12, $13, $14, $15)
                         ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
                                      LOWER(COALESCE(category_filter,'')),
                                      COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
@@ -1196,17 +1215,60 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                                       data_density = EXCLUDED.data_density,
                                       status = EXCLUDED.status,
                                       llm_model = EXCLUDED.llm_model,
+                                      latest_run_id = EXCLUDED.latest_run_id,
+                                      latest_attempt_no = EXCLUDED.latest_attempt_no,
+                                      latest_failure_step = EXCLUDED.latest_failure_step,
+                                      latest_error_code = EXCLUDED.latest_error_code,
+                                      latest_error_summary = EXCLUDED.latest_error_summary,
+                                      blocker_count = EXCLUDED.blocker_count,
+                                      warning_count = EXCLUDED.warning_count,
                                       created_at = now()
+                        RETURNING id
                         """,
                         today,
                         report_type,
                         json.dumps(data, default=str),
                         exec_summary,
                         data_density,
-                        "published",
+                        report_status,
                         llm_model,
                         account_id,
+                        str(task.id),
+                        1,
+                        latest_failure_step,
+                        latest_error_code,
+                        latest_error_summary,
+                        blocker_count,
+                        0,
                     )
+                    from ..visibility import record_attempt
+                    await record_attempt(
+                        pool,
+                        artifact_type="churn_report",
+                        artifact_id=str(report_row["id"]),
+                        run_id=str(task.id),
+                        stage="persistence",
+                        status="succeeded" if data else "failed",
+                        failure_step=latest_failure_step,
+                        error_message=latest_error_summary,
+                    )
+                    if not data:
+                        from ..visibility import emit_event
+                        await emit_event(
+                            pool,
+                            stage="reports",
+                            event_type="report_failed",
+                            entity_type="churn_report",
+                            entity_id=str(report_row["id"]),
+                            artifact_type="churn_report",
+                            run_id=str(task.id),
+                            severity="warning",
+                            actionable=False,
+                            reason_code="no_data",
+                            summary=f"{report_type} produced no data for account {account_id}",
+                            source_table="b2b_intelligence",
+                            source_id=str(report_row["id"]),
+                        )
             reports_generated += 1
         except Exception as exc:
             tracer.end_span(

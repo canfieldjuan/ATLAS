@@ -759,9 +759,14 @@ export default function B2BReports() {
           if (badge) return badge
         }
         return (
-          <span className={r.status === 'published' ? 'text-green-400 text-xs' : 'text-slate-500 text-xs'}>
-            {r.status || 'draft'}
-          </span>
+          <div className="space-y-0.5">
+            <span className={r.status === 'published' ? 'text-green-400 text-xs' : r.status === 'failed' ? 'text-red-400 text-xs' : 'text-slate-500 text-xs'}>
+              {r.status || 'draft'}
+            </span>
+            {(r.blocker_count ?? 0) > 0 && <div className="text-[11px] text-red-400">{r.blocker_count} blocker{r.blocker_count === 1 ? '' : 's'}</div>}
+            {(r.warning_count ?? 0) > 0 && <div className="text-[11px] text-amber-400">{r.warning_count} warn</div>}
+            {(r.unresolved_issue_count ?? 0) > 0 && <div className="text-[11px] text-cyan-400">{r.unresolved_issue_count} open</div>}
+          </div>
         )
       },
     },
@@ -825,11 +830,29 @@ export default function B2BReports() {
                   {selected.category_filter && <span>Category: {selected.category_filter}</span>}
                   <span>{selected.report_date?.split('T')[0]}</span>
                 </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  <span className={selected.status === 'published' ? 'text-green-400' : selected.status === 'failed' ? 'text-red-400' : 'text-slate-400'}>
+                    {selected.status || 'draft'}
+                  </span>
+                  {(selected.blocker_count ?? 0) > 0 && <span className="text-red-400">{selected.blocker_count} blocker{selected.blocker_count === 1 ? '' : 's'}</span>}
+                  {(selected.warning_count ?? 0) > 0 && <span className="text-amber-400">{selected.warning_count} warning{selected.warning_count === 1 ? '' : 's'}</span>}
+                  {(selected.unresolved_issue_count ?? 0) > 0 && <span className="text-cyan-400">{selected.unresolved_issue_count} open issue{selected.unresolved_issue_count === 1 ? '' : 's'}</span>}
+                </div>
               </div>
               <button onClick={() => setSelected(null)} className="text-slate-400 hover:text-white p-1">
                 <X className="h-5 w-5" />
               </button>
             </div>
+
+            {(selected.latest_error_summary || selected.latest_failure_step) && (
+              <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">
+                <div className="font-medium">Latest failure</div>
+                <div className="mt-1">{selected.latest_error_summary || 'Report failed'}</div>
+                {selected.latest_failure_step && (
+                  <div className="mt-1 text-xs text-rose-300/80">step: {selected.latest_failure_step}</div>
+                )}
+              </div>
+            )}
 
             {selected.executive_summary && (
               <p className="text-sm text-slate-300 mb-4 pb-3 border-b border-slate-700/50">

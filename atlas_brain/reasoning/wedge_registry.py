@@ -1,9 +1,9 @@
 """Sales-oriented wedge types for B2B reasoning synthesis.
 
 A 'wedge' is the opening angle a sales rep uses to engage a churning
-vendor's customers.  Wedges map 1:1 from the 8 base churn archetypes
-produced by the stratified reasoner plus two compound patterns and
-a stable fallback.
+vendor's customers. Wedges map 1:1 from the base churn archetypes used
+by synthesis and deterministic evidence scoring, plus two compound
+patterns and a stable fallback.
 
 The wedge registry is the single source of truth for:
 - Valid wedge enum values (prompt injection + post-LLM validation)

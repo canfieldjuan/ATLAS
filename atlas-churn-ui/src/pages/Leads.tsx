@@ -46,13 +46,53 @@ function CampaignStatusBadge({ status }: { status: string }) {
   const colors: Record<string, string> = {
     draft: 'bg-amber-500/20 text-amber-400',
     approved: 'bg-green-500/20 text-green-400',
+    queued: 'bg-cyan-500/20 text-cyan-400',
     sent: 'bg-cyan-500/20 text-cyan-400',
+    cancelled: 'bg-red-500/20 text-red-400',
     expired: 'bg-slate-500/20 text-slate-400',
   }
   return (
     <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', colors[status] ?? 'bg-slate-500/20 text-slate-400')}>
       {status}
     </span>
+  )
+}
+
+function CampaignQualityBadge({ status }: { status?: string | null }) {
+  if (!status) return null
+  const colors: Record<string, string> = {
+    pass: 'bg-green-500/15 text-green-300',
+    fail: 'bg-red-500/15 text-red-300',
+  }
+  return (
+    <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', colors[status] ?? 'bg-slate-500/20 text-slate-300')}>
+      quality: {status}
+    </span>
+  )
+}
+
+function CampaignQualitySummary({
+  blockerCount,
+  warningCount,
+  latestErrorSummary,
+}: {
+  blockerCount?: number
+  warningCount?: number
+  latestErrorSummary?: string | null
+}) {
+  const blockers = blockerCount ?? 0
+  const warnings = warningCount ?? 0
+  if (blockers === 0 && warnings === 0 && !latestErrorSummary) return null
+  return (
+    <div className="rounded-lg border border-slate-700/40 bg-slate-800/40 p-3">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        {blockers > 0 && <span className="text-red-400">{blockers} blocker{blockers === 1 ? '' : 's'}</span>}
+        {warnings > 0 && <span className="text-amber-400">{warnings} warning{warnings === 1 ? '' : 's'}</span>}
+      </div>
+      {latestErrorSummary && (
+        <p className="mt-1 text-xs text-slate-400">{latestErrorSummary}</p>
+      )}
+    </div>
   )
 }
 
@@ -98,6 +138,7 @@ function CampaignModal({
             </h2>
             <div className="flex items-center gap-2 mt-1">
               <CampaignStatusBadge status={campaign.status} />
+              <CampaignQualityBadge status={campaign.quality_status} />
               <span className="text-xs text-slate-400">
                 Churning from {campaign.vendor_name}
               </span>
@@ -129,6 +170,11 @@ function CampaignModal({
               <p className="text-cyan-400 mt-1 text-sm">{campaign.cta}</p>
             </div>
           )}
+          <CampaignQualitySummary
+            blockerCount={campaign.blocker_count}
+            warningCount={campaign.warning_count}
+            latestErrorSummary={campaign.latest_error_summary}
+          />
         </div>
         {campaign.status === 'draft' && (
           <div className="flex items-center gap-3 p-5 pt-3 border-t border-slate-700/50 shrink-0">
@@ -371,7 +417,34 @@ export default function Leads() {
     {
       key: 'status',
       header: 'Status',
-      render: (r) => <CampaignStatusBadge status={r.status} />,
+      render: (r) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <CampaignStatusBadge status={r.status} />
+          <CampaignQualityBadge status={r.quality_status} />
+        </div>
+      ),
+    },
+    {
+      key: 'quality',
+      header: 'Quality',
+      render: (r) => (
+        <div className="text-xs">
+          {(r.blocker_count ?? 0) > 0 && (
+            <div className="text-red-400">{r.blocker_count} blocker{r.blocker_count === 1 ? '' : 's'}</div>
+          )}
+          {(r.warning_count ?? 0) > 0 && (
+            <div className="text-amber-400">{r.warning_count} warning{r.warning_count === 1 ? '' : 's'}</div>
+          )}
+          {r.latest_error_summary && (
+            <div className="max-w-[220px] truncate text-slate-500" title={r.latest_error_summary}>
+              {r.latest_error_summary}
+            </div>
+          )}
+          {(r.blocker_count ?? 0) === 0 && (r.warning_count ?? 0) === 0 && !r.latest_error_summary && (
+            <span className="text-slate-500">--</span>
+          )}
+        </div>
+      ),
     },
     {
       key: 'actions',
@@ -496,6 +569,46 @@ export default function Leads() {
           skeleton={loading}
         />
       </div>
+
+      {stats.quality && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-4">
+            <h3 className="text-sm font-medium text-white mb-3">Campaign Quality</h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <div className="text-slate-500">Pass</div>
+                <div className="text-green-400 font-medium">{stats.quality.pass}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Fail</div>
+                <div className="text-red-400 font-medium">{stats.quality.fail}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Missing Audit</div>
+                <div className="text-slate-300 font-medium">{stats.quality.missing}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Blockers</div>
+                <div className="text-red-300 font-medium">{stats.quality.blocker_total}</div>
+              </div>
+            </div>
+          </div>
+          <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-4">
+            <h3 className="text-sm font-medium text-white mb-3">Top Campaign Blockers</h3>
+            <div className="space-y-2">
+              {(stats.quality.top_blockers || []).slice(0, 5).map((item) => (
+                <div key={item.reason} className="flex items-start justify-between gap-3 text-sm">
+                  <span className="text-slate-300 break-words">{item.reason}</span>
+                  <span className="text-red-400 shrink-0">{item.count}</span>
+                </div>
+              ))}
+              {(stats.quality.top_blockers || []).length === 0 && (
+                <span className="text-slate-500 text-sm">No blocker summaries yet.</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Opportunities Table */}
       <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5">

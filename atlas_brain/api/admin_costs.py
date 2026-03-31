@@ -233,7 +233,7 @@ async def cost_by_workflow(days: int = Query(default=30, ge=1, le=365)):
 
 @router.get("/reasoning-activity")
 async def reasoning_activity(days: int = Query(default=30, ge=1, le=365)):
-    """Per-pass breakdown of stratified reasoning activity (classify/challenge/ground)."""
+    """Per-pass breakdown of legacy stratified reasoning activity."""
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
 

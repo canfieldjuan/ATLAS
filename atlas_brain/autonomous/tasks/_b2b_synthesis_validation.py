@@ -58,11 +58,13 @@ _FIELD_SOURCE_RULES = {
     "migration_proof.displacement_mention_volume": {
         "vault:metric:displacement_mention_count",
         "category:aggregate:displacement_flow_count",
+        "displacement:aggregate:total_flow_mentions",
     },
     "timing_intelligence.active_eval_signals": {
         "accounts:summary:active_eval_signal_count",
         "segment:aggregate:active_eval_signal_count",
         "temporal:signal:evaluation_deadline_signals",
+        "displacement:aggregate:total_active_evaluations",
     },
     "segment_playbook.priority_segments[*].estimated_reach": {
         "accounts:summary:total_accounts",
@@ -87,6 +89,7 @@ _FIELD_SOURCE_PREFIX_RULES = {
     # displacement-specific counts are thin (prompt instructs the LLM to use
     # the broadest valid non-switch mention aggregate as a fallback).
     "migration_proof.displacement_mention_volume": (
+        "displacement:flow:",
         "vault:weakness:",
         "vault:metric:",
         "category:",
@@ -223,6 +226,11 @@ def _build_source_alias_map(packet: Any | None) -> dict[str, str]:
             _register(f"{prefix}_mention_count_recent", canonical)
         if canonical.startswith("segment:reach:"):
             _register(canonical.replace("segment:reach:", "segment:", 1), canonical)
+    if any(
+        getattr(agg, "source_id", "") == "accounts:summary:total_accounts"
+        for agg in getattr(packet, "aggregates", []) or []
+    ):
+        _register("accounts", "accounts:summary:total_accounts")
 
     return {
         key: val for key, val in alias_map.items()
@@ -297,6 +305,10 @@ def _normalize_constrained_wrappers(
         for candidate in _candidate_wrappers(field_path):
             if _numeric_equal(candidate.get("value"), wrapper.get("value")):
                 return candidate
+        if field_path in _FIELDS_REQUIRING_AGGREGATE_SOURCE:
+            for sid, value in aggregate_lookup.items():
+                if _numeric_equal(value, wrapper.get("value")):
+                    return {"value": value, "source_id": sid}
         sid = wrapper.get("source_id")
         if isinstance(sid, str) and sid in aggregate_lookup:
             return {"value": aggregate_lookup[sid], "source_id": sid}
@@ -376,22 +388,42 @@ def _normalize_constrained_wrappers(
         if not has_segment_reach:
             segment_playbook["priority_segments"] = []
             continue
+        normalized_segments: list[dict[str, Any]] = []
         for seg in segment_playbook.get("priority_segments") or []:
             if not isinstance(seg, dict):
                 continue
-            _upgrade_wrapper_source(
+            normalized = _best_wrapper_for_field(
                 seg.get("estimated_reach"),
                 "segment_playbook.priority_segments[*].estimated_reach",
             )
+            if not isinstance(normalized, dict):
+                continue
+            sid = normalized.get("source_id")
+            if not isinstance(sid, str) or not _field_source_allowed(
+                "segment_playbook.priority_segments[*].estimated_reach",
+                sid,
+            ):
+                continue
+            reach_value = normalized.get("value")
+            try:
+                if float(reach_value) < 5:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            seg["estimated_reach"] = normalized
+            normalized_segments.append(seg)
+        segment_playbook["priority_segments"] = normalized_segments
 
     for competitive_reframes in _section_dicts(synthesis, "competitive_reframes"):
         for reframe in competitive_reframes.get("reframes") or []:
             if not isinstance(reframe, dict):
                 continue
-            _upgrade_wrapper_source(
+            normalized = _best_wrapper_for_field(
                 reframe.get("proof_point"),
                 "competitive_reframes.reframes[*].proof_point",
             )
+            if normalized is not None:
+                reframe["proof_point"] = normalized
 
 
 def normalize_synthesis_source_ids(
@@ -460,8 +492,21 @@ def _normalized_synthesis_for_validation(synthesis: dict[str, Any]) -> dict[str,
     contracts = synthesis.get("reasoning_contracts")
     has_explicit_contracts = isinstance(contracts, dict) and bool(contracts)
     if has_explicit_contracts:
-        for section in _REQUIRED_SECTIONS:
-            normalized.pop(section, None)
+        for section, contract_path in _SECTION_CONTRACT_PATHS.items():
+            contract_name = contract_path[0] if contract_path else ""
+            contract = _contract_block(synthesis, contract_name) if contract_name else {}
+            if not contract:
+                continue
+            nested: Any = contract
+            for path_part in contract_path[1:]:
+                if not isinstance(nested, dict):
+                    nested = None
+                    break
+                nested = nested.get(path_part)
+            if isinstance(nested, dict):
+                normalized.pop(section, None)
+        if _contract_block(synthesis, "category_reasoning"):
+            normalized.pop("category_reasoning", None)
     for section, contract_path in _SECTION_CONTRACT_PATHS.items():
         if isinstance(normalized.get(section), dict):
             continue
@@ -484,6 +529,12 @@ def _normalized_synthesis_for_validation(synthesis: dict[str, Any]) -> dict[str,
         cr = _contract_block(synthesis, "category_reasoning")
         if cr:
             normalized["category_reasoning"] = cr
+    for section in ("account_reasoning", "category_reasoning"):
+        if not isinstance(normalized.get(section), dict):
+            normalized[section] = {
+                "confidence": "insufficient",
+                "data_gaps": ["Section missing from model output"],
+            }
     return normalized
 
 
@@ -558,7 +609,6 @@ def _check_data_gaps_on_insufficient(
 
 def _check_citations(
     synthesis: dict[str, Any],
-    valid_source_ids: frozenset[str],
     result: ValidationResult,
 ) -> None:
     """Warn when sections lack citations arrays."""
@@ -576,22 +626,6 @@ def _check_citations(
                 f"Section '{section}' has no citations array",
                 severity="warning",
             )
-        elif valid_source_ids:
-            for sid in cites:
-                if isinstance(sid, str) and sid and sid not in valid_source_ids:
-                    _add(
-                        result,
-                        f"{section}.citations",
-                        "hallucinated_source_id",
-                        f"citation '{sid}' does not exist in the input packet",
-                    )
-                elif isinstance(sid, str) and _is_unclassified_vault_source_id(sid):
-                    _add(
-                        result,
-                        f"{section}.citations",
-                        "unclassified_source_id",
-                        f"citation '{sid}' is not specific enough for synthesis output",
-                    )
 
     # Per-segment citations
     sp = synthesis.get("segment_playbook")
@@ -626,6 +660,73 @@ def _check_citations(
                 )
 
 
+def _collect_citation_entries(
+    value: Any,
+    path: str,
+    sink: list[tuple[str, list[str]]],
+) -> None:
+    if isinstance(value, dict):
+        citations = value.get("citations")
+        if isinstance(citations, list):
+            sink.append((
+                f"{path}.citations",
+                [
+                    str(sid).strip()
+                    for sid in citations
+                    if isinstance(sid, str) and str(sid).strip()
+                ],
+            ))
+        for key, item in value.items():
+            _collect_citation_entries(item, f"{path}.{key}", sink)
+        return
+    if isinstance(value, list):
+        for idx, item in enumerate(value):
+            _collect_citation_entries(item, f"{path}[{idx}]", sink)
+
+
+def _check_packet_citations(
+    synthesis: dict[str, Any],
+    valid_source_ids: frozenset[str],
+    result: ValidationResult,
+) -> None:
+    """Verify every citation id exists in the input packet."""
+    if not valid_source_ids:
+        return
+
+    citation_entries: list[tuple[str, list[str]]] = []
+    for section in _REQUIRED_SECTIONS:
+        sec = synthesis.get(section)
+        if isinstance(sec, dict):
+            _collect_citation_entries(sec, section, citation_entries)
+
+    for path, citations in citation_entries:
+        if not citations:
+            continue
+        unclassified_ids = sorted({
+            sid for sid in citations
+            if _is_unclassified_vault_source_id(sid)
+        })
+        if unclassified_ids:
+            _add(
+                result,
+                path,
+                "unclassified_source_id",
+                "citations are not specific enough for synthesis output: "
+                + ", ".join(unclassified_ids),
+            )
+        unknown_ids = sorted({
+            sid for sid in citations
+            if sid not in valid_source_ids and not _is_unclassified_vault_source_id(sid)
+        })
+        if unknown_ids:
+            _add(
+                result,
+                path,
+                "unknown_packet_citation",
+                "citations reference ids not present in the input packet: "
+                + ", ".join(unknown_ids),
+            )
+
 def _check_source_ids(
     synthesis: dict[str, Any],
     valid_source_ids: frozenset[str],
@@ -659,6 +760,30 @@ def _check_source_ids(
         sec = synthesis.get(section)
         if isinstance(sec, dict):
             _walk(sec, section)
+
+
+def _check_witness_pack_governance(packet: Any | None, result: ValidationResult) -> None:
+    """Warn when synthesis had to rely on generic fallback witnesses."""
+    if packet is None:
+        return
+    governance = {}
+    if isinstance(getattr(packet, "section_packets", None), dict):
+        governance = getattr(packet, "section_packets", {}).get("_witness_governance") or {}
+    thin_pool = bool(governance.get("thin_specific_witness_pool"))
+    if not thin_pool:
+        thin_pool = any(
+            str(witness.get("generic_reason") or "").strip()
+            for witness in (getattr(packet, "witness_pack", []) or [])
+            if isinstance(witness, dict)
+        )
+    if thin_pool:
+        _add(
+            result,
+            "packet_artifacts.witness_pack",
+            "thin_specific_witness_pool",
+            "witness selection fell back to generic excerpts because the specific witness pool was too thin",
+            severity="warning",
+        )
 
 
 def _check_value_wrappers(
@@ -1217,7 +1342,8 @@ def validate_synthesis(
     _check_wedge(normalized, result)
     _check_confidence_fields(normalized, result)
     _check_data_gaps_on_insufficient(normalized, result)
-    _check_citations(normalized, valid_source_ids, result)
+    _check_citations(normalized, result)
+    _check_packet_citations(normalized, valid_source_ids, result)
     _check_source_ids(normalized, valid_source_ids, result)
     _check_value_wrappers(normalized, aggregate_lookup, result)
     _check_evidence_type(normalized, result)
@@ -1235,6 +1361,7 @@ def validate_synthesis(
     _check_contradiction_hedging(normalized, packet, result, governance_blocking=_governance_blocking)
     _check_why_they_stay(normalized, packet, result, governance_blocking=_governance_blocking)
     _check_confidence_posture_limits(normalized, packet, result, governance_blocking=_governance_blocking)
+    _check_witness_pack_governance(packet, result)
 
     if result.errors:
         logger.warning("Synthesis validation FAILED for %s: %s", vendor_name, result.summary())

@@ -78,6 +78,39 @@ Mailchimp and Intercom are compared using reviewer signals.
     assert any(item.startswith("removed_unmatched_quotes:") for item in report["fixes_applied"])
 
 
+def test_quality_gate_emits_and_enforces_score_threshold(monkeypatch):
+    blueprint = _build_blueprint(
+        quotes=[
+            {"phrase": "Mailchimp pricing climbed too quickly for our team"},
+            {"phrase": "Intercom onboarding helped us move faster"},
+        ]
+    )
+    filler = (
+        "Mailchimp and Intercom are compared using reviewer sentiment signals "
+        "from public software reviews. "
+    ) * 130
+    content = {
+        "title": "Short title",
+        "description": "desc",
+        "content": f"""
+## Introduction
+Mailchimp and Intercom are compared using reviewer sentiment signals.
+{filler}
+{{{{chart:head2head-bar}}}}
+> "Mailchimp pricing climbed too quickly for our team" -- reviewer on Reddit
+> "Intercom onboarding helped us move faster" -- reviewer on G2
+""",
+    }
+
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_quality_pass_score", 95, raising=False)
+
+    _, report = _apply_blog_quality_gate(blueprint, content)
+
+    assert report["threshold"] == 95
+    assert report["score"] < 95
+    assert report["status"] == "fail"
+
+
 def test_quality_gate_blocks_when_required_vendor_missing():
     blueprint = _build_blueprint(
         quotes=[

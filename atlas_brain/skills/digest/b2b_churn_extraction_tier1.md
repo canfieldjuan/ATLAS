@@ -134,8 +134,10 @@ Do not classify competitive evidence, urgency, pain priority, contract value, or
 - `use_case.lock_in_level`: `high` for 3+ integrations or explicit lock-in language, `medium` for 1-2 integrations, `low` for none, `unknown` if unclear.
 - `competitors_mentioned`: extract only named competitors explicitly present in the review. If the text says `switched to X`, `moved to X`, `replaced with X`, `evaluating X`, `looking at X`, or `considering X`, extract `X` as a competitor name.
 - `specific_complaints`, `quotable_phrases`, `positive_aspects`, `feature_gaps`, `recommendation_language`, `pricing_phrases`: verbatim phrases only. No paraphrase.
+- Prefer commercially relevant evidence over catchy wording. If multiple verbatim phrases are available, prioritize ones containing money, dates, deadlines, renewal language, named organizations, explicit switch/evaluation language, or productivity claims.
 - Billing, cancellation, and contract complaints belong in `specific_complaints` when explicitly stated. Examples: `automatic renewal without notice`, `trying to cancel`, `billing dispute`, `charged after cancellation`, `refund denied`, `runaround on cancellation`.
 - Price and billing language belongs in `pricing_phrases` when explicitly stated. Examples: `suddenly invoiced $375 per month`, `charged more at renewal`, `price increase`, `unexpected billing`, `overcharged`.
+- If the review says the team became more productive with docs, async workflows, bundled suites, or internal tooling, preserve that verbatim language in `quotable_phrases` or `specific_complaints` instead of collapsing it into a generic UX complaint.
 - `event_mentions[*].event` and `event_mentions[*].timeframe`: verbatim. Use null timeframe if absent.
 - `urgency_indicators`: set booleans only when the exact pattern is explicitly present.
 - `sentiment_trajectory.tenure`, `timeline.contract_end`, `timeline.evaluation_deadline`, `contract_context.usage_duration`: verbatim extraction only.

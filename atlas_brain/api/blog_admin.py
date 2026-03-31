@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
+from ..autonomous.visibility import emit_event, record_attempt
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.blog_admin")
@@ -36,6 +37,16 @@ class BlogDraftSummary(BaseModel):
     llm_model: Optional[str] = None
     created_at: str
     published_at: Optional[str] = None
+    rejected_at: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    quality_score: Optional[int] = None
+    quality_threshold: Optional[int] = None
+    blocker_count: int = 0
+    warning_count: int = 0
+    latest_failure_step: Optional[str] = None
+    latest_error_code: Optional[str] = None
+    latest_error_summary: Optional[str] = None
+    unresolved_issue_count: int = 0
 
 
 class BlogDraftDetail(BaseModel):
@@ -54,12 +65,23 @@ class BlogDraftDetail(BaseModel):
     source_report_date: Optional[str] = None
     created_at: str
     published_at: Optional[str] = None
+    rejected_at: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    quality_score: Optional[int] = None
+    quality_threshold: Optional[int] = None
+    blocker_count: int = 0
+    warning_count: int = 0
+    latest_failure_step: Optional[str] = None
+    latest_error_code: Optional[str] = None
+    latest_error_summary: Optional[str] = None
+    unresolved_issue_count: int = 0
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
     target_keyword: Optional[str] = None
     secondary_keywords: Optional[list] = None
     faq: Optional[list] = None
     related_slugs: Optional[list] = None
+    cta: Optional[dict] = None
 
 
 class BlogDraftPatch(BaseModel):
@@ -109,6 +131,16 @@ def _row_to_summary(row) -> dict:
         "llm_model": row.get("llm_model"),
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "published_at": row["published_at"].isoformat() if row.get("published_at") else None,
+        "rejected_at": row["rejected_at"].isoformat() if row.get("rejected_at") else None,
+        "rejection_reason": row.get("rejection_reason"),
+        "quality_score": row.get("quality_score"),
+        "quality_threshold": row.get("quality_threshold"),
+        "blocker_count": row.get("blocker_count") or 0,
+        "warning_count": row.get("warning_count") or 0,
+        "latest_failure_step": row.get("latest_failure_step"),
+        "latest_error_code": row.get("latest_error_code"),
+        "latest_error_summary": row.get("latest_error_summary"),
+        "unresolved_issue_count": row.get("unresolved_issue_count") or 0,
     }
 
 
@@ -139,20 +171,88 @@ def _row_to_detail(row) -> dict:
         "source_report_date": str(row["source_report_date"]) if row.get("source_report_date") else None,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "published_at": row["published_at"].isoformat() if row.get("published_at") else None,
+        "rejected_at": row["rejected_at"].isoformat() if row.get("rejected_at") else None,
+        "rejection_reason": row.get("rejection_reason"),
+        "quality_score": row.get("quality_score"),
+        "quality_threshold": row.get("quality_threshold"),
+        "blocker_count": row.get("blocker_count") or 0,
+        "warning_count": row.get("warning_count") or 0,
+        "latest_failure_step": row.get("latest_failure_step"),
+        "latest_error_code": row.get("latest_error_code"),
+        "latest_error_summary": row.get("latest_error_summary"),
+        "unresolved_issue_count": row.get("unresolved_issue_count") or 0,
         "seo_title": row.get("seo_title"),
         "seo_description": row.get("seo_description"),
         "target_keyword": row.get("target_keyword"),
         "secondary_keywords": _safe_json(row.get("secondary_keywords", [])),
         "faq": _safe_json(row.get("faq", [])),
         "related_slugs": _safe_json(row.get("related_slugs", [])),
+        "cta": _safe_json(row.get("cta")) if isinstance(_safe_json(row.get("cta")), dict) else None,
     }
+
+
+def _stored_row_to_blueprint(row):
+    from ..autonomous.tasks.b2b_blog_post_generation import ChartSpec, PostBlueprint
+
+    raw_charts = _safe_json(row.get("charts", []))
+    charts: list[ChartSpec] = []
+    for idx, chart in enumerate(raw_charts if isinstance(raw_charts, list) else []):
+        if not isinstance(chart, dict):
+            continue
+        charts.append(
+            ChartSpec(
+                chart_id=str(chart.get("chart_id") or f"chart_{idx + 1}"),
+                chart_type=str(chart.get("chart_type") or "bar"),
+                title=str(chart.get("title") or f"Chart {idx + 1}"),
+                data=chart.get("data") if isinstance(chart.get("data"), list) else [],
+                config=chart.get("config") if isinstance(chart.get("config"), dict) else {},
+            )
+        )
+
+    data_context = _safe_json(row.get("data_context"))
+    if not isinstance(data_context, dict):
+        data_context = {}
+
+    quotable_phrases = data_context.get("quotable_phrases")
+    if not isinstance(quotable_phrases, list):
+        quotable_phrases = []
+
+    return PostBlueprint(
+        topic_type=str(row.get("topic_type") or ""),
+        slug=str(row.get("slug") or ""),
+        suggested_title=str(row.get("title") or ""),
+        tags=_safe_json(row.get("tags", [])) if isinstance(_safe_json(row.get("tags", [])), list) else [],
+        data_context=data_context,
+        sections=[],
+        charts=charts,
+        quotable_phrases=quotable_phrases,
+        cta=_safe_json(row.get("cta")) if isinstance(_safe_json(row.get("cta")), dict) else None,
+    )
+
+
+def _publish_revalidation_report(row) -> dict:
+    from ..autonomous.tasks.b2b_blog_post_generation import (
+        _apply_blog_quality_gate,
+        _with_unresolved_critical_warnings,
+    )
+
+    blueprint = _stored_row_to_blueprint(row)
+    _, report = _apply_blog_quality_gate(
+        blueprint,
+        {
+            "title": row.get("title") or blueprint.suggested_title,
+            "description": row.get("description") or "",
+            "content": row.get("content") or "",
+        },
+    )
+    return _with_unresolved_critical_warnings(report)
 
 
 # -- endpoints ----------------------------------------------------
 
 @router.get("/drafts")
 async def list_drafts(
-    status: Optional[str] = Query(None, description="Filter by status (draft, published, archived)"),
+    status: Optional[str] = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=200),
     _user: AuthUser = Depends(require_auth),
 ):
@@ -163,17 +263,143 @@ async def list_drafts(
 
     if status:
         rows = await pool.fetch(
-            "SELECT id, slug, title, topic_type, status, llm_model, created_at, published_at "
-            "FROM blog_posts WHERE status = $1 ORDER BY created_at DESC LIMIT $2",
+            """
+            SELECT id, slug, title, topic_type, status, llm_model, created_at, published_at,
+                   rejected_at, rejection_reason, quality_score, quality_threshold,
+                   blocker_count, warning_count, latest_failure_step,
+                   latest_error_code, latest_error_summary,
+                   (
+                     SELECT COUNT(*)
+                     FROM pipeline_visibility_reviews r
+                     JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+                     WHERE r.status = 'open'
+                       AND e.entity_type = 'blog_post'
+                       AND e.entity_id = blog_posts.slug
+                   ) AS unresolved_issue_count
+            FROM blog_posts
+            WHERE status = $1
+            ORDER BY created_at DESC LIMIT $2
+            """,
             status, limit,
         )
     else:
         rows = await pool.fetch(
-            "SELECT id, slug, title, topic_type, status, llm_model, created_at, published_at "
-            "FROM blog_posts ORDER BY created_at DESC LIMIT $1",
+            """
+            SELECT id, slug, title, topic_type, status, llm_model, created_at, published_at,
+                   rejected_at, rejection_reason, quality_score, quality_threshold,
+                   blocker_count, warning_count, latest_failure_step,
+                   latest_error_code, latest_error_summary,
+                   (
+                     SELECT COUNT(*)
+                     FROM pipeline_visibility_reviews r
+                     JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+                     WHERE r.status = 'open'
+                       AND e.entity_type = 'blog_post'
+                       AND e.entity_id = blog_posts.slug
+                   ) AS unresolved_issue_count
+            FROM blog_posts
+            ORDER BY created_at DESC LIMIT $1
+            """,
             limit,
-        )
+    )
     return [_row_to_summary(r) for r in rows]
+
+
+@router.get("/drafts/summary")
+async def draft_summary(_user: AuthUser = Depends(require_auth)):
+    """Roll up current blog draft quality and status counts."""
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(503, "Database not ready")
+
+    status_rows = await pool.fetch(
+        """
+        SELECT status, COUNT(*) AS count
+        FROM blog_posts
+        GROUP BY status
+        ORDER BY count DESC, status ASC
+        """
+    )
+    quality_row = await pool.fetchrow(
+        """
+        WITH blog_state AS (
+            SELECT
+                b.*,
+                (
+                    SELECT COUNT(*)
+                    FROM pipeline_visibility_reviews r
+                    JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+                    WHERE r.status = 'open'
+                      AND e.entity_type = 'blog_post'
+                      AND e.entity_id = b.slug
+                ) AS unresolved_issue_count
+            FROM blog_posts b
+        )
+        SELECT
+            COUNT(*) FILTER (
+                WHERE COALESCE(blocker_count, 0) = 0
+                  AND COALESCE(warning_count, 0) = 0
+                  AND quality_score IS NOT NULL
+            ) AS clean,
+            COUNT(*) FILTER (
+                WHERE COALESCE(blocker_count, 0) = 0
+                  AND COALESCE(warning_count, 0) > 0
+            ) AS warning_only,
+            COUNT(*) FILTER (
+                WHERE COALESCE(blocker_count, 0) > 0
+            ) AS failing,
+            COUNT(*) FILTER (
+                WHERE COALESCE(unresolved_issue_count, 0) > 0
+            ) AS unresolved,
+            COALESCE(SUM(COALESCE(blocker_count, 0)), 0) AS blocker_total,
+            COALESCE(SUM(COALESCE(warning_count, 0)), 0) AS warning_total
+        FROM blog_state
+        """
+    )
+    blocker_rows = await pool.fetch(
+        """
+        SELECT latest_error_summary AS reason, COUNT(*) AS count
+        FROM blog_posts
+        WHERE COALESCE(blocker_count, 0) > 0
+          AND COALESCE(latest_error_summary, '') <> ''
+        GROUP BY latest_error_summary
+        ORDER BY count DESC, latest_error_summary ASC
+        LIMIT 5
+        """
+    )
+    failure_step_rows = await pool.fetch(
+        """
+        SELECT COALESCE(latest_failure_step, 'missing') AS step, COUNT(*) AS count
+        FROM blog_posts
+        GROUP BY step
+        ORDER BY count DESC, step ASC
+        LIMIT 10
+        """
+    )
+
+    quality = dict(quality_row or {})
+    return {
+        "by_status": {
+            str(item["status"] or "unknown"): int(item["count"] or 0)
+            for item in status_rows
+        },
+        "quality": {
+            "clean": int(quality.get("clean") or 0),
+            "warning_only": int(quality.get("warning_only") or 0),
+            "failing": int(quality.get("failing") or 0),
+            "unresolved": int(quality.get("unresolved") or 0),
+            "blocker_total": int(quality.get("blocker_total") or 0),
+            "warning_total": int(quality.get("warning_total") or 0),
+            "by_failure_step": [
+                {"step": str(item["step"] or "missing"), "count": int(item["count"] or 0)}
+                for item in failure_step_rows
+            ],
+            "top_blockers": [
+                {"reason": str(item["reason"] or ""), "count": int(item["count"] or 0)}
+                for item in blocker_rows
+            ],
+        },
+    }
 
 
 @router.get("/drafts/{draft_id}")
@@ -187,7 +413,20 @@ async def get_draft(
         raise HTTPException(503, "Database not ready")
 
     row = await pool.fetchrow(
-        "SELECT * FROM blog_posts WHERE id = $1", draft_id,
+        """
+        SELECT blog_posts.*,
+               (
+                 SELECT COUNT(*)
+                 FROM pipeline_visibility_reviews r
+                 JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+                 WHERE r.status = 'open'
+                   AND e.entity_type = 'blog_post'
+                   AND e.entity_id = blog_posts.slug
+               ) AS unresolved_issue_count
+        FROM blog_posts
+        WHERE id = $1
+        """,
+        draft_id,
     )
     if not row:
         raise HTTPException(404, "Draft not found")
@@ -351,14 +590,92 @@ async def publish_draft(
     if row["status"] == "published":
         raise HTTPException(400, "Already published")
 
+    from ..config import settings
+
+    if settings.b2b_churn.blog_publish_revalidate_enabled:
+        report = _publish_revalidation_report(row)
+        if report.get("status") != "pass":
+            blocking_issues = list(report.get("blocking_issues") or [])
+            warnings = list(report.get("warnings") or [])
+            summary = ", ".join(blocking_issues[:3]) or "publish_revalidation_failed"
+            await pool.execute(
+                """
+                UPDATE blog_posts
+                SET latest_failure_step = $1,
+                    latest_error_code = $2,
+                    latest_error_summary = $3,
+                    quality_score = $4,
+                    quality_threshold = $5,
+                    blocker_count = $6,
+                    warning_count = $7
+                WHERE id = $8
+                """,
+                "publish_validation",
+                "publish_revalidation_failed",
+                summary,
+                report.get("score"),
+                report.get("threshold"),
+                len(blocking_issues),
+                len(warnings),
+                draft_id,
+            )
+            await record_attempt(
+                pool,
+                artifact_type="blog_post",
+                artifact_id=row["slug"],
+                attempt_no=1,
+                stage="publish_validation",
+                status="rejected",
+                score=report.get("score"),
+                threshold=report.get("threshold"),
+                blocker_count=len(blocking_issues),
+                warning_count=len(warnings),
+                blocking_issues=blocking_issues,
+                warnings=warnings,
+                failure_step="publish_validation",
+                error_message=summary,
+            )
+            await emit_event(
+                pool,
+                stage="blog",
+                event_type="publish_revalidation_blocked",
+                entity_type="blog_post",
+                entity_id=row["slug"],
+                summary=f"Blog publish blocked for {row['slug']}",
+                severity="warning",
+                actionable=True,
+                artifact_type="blog_post",
+                reason_code=(blocking_issues[0] if blocking_issues else "publish_revalidation_failed")[:80],
+                decision="blocked",
+                detail=report,
+            )
+            raise HTTPException(409, summary)
+
     now = datetime.now(timezone.utc)
     await pool.execute(
-        "UPDATE blog_posts SET status = 'published', published_at = $1 WHERE id = $2",
+        """
+        UPDATE blog_posts
+        SET status = 'published',
+            published_at = $1,
+            rejected_at = NULL,
+            rejection_reason = NULL,
+            latest_failure_step = NULL,
+            latest_error_code = NULL,
+            latest_error_summary = NULL
+        WHERE id = $2
+        """,
         now, draft_id,
+    )
+    await record_attempt(
+        pool,
+        artifact_type="blog_post",
+        artifact_id=row["slug"],
+        attempt_no=1,
+        stage="publish_validation",
+        status="succeeded",
     )
 
     # Optionally write the TS file to the blog content directory
-    from ..config import settings
     topic_type = row.get("topic_type", "")
     b2b_types = (
         "vendor_alternative", "vendor_showdown", "churn_report", "migration_guide",
@@ -529,13 +846,14 @@ def _write_blog_ts_file(row, ui_path: str, published_at: datetime) -> str | None
     faq = _safe_json(row.get("faq", []))
     secondary_keywords = _safe_json(row.get("secondary_keywords", []))
     related_slugs = _safe_json(row.get("related_slugs", []))
+    cta = _safe_json(row.get("cta"))
 
     var_name, ts_content = build_post_ts(
         slug=slug,
         title=row["title"],
         description=row.get("description", ""),
         date_str=date_str,
-        author="Atlas Intelligence",
+        author="Churn Signals Team",
         tags=tags,
         topic_type=row.get("topic_type", ""),
         charts_json=charts,
@@ -547,6 +865,7 @@ def _write_blog_ts_file(row, ui_path: str, published_at: datetime) -> str | None
         secondary_keywords=secondary_keywords,
         faq=faq,
         related_slugs=related_slugs,
+        cta=cta if isinstance(cta, dict) else None,
     )
 
     file_path = os.path.join(ui_path, f"{slug}.ts")

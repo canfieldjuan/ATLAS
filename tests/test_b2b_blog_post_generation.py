@@ -1,11 +1,13 @@
 """Focused tests for evidence-vault overlays in B2B blog generation."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 import atlas_brain.autonomous.tasks.b2b_blog_post_generation as blog_mod
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
+    _assemble_and_store,
     _candidate_overlaps_gap_pain,
     _blueprint_churn_report,
     _blueprint_migration_guide,
@@ -161,11 +163,210 @@ def test_ensure_methodology_context_injects_review_period_and_disclaimer():
     assert "self-selected" in updated["content"]
 
 
+def _blog_anchor_context() -> dict:
+    return {
+        "reasoning_anchor_examples": {
+            "outlier_or_named_account": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "Hack Club said Zendesk tried to charge $200k/year at Q2 renewal.",
+                    "reviewer_company": "Hack Club",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Freshdesk",
+                    "pain_category": "pricing",
+                },
+            ],
+        },
+        "reasoning_witness_highlights": [
+            {
+                "witness_id": "witness:r1:0",
+                "excerpt_text": "Hack Club said Zendesk tried to charge $200k/year at Q2 renewal.",
+                "reviewer_company": "Hack Club",
+                "time_anchor": "Q2 renewal",
+                "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                "competitor": "Freshdesk",
+                "pain_category": "pricing",
+            },
+        ],
+        "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
+    }
+
+
+def _long_blog_body(core_sentence: str) -> str:
+    intro = (
+        "# Zendesk Alternatives\n\n"
+        "This analysis reflects self-selected feedback collected between 2025-06 and 2026-03. "
+        "Zendesk remains the focus of the narrative throughout the piece.\n\n"
+    )
+    repeated = " ".join([core_sentence] * 240)
+    return f"{intro}{repeated}"
+
+
 def _section_by_id(blueprint, section_id: str):
     for section in blueprint.sections:
         if section.id == section_id:
             return section
     raise AssertionError(f"missing section {section_id}")
+
+
+@pytest.mark.asyncio
+async def test_load_pool_layers_for_blog_injects_anchor_context_and_claim_plan(monkeypatch):
+    class _DummyView:
+        primary_wedge = SimpleNamespace(value="price_squeeze")
+        wedge_label = "Price Squeeze"
+        why_they_stay = {"summary": "Ecosystem breadth keeps some teams in place."}
+        confidence_posture = {"overall": "medium"}
+        evidence_governance = {"coverage_gaps": []}
+
+        def materialized_contracts(self):
+            return {
+                "vendor_core_reasoning": {
+                    "causal_narrative": {"summary": "Pricing pressure is driving the story."},
+                    "timing_intelligence": {"best_timing_window": "Q2 renewal"},
+                    "why_they_stay": {
+                        "summary": "Ecosystem breadth keeps some teams in place.",
+                    },
+                },
+                "category_reasoning": {"market_regime": "price_competition"},
+            }
+
+        def consumer_context(self, consumer):
+            assert consumer == "blog_reranker"
+            return {
+                "anchor_examples": _blog_anchor_context()["reasoning_anchor_examples"],
+                "witness_highlights": _blog_anchor_context()["reasoning_witness_highlights"],
+                "reference_ids": _blog_anchor_context()["reasoning_reference_ids"],
+            }
+
+    monkeypatch.setattr(
+        blog_mod,
+        "fetch_all_pool_layers",
+        AsyncMock(return_value={"Zendesk": {"displacement": []}}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.load_best_reasoning_views",
+        AsyncMock(return_value={"Zendesk": _DummyView()}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.load_cross_vendor_synthesis_lookup",
+        AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
+    )
+
+    data = {}
+    await _load_pool_layers_for_blog(
+        object(),
+        "vendor_alternative",
+        {"vendor": "Zendesk"},
+        data,
+    )
+
+    anchor = data["reasoning_anchor_examples"]["outlier_or_named_account"][0]
+    assert anchor["excerpt_text"].startswith("a customer said Zendesk")
+    assert "reviewer_company" not in anchor
+    assert data["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
+    assert data["blog_claim_plan"]["primary_thesis"] == "Pricing pressure is driving the story."
+    assert data["blog_claim_plan"]["timing_hook"] == "Q2 renewal"
+
+
+def test_apply_blog_quality_gate_blocks_generic_copy_when_anchors_available():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_alternative",
+        slug="zendesk-alternatives-2026-03",
+        suggested_title="Zendesk Alternatives",
+        tags=["crm"],
+        data_context={
+            "vendor": "Zendesk",
+            "review_period": "2025-06 to 2026-03",
+            **_blog_anchor_context(),
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Zendesk Alternatives",
+        "content": _long_blog_body(
+            "Zendesk faces broad commercial pressure and teams describe general friction across the stack."
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+
+    assert any(
+        "witness_specificity:content does not reference any witness-backed anchor" in issue
+        for issue in report["blocking_issues"]
+    )
+
+
+def test_apply_blog_quality_gate_accepts_concrete_anchor_usage():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_alternative",
+        slug="zendesk-alternatives-2026-03",
+        suggested_title="Zendesk Alternatives",
+        tags=["crm"],
+        data_context={
+            "vendor": "Zendesk",
+            "review_period": "2025-06 to 2026-03",
+            **_blog_anchor_context(),
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Zendesk Alternatives",
+        "content": _long_blog_body(
+            "Zendesk hits a $200k/year flashpoint around the Q2 renewal window while Freshdesk keeps showing up in the displacement pattern."
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+
+    assert not any("witness_specificity:" in issue for issue in report["blocking_issues"])
+
+
+@pytest.mark.asyncio
+async def test_assemble_and_store_forwards_run_metadata_to_canonical_row(monkeypatch):
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_showdown",
+        slug="zendesk-vs-freshdesk-2026-03",
+        suggested_title="Zendesk vs Freshdesk",
+        tags=["helpdesk"],
+        data_context={
+            "generation_quality": {
+                "score": 88,
+                "threshold": 70,
+                "blocking_issues": [],
+                "warnings": ["methodology_disclaimer_missing_self_selected"],
+            },
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Zendesk vs Freshdesk",
+        "description": "Compare Zendesk and Freshdesk.",
+        "content": "Body copy",
+    }
+    pool = AsyncMock()
+    upsert = AsyncMock(return_value="post-123")
+    monkeypatch.setattr(blog_mod, "_upsert_blog_post_state", upsert)
+    monkeypatch.setattr(blog_mod, "_compute_related_slugs", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_ui_path", "", raising=False)
+
+    post_id = await _assemble_and_store(
+        pool,
+        blueprint,
+        content,
+        SimpleNamespace(model_name="test-model"),
+        run_id="run-42",
+        attempt_no=3,
+    )
+
+    assert post_id == "post-123"
+    assert upsert.await_args.kwargs["run_id"] == "run-42"
+    assert upsert.await_args.kwargs["attempt_no"] == 3
+    assert upsert.await_args.kwargs["score"] == 88
+    assert upsert.await_args.kwargs["threshold"] == 70
 
 
 def test_blueprint_vendor_alternative_uses_reasoning_contracts_for_market_context():

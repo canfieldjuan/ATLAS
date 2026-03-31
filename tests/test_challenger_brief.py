@@ -645,6 +645,66 @@ class TestBuildChallengerBrief:
         assert brief["evidence_window_days"] == 17
         assert brief["reasoning_source"] == "b2b_reasoning_synthesis"
 
+    def test_build_brief_surfaces_reasoning_anchor_examples(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "trigger": "Price hike",
+                        },
+                    },
+                    "displacement_reasoning": {
+                        "migration_proof": {"confidence": "medium"},
+                    },
+                    "category_reasoning": {"market_regime": "consolidating"},
+                    "account_reasoning": {"market_summary": "Active evaluation in named accounts."},
+                },
+                "reference_ids": {"witness_ids": ["witness:r1:0"]},
+                "packet_artifacts": {
+                    "witness_pack": [
+                        {
+                            "witness_id": "witness:r1:0",
+                            "_sid": "witness:r1:0",
+                            "excerpt_text": "Hack Club said the renewal jumped to $200k/year.",
+                            "reviewer_company": "Hack Club",
+                            "time_anchor": "Q2 renewal",
+                            "salience_score": 9.2,
+                        },
+                    ],
+                    "section_packets": {
+                        "anchor_examples": {
+                            "outlier_or_named_account": ["witness:r1:0"],
+                        },
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["reasoning_anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Hack Club"
+        assert brief["reasoning_witness_highlights"][0]["witness_id"] == "witness:r1:0"
+        assert brief["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
+        assert brief["incumbent_profile"]["reasoning_anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Hack Club"
+
     def test_empty_synthesis_view_does_not_claim_reasoning_source(self):
         """Presence of a synthesis row alone should not mark the brief as synthesis-backed."""
         synthesis_view = load_synthesis_view(

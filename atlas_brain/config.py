@@ -2320,7 +2320,7 @@ class B2BChurnConfig(BaseSettings):
         default=10,
         ge=1,
         le=50,
-        description="Max concurrent HN/GitHub profile fetches. 10 concurrent × 5s timeout ≈ 25s for 50 profiles.",
+        description="Max concurrent HN/GitHub profile fetches. 10 concurrent x 5s timeout ~= 25s for 50 profiles.",
     )
     account_resolution_profile_fetch_timeout: float = Field(
         default=5.0,
@@ -2542,6 +2542,30 @@ class B2BChurnConfig(BaseSettings):
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
     blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
     blog_post_openrouter_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for blog generation")
+    blog_quality_pass_score: int = Field(
+        default=70,
+        ge=0,
+        le=100,
+        description="Minimum blog quality score required to pass the deterministic quality gate",
+    )
+    blog_specificity_require_anchor_support: bool = Field(
+        default=True,
+        description="Require blog drafts to use witness-backed anchors when concrete reasoning anchors are available",
+    )
+    blog_specificity_min_anchor_hits: int = Field(
+        default=1,
+        ge=1,
+        le=5,
+        description="Minimum number of witness-backed specificity signal groups a blog draft must hit when anchors are available",
+    )
+    blog_specificity_require_timing_or_numeric_when_available: bool = Field(
+        default=True,
+        description="Require blog drafts to mention a timing or numeric anchor when one is available in the reasoning packet",
+    )
+    blog_publish_revalidate_enabled: bool = Field(
+        default=True,
+        description="Re-run the deterministic blog quality and specificity gate before admin publish",
+    )
     # Blog auto-deploy (git push + Vercel deploy hook)
     blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
     blog_auto_deploy_branch: str = Field(default="main", description="Git branch to push B2B blog commits to")
@@ -2623,11 +2647,149 @@ class B2BChurnConfig(BaseSettings):
         le=30.0,
         description="Delay between vendor reasoning synthesis retry attempts",
     )
+    reasoning_synthesis_timeout_seconds: float = Field(
+        default=180.0,
+        ge=1.0,
+        le=3600.0,
+        description="Timeout for each vendor or cross-vendor reasoning LLM call",
+    )
+    reasoning_synthesis_max_tokens: int = Field(
+        default=4096,
+        ge=256,
+        le=16384,
+        description="Max completion tokens for vendor or cross-vendor reasoning synthesis calls",
+    )
+    reasoning_synthesis_model: str = Field(
+        default="",
+        description=(
+            "OpenRouter model override for vendor reasoning synthesis. "
+            "Empty = prefer settings.llm.openrouter_reasoning_model before "
+            "falling back to the legacy reasoning-model defaults."
+        ),
+    )
+    reasoning_synthesis_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Temperature for vendor and cross-vendor reasoning synthesis calls",
+    )
     reasoning_synthesis_feedback_limit: int = Field(
         default=5,
         ge=1,
         le=10,
         description="Max validator issues to feed back into synthesis repair retries",
+    )
+    reasoning_retry_escalation_window_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="Rolling window for escalating repeated recovered synthesis validation retries",
+    )
+    reasoning_retry_repeat_rule_threshold: int = Field(
+        default=3,
+        ge=2,
+        le=20,
+        description="Escalate when the same vendor and validation rule hit this many recovered retries within the escalation window",
+    )
+    reasoning_retry_cost_min_retries: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Minimum recovered retry count before token-cost escalation can trigger",
+    )
+    reasoning_retry_cost_tokens_threshold: int = Field(
+        default=80000,
+        ge=1000,
+        le=1000000,
+        description="Escalate recovered retry churn when retry-token spend crosses this threshold within the escalation window",
+    )
+    reasoning_witness_max_witnesses: int = Field(
+        default=12,
+        ge=1,
+        le=50,
+        description="Max witnesses included in each vendor reasoning packet",
+    )
+    reasoning_witness_highlight_limit: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Max witness highlights surfaced to downstream render consumers",
+    )
+    witness_specificity_min_score: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=10.0,
+        description="Minimum deterministic specificity score required before a witness can enter the normal witness pack",
+    )
+    witness_specificity_fallback_min_witnesses: int = Field(
+        default=4,
+        ge=0,
+        le=20,
+        description="Minimum witness count to recover with generic fallback when the specific witness pool is too thin",
+    )
+    witness_specificity_generic_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "great tool",
+            "great platform",
+            "good tool",
+            "good platform",
+            "easy to use",
+            "easy-to-use",
+            "works well",
+            "working well",
+            "very helpful",
+            "super helpful",
+        ],
+        description="Boilerplate phrases that reduce witness specificity",
+    )
+    witness_specificity_concrete_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "pricing",
+            "renewal",
+            "seat",
+            "integration",
+            "workflow",
+            "contract",
+            "budget",
+            "support",
+            "security",
+            "migration",
+            "implementation",
+            "downtime",
+            "latency",
+        ],
+        description="Concrete pain or workflow anchors that increase witness specificity",
+    )
+    witness_specificity_short_excerpt_chars: int = Field(
+        default=55,
+        ge=1,
+        le=500,
+        description="Excerpt length below which anchor-free witnesses incur a specificity penalty",
+    )
+    witness_specificity_long_excerpt_chars: int = Field(
+        default=80,
+        ge=1,
+        le=1000,
+        description="Excerpt length above which a witness receives a small specificity bonus",
+    )
+    witness_specificity_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "currency": 2.0,
+            "number": 1.0,
+            "timing": 1.0,
+            "competitor": 1.0,
+            "reviewer_company": 1.0,
+            "pain_category": 0.75,
+            "replacement_mode": 0.75,
+            "operating_model_shift": 0.75,
+            "productivity_delta_claim": 0.75,
+            "signal_type": 0.5,
+            "long_excerpt": 0.5,
+            "concrete_pattern": 0.5,
+            "generic_phrase_penalty": 2.5,
+            "short_excerpt_penalty": 1.5,
+        },
+        description="Deterministic witness specificity scoring weights and penalties",
     )
     reasoning_synthesis_enabled: bool = Field(
         default=True,
@@ -3132,6 +3294,32 @@ class B2BCampaignConfig(BaseSettings):
     personas: list[str] = Field(
         default=["executive", "technical", "operations", "evaluator", "champion"],
         description="Persona types to generate campaigns for (buying committee coverage)",
+    )
+    specificity_require_anchor_support: bool = Field(
+        default=True,
+        description="Require campaign drafts to use witness-backed anchors when briefing-backed concrete anchors are available",
+    )
+    specificity_min_anchor_hits: int = Field(
+        default=1,
+        ge=1,
+        le=5,
+        description="Minimum number of witness-backed specificity signal groups a campaign draft must hit when anchors are available",
+    )
+    specificity_require_timing_or_numeric_when_available: bool = Field(
+        default=True,
+        description="Require campaign drafts to mention a timing or numeric anchor when one is available in briefing-backed witnesses",
+    )
+    revalidate_before_manual_approval: bool = Field(
+        default=True,
+        description="Re-run deterministic witness-backed specificity checks before manual campaign approval",
+    )
+    revalidate_before_queue_send: bool = Field(
+        default=True,
+        description="Re-run deterministic witness-backed specificity checks before queueing a campaign for send",
+    )
+    revalidate_before_send: bool = Field(
+        default=True,
+        description="Re-run deterministic witness-backed specificity checks immediately before campaign auto-send",
     )
 
 

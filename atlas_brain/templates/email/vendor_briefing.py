@@ -13,6 +13,8 @@ from datetime import date
 from html import escape
 from typing import Any
 
+from ...config import settings
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -98,6 +100,152 @@ _ARCHETYPE_LABELS: dict[str, str] = {
     "category_disruption": "Category Disruption",
     "compliance_gap": "Compliance Gap",
 }
+
+_REASONING_ANCHOR_LABELS: dict[str, str] = {
+    "outlier_or_named_account": "Named Account / Outlier",
+    "common_pattern": "Common Pattern",
+    "counterevidence": "Counterevidence",
+}
+
+
+def _reasoning_anchor_examples(
+    briefing: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    raw = briefing.get("reasoning_anchor_examples")
+    if not isinstance(raw, dict):
+        return {}
+    resolved: dict[str, list[dict[str, Any]]] = {}
+    for label, rows in raw.items():
+        if not isinstance(rows, list):
+            continue
+        clean_rows = [dict(row) for row in rows if isinstance(row, dict)]
+        if clean_rows:
+            resolved[str(label)] = clean_rows
+    return resolved
+
+
+def _reasoning_witness_highlights(briefing: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = briefing.get("reasoning_witness_highlights")
+    return [dict(row) for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+
+
+def _reasoning_witness_key(witness: dict[str, Any]) -> str:
+    return str(
+        witness.get("witness_id")
+        or witness.get("_sid")
+        or ("%s:%s" % (witness.get("reviewer_company") or "", witness.get("excerpt_text") or ""))
+    ).strip()
+
+
+def _reasoning_numeric_summary(witness: dict[str, Any]) -> list[str]:
+    numeric_literals = witness.get("numeric_literals")
+    if not isinstance(numeric_literals, dict):
+        return []
+    parts: list[str] = []
+    for key, value in numeric_literals.items():
+        values = value if isinstance(value, list) else [value]
+        text = ", ".join(str(item).strip() for item in values if str(item).strip())
+        if text:
+            parts.append("%s: %s" % (str(key).replace("_", " "), text))
+    return parts
+
+
+def _selected_reasoning_anchors(
+    briefing: dict[str, Any],
+) -> list[tuple[str | None, dict[str, Any]]]:
+    anchors = _reasoning_anchor_examples(briefing)
+    selected: list[tuple[str | None, dict[str, Any]]] = []
+    seen: set[str] = set()
+
+    def _add(label: str | None, witness: dict[str, Any]) -> None:
+        key = _reasoning_witness_key(witness)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        selected.append((label, dict(witness)))
+
+    preferred_labels = [
+        "outlier_or_named_account",
+        "common_pattern",
+        "counterevidence",
+    ]
+    ordered_labels = preferred_labels + sorted(
+        label for label in anchors.keys() if label not in set(preferred_labels)
+    )
+    for label in ordered_labels:
+        rows = anchors.get(label) or []
+        if rows:
+            _add(label, rows[0])
+    if selected:
+        return selected
+
+    limit = int(settings.b2b_churn.reasoning_witness_highlight_limit)
+    for witness in _reasoning_witness_highlights(briefing)[:limit]:
+        _add(None, witness)
+    return selected
+
+
+def _render_reasoning_anchor_section(briefing: dict[str, Any]) -> str:
+    selected = _selected_reasoning_anchors(briefing)
+    if not selected:
+        return ""
+
+    blocks = ""
+    for label, witness in selected:
+        excerpt = _safe(witness.get("excerpt_text"), "")
+        if not excerpt:
+            continue
+        label_html = ""
+        if label:
+            label_text = _REASONING_ANCHOR_LABELS.get(label, label.replace("_", " ").title())
+            label_html = (
+                f'<div style="font-size:11px;color:#2980b9;text-transform:uppercase;'
+                f'letter-spacing:0.5px;margin-bottom:6px;">{escape(label_text)}</div>'
+            )
+        detail_parts = []
+        company = _safe(witness.get("reviewer_company"), "")
+        if company:
+            detail_parts.append(company)
+        time_anchor = _safe(witness.get("time_anchor"), "")
+        if time_anchor:
+            detail_parts.append(time_anchor)
+        competitor = _safe(witness.get("competitor"), "")
+        if competitor:
+            detail_parts.append("vs %s" % competitor)
+        detail_parts.extend(escape(part) for part in _reasoning_numeric_summary(witness))
+        detail_html = ""
+        if detail_parts:
+            detail_html = (
+                '<div style="margin-top:8px;">'
+                + "".join(
+                    f'<span style="display:inline-block;margin:0 6px 6px 0;padding:3px 8px;'
+                    f'background:#f2f4f7;border-radius:12px;font-size:11px;color:#5b6e7a;">'
+                    f'{part}</span>'
+                    for part in detail_parts
+                )
+                + "</div>"
+            )
+        blocks += f"""
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:12px;">
+              <tr>
+                <td style="padding:12px 14px;background:#fafafa;border:1px solid #eee;border-radius:6px;">
+                  {label_html}
+                  <div style="font-size:13px;color:#444;line-height:1.6;font-style:italic;">&ldquo;{excerpt}&rdquo;</div>
+                  {detail_html}
+                </td>
+              </tr>
+            </table>"""
+    if not blocks:
+        return ""
+
+    return f"""
+            <!-- Proof Anchors -->
+            <table cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-bottom:28px;">
+              <tr><td style="padding:0 24px;">
+                <h3 style="margin:0 0 12px;font-size:16px;color:#1a2332;">Proof Anchors</h3>
+                {blocks}
+              </td></tr>
+            </table>"""
 
 
 def _render_archetype_section(
@@ -303,6 +451,8 @@ def render_vendor_briefing_html(briefing: dict) -> str:
                 </td>
               </tr>
             </table>"""
+
+    proof_anchor_html = _render_reasoning_anchor_section(briefing)
 
     # Section 7: named accounts (conditional)
     named_accounts = briefing.get("named_accounts") or []
@@ -857,6 +1007,8 @@ def render_vendor_briefing_html(briefing: dict) -> str:
     </td>
   </tr>
   '''}
+
+  {proof_anchor_html}
 
   {named_accounts_html}
 

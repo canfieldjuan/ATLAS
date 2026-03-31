@@ -1244,25 +1244,43 @@ def _build_challenger_brief(
     priority_timing_triggers: list[str] = []
     synthesis_wedge = ""
     synthesis_wedge_label = ""
+    reasoning_anchor_examples: dict[str, list[dict[str, Any]]] = {}
+    reasoning_witness_highlights: list[dict[str, Any]] = []
+    reasoning_reference_ids: dict[str, Any] = {}
     if incumbent_synthesis_view is not None:
         from ._b2b_synthesis_reader import (
-            contract_gaps_for_consumer,
             inject_synthesis_freshness,
         )
-        reasoning_contracts = incumbent_synthesis_view.materialized_contracts()
+        consumer_context = incumbent_synthesis_view.consumer_context("challenger_brief")
+        reasoning_contracts = consumer_context.get("reasoning_contracts") or {}
         vendor_core_reasoning = (
-            reasoning_contracts.get("vendor_core_reasoning")
-            if isinstance(reasoning_contracts.get("vendor_core_reasoning"), dict)
+            consumer_context.get("vendor_core_reasoning")
+            if isinstance(consumer_context.get("vendor_core_reasoning"), dict)
             else {}
         )
         displacement_reasoning = (
-            reasoning_contracts.get("displacement_reasoning")
-            if isinstance(reasoning_contracts.get("displacement_reasoning"), dict)
+            consumer_context.get("displacement_reasoning")
+            if isinstance(consumer_context.get("displacement_reasoning"), dict)
             else {}
         )
         account_reasoning = (
-            reasoning_contracts.get("account_reasoning")
-            if isinstance(reasoning_contracts.get("account_reasoning"), dict)
+            consumer_context.get("account_reasoning")
+            if isinstance(consumer_context.get("account_reasoning"), dict)
+            else {}
+        )
+        reasoning_anchor_examples = (
+            consumer_context.get("anchor_examples")
+            if isinstance(consumer_context.get("anchor_examples"), dict)
+            else {}
+        )
+        reasoning_witness_highlights = (
+            consumer_context.get("witness_highlights")
+            if isinstance(consumer_context.get("witness_highlights"), list)
+            else []
+        )
+        reasoning_reference_ids = (
+            consumer_context.get("reference_ids")
+            if isinstance(consumer_context.get("reference_ids"), dict)
             else {}
         )
         if isinstance(vendor_core_reasoning, dict):
@@ -1324,13 +1342,16 @@ def _build_challenger_brief(
             incumbent_section["timing_metrics"] = timing_metrics
         if priority_timing_triggers:
             incumbent_section["priority_timing_triggers"] = priority_timing_triggers
-        contract_gaps = contract_gaps_for_consumer(
-            incumbent_synthesis_view,
-            "challenger_brief",
-        )
+        contract_gaps = consumer_context.get("reasoning_contract_gaps") or []
         reasoning_contract_gaps = contract_gaps
         if contract_gaps:
             incumbent_section["reasoning_contract_gaps"] = contract_gaps
+        if reasoning_anchor_examples:
+            incumbent_section["reasoning_anchor_examples"] = reasoning_anchor_examples
+        if reasoning_witness_highlights:
+            incumbent_section["reasoning_witness_highlights"] = reasoning_witness_highlights
+        if reasoning_reference_ids:
+            incumbent_section["reasoning_reference_ids"] = reasoning_reference_ids
 
         # Phase 3 governance fields
         wts = incumbent_synthesis_view.why_they_stay
@@ -1554,6 +1575,12 @@ def _build_challenger_brief(
         result["target_accounts_source"] = target_accounts_source
     if reasoning_contracts:
         result["reasoning_contracts"] = reasoning_contracts
+    if reasoning_anchor_examples:
+        result["reasoning_anchor_examples"] = reasoning_anchor_examples
+    if reasoning_witness_highlights:
+        result["reasoning_witness_highlights"] = reasoning_witness_highlights
+    if reasoning_reference_ids:
+        result["reasoning_reference_ids"] = reasoning_reference_ids
     if account_reasoning:
         result["account_reasoning"] = account_reasoning
     if timing_summary or timing_metrics or priority_timing_triggers:
@@ -1775,23 +1802,47 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             total_mentions = brief["displacement_summary"]["total_mentions"]
             sources_present = sum(1 for v in brief["data_sources"].values() if v)
 
-            await pool.execute(
-                """
+            execution_id = str(
+                getattr(task, "id", None)
+                or (getattr(task, "metadata", {}) or {}).get("_execution_id")
+                or ""
+            ) or None
+            report_status = "published" if total_mentions > 0 else "failed"
+            latest_failure_step = None if total_mentions > 0 else "no_data"
+            latest_error_code = None if total_mentions > 0 else "no_data"
+            latest_error_summary = None if total_mentions > 0 else "Challenger brief has no displacement mentions"
+            sql = """
                 INSERT INTO b2b_intelligence (
                     report_date, report_type, vendor_filter, category_filter,
                     intelligence_data, executive_summary, data_density, status, llm_model,
-                    source_review_count, source_distribution
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    source_review_count, source_distribution,
+                    latest_run_id, latest_attempt_no, latest_failure_step,
+                    latest_error_code, latest_error_summary,
+                    blocker_count, warning_count
+                ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                    $12, $13, $14, $15, $16, $17, $18
+                )
                 ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
                              LOWER(COALESCE(category_filter,'')),
                              COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
                 DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
                               executive_summary = EXCLUDED.executive_summary,
                               data_density = EXCLUDED.data_density,
+                              status = EXCLUDED.status,
                               source_review_count = EXCLUDED.source_review_count,
                               source_distribution = EXCLUDED.source_distribution,
+                              latest_run_id = EXCLUDED.latest_run_id,
+                              latest_attempt_no = EXCLUDED.latest_attempt_no,
+                              latest_failure_step = EXCLUDED.latest_failure_step,
+                              latest_error_code = EXCLUDED.latest_error_code,
+                              latest_error_summary = EXCLUDED.latest_error_summary,
+                              blocker_count = EXCLUDED.blocker_count,
+                              warning_count = EXCLUDED.warning_count,
                               created_at = now()
-                """,
+                RETURNING id
+            """
+            sql_args = (
                 today,
                 "challenger_brief",
                 incumbent,
@@ -1803,12 +1854,51 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "sources_present": sources_present,
                     "target_accounts": brief["total_target_accounts"],
                 }),
-                "published" if total_mentions > 0 else "failed",
+                report_status,
                 "pipeline_deterministic",
                 total_mentions,
                 json.dumps(brief["displacement_summary"].get("source_distribution", {})),
+                execution_id,
+                1,
+                latest_failure_step,
+                latest_error_code,
+                latest_error_summary,
+                0 if total_mentions > 0 else 1,
+                0,
             )
+            fetchrow = getattr(pool, "fetchrow", None)
+            report_row = await fetchrow(sql, *sql_args) if callable(fetchrow) else None
+            if report_row is None:
+                await pool.execute(sql.replace(" RETURNING id", ""), *sql_args)
             persisted += 1
+            from ..visibility import record_attempt
+            await record_attempt(
+                pool,
+                artifact_type="churn_report",
+                artifact_id=str(report_row["id"]) if report_row else f"{today}:challenger_brief:{incumbent}:{challenger}",
+                run_id=execution_id,
+                stage="persistence",
+                status="succeeded" if total_mentions > 0 else "failed",
+                failure_step=latest_failure_step,
+                error_message=latest_error_summary,
+            )
+            if total_mentions <= 0:
+                from ..visibility import emit_event
+                await emit_event(
+                    pool,
+                        stage="reports",
+                        event_type="report_failed",
+                        entity_type="churn_report",
+                    entity_id=str(report_row["id"]) if report_row else f"{today}:challenger_brief:{incumbent}:{challenger}",
+                    artifact_type="churn_report",
+                    run_id=execution_id,
+                    severity="warning",
+                    actionable=False,
+                    reason_code="no_data",
+                    summary=f"challenger_brief produced no displacement mentions for {incumbent} vs {challenger}",
+                    source_table="b2b_intelligence",
+                    source_id=str(report_row["id"]) if report_row else None,
+                )
         except Exception:
             logger.exception(
                 "Failed to build/persist challenger brief for %s -> %s",

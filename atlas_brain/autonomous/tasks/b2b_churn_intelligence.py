@@ -667,39 +667,6 @@ def _apply_vendor_scope_to_churn_inputs(
 
     return scoped, scoped_vendors
 
-
-async def persist_single_vendor_reasoning(
-    pool,
-    vendor_name: str,
-    reasoning_result,
-) -> None:
-    """Write archetype columns to b2b_churn_signals for a single vendor."""
-    conclusion = reasoning_result.conclusion or {}
-    await pool.execute(
-        """
-        UPDATE b2b_churn_signals
-        SET archetype = $2,
-            archetype_confidence = $3,
-            reasoning_mode = $4,
-            falsification_conditions = $5,
-            reasoning_risk_level = $6,
-            reasoning_executive_summary = $7,
-            reasoning_key_signals = $8,
-            reasoning_uncertainty_sources = $9
-        WHERE vendor_name = $1
-        """,
-        vendor_name,
-        conclusion.get("archetype"),
-        reasoning_result.confidence,
-        reasoning_result.mode,
-        json.dumps(conclusion.get("falsification_conditions", [])),
-        conclusion.get("risk_level"),
-        conclusion.get("executive_summary"),
-        json.dumps(conclusion.get("key_signals", [])),
-        json.dumps(conclusion.get("uncertainty_sources", [])),
-    )
-
-
 async def _persist_vendor_snapshots(
     pool,
     vendor_scores: list[dict[str, Any]],
@@ -854,9 +821,8 @@ async def reconstruct_reasoning_lookup(
 ) -> dict[str, dict]:
     """Rebuild reasoning_lookup from persisted b2b_churn_signals.
 
-    Returns the same dict shape that the stratified reasoner produces
-    in-memory during the core task, allowing follow-up tasks to skip
-    re-running the reasoner entirely.
+    Returns the legacy archetype-style dict shape expected by downstream
+    compatibility readers, rebuilt from persisted churn-signal fields.
 
     When *as_of* is None, uses the most recent last_computed_at watermark.
     """
@@ -1230,7 +1196,7 @@ async def _detect_change_events(
         if top_competitor and prior_comp and top_competitor != prior_comp:
             events.append(("new_competitor", f"Top competitor shifted from '{prior_comp}' to '{top_competitor}'", None, None, None, None))
 
-        # Archetype shift (requires reasoning_lookup from stratified reasoning)
+        # Archetype shift (requires vendor reasoning context when available)
         if reasoning_lookup:
             current_rc = reasoning_lookup.get(vendor, {})
             current_arch = current_rc.get("archetype")
@@ -3110,15 +3076,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         },
     )
 
-    # Flush metacognition counters to DB after each intelligence run
-    try:
-        from atlas_brain.reasoning import get_stratified_reasoner
-        reasoner = get_stratified_reasoner()
-        if reasoner and reasoner._meta:
-            await reasoner._meta.flush()
-    except Exception:
-        logger.debug("Metacognition flush skipped", exc_info=True)
-
     return response
 
 
@@ -4521,22 +4478,51 @@ async def generate_vendor_comparison_report(
         _switching_triggers_from_dynamics(pool, comparison_name, window_days),
     )
 
-    # Archetype context from churn signals + prior snapshots
-    primary_arch_row = await pool.fetchrow(
-        "SELECT archetype, archetype_confidence, falsification_conditions "
-        "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
-        "AND archetype IS NOT NULL "
-        "ORDER BY last_computed_at DESC LIMIT 1",
-        primary_name,
+    # Current/prior reasoning context (synthesis-first, legacy fallback)
+    from ._b2b_synthesis_reader import (
+        load_best_reasoning_views,
+        load_prior_reasoning_snapshots,
+        synthesis_view_to_reasoning_entry,
     )
-    comparison_arch_row = await pool.fetchrow(
-        "SELECT archetype, archetype_confidence, falsification_conditions "
-        "FROM b2b_churn_signals WHERE LOWER(vendor_name) = LOWER($1) "
-        "AND archetype IS NOT NULL "
-        "ORDER BY last_computed_at DESC LIMIT 1",
-        comparison_name,
+
+    _current_views = await load_best_reasoning_views(
+        pool,
+        [primary_name, comparison_name],
+        as_of=today,
+        analysis_window_days=window_days,
     )
-    _prior_archs = await _fetch_prior_archetypes(pool, [primary_name, comparison_name])
+    _prior_archs = await load_prior_reasoning_snapshots(
+        pool,
+        [primary_name, comparison_name],
+        before_date=today,
+        analysis_window_days=window_days,
+    )
+
+    def _view_for(vendor_name: str):
+        lowered = str(vendor_name or "").strip().lower()
+        for current_name, view in _current_views.items():
+            if str(current_name or "").strip().lower() == lowered:
+                return view
+        return None
+
+    primary_view = _view_for(primary_name)
+    comparison_view = _view_for(comparison_name)
+    primary_reasoning = (
+        synthesis_view_to_reasoning_entry(primary_view)
+        if primary_view is not None else {}
+    )
+    comparison_reasoning = (
+        synthesis_view_to_reasoning_entry(comparison_view)
+        if comparison_view is not None else {}
+    )
+    primary_falsification = [
+        fc.get("condition", fc) if isinstance(fc, dict) else fc
+        for fc in (primary_view.falsification_conditions() if primary_view is not None else [])
+    ]
+    comparison_falsification = [
+        fc.get("condition", fc) if isinstance(fc, dict) else fc
+        for fc in (comparison_view.falsification_conditions() if comparison_view is not None else [])
+    ]
 
     # Trend analysis from prior comparison reports
     trend_analysis = None
@@ -4580,8 +4566,8 @@ async def generate_vendor_comparison_report(
         "window_days": window_days,
         "executive_summary": _build_vendor_comparison_summary(
             primary_snapshot, comparison_snapshot, head_to_head,
-            primary_archetype=primary_arch_row["archetype"] if primary_arch_row else None,
-            comparison_archetype=comparison_arch_row["archetype"] if comparison_arch_row else None,
+            primary_archetype=primary_reasoning.get("archetype") or None,
+            comparison_archetype=comparison_reasoning.get("archetype") or None,
         ),
         "primary_metrics": {k: v for k, v in primary_snapshot.items() if k not in _snapshot_exclude},
         "comparison_metrics": {k: v for k, v in comparison_snapshot.items() if k not in _snapshot_exclude},
@@ -4608,14 +4594,14 @@ async def generate_vendor_comparison_report(
         "comparison_switching_triggers": comparison_triggers,
         "trend_analysis": trend_analysis,
         # Archetype context
-        "primary_archetype": primary_arch_row["archetype"] if primary_arch_row else None,
-        "primary_archetype_confidence": float(primary_arch_row["archetype_confidence"]) if primary_arch_row and primary_arch_row["archetype_confidence"] else None,
+        "primary_archetype": primary_reasoning.get("archetype") or None,
+        "primary_archetype_confidence": primary_reasoning.get("confidence"),
         "primary_archetype_was": _prior_archs.get(primary_name, {}).get("archetype"),
-        "primary_falsification": primary_arch_row["falsification_conditions"] if primary_arch_row and primary_arch_row["falsification_conditions"] else [],
-        "comparison_archetype": comparison_arch_row["archetype"] if comparison_arch_row else None,
-        "comparison_archetype_confidence": float(comparison_arch_row["archetype_confidence"]) if comparison_arch_row and comparison_arch_row["archetype_confidence"] else None,
+        "primary_falsification": primary_falsification,
+        "comparison_archetype": comparison_reasoning.get("archetype") or None,
+        "comparison_archetype_confidence": comparison_reasoning.get("confidence"),
         "comparison_archetype_was": _prior_archs.get(comparison_name, {}).get("archetype"),
-        "comparison_falsification": comparison_arch_row["falsification_conditions"] if comparison_arch_row and comparison_arch_row["falsification_conditions"] else [],
+        "comparison_falsification": comparison_falsification,
     }
     if persist:
         row = await pool.fetchrow(

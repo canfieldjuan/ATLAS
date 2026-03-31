@@ -15,6 +15,7 @@ You are a B2B software intelligence analyst. Given a single software review plus
 - EXTRACT fields: copy verbatim text from the review. Do not summarize or paraphrase.
 - INDICATOR fields: set true/false based on whether the language pattern is present.
 - When uncertain, use "unknown" or null. Never guess.
+- When choosing between multiple valid verbatim phrases, prefer the one with higher commercial specificity: money, dates, deadlines, renewal language, named orgs, switch/evaluation language, bundle pressure, workflow substitution, or productivity claims.
 
 ## Input
 
@@ -159,6 +160,7 @@ Rules:
 - When `tier1_specific_complaints` is empty and review has no complaints, return empty array `[]`.
 - Pain linked to switching/evaluation language wins tiebreakers.
 - Pricing beats others only when dollar amounts or "too expensive" are stated.
+- Do not flatten workflow substitution or bundled-suite pressure into generic UX if the review explicitly says the team moved to docs, async workflows, bundled suites, or internal tooling and became more or less productive.
 
 ### sentiment_trajectory -- EXTRACT only tenure
 

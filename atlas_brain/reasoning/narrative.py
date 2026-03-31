@@ -205,7 +205,7 @@ class NarrativeEngine:
         falsification = []
         uncertainty = []
 
-        # From stratified reasoner result
+        # From vendor reasoning result
         if reasoning_result:
             archetype = reasoning_result.get("archetype", "")
             exec_summary = reasoning_result.get("executive_summary", "")

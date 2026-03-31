@@ -307,8 +307,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       AND review_text ~* '(billing|invoice|invoiced|charged|refund|renewal|price increase|cost increase|automatic renewal|auto renew|overcharg)'
                     )
                     OR (
+                      COALESCE(enrichment->>'pain_category', 'other') NOT IN ('pricing', 'contract_lock_in')
+                      AND (
+                        review_text ~* '\\$\\s?\\d'
+                        OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
+                      )
+                    )
+                    OR (
                       COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) = 0
                       AND review_text ~* '(cancel|cancellation|billing dispute|charged after cancellation|refund denied|runaround|automatic renewal|auto renew|renewed without notice)'
+                    )
+                    OR (
+                      COALESCE(jsonb_array_length(enrichment->'event_mentions'), 0) = 0
+                      AND COALESCE(enrichment->'timeline'->>'decision_timeline', 'unknown') = 'unknown'
+                      AND review_text ~* '(renewal|contract end|contract expires|deadline|next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
                     )
                     OR (
                       enrichment_status = 'no_signal'

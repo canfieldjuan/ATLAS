@@ -8,6 +8,11 @@ language -- it outputs structured analytical contracts only.
 Phase 2 governance signals (metric_ledger, contradiction_rows,
 minority_signals, coverage_gaps, retention_proof) are present in the
 input payload and must be reflected in the output contracts.
+
+Witness-backed packets are also present:
+- ``witness_pack``: deterministically selected review excerpts with stable
+  witness IDs and metadata
+- ``section_packets``: compact per-section witness groupings
 """
 
 import hashlib as _hashlib
@@ -47,41 +52,50 @@ CRITICAL RULES:
 
 4. ``primary_wedge`` MUST be one of: {_WEDGE_LIST}.
 
-5. When ``contradiction_rows`` are present in the input, the output MUST:
+5. Build qualitative claims from ``witness_pack`` first. Use
+   ``precomputed_aggregates`` and ``metric_ledger`` only to state scope,
+   prevalence, and numeric intensity. Do not make a causal claim without
+   at least one witness-backed citation when witness evidence exists.
+
+6. When ``contradiction_rows`` are present in the input, the output MUST:
    - Set causal_narrative confidence no higher than ``medium``
    - Include the contradicting dimensions in data_gaps
    - Populate ``confidence_posture.limits`` with the conflicting areas
 
-6. When ``coverage_gaps`` are present in the input, the output MUST:
+7. When ``coverage_gaps`` are present in the input, the output MUST:
    - Populate ``confidence_posture.limits`` with the gap descriptions
    - Avoid strong claims about thin-evidence areas
 
-7. When ``retention_proof`` is present in the input, the output MUST:
+8. When ``retention_proof`` is present in the input, the output MUST:
    - Populate ``why_they_stay`` with a summary and per-area strengths
    - Each strength should include ``neutralization``: what would erode
      this retention anchor
 
-8. When ``minority_signals`` are present, the output MUST reference
+9. When ``minority_signals`` are present, the output MUST reference
    rare-but-severe items in the relevant section's data_gaps.
 
-9. When evidence conflicts, state the conflict explicitly in data_gaps.
+10. When evidence conflicts, state the conflict explicitly in data_gaps.
    Do NOT synthesize contradictions into a single clean narrative.
 
-10. ``migration_proof.switch_volume`` means confirmed explicit switches
+11. ``migration_proof.switch_volume`` means confirmed explicit switches
     only.  ``active_evaluation_volume`` is evaluation pressure only.
     ``displacement_mention_volume`` is broader mention intensity.
 
-11. ``migration_proof.confidence`` cannot be ``high`` without confirmed
+12. ``migration_proof.confidence`` cannot be ``high`` without confirmed
     switch evidence.  Evaluation-only caps at ``medium``.
 
-12. Never cite ``vault:weakness:unknown`` or ``vault:strength:unknown``.
+13. When ``section_packets.anchor_examples`` contains witness IDs,
+    preferentially use one common-pattern anchor and one outlier or
+    named-account anchor when the relevant section supports the claim.
 
-13. Omit thin or low-sample segments instead of overstating them.
+14. Never cite ``vault:weakness:unknown`` or ``vault:strength:unknown``.
 
-14. ``competitive_reframes.reframes`` and ``segment_playbook.priority_segments``
+15. Omit thin or low-sample segments instead of overstating them.
+
+16. ``competitive_reframes.reframes`` and ``segment_playbook.priority_segments``
     may be empty arrays when evidence is insufficient.
 
-15. ``proof_point.source_id`` must come from ``precomputed_aggregates`` only.
+17. ``proof_point.source_id`` must come from ``precomputed_aggregates`` only.
 
 OUTPUT SCHEMA:
 

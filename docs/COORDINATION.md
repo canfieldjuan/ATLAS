@@ -1,5 +1,9 @@
 # Dev Coordination — Stratified Reasoning Build
 
+> Historical coordination log: this document tracks the retired stratified
+> reasoning buildout. The production B2B pipeline now uses synthesis-first
+> vendor and cross-vendor reasoning.
+
 **Lead**: Claude (AI) — architecture, core engine, integration
 **Dev 2**: Senior Dev — investigations, parallel workstreams, data layer
 **Plan**: `docs/STRATIFIED_REASONING_ARCHITECTURE.md`

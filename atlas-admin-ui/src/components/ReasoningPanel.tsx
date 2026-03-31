@@ -17,7 +17,7 @@ function classifySpan(spanName: string): ReasoningClass {
       bucket: 'reason',
       label: 'Full Reason',
       tone: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
-      description: 'Fresh stratified reasoning'
+      description: 'Legacy full-reason pass'
     }
   }
   if (spanName === 'reasoning.stratified.reason.challenge') {
@@ -167,7 +167,7 @@ export default function ReasoningPanel({
             Reasoning Activity
           </h2>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Separates true stratified reasoning from downstream narrative generation. Recall hits and deterministic builders are intentionally absent because they do not create LLM cost records.
+            Separates legacy reasoning-pass spend from downstream narrative generation. Persisted synthesis reads, recall hits, and deterministic builders are intentionally absent because they do not create LLM cost records.
           </p>
         </div>
         <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-4 py-3 text-right">

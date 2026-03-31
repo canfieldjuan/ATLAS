@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from atlas_brain.autonomous.tasks import b2b_enrichment
+from atlas_brain.reasoning import evidence_engine
 from atlas_brain.storage.models import ScheduledTask
 
 
@@ -516,3 +517,116 @@ async def test_enrich_rows_counts_quarantined(monkeypatch):
 
     assert result["enriched"] == 0
     assert result["quarantined"] == 3
+
+
+def test_compute_derived_fields_adds_witness_primitives(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 8.4
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return True
+
+        def derive_price_complaint(self, result):
+            return True
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "summary": "Renewal pricing pushed us toward async docs",
+        "review_text": (
+            "Slack wanted $200k/year at renewal. "
+            "We became more productive using docs and async updates instead."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "CTO",
+        "reviewer_company": "Hack Club",
+        "raw_metadata": {"source_weight": 0.9},
+        "content_type": "review",
+        "rating": 2.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": False,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": "next quarter",
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {
+            "role_level": "executive",
+            "decision_maker": True,
+            "company_name": "Hack Club",
+        },
+        "budget_signals": {
+            "annual_spend_estimate": 200000,
+            "price_per_seat": None,
+            "seat_count": None,
+            "price_increase_mentioned": True,
+        },
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": ["Slack wanted $200k/year at renewal"],
+        "quotable_phrases": ["We became more productive using docs and async updates instead"],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": ["I would not recommend this"],
+        "pricing_phrases": ["$200k/year at renewal"],
+        "event_mentions": [{"event": "renewal", "timeframe": "next quarter"}],
+        "timeline": {"contract_end": "next quarter", "evaluation_deadline": None},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["replacement_mode"] == "workflow_substitution"
+    assert derived["operating_model_shift"] == "sync_to_async"
+    assert derived["productivity_delta_claim"] == "more_productive"
+    assert derived["org_pressure_type"] == "none"
+    assert {"explicit_dollar", "named_account", "decision_maker"}.issubset(set(derived["salience_flags"]))
+    assert derived["evidence_spans"]
+    assert any(span["signal_type"] == "pricing_backlash" for span in derived["evidence_spans"])
+    assert any(span["productivity_delta_claim"] == "more_productive" for span in derived["evidence_spans"])
+
+
+def test_repair_target_fields_flags_semantic_pricing_and_timeline_gaps():
+    row = {
+        "summary": "Renewal confusion",
+        "review_text": "We got a $50k renewal quote and need to decide next quarter.",
+        "pros": "",
+        "cons": "",
+        "source": "reddit",
+        "enrichment_status": "enriched",
+    }
+    result = {
+        "pain_category": "ux",
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "feature_gaps": [],
+        "event_mentions": [],
+        "competitors_mentioned": [],
+        "salience_flags": ["explicit_dollar"],
+        "timeline": {"decision_timeline": "unknown"},
+    }
+
+    targets = b2b_enrichment._repair_target_fields(result, row)
+
+    assert "specific_complaints" in targets
+    assert "pricing_phrases" in targets
+    assert "event_mentions" in targets

@@ -3,6 +3,27 @@ export interface KeyInsightViewModel {
   evidence: string
 }
 
+export interface ReasoningWitnessViewModel {
+  witness_id?: string
+  _sid?: string
+  reviewer_company?: string
+  reviewer_title?: string
+  excerpt_text?: string
+  time_anchor?: string
+  competitor?: string
+  witness_type?: string
+  selection_reason?: string
+  salience_score?: number | null
+  numeric_literals?: Record<string, unknown>
+}
+
+export type ReasoningAnchorExamplesViewModel = Record<string, ReasoningWitnessViewModel[]>
+
+export interface ReasoningReferenceIdsViewModel {
+  metric_ids: string[]
+  witness_ids: string[]
+}
+
 export interface PainQuoteViewModel {
   quote: string
   text?: string
@@ -89,6 +110,9 @@ export interface ChallengerIncumbentProfileViewModel {
   key_signals: string[]
   top_weaknesses: WeaknessAnalysisItemViewModel[]
   top_pain_quotes: PainQuoteViewModel[]
+  reasoning_anchor_examples?: ReasoningAnchorExamplesViewModel
+  reasoning_witness_highlights?: ReasoningWitnessViewModel[]
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ChallengerStrengthViewModel {
@@ -146,6 +170,9 @@ export interface ChallengerBriefViewModel {
   sales_playbook: ChallengerSalesPlaybookViewModel
   integration_comparison: IntegrationComparisonViewModel
   data_sources: Record<string, boolean>
+  reasoning_anchor_examples?: ReasoningAnchorExamplesViewModel
+  reasoning_witness_highlights?: ReasoningWitnessViewModel[]
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface PricingPressureViewModel {

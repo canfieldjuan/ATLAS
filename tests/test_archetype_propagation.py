@@ -516,6 +516,113 @@ class TestVendorBriefingArchetypeRender:
         assert "New Pattern" in html
 
 
+class TestVendorBriefingReasoningAnchorsRender:
+    """Verify witness-backed proof anchors render in briefing HTML."""
+
+    def test_reasoning_anchor_section_renders_preferred_buckets(self):
+        from atlas_brain.templates.email.vendor_briefing import (
+            _render_reasoning_anchor_section,
+        )
+
+        html = _render_reasoning_anchor_section(
+            {
+                "reasoning_anchor_examples": {
+                    "outlier_or_named_account": [
+                        {
+                            "witness_id": "witness:r1:0",
+                            "excerpt_text": "Hack Club said the renewal jumped to $200k/year.",
+                            "reviewer_company": "Hack Club",
+                            "time_anchor": "Q2 renewal",
+                            "numeric_literals": {"annual_spend_estimate": [200000]},
+                        }
+                    ],
+                    "common_pattern": [
+                        {
+                            "witness_id": "witness:r2:0",
+                            "excerpt_text": "Pricing pressure keeps coming up in renewal reviews.",
+                            "reviewer_company": "Northwind",
+                        }
+                    ],
+                    "counterevidence": [
+                        {
+                            "witness_id": "witness:r3:0",
+                            "excerpt_text": "Teams still stay for the integration depth.",
+                            "competitor": "Freshdesk",
+                        }
+                    ],
+                }
+            }
+        )
+
+        assert "Proof Anchors" in html
+        assert "Named Account / Outlier" in html
+        assert "Common Pattern" in html
+        assert "Counterevidence" in html
+        assert "Hack Club" in html
+        assert "Q2 renewal" in html
+        assert "annual spend estimate: 200000" in html
+
+    def test_reasoning_anchor_section_falls_back_to_witness_highlights(self):
+        from atlas_brain.templates.email.vendor_briefing import (
+            _render_reasoning_anchor_section,
+        )
+
+        html = _render_reasoning_anchor_section(
+            {
+                "reasoning_witness_highlights": [
+                    {
+                        "witness_id": "witness:r4:0",
+                        "excerpt_text": "The team is evaluating alternatives before the April renewal.",
+                        "reviewer_company": "Acme Corp",
+                        "time_anchor": "April renewal",
+                    }
+                ]
+            }
+        )
+
+        assert "Proof Anchors" in html
+        assert "Acme Corp" in html
+        assert "April renewal" in html
+
+    def test_reasoning_anchor_section_is_empty_without_witnesses(self):
+        from atlas_brain.templates.email.vendor_briefing import (
+            _render_reasoning_anchor_section,
+        )
+
+        assert _render_reasoning_anchor_section({}) == ""
+
+    def test_full_briefing_html_includes_proof_anchors_section(self):
+        from atlas_brain.templates.email.vendor_briefing import (
+            render_vendor_briefing_html,
+        )
+
+        html = render_vendor_briefing_html(
+            {
+                "vendor_name": "Zendesk",
+                "category": "Helpdesk",
+                "churn_pressure_score": 61,
+                "trend": "rising",
+                "churn_signal_density": 12.0,
+                "avg_urgency": 7.3,
+                "review_count": 48,
+                "dm_churn_rate": 22.0,
+                "reasoning_anchor_examples": {
+                    "outlier_or_named_account": [
+                        {
+                            "witness_id": "witness:r1:0",
+                            "excerpt_text": "Hack Club said the renewal jumped to $200k/year.",
+                            "reviewer_company": "Hack Club",
+                            "time_anchor": "Q2 renewal",
+                        }
+                    ]
+                },
+            }
+        )
+
+        assert "Proof Anchors" in html
+        assert "Hack Club" in html
+
+
 # ---------------------------------------------------------------------------
 # Article-archetype correlation
 # ---------------------------------------------------------------------------
@@ -1606,93 +1713,6 @@ class TestReconstructCrossVendorLookup:
         assert result["asymmetries"][("A", "B")]["conclusion"]["conclusion"] == "asymmetry"
 
 
-class TestCrossVendorSchemaContract:
-    """Validate CROSS_VENDOR_JSON_SCHEMA accepts expected LLM output shapes."""
-
-    def test_battle_output_validates(self):
-        import jsonschema
-        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
-        output = {
-            "analysis_type": "pairwise_battle",
-            "vendors": ["Zendesk", "Freshdesk"],
-            "conclusion": "Zendesk losing customers due to pricing pressure",
-            "confidence": 0.85,
-            "key_insights": [
-                {"insight": "3x price gap", "evidence": "pricing delta: 3x"},
-                {"insight": "SMB migration accelerating", "evidence": "switch_count: 43"},
-            ],
-            "durability_assessment": "structural",
-            "winner": "Freshdesk",
-            "loser": "Zendesk",
-            "market_regime": "",
-            "segment_dynamics": {"enterprise_winner": "Zendesk", "smb_winner": "Freshdesk",
-                                 "segment_divergence": True},
-            "falsification_conditions": ["Zendesk restores pricing"],
-            "uncertainty_sources": ["limited enterprise data"],
-            "resource_advantage": "",
-        }
-        jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
-
-    def test_asymmetry_output_with_resource_advantage_validates(self):
-        import jsonschema
-        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
-        output = {
-            "analysis_type": "resource_asymmetry",
-            "vendors": ["Salesforce", "HubSpot"],
-            "conclusion": "Salesforce holds deeper lock-in via integrations",
-            "confidence": 0.72,
-            "key_insights": [
-                {"insight": "4x integration count", "evidence": "integration_ratio: 4.0"},
-                {"insight": "enterprise tilt", "evidence": "enterprise_share: 0.62"},
-            ],
-            "durability_assessment": "structural",
-            "winner": "Salesforce",
-            "loser": "",
-            "market_regime": "",
-            "segment_dynamics": {"enterprise_winner": "Salesforce", "smb_winner": "", "segment_divergence": False},
-            "falsification_conditions": ["HubSpot launches marketplace"],
-            "uncertainty_sources": [],
-            "resource_advantage": "Salesforce holds edge due to 4x integration count",
-        }
-        jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
-
-    def test_resource_advantage_accepts_null(self):
-        import jsonschema
-        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
-        output = {
-            "analysis_type": "resource_asymmetry",
-            "vendors": ["A", "B"],
-            "conclusion": "Approximate parity",
-            "confidence": 0.5,
-            "key_insights": [{"insight": "similar review share", "evidence": "review_ratio: 1.1"}],
-            "durability_assessment": "uncertain",
-            "winner": "",
-            "loser": "",
-            "market_regime": "",
-            "segment_dynamics": {"enterprise_winner": "", "smb_winner": "", "segment_divergence": False},
-            "falsification_conditions": [],
-            "uncertainty_sources": [],
-            "resource_advantage": "",
-        }
-        jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
-
-    def test_schema_rejects_unknown_field(self):
-        import jsonschema
-        from atlas_brain.reasoning.cross_vendor import CROSS_VENDOR_JSON_SCHEMA
-        output = {
-            "analysis_type": "pairwise_battle",
-            "vendors": ["A", "B"],
-            "conclusion": "test",
-            "confidence": 0.5,
-            "key_insights": [],
-            "durability_assessment": "uncertain",
-            "falsification_conditions": [],
-            "made_up_field": "should fail",
-        }
-        with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate(output, CROSS_VENDOR_JSON_SCHEMA)
-
-
 class TestBattleCardCacheKeyIntegration:
     """Verify cache hash changes when cross-vendor fields change."""
 
@@ -2170,71 +2190,6 @@ class TestTemporalVendorLimit:
         assert cfg.temporal_analysis_vendor_limit <= 100
 
 
-# ---------------------------------------------------------------------------
-# Evidence diff persistence
-# ---------------------------------------------------------------------------
-
-
-class TestPersistEvidenceDiff:
-    """Verify persist_evidence_diff handles all code paths."""
-
-    @pytest.mark.asyncio
-    async def test_persist_with_real_diff(self):
-        from atlas_brain.reasoning.differential import (
-            EvidenceDiff, persist_evidence_diff,
-        )
-
-        pool = AsyncMock()
-        pool.execute.return_value = None
-
-        diff = EvidenceDiff(
-            confirmed=["urgency", "reviews"],
-            contradicted=[("churn_density", "30", "45")],
-            novel=[("new_metric", "100")],
-            missing=["old_field"],
-        )
-        await persist_evidence_diff(pool, "Zendesk", diff, "full_reason")
-
-        pool.execute.assert_called_once()
-        args = pool.execute.call_args[0]
-        assert "INSERT INTO reasoning_evidence_diffs" in args[0]
-        assert args[1] == "Zendesk"
-        assert args[2] == 2   # confirmed_count
-        assert args[3] == 1   # contradicted_count
-        assert args[4] == 1   # novel_count
-        assert args[5] == 1   # missing_count
-        assert args[6] == 5   # total_fields
-        assert args[10] == '{"contradiction_emergence": 5.0}'  # component_scores
-
-    @pytest.mark.asyncio
-    async def test_persist_with_none_diff(self):
-        """Recall and cold full-reason pass diff=None."""
-        from atlas_brain.reasoning.differential import persist_evidence_diff
-
-        pool = AsyncMock()
-        pool.execute.return_value = None
-
-        await persist_evidence_diff(pool, "Slack", None, "recall")
-
-        args = pool.execute.call_args[0]
-        assert args[1] == "Slack"
-        assert args[2] == 0   # confirmed_count
-        assert args[3] == 0   # contradicted_count
-        assert args[11] == "recall"  # decision
-        assert args[12] is False     # compared (recall = not compared)
-
-    @pytest.mark.asyncio
-    async def test_persist_swallows_db_error(self):
-        """DB errors are logged but don't raise."""
-        from atlas_brain.reasoning.differential import persist_evidence_diff
-
-        pool = AsyncMock()
-        pool.execute.side_effect = Exception("connection lost")
-
-        # Should not raise
-        await persist_evidence_diff(pool, "Acme", None, "full_reason")
-
-
 class TestReconstructEvidenceVolatility:
     """Verify reconstruct_evidence_volatility returns correct structure."""
 
@@ -2353,25 +2308,6 @@ class TestSlowBurnEvidenceFlow:
         archetypes = [x["archetype"] for x in enriched.get("archetype_scores", [])]
 
         assert "pivot_abandonment" in archetypes
-
-    def test_prepare_evidence_keeps_market_regime_and_trends(self):
-        from atlas_brain.reasoning.stratified_reasoner import StratifiedReasoner
-
-        prepared = StratifiedReasoner._prepare_evidence({
-            "vendor_name": "Acme",
-            "support_sentiment": 0.44,
-            "legacy_support_score": 0.31,
-            "new_feature_velocity": 0.63,
-            "employee_growth_rate": 0.28,
-            "trend_30d_support_sentiment": -0.07,
-            "trend_90d_churn_density": 0.09,
-            "market_regime": {"regime_type": "disruption"},
-        })
-
-        assert prepared["support_sentiment"] == 0.44
-        assert prepared["trend_30d_support_sentiment"] == -0.07
-        assert prepared["trend_90d_churn_density"] == 0.09
-        assert prepared["market_regime"]["regime_type"] == "disruption"
 
 
 class TestBlogMarketRegimeBlueprint:

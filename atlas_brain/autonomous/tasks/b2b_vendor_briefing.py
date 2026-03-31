@@ -50,54 +50,32 @@ _ACCOUNT_CARD_SYSTEM_PROMPT = (
 )
 
 
-def _apply_reasoning_synthesis_to_briefing(
+def _apply_synthesis_view_to_briefing(
     briefing: dict[str, Any],
-    feed_entry: dict[str, Any] | None,
+    view: Any,
+    *,
+    requested_as_of: date | None = None,
 ) -> bool:
-    """Overlay contract-backed reasoning fields from weekly feed entries."""
-    if not isinstance(feed_entry, dict):
+    """Overlay normalized synthesis-view fields onto a briefing payload."""
+    if view is None:
         return False
 
+    from ._b2b_synthesis_reader import inject_synthesis_freshness
+
+    context = view.consumer_context("vendor_briefing")
+    contracts = context.get("reasoning_contracts") or {}
+    vendor_core = context.get("vendor_core_reasoning") or {}
+    displacement = context.get("displacement_reasoning") or {}
+    account_reasoning = context.get("account_reasoning") or {}
     used = False
-
-    contracts = feed_entry.get("reasoning_contracts")
-    has_explicit_contracts = isinstance(contracts, dict) and bool(contracts)
-    if not has_explicit_contracts:
-        contracts = {}
-
-    vendor_core = contracts.get("vendor_core_reasoning")
-    if (not isinstance(vendor_core, dict) or not vendor_core) and not has_explicit_contracts:
-        vendor_sections = {
-            section: feed_entry.get(section)
-            for section in ("causal_narrative", "segment_playbook", "timing_intelligence")
-            if isinstance(feed_entry.get(section), dict) and feed_entry.get(section)
-        }
-        if vendor_sections:
-            vendor_core = {
-                "schema_version": "v1",
-                **vendor_sections,
-            }
-
-    displacement = contracts.get("displacement_reasoning")
-    if (not isinstance(displacement, dict) or not displacement) and not has_explicit_contracts:
-        displacement_sections = {
-            section: feed_entry.get(section)
-            for section in ("competitive_reframes", "migration_proof")
-            if isinstance(feed_entry.get(section), dict) and feed_entry.get(section)
-        }
-        if displacement_sections:
-            displacement = {
-                "schema_version": "v1",
-                **displacement_sections,
-            }
 
     if isinstance(vendor_core, dict) and vendor_core:
         briefing["vendor_core_reasoning"] = vendor_core
         timing_intelligence = vendor_core.get("timing_intelligence")
         if isinstance(timing_intelligence, dict) and timing_intelligence:
             briefing["timing_intelligence"] = timing_intelligence
-            timing_summary, timing_metrics, priority_triggers = (
-                _timing_summary_payload(timing_intelligence)
+            timing_summary, timing_metrics, priority_triggers = _timing_summary_payload(
+                timing_intelligence,
             )
             if timing_summary:
                 briefing["timing_summary"] = timing_summary
@@ -105,16 +83,24 @@ def _apply_reasoning_synthesis_to_briefing(
                 briefing["timing_metrics"] = timing_metrics
             if priority_triggers:
                 briefing["priority_timing_triggers"] = priority_triggers
-        used = True
-    if isinstance(displacement, dict) and displacement:
-        briefing["displacement_reasoning"] = displacement
+        wts = view.why_they_stay
+        if wts:
+            briefing["why_they_stay"] = wts
+        cp = view.confidence_posture
+        if cp:
+            briefing["confidence_posture"] = cp
+            limits = cp.get("limits")
+            if limits:
+                briefing["confidence_limits"] = limits
         used = True
 
-    account_reasoning = contracts.get("account_reasoning")
-    if (not isinstance(account_reasoning, dict) or not account_reasoning) and not has_explicit_contracts:
-        raw_account = feed_entry.get("account_reasoning")
-        if isinstance(raw_account, dict) and raw_account:
-            account_reasoning = raw_account
+    if isinstance(displacement, dict) and displacement:
+        briefing["displacement_reasoning"] = displacement
+        switch_triggers = view.switch_triggers
+        if switch_triggers:
+            briefing["switch_triggers"] = switch_triggers
+        used = True
+
     if isinstance(account_reasoning, dict) and account_reasoning:
         briefing["account_reasoning"] = account_reasoning
         summary_payload = _account_reasoning_summary_payload(account_reasoning)
@@ -131,34 +117,85 @@ def _apply_reasoning_synthesis_to_briefing(
 
     if contracts:
         briefing["reasoning_contracts"] = contracts
+        briefing["reasoning_source"] = "b2b_reasoning_synthesis"
         used = True
 
-    # Phase 3 governance fields from contracts
-    if isinstance(vendor_core, dict) and vendor_core:
-        wts = vendor_core.get("why_they_stay")
-        if isinstance(wts, dict) and wts:
-            briefing["why_they_stay"] = wts
-            used = True
-        cp = vendor_core.get("confidence_posture")
-        if isinstance(cp, dict) and cp:
-            briefing["confidence_posture"] = cp
-            limits = cp.get("limits")
-            if limits:
-                briefing["confidence_limits"] = limits
-            used = True
+    evidence_window = view.meta
+    if evidence_window:
+        briefing["evidence_window"] = evidence_window
+        ew_start = evidence_window.get("evidence_window_start")
+        ew_end = evidence_window.get("evidence_window_end")
+        if ew_start and ew_end:
+            try:
+                briefing["evidence_window_days"] = (
+                    date.fromisoformat(str(ew_end)[:10])
+                    - date.fromisoformat(str(ew_start)[:10])
+                ).days
+            except (TypeError, ValueError):
+                pass
+        used = True
 
-    if isinstance(displacement, dict) and displacement:
-        st = displacement.get("switch_triggers")
-        if isinstance(st, list) and st:
-            briefing["switch_triggers"] = st
-            used = True
+    if view.primary_wedge:
+        briefing["synthesis_wedge"] = view.primary_wedge.value
+        briefing["synthesis_wedge_label"] = view.wedge_label
+        used = True
+    if getattr(view, "schema_version", ""):
+        briefing["synthesis_schema_version"] = view.schema_version
+        used = True
 
-    eg = contracts.get("evidence_governance")
-    if isinstance(eg, dict) and eg:
-        cg = eg.get("coverage_gaps")
-        if isinstance(cg, list) and cg:
-            briefing["coverage_gaps"] = cg
-            used = True
+    coverage_gaps = view.coverage_gaps
+    if coverage_gaps:
+        briefing["coverage_gaps"] = coverage_gaps
+        used = True
+
+    anchors = context.get("anchor_examples")
+    if isinstance(anchors, dict) and anchors:
+        briefing["reasoning_anchor_examples"] = anchors
+        used = True
+    highlights = context.get("witness_highlights")
+    if isinstance(highlights, list) and highlights:
+        briefing["reasoning_witness_highlights"] = highlights
+        used = True
+    reference_ids = context.get("reference_ids")
+    if isinstance(reference_ids, dict) and reference_ids:
+        briefing["reasoning_reference_ids"] = reference_ids
+        used = True
+
+    contract_gaps = context.get("reasoning_contract_gaps") or []
+    if contract_gaps:
+        briefing["reasoning_contract_gaps"] = contract_gaps
+        used = True
+
+    inject_synthesis_freshness(
+        briefing,
+        view,
+        requested_as_of=requested_as_of,
+    )
+    return used
+
+
+def _apply_reasoning_synthesis_to_briefing(
+    briefing: dict[str, Any],
+    feed_entry: dict[str, Any] | None,
+) -> bool:
+    """Overlay contract-backed reasoning fields from weekly feed entries."""
+    if not isinstance(feed_entry, dict):
+        return False
+
+    from ._b2b_synthesis_reader import load_synthesis_view
+
+    vendor_name = str(feed_entry.get("vendor") or briefing.get("vendor") or "").strip()
+    view = load_synthesis_view(
+        feed_entry,
+        vendor_name,
+        schema_version=str(
+            feed_entry.get("synthesis_schema_version")
+            or feed_entry.get("schema_version")
+            or ""
+        ),
+        as_of_date=feed_entry.get("data_as_of_date"),
+    )
+    used = _apply_synthesis_view_to_briefing(briefing, view)
 
     for field in (
         "synthesis_wedge",
@@ -174,6 +211,9 @@ def _apply_reasoning_synthesis_to_briefing(
         "timing_summary",
         "timing_metrics",
         "priority_timing_triggers",
+        "reasoning_anchor_examples",
+        "reasoning_witness_highlights",
+        "reasoning_reference_ids",
         "reasoning_contract_gaps",
         "reasoning_source",
         "category_council",
@@ -1694,26 +1734,17 @@ async def build_vendor_briefing(
     # Source 5: reasoning view (synthesis-first, legacy fallback)
     # ------------------------------------------------------------------
     reasoning_view = None
-    if not briefing.get("reasoning_contracts"):
+    if (
+        not briefing.get("reasoning_contracts")
+        or not briefing.get("reasoning_anchor_examples")
+        or not briefing.get("reasoning_reference_ids")
+    ):
         from ._b2b_synthesis_reader import load_best_reasoning_view
 
         reasoning_view = await load_best_reasoning_view(pool, vendor_name)
         if reasoning_view is not None:
-            contracts = reasoning_view.materialized_contracts()
-            if contracts:
-                synth_dict: dict[str, Any] = {"reasoning_contracts": contracts}
-                if reasoning_view.primary_wedge:
-                    synth_dict["synthesis_wedge"] = reasoning_view.primary_wedge.value
-                    synth_dict["synthesis_wedge_label"] = reasoning_view.wedge_label
-                synth_dict["reasoning_source"] = "b2b_reasoning_synthesis"
-                synth_dict["synthesis_schema_version"] = reasoning_view.schema_version
-                if reasoning_view.as_of_date:
-                    synth_dict["data_as_of_date"] = reasoning_view.as_of_date.isoformat()
-                meta = reasoning_view.meta
-                if meta:
-                    synth_dict["evidence_window"] = meta
-                if _apply_reasoning_synthesis_to_briefing(briefing, synth_dict):
-                    briefing["data_sources"]["reasoning_synthesis"] = True
+            if _apply_synthesis_view_to_briefing(briefing, reasoning_view):
+                briefing["data_sources"]["reasoning_synthesis"] = True
 
     # ------------------------------------------------------------------
     # Source 6: b2b_segment_intelligence
@@ -1871,10 +1902,10 @@ async def build_vendor_briefing(
                 for fc in reasoning_view.falsification_conditions()
             ]
 
-            # "what changed" context via prior archetype
-            from .b2b_churn_intelligence import _fetch_prior_archetypes
+            # "What changed" context via prior reasoning snapshot
+            from ._b2b_synthesis_reader import load_prior_reasoning_snapshots
 
-            prior = await _fetch_prior_archetypes(pool, [vendor_name])
+            prior = await load_prior_reasoning_snapshots(pool, [vendor_name])
             prior_data = prior.get(vendor_name, {})
             if prior_data.get("archetype"):
                 briefing["archetype_was"] = prior_data["archetype"]

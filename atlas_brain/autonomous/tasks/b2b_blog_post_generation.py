@@ -17,6 +17,7 @@ Returns _skip_synthesis.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -33,6 +34,10 @@ from ._b2b_shared import (
     _segment_targeting_summary,
     _timing_summary_payload,
     fetch_all_pool_layers,
+)
+from ._b2b_specificity import (
+    evaluate_specificity_support,
+    surface_specificity_context,
 )
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_blog_post_generation")
@@ -370,6 +375,143 @@ def _blog_category_reasoning_stats(category_reasoning: dict[str, Any] | None) ->
         if value:
             stats[key] = value
     return stats
+
+
+def _build_blog_claim_plan(
+    contracts: dict[str, Any] | None,
+    specificity_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(contracts, dict):
+        return {}
+
+    plan: dict[str, Any] = {}
+    vendor_core = contracts.get("vendor_core_reasoning")
+    if isinstance(vendor_core, dict):
+        causal = vendor_core.get("causal_narrative")
+        if isinstance(causal, dict):
+            summary = str(causal.get("summary") or "").strip()
+            trigger = str(causal.get("trigger") or "").strip()
+            why_now = str(causal.get("why_now") or "").strip()
+            if summary:
+                plan["primary_thesis"] = summary
+            elif trigger or why_now:
+                parts = [part for part in (trigger, why_now) if part]
+                if parts:
+                    plan["primary_thesis"] = ". ".join(parts)
+
+        timing = vendor_core.get("timing_intelligence")
+        if isinstance(timing, dict):
+            best_window = str(timing.get("best_timing_window") or "").strip()
+            if best_window:
+                plan["timing_hook"] = best_window
+            else:
+                for trigger_row in timing.get("immediate_triggers") or []:
+                    if not isinstance(trigger_row, dict):
+                        continue
+                    trigger = str(
+                        trigger_row.get("trigger")
+                        or trigger_row.get("description")
+                        or ""
+                    ).strip()
+                    if trigger:
+                        plan["timing_hook"] = trigger
+                        break
+
+        retention = vendor_core.get("why_they_stay")
+        if isinstance(retention, dict):
+            summary = str(retention.get("summary") or "").strip()
+            if summary:
+                plan["counterevidence"] = summary
+
+    category_reasoning = contracts.get("category_reasoning")
+    if isinstance(category_reasoning, dict):
+        market_regime = str(category_reasoning.get("market_regime") or "").strip()
+        if market_regime:
+            plan["market_regime"] = market_regime
+
+    specificity = specificity_context if isinstance(specificity_context, dict) else {}
+    anchors = specificity.get("anchor_examples")
+    highlights = specificity.get("witness_highlights")
+    proof_anchors: list[dict[str, Any]] = []
+    preferred_labels = (
+        "outlier_or_named_account",
+        "common_pattern",
+        "counterevidence",
+    )
+    if isinstance(anchors, dict):
+        for label in preferred_labels:
+            rows = anchors.get(label) or []
+            if not isinstance(rows, list) or not rows:
+                continue
+            row = rows[0]
+            if not isinstance(row, dict):
+                continue
+            anchor = {"anchor_type": label}
+            for key in (
+                "excerpt_text",
+                "time_anchor",
+                "competitor",
+                "pain_category",
+                "signal_type",
+                "replacement_mode",
+                "operating_model_shift",
+                "productivity_delta_claim",
+                "org_pressure_type",
+                "reviewer_title",
+                "company_size",
+                "industry",
+                "numeric_literals",
+            ):
+                value = row.get(key)
+                if value not in (None, "", [], {}):
+                    anchor[key] = copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+            if len(anchor) > 1:
+                proof_anchors.append(anchor)
+    if not proof_anchors and isinstance(highlights, list):
+        for row in highlights[:2]:
+            if not isinstance(row, dict):
+                continue
+            anchor: dict[str, Any] = {"anchor_type": "witness_highlight"}
+            for key in (
+                "excerpt_text",
+                "time_anchor",
+                "competitor",
+                "pain_category",
+                "signal_type",
+                "replacement_mode",
+                "operating_model_shift",
+                "productivity_delta_claim",
+                "org_pressure_type",
+                "numeric_literals",
+            ):
+                value = row.get(key)
+                if value not in (None, "", [], {}):
+                    anchor[key] = copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+            if len(anchor) > 1:
+                proof_anchors.append(anchor)
+    if proof_anchors:
+        plan["proof_anchors"] = proof_anchors[:3]
+    return plan
+
+
+def _inject_blog_reasoning_specificity(
+    data: dict[str, Any],
+    *,
+    suffix: str,
+    view: Any,
+) -> None:
+    consumer_context = view.consumer_context("blog_reranker")
+    specificity = surface_specificity_context(consumer_context, surface="blog")
+    if specificity.get("anchor_examples"):
+        data[f"reasoning_anchor_examples{suffix}"] = specificity["anchor_examples"]
+    if specificity.get("witness_highlights"):
+        data[f"reasoning_witness_highlights{suffix}"] = specificity["witness_highlights"]
+    if specificity.get("reference_ids"):
+        data[f"reasoning_reference_ids{suffix}"] = specificity["reference_ids"]
+
+    claim_plan = _build_blog_claim_plan(view.materialized_contracts(), specificity)
+    if claim_plan:
+        data[f"blog_claim_plan{suffix}"] = claim_plan
 
 
 # -- Cross-vendor synthesis resolution helpers ----------------------
@@ -763,6 +905,35 @@ def _apply_blog_quality_gate(
     if missing_vendors:
         blocking_issues.append(f"missing_vendor_mentions:{','.join(missing_vendors)}")
 
+    specificity_context = surface_specificity_context(
+        blueprint.data_context if isinstance(blueprint.data_context, dict) else {},
+        surface="blog",
+    )
+    if specificity_context:
+        specificity = evaluate_specificity_support(
+            body,
+            anchor_examples=specificity_context.get("anchor_examples"),
+            witness_highlights=specificity_context.get("witness_highlights"),
+            reference_ids=specificity_context.get("reference_ids"),
+            allow_company_names=False,
+            min_anchor_hits=int(settings.b2b_churn.blog_specificity_min_anchor_hits),
+            require_anchor_support=bool(
+                settings.b2b_churn.blog_specificity_require_anchor_support
+            ),
+            require_timing_or_numeric_when_available=bool(
+                settings.b2b_churn.blog_specificity_require_timing_or_numeric_when_available
+            ),
+            include_competitor_terms=True,
+        )
+        blocking_issues.extend(
+            f"witness_specificity:{issue}"
+            for issue in specificity.get("blocking_issues", []) or []
+        )
+        warnings.extend(
+            f"witness_specificity:{warning}"
+            for warning in specificity.get("warnings", []) or []
+        )
+
     # Block placeholder links
     if 'href="#"' in body or "href='#'" in body:
         blocking_issues.append("placeholder_links_href_hash")
@@ -863,10 +1034,12 @@ def _apply_blog_quality_gate(
                     f"in a switch-to-{topic_vendor} article ({outbound_count} outbound phrases)"
                 )
 
+    threshold = int(settings.b2b_churn.blog_quality_pass_score)
     score = max(0, 100 - (18 * len(blocking_issues)) - (6 * len(warnings)))
     report = {
         "score": score,
-        "status": "pass" if not blocking_issues else "fail",
+        "threshold": threshold,
+        "status": "pass" if (not blocking_issues and score >= threshold) else "fail",
         "blocking_issues": blocking_issues,
         "warnings": warnings,
         "fixes_applied": fixes_applied,
@@ -879,6 +1052,17 @@ def _quality_feedback(report: dict[str, Any]) -> list[str]:
     feedback: list[str] = []
     for issue in report.get("blocking_issues", []) or []:
         feedback.append(f"Fix: {issue}")
+    if (
+        report.get("status") == "fail"
+        and not (report.get("blocking_issues") or [])
+        and report.get("score") is not None
+        and report.get("threshold") is not None
+        and report.get("score") < report.get("threshold")
+    ):
+        feedback.append(
+            "Fix: Reduce warning-level quality issues so the final score "
+            f"meets the passing threshold of {report['threshold']}."
+        )
     for warning in (report.get("warnings", []) or []):
         if warning == "review_period_not_explicitly_mentioned":
             feedback.append("Fix: Explicitly state the exact review period from data_context.review_period.")
@@ -900,6 +1084,11 @@ def _quality_feedback(report: dict[str, Any]) -> list[str]:
                 "Fix: This is a switch-TO article. Keep the primary narrative about inbound migration. "
                 "Outbound switching (people leaving the vendor) may be acknowledged in 1-2 sentences as a brief caveat, "
                 "but must not become a narrative thread. Remove or compress outbound-focused passages."
+            )
+        elif str(warning).startswith("witness_specificity:"):
+            feedback.append(
+                "Fix: Use the witness-backed proof anchors already provided. "
+                "Ground key claims in the concrete timing, numeric, competitor, or pain details instead of generic summary language."
             )
         else:
             feedback.append(f"Improve: {warning}")
@@ -976,7 +1165,7 @@ def _enforce_blog_quality(
     _inject_affiliate_links(blueprint, current)
     current, report = _apply_blog_quality_gate(blueprint, current)
     initial_critical = _critical_quality_warnings(report)
-    needs_retry = bool(report.get("blocking_issues")) or bool(initial_critical)
+    needs_retry = report.get("status") != "pass" or bool(initial_critical)
     if not needs_retry:
         return current, report
 
@@ -996,7 +1185,7 @@ def _enforce_blog_quality(
     _inject_affiliate_links(blueprint, retry)
     retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
     retry_report = _with_unresolved_critical_warnings(retry_report)
-    if retry_report.get("blocking_issues"):
+    if retry_report.get("status") != "pass":
         return None, retry_report
     return retry, retry_report
 
@@ -1090,6 +1279,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if content is None:
             logger.warning("LLM failed for B2B topic %s, skipping", blueprint.slug)
             from ..visibility import record_attempt, emit_event
+            await _upsert_blog_post_state(
+                pool,
+                blueprint,
+                llm,
+                status="failed",
+                run_id=str(task.id),
+                attempt_no=1,
+                failure_step="llm_call",
+                error_code="llm_returned_none",
+                error_summary="LLM returned None",
+            )
             await record_attempt(
                 pool, artifact_type="blog_post", artifact_id=blueprint.slug,
                 run_id=str(task.id), attempt_no=1, stage="generation",
@@ -1121,11 +1321,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 ", ".join(quality_report.get("blocking_issues", [])[:4]) or "unknown issues",
             )
             from ..visibility import record_attempt, emit_event
+            await _upsert_blog_post_state(
+                pool,
+                blueprint,
+                llm,
+                status="rejected",
+                run_id=str(task.id),
+                attempt_no=1,
+                score=quality_report.get("score"),
+                threshold=quality_report.get("threshold"),
+                blocker_count=len(quality_report.get("blocking_issues", [])),
+                warning_count=len(quality_report.get("warnings", [])),
+                failure_step="quality_gate",
+                error_code="quality_gate_rejection",
+                error_summary=", ".join(quality_report.get("blocking_issues", [])[:3]),
+                rejection_reason=", ".join(quality_report.get("blocking_issues", [])[:3]),
+                content=content,
+            )
             await record_attempt(
                 pool, artifact_type="blog_post", artifact_id=blueprint.slug,
                 run_id=str(task.id), attempt_no=1, stage="quality_gate",
                 status="rejected",
                 score=quality_report.get("score"),
+                threshold=quality_report.get("threshold"),
                 blocker_count=len(quality_report.get("blocking_issues", [])),
                 warning_count=len(quality_report.get("warnings", [])),
                 blocking_issues=quality_report.get("blocking_issues"),
@@ -1140,12 +1358,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 severity="warning", actionable=True,
                 artifact_type="blog_post", run_id=str(task.id),
                 reason_code=quality_report.get("blocking_issues", ["unknown"])[0][:80] if quality_report.get("blocking_issues") else "unknown",
+                decision="rejected",
                 detail=quality_report,
             )
             continue
         blueprint.data_context["generation_quality"] = quality_report
 
-        post_id = await _assemble_and_store(pool, blueprint, content, llm)
+        post_id = await _assemble_and_store(
+            pool,
+            blueprint,
+            content,
+            llm,
+            run_id=str(task.id),
+            attempt_no=1,
+        )
         if not post_id:
             logger.info("Slug %s already published, skipping", blueprint.slug)
             from ..visibility import record_dedup
@@ -1163,6 +1389,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             run_id=str(task.id), attempt_no=1, stage="quality_gate",
             status="succeeded",
             score=quality_report.get("score"),
+            threshold=quality_report.get("threshold"),
             blocker_count=len(quality_report.get("blocking_issues", [])),
             warning_count=len(quality_report.get("warnings", [])),
             warnings=quality_report.get("warnings"),
@@ -1279,6 +1506,17 @@ async def _regenerate_existing_posts(
             )
             if content is None:
                 logger.warning("Regen: LLM failed for %s, skipping", slug)
+                await _upsert_blog_post_state(
+                    pool,
+                    blueprint,
+                    llm,
+                    status="failed",
+                    run_id=str(task.id),
+                    attempt_no=1,
+                    failure_step="llm_call",
+                    error_code="llm_returned_none",
+                    error_summary="LLM returned None",
+                )
                 continue
 
             content, quality_report = _enforce_blog_quality(
@@ -1294,10 +1532,33 @@ async def _regenerate_existing_posts(
                     slug,
                     ", ".join(quality_report.get("blocking_issues", [])[:4]) or "unknown issues",
                 )
+                await _upsert_blog_post_state(
+                    pool,
+                    blueprint,
+                    llm,
+                    status="rejected",
+                    run_id=str(task.id),
+                    attempt_no=1,
+                    score=quality_report.get("score"),
+                    threshold=quality_report.get("threshold"),
+                    blocker_count=len(quality_report.get("blocking_issues", [])),
+                    warning_count=len(quality_report.get("warnings", [])),
+                    failure_step="quality_gate",
+                    error_code="quality_gate_rejection",
+                    error_summary=", ".join(quality_report.get("blocking_issues", [])[:3]),
+                    rejection_reason=", ".join(quality_report.get("blocking_issues", [])[:3]),
+                )
                 continue
             blueprint.data_context["generation_quality"] = quality_report
 
-            post_id = await _assemble_and_store(pool, blueprint, content, llm)
+            post_id = await _assemble_and_store(
+                pool,
+                blueprint,
+                content,
+                llm,
+                run_id=str(task.id),
+                attempt_no=1,
+            )
             if post_id:
                 results.append({
                     "post_id": str(post_id),
@@ -3098,6 +3359,7 @@ async def _load_pool_layers_for_blog(
         eg = view.evidence_governance
         if eg:
             data["evidence_governance"] = eg
+        _inject_blog_reasoning_specificity(data, suffix="", view=view)
 
     # Balanced multi-vendor synthesis for showdown/comparison topics
     if vendor_a and vendor_b:
@@ -3114,6 +3376,7 @@ async def _load_pool_layers_for_blog(
                 data["why_they_stay_b"] = view_b.why_they_stay
             if view_b.confidence_posture:
                 data["confidence_posture_b"] = view_b.confidence_posture
+            _inject_blog_reasoning_specificity(data, suffix="_b", view=view_b)
 
 
 # -- Stage 2: Data Gathering --------------------------------------
@@ -5827,6 +6090,20 @@ def _generate_content(
         ],
         "quotable_phrases": blueprint.quotable_phrases[:5],
     }
+    ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    for src_key, dest_key in (
+        ("reasoning_anchor_examples", "anchor_examples"),
+        ("reasoning_witness_highlights", "witness_highlights"),
+        ("reasoning_reference_ids", "reference_ids"),
+        ("blog_claim_plan", "claim_plan"),
+        ("reasoning_anchor_examples_b", "anchor_examples_b"),
+        ("reasoning_witness_highlights_b", "witness_highlights_b"),
+        ("reasoning_reference_ids_b", "reference_ids_b"),
+        ("blog_claim_plan_b", "claim_plan_b"),
+    ):
+        value = ctx.get(src_key)
+        if value not in (None, "", [], {}):
+            payload[dest_key] = value
     if blueprint.cta:
         payload["cta_context"] = {
             "button_text": blueprint.cta["button_text"],
@@ -6013,28 +6290,58 @@ def _fallback_seo_title(display_title: str, blueprint: PostBlueprint) -> str:
     return display_title[:60]
 
 
-async def _assemble_and_store(
-    pool, blueprint: PostBlueprint, content: dict[str, Any], llm
+async def _upsert_blog_post_state(
+    pool,
+    blueprint: PostBlueprint,
+    llm,
+    *,
+    status: str,
+    run_id: str | None = None,
+    attempt_no: int | None = None,
+    score: int | None = None,
+    threshold: int | None = None,
+    blocker_count: int = 0,
+    warning_count: int = 0,
+    failure_step: str | None = None,
+    error_code: str | None = None,
+    error_summary: str | None = None,
+    rejection_reason: str | None = None,
+    content: dict[str, Any] | None = None,
 ) -> str:
-    """Store the assembled post as a draft in blog_posts."""
+    """Upsert the canonical blog row so failures/rejections do not vanish."""
     charts_json = [asdict(c) for c in blueprint.charts]
     model_name = getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
-
+    title = (content or {}).get("title") or blueprint.suggested_title
+    description = (content or {}).get("description", "")
+    body = (content or {}).get("content", "")
+    source_report_date = blueprint.data_context.get("source_report_date") or date.today()
     row = await pool.fetchrow(
         """
         INSERT INTO blog_posts (
             slug, title, description, topic_type, tags,
-            content, charts, data_context,
-            status, llm_model, source_report_date,
+            content, charts, data_context, status, llm_model, source_report_date,
             seo_title, seo_description, target_keyword,
-            secondary_keywords, faq, cta
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$10,$11,$12,$13,$14,$15,$16)
+            secondary_keywords, faq, cta,
+            latest_run_id, latest_attempt_no, latest_failure_step,
+            latest_error_code, latest_error_summary,
+            quality_score, quality_threshold, blocker_count, warning_count,
+            rejected_at, rejection_reason
+        ) VALUES (
+            $1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10, $11,
+            $12, $13, $14, $15::jsonb, $16::jsonb, $17::jsonb,
+            $18, $19, $20, $21, $22, $23, $24, $25, $26,
+            CASE WHEN $9 = 'rejected' THEN NOW() ELSE NULL END,
+            CASE WHEN $9 = 'rejected' THEN $27 ELSE NULL END
+        )
         ON CONFLICT (slug) DO UPDATE SET
             title = EXCLUDED.title,
             description = EXCLUDED.description,
+            topic_type = EXCLUDED.topic_type,
+            tags = EXCLUDED.tags,
             content = EXCLUDED.content,
             charts = EXCLUDED.charts,
             data_context = EXCLUDED.data_context,
+            status = EXCLUDED.status,
             llm_model = EXCLUDED.llm_model,
             source_report_date = EXCLUDED.source_report_date,
             seo_title = EXCLUDED.seo_title,
@@ -6042,33 +6349,85 @@ async def _assemble_and_store(
             target_keyword = EXCLUDED.target_keyword,
             secondary_keywords = EXCLUDED.secondary_keywords,
             faq = EXCLUDED.faq,
-            cta = EXCLUDED.cta
+            cta = EXCLUDED.cta,
+            latest_run_id = EXCLUDED.latest_run_id,
+            latest_attempt_no = EXCLUDED.latest_attempt_no,
+            latest_failure_step = EXCLUDED.latest_failure_step,
+            latest_error_code = EXCLUDED.latest_error_code,
+            latest_error_summary = EXCLUDED.latest_error_summary,
+            quality_score = EXCLUDED.quality_score,
+            quality_threshold = EXCLUDED.quality_threshold,
+            blocker_count = EXCLUDED.blocker_count,
+            warning_count = EXCLUDED.warning_count,
+            rejected_at = EXCLUDED.rejected_at,
+            rejection_reason = EXCLUDED.rejection_reason,
+            published_at = CASE
+                WHEN EXCLUDED.status = 'published' THEN COALESCE(blog_posts.published_at, NOW())
+                ELSE blog_posts.published_at
+            END
         WHERE blog_posts.status != 'published'
         RETURNING id
         """,
         blueprint.slug,
-        content["title"],
-        content.get("description", ""),
+        title,
+        description,
         blueprint.topic_type,
         json.dumps(blueprint.tags),
-        content["content"],
+        body,
         json.dumps(charts_json, default=str),
         json.dumps(blueprint.data_context, default=str),
+        status,
         str(model_name),
-        date.today(),
-        content.get("seo_title") or _fallback_seo_title(content["title"], blueprint),
-        content.get("seo_description") or content.get("description", "")[:155],
-        content.get("target_keyword") or _fallback_target_keyword(blueprint),
-        json.dumps(content.get("secondary_keywords", []), default=str),
-        json.dumps(content.get("faq", []), default=str),
+        source_report_date,
+        (content or {}).get("seo_title") or _fallback_seo_title(title, blueprint),
+        (content or {}).get("seo_description") or description[:155],
+        (content or {}).get("target_keyword") or _fallback_target_keyword(blueprint),
+        json.dumps((content or {}).get("secondary_keywords", []), default=str),
+        json.dumps((content or {}).get("faq", []), default=str),
         json.dumps(blueprint.cta, default=str) if blueprint.cta else None,
+        run_id,
+        attempt_no,
+        failure_step,
+        error_code,
+        error_summary,
+        score,
+        threshold,
+        blocker_count,
+        warning_count,
+        rejection_reason,
     )
-    if not row:
+    return str(row["id"]) if row else ""
+
+
+async def _assemble_and_store(
+    pool,
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+    llm,
+    *,
+    run_id: str | None = None,
+    attempt_no: int | None = None,
+) -> str:
+    """Store the assembled post as a draft in blog_posts."""
+    charts_json = [asdict(c) for c in blueprint.charts]
+    post_id = await _upsert_blog_post_state(
+        pool,
+        blueprint,
+        llm,
+        status="draft",
+        run_id=run_id,
+        attempt_no=attempt_no,
+        score=(blueprint.data_context.get("generation_quality") or {}).get("score"),
+        threshold=(blueprint.data_context.get("generation_quality") or {}).get("threshold"),
+        blocker_count=len((blueprint.data_context.get("generation_quality") or {}).get("blocking_issues", []) or []),
+        warning_count=len((blueprint.data_context.get("generation_quality") or {}).get("warnings", []) or []),
+        content=content,
+    )
+    if not post_id:
         logger.warning(
             "Skipped overwrite of published post: slug=%s", blueprint.slug
         )
         return ""
-    post_id = str(row["id"])
     logger.info("Stored B2B blog draft: slug=%s, id=%s", blueprint.slug, post_id)
 
     # Compute related posts (same category/vendor overlap)
@@ -6078,7 +6437,7 @@ async def _assemble_and_store(
         if related:
             await pool.execute(
                 "UPDATE blog_posts SET related_slugs = $1 WHERE id = $2",
-                json.dumps(related), row["id"],
+                json.dumps(related), post_id,
             )
     except Exception:
         logger.debug("Related slug computation skipped", exc_info=True)
@@ -6146,6 +6505,7 @@ def _write_ui_post(
         secondary_keywords=content.get("secondary_keywords"),
         faq=content.get("faq"),
         related_slugs=related_slugs,
+        cta=blueprint.cta,
     )
 
     post_path = blog_dir / (slug + ".ts")

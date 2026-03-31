@@ -1,4 +1,4 @@
-"""Shared LLM helpers for stratified reasoning."""
+"""Shared LLM helpers for legacy reasoning utilities and synthesis tasks."""
 
 from __future__ import annotations
 
@@ -99,9 +99,9 @@ def _strict_openrouter_reasoning() -> bool:
 
 
 def resolve_stratified_llm(cfg: Any) -> Any:
-    """Resolve the Tier 1 (heavy) LLM for stratified reasoning.
+    """Resolve the heavy reasoning LLM used by synthesis and legacy tooling.
 
-    Used for: archetype classification (Pass 1), pairwise battles.
+    Used by the synthesis pipeline and retained legacy utilities.
 
     Uses a named registry slot so it does not evict the primary LLM
     used by voice, chat, and other subsystems.

@@ -25,6 +25,9 @@ import type {
   PainQuoteViewModel,
   PricingPressureViewModel,
   RecommendedPlayViewModel,
+  ReasoningAnchorExamplesViewModel,
+  ReasoningReferenceIdsViewModel,
+  ReasoningWitnessViewModel,
   ResourceAsymmetryViewModel,
   SwitchingTriggerViewModel,
   TalkTrackViewModel,
@@ -231,6 +234,46 @@ function toDisplacementSummary(value: unknown): ChallengerBriefDisplacementViewM
   }
 }
 
+function toReasoningWitness(value: unknown): ReasoningWitnessViewModel {
+  const obj = asRecord(value)
+  const numericLiterals = asRecord(obj.numeric_literals)
+  return {
+    witness_id: asString(obj.witness_id),
+    _sid: asString(obj._sid),
+    reviewer_company: asString(obj.reviewer_company),
+    reviewer_title: asString(obj.reviewer_title),
+    excerpt_text: asString(obj.excerpt_text),
+    time_anchor: asString(obj.time_anchor),
+    competitor: asString(obj.competitor),
+    witness_type: asString(obj.witness_type),
+    selection_reason: asString(obj.selection_reason),
+    salience_score: asNumber(obj.salience_score) ?? null,
+    numeric_literals: Object.keys(numericLiterals).length > 0 ? numericLiterals : undefined,
+  }
+}
+
+function toReasoningWitnesses(value: unknown): ReasoningWitnessViewModel[] {
+  return toRecordArray(value)
+    .map((item) => toReasoningWitness(item))
+    .filter((item) => Boolean(item.witness_id || item._sid || item.excerpt_text || item.reviewer_company))
+}
+
+function toReasoningAnchorExamples(value: unknown): ReasoningAnchorExamplesViewModel | undefined {
+  const obj = asRecord(value)
+  const entries = Object.entries(obj)
+    .map(([label, rows]) => [label, toReasoningWitnesses(rows)] as const)
+    .filter(([, rows]) => rows.length > 0)
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
+}
+
+function toReasoningReferenceIds(value: unknown): ReasoningReferenceIdsViewModel | undefined {
+  const obj = asRecord(value)
+  const metric_ids = toStringArray(obj.metric_ids)
+  const witness_ids = toStringArray(obj.witness_ids)
+  if (metric_ids.length === 0 && witness_ids.length === 0) return undefined
+  return { metric_ids, witness_ids }
+}
+
 function toIncumbentProfile(value: unknown): ChallengerIncumbentProfileViewModel {
   const obj = asRecord(value)
   return {
@@ -244,6 +287,9 @@ function toIncumbentProfile(value: unknown): ChallengerIncumbentProfileViewModel
     key_signals: toStringArray(obj.key_signals),
     top_weaknesses: toWeaknessAnalysis(obj.top_weaknesses),
     top_pain_quotes: toPainQuotes(obj.top_pain_quotes),
+    reasoning_anchor_examples: toReasoningAnchorExamples(obj.reasoning_anchor_examples),
+    reasoning_witness_highlights: toReasoningWitnesses(obj.reasoning_witness_highlights),
+    reasoning_reference_ids: toReasoningReferenceIds(obj.reasoning_reference_ids),
   }
 }
 
@@ -318,6 +364,9 @@ export function toChallengerBriefViewModel(value: UnknownRecord): ChallengerBrie
     data_sources: Object.fromEntries(
       Object.entries(asRecord(value.data_sources)).filter(([, flag]) => typeof flag === 'boolean'),
     ) as Record<string, boolean>,
+    reasoning_anchor_examples: toReasoningAnchorExamples(value.reasoning_anchor_examples),
+    reasoning_witness_highlights: toReasoningWitnesses(value.reasoning_witness_highlights),
+    reasoning_reference_ids: toReasoningReferenceIds(value.reasoning_reference_ids),
   }
 }
 

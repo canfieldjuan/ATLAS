@@ -243,6 +243,12 @@ export interface B2BReport {
   executive_summary: string | null
   vendor_filter: string | null
   status: string | null
+  latest_failure_step?: string | null
+  latest_error_code?: string | null
+  latest_error_summary?: string | null
+  blocker_count?: number
+  warning_count?: number
+  unresolved_issue_count?: number
   quality_status?: string | null
   quality_score?: number | null
   created_at: string | null

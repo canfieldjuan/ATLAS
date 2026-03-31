@@ -13,6 +13,14 @@ logger = logging.getLogger("atlas.storage.migrations")
 MIGRATIONS_DIR = Path(__file__).parent
 
 
+def _parse_migration_identity(filename: str) -> tuple[int, str]:
+    """Extract the numeric prefix and canonical migration name."""
+    prefix = filename.split("_", 1)[0]
+    match = re.match(r"\d+", prefix)
+    version = int(match.group()) if match else 0
+    return version, filename.removesuffix(".sql")
+
+
 async def _ensure_migrations_table(pool) -> None:
     """Create the migrations tracking table if it doesn't exist."""
     await pool.execute("""
@@ -32,14 +40,42 @@ async def _get_applied_migrations(pool) -> set[str]:
 
 async def _record_migration(pool, filename: str) -> None:
     """Record that a migration has been applied."""
-    # Extract leading digits from filename prefix (e.g. '025_temporal_patterns.sql' -> 25)
-    prefix = filename.split("_", 1)[0]
-    match = re.match(r"\d+", prefix)
-    version = int(match.group()) if match else 0
-    name = filename.removesuffix(".sql")
+    version, name = _parse_migration_identity(filename)
+    existing_version = await pool.fetchval(
+        "SELECT version FROM schema_migrations WHERE name = $1",
+        name,
+    )
+    if existing_version is not None:
+        return
+
+    record_version = version
+    conflicting_name = await pool.fetchval(
+        "SELECT name FROM schema_migrations WHERE version = $1",
+        version,
+    )
+    if conflicting_name and conflicting_name != name:
+        record_version = await pool.fetchval(
+            """
+            SELECT CASE
+                WHEN COALESCE(MIN(version), 0) < 0 THEN MIN(version) - 1
+                ELSE -1
+            END
+            FROM schema_migrations
+            """
+        )
+        logger.warning(
+            "Migration version collision for %s on prefix %d with existing %s; "
+            "recording under synthetic version %d",
+            name,
+            version,
+            conflicting_name,
+            record_version,
+        )
+
     await pool.execute(
-        "INSERT INTO schema_migrations (version, name) VALUES ($1, $2) ON CONFLICT (version) DO NOTHING",
-        version, name,
+        "INSERT INTO schema_migrations (version, name) VALUES ($1, $2)",
+        record_version,
+        name,
     )
 
 

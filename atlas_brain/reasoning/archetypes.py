@@ -5,8 +5,8 @@ evaluates vendor evidence (including temporal data from WS1) against each
 archetype's expected signal profile and returns ranked matches.
 
 This is a pure-data pre-filter -- it does NOT call the LLM. The ranked
-scores feed into the stratified reasoner as context, and enable T1
-(Vendor State) tier updates without LLM calls.
+scores feed into synthesis-first vendor reasoning as context, and enable
+vendor-state updates without LLM calls.
 
 Archetypes:
     pricing_shock       -- Sudden price increase -> complaint spike -> competitor mentions

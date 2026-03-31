@@ -20,7 +20,7 @@ You will receive a JSON object with:
 
 - `report_type`: one of "weekly_churn_feed", "vendor_scorecard", "displacement_report", "category_overview"
 - `report_data`: the deterministic report data (vendor list, scorecards, displacement edges, or category rankings)
-- `reasoning_summary`: per-vendor archetype classifications, risk levels, and key signals from the stratified reasoner
+- `reasoning_summary`: per-vendor reasoning summary with archetype-style labels, risk levels, and key signals from persisted reasoning outputs
 - `data_context`: temporal metadata (analysis window, source distribution, review counts)
 
 ## Output

@@ -228,6 +228,22 @@ def _ensure_migration_citations(migration_proof: dict[str, Any]) -> dict[str, An
     return migration_proof
 
 
+def _collect_source_ids(value: Any, sink: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"source_id", "_sid"} and isinstance(item, str) and item.strip():
+                sink.add(item.strip())
+            elif key == "citations" and isinstance(item, list):
+                for citation in item:
+                    if isinstance(citation, str) and citation.strip():
+                        sink.add(citation.strip())
+            else:
+                _collect_source_ids(item, sink)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_source_ids(item, sink)
+
+
 def _canonicalize_trigger_type(value: Any) -> str:
     """Normalize temporal trigger type aliases to the validator contract."""
     raw = str(value or "").strip().lower()
@@ -435,6 +451,10 @@ def _preferred_migration_switch_wrapper(
     current: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Use the canonical explicit-switch aggregate when it exists."""
+    if isinstance(current, dict):
+        normalized_current = _normalize_wrapper_value(current)
+        if (_wrapper_numeric_value(normalized_current) or 0.0) <= 0.0:
+            return normalized_current
     aggregate = _aggregate_wrapper(
         packet,
         "displacement:aggregate:total_explicit_switches",
@@ -955,7 +975,7 @@ def _account_summary(packet: Any) -> dict[str, Any]:
     for item in _pool_items(packet, "accounts"):
         _append_account_item(item)
 
-    if len(top_accounts) < 5:
+    if not top_accounts:
         for item in _pool_items(packet, "evidence_vault"):
             source_ref = getattr(item, "source_ref", None)
             if getattr(source_ref, "kind", "") != "company":
@@ -1602,6 +1622,33 @@ def build_persistable_synthesis(
         persisted["meta"] = meta
     if warnings:
         persisted["_validation_warnings"] = warnings
+
+    referenced_ids: set[str] = set()
+    _collect_source_ids(contracts, referenced_ids)
+    metric_source_ids = {
+        str(agg.source_id)
+        for agg in getattr(packet, "aggregates", []) or []
+        if getattr(agg, "source_id", None)
+    }
+    metric_source_ids.update(
+        str(entry.get("_sid"))
+        for entry in getattr(packet, "metric_ledger", []) or []
+        if isinstance(entry, dict) and str(entry.get("_sid") or "").strip()
+    )
+    witness_source_ids = {
+        str(witness.get("_sid") or witness.get("witness_id"))
+        for witness in getattr(packet, "witness_pack", []) or []
+        if isinstance(witness, dict) and str(witness.get("_sid") or witness.get("witness_id") or "").strip()
+    }
+    persisted["reference_ids"] = {
+        "metric_ids": sorted(referenced_ids.intersection(metric_source_ids)),
+        "witness_ids": sorted(referenced_ids.intersection(witness_source_ids)),
+    }
+    if getattr(packet, "witness_pack", None) or getattr(packet, "section_packets", None):
+        persisted["packet_artifacts"] = {
+            "witness_pack": list(getattr(packet, "witness_pack", []) or []),
+            "section_packets": dict(getattr(packet, "section_packets", {}) or {}),
+        }
 
     vendor_core = contracts.get("vendor_core_reasoning") or {}
     causal = vendor_core.get("causal_narrative") or {}

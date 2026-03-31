@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+from ...config import settings
 from ...reasoning.wedge_registry import Wedge, validate_wedge
 
 
@@ -420,9 +421,128 @@ class SynthesisView:
         rc = self.raw.get("reasoning_contracts")
         return rc if isinstance(rc, dict) else {}
 
+    @property
+    def reference_ids(self) -> dict[str, list[str]]:
+        raw = self.raw.get("reference_ids")
+        if not isinstance(raw, dict):
+            return {}
+        resolved: dict[str, list[str]] = {}
+        for key in ("metric_ids", "witness_ids"):
+            values = raw.get(key)
+            if isinstance(values, list):
+                cleaned = [
+                    str(value).strip()
+                    for value in values
+                    if str(value or "").strip()
+                ]
+                if cleaned:
+                    resolved[key] = cleaned
+        return resolved
+
+    @property
+    def packet_artifacts(self) -> dict[str, Any]:
+        raw = self.raw.get("packet_artifacts")
+        return raw if isinstance(raw, dict) else {}
+
+    @property
+    def witness_pack(self) -> list[dict[str, Any]]:
+        raw = self.packet_artifacts.get("witness_pack")
+        return [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+    @property
+    def section_packets(self) -> dict[str, Any]:
+        raw = self.packet_artifacts.get("section_packets")
+        return dict(raw) if isinstance(raw, dict) else {}
+
     def contract(self, name: str) -> dict[str, Any]:
         rc = self.reasoning_contracts.get(name)
         return rc if isinstance(rc, dict) else {}
+
+    def witness(self, witness_id: str) -> dict[str, Any]:
+        target = str(witness_id or "").strip()
+        if not target:
+            return {}
+        for witness in self.witness_pack:
+            sid = str(witness.get("witness_id") or witness.get("_sid") or "").strip()
+            if sid == target:
+                return dict(witness)
+        return {}
+
+    def anchor_examples(self) -> dict[str, list[dict[str, Any]]]:
+        raw = self.section_packets.get("anchor_examples")
+        if not isinstance(raw, dict):
+            return {}
+        resolved: dict[str, list[dict[str, Any]]] = {}
+        for label, witness_ids in raw.items():
+            if not isinstance(witness_ids, list):
+                continue
+            matches: list[dict[str, Any]] = []
+            for witness_id in witness_ids:
+                witness = self.witness(str(witness_id or ""))
+                if witness:
+                    matches.append(witness)
+            if matches:
+                resolved[str(label)] = matches
+        return resolved
+
+    def witness_highlights(self, *, limit: int | None = None) -> list[dict[str, Any]]:
+        if limit is None:
+            limit = int(
+                getattr(settings.b2b_churn, "reasoning_witness_highlight_limit", 4),
+            )
+        if limit <= 0:
+            return []
+        highlights: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def _add(witness: dict[str, Any]) -> None:
+            witness_id = str(witness.get("witness_id") or witness.get("_sid") or "").strip()
+            if not witness_id or witness_id in seen:
+                return
+            seen.add(witness_id)
+            highlights.append(dict(witness))
+
+        for rows in self.anchor_examples().values():
+            for witness in rows:
+                _add(witness)
+                if len(highlights) >= limit:
+                    return highlights
+
+        ranked = sorted(
+            self.witness_pack,
+            key=lambda item: (
+                -float(item.get("salience_score") or 0.0),
+                str(item.get("witness_id") or item.get("_sid") or ""),
+            ),
+        )
+        for witness in ranked:
+            _add(witness)
+            if len(highlights) >= limit:
+                break
+        return highlights
+
+    def consumer_context(self, consumer: str) -> dict[str, Any]:
+        contracts = self.materialized_contracts()
+        context: dict[str, Any] = {
+            "reasoning_contracts": contracts,
+            "vendor_core_reasoning": dict(contracts.get("vendor_core_reasoning") or {}),
+            "displacement_reasoning": dict(contracts.get("displacement_reasoning") or {}),
+            "category_reasoning": dict(contracts.get("category_reasoning") or {}),
+            "account_reasoning": dict(contracts.get("account_reasoning") or {}),
+            "reasoning_contract_gaps": contract_gaps_for_consumer(self, consumer),
+        }
+        anchors = self.anchor_examples()
+        if anchors:
+            context["anchor_examples"] = anchors
+        highlights = self.witness_highlights()
+        if highlights:
+            context["witness_highlights"] = highlights
+        refs = self.reference_ids
+        if refs:
+            context["reference_ids"] = refs
+        if self.packet_artifacts:
+            context["packet_artifacts"] = self.packet_artifacts
+        return context
 
     def materialized_contracts(self) -> dict[str, Any]:
         """Return contract-first reasoning blocks with flat-section fallback.
@@ -604,21 +724,31 @@ def inject_synthesis_into_card(
     If ``vendor_evidence`` is provided, evidence-engine suppression and
     conclusion gating rules are applied to sections and injected into the card.
     """
+    context = view.consumer_context("battle_card")
     if materialize_flat_sections:
         for section in _REQUIRED_SECTIONS:
             if not view.should_suppress(section, vendor_evidence):
                 card_entry[section] = view.section(section)
 
-    contracts = view.materialized_contracts()
+    contracts = context.get("reasoning_contracts") or {}
     if contracts:
         card_entry["reasoning_contracts"] = contracts
         card_entry["reasoning_source"] = "b2b_reasoning_synthesis"
+    anchors = context.get("anchor_examples")
+    if isinstance(anchors, dict) and anchors:
+        card_entry["anchor_examples"] = anchors
+    highlights = context.get("witness_highlights")
+    if isinstance(highlights, list) and highlights:
+        card_entry["witness_highlights"] = highlights
+    reference_ids = context.get("reference_ids")
+    if isinstance(reference_ids, dict) and reference_ids:
+        card_entry["reference_ids"] = reference_ids
     inject_synthesis_freshness(
         card_entry,
         view,
         requested_as_of=requested_as_of,
     )
-    contract_gaps = contract_gaps_for_consumer(view, "battle_card")
+    contract_gaps = context.get("reasoning_contract_gaps") or []
     if contract_gaps:
         card_entry["reasoning_contract_gaps"] = contract_gaps
 
@@ -628,9 +758,9 @@ def inject_synthesis_into_card(
         card_entry["synthesis_wedge"] = view.primary_wedge.value
         card_entry["synthesis_wedge_label"] = view.wedge_label
         # Override archetype with synthesis wedge so the card has one story.
-        # The old archetype came from the stratified reasoner on different
-        # data; the synthesis wedge is derived from the same pool evidence
-        # the card displays.
+        # Older archetype-style labels could come from a different producer;
+        # the synthesis wedge is derived from the same pool evidence the card
+        # displays.
         card_entry["archetype"] = view.primary_wedge.value
         card_entry["archetype_label"] = view.wedge_label
 

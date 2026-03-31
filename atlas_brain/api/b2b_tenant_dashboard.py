@@ -1456,6 +1456,16 @@ async def list_tenant_reports(
         f"""
         SELECT id, report_date, report_type, executive_summary,
                vendor_filter, category_filter, status, created_at,
+               latest_failure_step, latest_error_code, latest_error_summary,
+               blocker_count, warning_count,
+               (
+                 SELECT COUNT(*)
+                 FROM pipeline_visibility_reviews r
+                 JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+                 WHERE r.status = 'open'
+                   AND e.entity_type = 'churn_report'
+                   AND e.entity_id = b2b_intelligence.id::text
+               ) AS unresolved_issue_count,
                CASE
                  WHEN report_type = 'battle_card'
                  THEN COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
@@ -1483,6 +1493,12 @@ async def list_tenant_reports(
             "vendor_filter": r["vendor_filter"],
             "category_filter": r["category_filter"],
             "status": r["status"],
+            "latest_failure_step": r["latest_failure_step"],
+            "latest_error_code": r["latest_error_code"],
+            "latest_error_summary": r["latest_error_summary"],
+            "blocker_count": r["blocker_count"] or 0,
+            "warning_count": r["warning_count"] or 0,
+            "unresolved_issue_count": r["unresolved_issue_count"] or 0,
             "quality_status": r["quality_status"],
             "quality_score": r["quality_score"],
             "created_at": str(r["created_at"]) if r["created_at"] else None,
@@ -1521,6 +1537,17 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
     intelligence_data = _safe_json(row["intelligence_data"])
     quality_status = None
     quality_score = None
+    unresolved_issue_count = await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM pipeline_visibility_reviews r
+        JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+        WHERE r.status = 'open'
+          AND e.entity_type = 'churn_report'
+          AND e.entity_id = $1
+        """,
+        str(row["id"]),
+    )
     if isinstance(intelligence_data, dict):
         quality = _safe_json(intelligence_data.get("battle_card_quality"))
         quality_status = intelligence_data.get("quality_status")
@@ -1539,6 +1566,12 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         "intelligence_data": intelligence_data,
         "data_density": _safe_json(row["data_density"]),
         "status": row["status"],
+        "latest_failure_step": row["latest_failure_step"],
+        "latest_error_code": row["latest_error_code"],
+        "latest_error_summary": row["latest_error_summary"],
+        "blocker_count": row["blocker_count"] or 0,
+        "warning_count": row["warning_count"] or 0,
+        "unresolved_issue_count": unresolved_issue_count or 0,
         "quality_status": quality_status,
         "quality_score": quality_score,
         "llm_model": row["llm_model"],

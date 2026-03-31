@@ -11,8 +11,8 @@ Metrics:
     - Pain convergence: are all vendors suffering the same complaints?
     - Market structure: consolidating / fragmenting / displacing / stable
 
-All outputs are pure data -- they feed into the stratified reasoner as
-Tier 4 (Market Dynamics) evidence cached quarterly.
+All outputs are pure data -- they feed into synthesis-first and
+deterministic market-dynamics consumers as Tier 4 evidence.
 """
 
 from __future__ import annotations
@@ -316,7 +316,7 @@ class EcosystemAnalyzer:
 
     @staticmethod
     def to_evidence_dict(eco: EcosystemEvidence) -> dict[str, Any]:
-        """Convert ecosystem evidence to a dict for the stratified reasoner."""
+        """Convert ecosystem evidence to a dict for downstream reasoning consumers."""
         h = eco.health
         evidence: dict[str, Any] = {
             "category": eco.category,

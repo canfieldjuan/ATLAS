@@ -869,69 +869,36 @@ async def generate_account_deep_dive_report(
 @router.post("/vendors/{vendor_name}/reason")
 async def reason_vendor(
     vendor_name: str,
-    force: bool = Query(False, description="Bypass reasoning cache"),
+    force: bool = Query(False, description="Compatibility no-op; returns the best available persisted reasoning"),
     user: AuthUser | None = Depends(optional_auth),
 ):
-    """Run stratified reasoning for a single vendor on demand.
-
-    Builds fresh evidence from current DB data, invokes the reasoning engine,
-    persists the archetype to churn_signals, and returns the full result.
-    """
-    import asyncio as _aio
+    """Return the best available persisted reasoning for a single vendor."""
+    _ = force
 
     pool = _pool_or_503()
 
-    from ..autonomous.tasks.b2b_churn_intelligence import (
-        fetch_vendor_evidence,
-        persist_single_vendor_reasoning,
+    from ..autonomous.tasks._b2b_synthesis_reader import (
+        load_best_reasoning_view,
+        synthesis_view_to_reasoning_entry,
     )
-    from ..reasoning import get_stratified_reasoner, init_stratified_reasoner
-    from ..reasoning.tiers import Tier, gather_tier_context
-
-    evidence = await fetch_vendor_evidence(pool, vendor_name)
-    if evidence is None:
-        raise HTTPException(status_code=404, detail=f"No churn signal data for vendor: {vendor_name}")
-
-    reasoner = get_stratified_reasoner()
-    if reasoner is None:
-        try:
-            await init_stratified_reasoner(pool)
-            reasoner = get_stratified_reasoner()
-        except Exception:
-            pass
-    if reasoner is None:
-        raise HTTPException(status_code=503, detail="Reasoning engine unavailable")
-
-    canonical = evidence.get("vendor_name", vendor_name)
-    category = evidence.get("product_category", "")
-
-    try:
-        tier_ctx = await gather_tier_context(
-            reasoner._cache, Tier.VENDOR_ARCHETYPE,
-            vendor_name=canonical, product_category=category,
-        )
-        sr = await reasoner.analyze(
-            vendor_name=canonical,
-            evidence=evidence,
-            product_category=category,
-            force_reason=force,
-            tier_context=tier_ctx,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Reasoning failed: {exc}")
-
-    try:
-        await persist_single_vendor_reasoning(pool, canonical, sr)
-    except Exception:
-        pass  # non-fatal
-
-    conclusion = sr.conclusion or {}
+    view = await load_best_reasoning_view(pool, vendor_name)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"No reasoning data for vendor: {vendor_name}")
+    entry = synthesis_view_to_reasoning_entry(view)
+    conclusion = {
+        "archetype": entry.get("archetype"),
+        "risk_level": entry.get("risk_level"),
+        "executive_summary": entry.get("executive_summary"),
+        "key_signals": entry.get("key_signals", []),
+        "falsification_conditions": entry.get("falsification_conditions", []),
+        "uncertainty_sources": entry.get("uncertainty_sources", []),
+    }
     return {
-        "vendor_name": canonical,
-        "mode": sr.mode,
-        "cached": sr.cached,
-        "confidence": sr.confidence,
-        "tokens_used": sr.tokens_used,
+        "vendor_name": view.vendor_name,
+        "mode": entry.get("mode"),
+        "cached": True,
+        "confidence": entry.get("confidence"),
+        "tokens_used": 0,
         "archetype": conclusion.get("archetype"),
         "risk_level": conclusion.get("risk_level"),
         "executive_summary": conclusion.get("executive_summary"),
@@ -946,76 +913,44 @@ async def compare_vendor_reasoning(
     body: dict,
     user: AuthUser | None = Depends(optional_auth),
 ):
-    """Side-by-side stratified reasoning for multiple vendors (2-5)."""
-    import asyncio as _aio
+    """Side-by-side persisted reasoning for multiple vendors (2-5)."""
 
     vendors = body.get("vendors", [])
-    force = body.get("force", False)
+    _ = body.get("force", False)
 
     if not isinstance(vendors, list) or len(vendors) < 2 or len(vendors) > 5:
         raise HTTPException(status_code=400, detail="vendors must be a list of 2-5 vendor names")
 
     pool = _pool_or_503()
 
-    from ..autonomous.tasks.b2b_churn_intelligence import (
-        fetch_vendor_evidence,
-        persist_single_vendor_reasoning,
+    from ..autonomous.tasks._b2b_synthesis_reader import (
+        load_best_reasoning_views,
+        synthesis_view_to_reasoning_entry,
     )
-    from ..reasoning import get_stratified_reasoner, init_stratified_reasoner
-    from ..reasoning.tiers import Tier, gather_tier_context
-
-    reasoner = get_stratified_reasoner()
-    if reasoner is None:
-        try:
-            await init_stratified_reasoner(pool)
-            reasoner = get_stratified_reasoner()
-        except Exception:
-            pass
-    if reasoner is None:
-        raise HTTPException(status_code=503, detail="Reasoning engine unavailable")
-
-    async def _reason_one(vname: str) -> dict:
-        evidence = await fetch_vendor_evidence(pool, vname)
-        if evidence is None:
-            return {"vendor_name": vname, "error": "No churn signal data"}
-
-        canonical = evidence.get("vendor_name", vname)
-        category = evidence.get("product_category", "")
-        try:
-            tier_ctx = await gather_tier_context(
-                reasoner._cache, Tier.VENDOR_ARCHETYPE,
-                vendor_name=canonical, product_category=category,
-            )
-            sr = await reasoner.analyze(
-                vendor_name=canonical,
-                evidence=evidence,
-                product_category=category,
-                force_reason=force,
-                tier_context=tier_ctx,
-            )
-        except Exception as exc:
-            return {"vendor_name": canonical, "error": str(exc)[:200]}
-
-        try:
-            await persist_single_vendor_reasoning(pool, canonical, sr)
-        except Exception:
-            pass
-
-        conclusion = sr.conclusion or {}
-        return {
-            "vendor_name": canonical,
-            "mode": sr.mode,
-            "cached": sr.cached,
-            "confidence": sr.confidence,
-            "tokens_used": sr.tokens_used,
-            "archetype": conclusion.get("archetype"),
-            "risk_level": conclusion.get("risk_level"),
-            "executive_summary": conclusion.get("executive_summary"),
-            "key_signals": conclusion.get("key_signals", []),
-            "falsification_conditions": conclusion.get("falsification_conditions", []),
-        }
-
-    results = await _aio.gather(*[_reason_one(v) for v in vendors])
+    views = await load_best_reasoning_views(pool, vendors)
+    results = []
+    for requested_name in vendors:
+        matched_view = None
+        for current_name, view in views.items():
+            if str(current_name or "").strip().lower() == str(requested_name or "").strip().lower():
+                matched_view = view
+                break
+        if matched_view is None:
+            results.append({"vendor_name": requested_name, "error": "No reasoning data"})
+            continue
+        entry = synthesis_view_to_reasoning_entry(matched_view)
+        results.append({
+            "vendor_name": matched_view.vendor_name,
+            "mode": entry.get("mode"),
+            "cached": True,
+            "confidence": entry.get("confidence"),
+            "tokens_used": 0,
+            "archetype": entry.get("archetype"),
+            "risk_level": entry.get("risk_level"),
+            "executive_summary": entry.get("executive_summary"),
+            "key_signals": entry.get("key_signals", []),
+            "falsification_conditions": entry.get("falsification_conditions", []),
+        })
     return {"vendors": results, "count": len(results)}
 
 
@@ -1066,6 +1001,16 @@ async def list_reports(
         f"""
         SELECT id, report_date, report_type, executive_summary,
              vendor_filter, category_filter, status, created_at,
+             latest_failure_step, latest_error_code, latest_error_summary,
+             blocker_count, warning_count,
+             (
+               SELECT COUNT(*)
+               FROM pipeline_visibility_reviews r
+               JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+               WHERE r.status = 'open'
+                 AND e.entity_type = 'churn_report'
+                 AND e.entity_id = b2b_intelligence.id::text
+             ) AS unresolved_issue_count,
              CASE
                WHEN report_type = 'battle_card'
                THEN COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
@@ -1096,6 +1041,12 @@ async def list_reports(
             "vendor_filter": r["vendor_filter"],
             "category_filter": r["category_filter"],
             "status": r["status"],
+            "latest_failure_step": r["latest_failure_step"],
+            "latest_error_code": r["latest_error_code"],
+            "latest_error_summary": r["latest_error_summary"],
+            "blocker_count": r["blocker_count"] or 0,
+            "warning_count": r["warning_count"] or 0,
+            "unresolved_issue_count": r["unresolved_issue_count"] or 0,
             "quality_status": r["quality_status"],
             "quality_score": r["quality_score"],
             "created_at": str(r["created_at"]) if r["created_at"] else None,
@@ -1137,6 +1088,17 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
     intelligence_data = _safe_json(row["intelligence_data"])
     quality = {}
     quality_status = None
+    unresolved_issue_count = await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM pipeline_visibility_reviews r
+        JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+        WHERE r.status = 'open'
+          AND e.entity_type = 'churn_report'
+          AND e.entity_id = $1
+        """,
+        str(row["id"]),
+    )
     if isinstance(intelligence_data, dict):
         quality = _safe_dict(intelligence_data.get("battle_card_quality"))
         quality_status = intelligence_data.get("quality_status")
@@ -1151,6 +1113,12 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         "intelligence_data": intelligence_data,
         "data_density": _safe_json(row["data_density"]),
         "status": row["status"],
+        "latest_failure_step": row["latest_failure_step"],
+        "latest_error_code": row["latest_error_code"],
+        "latest_error_summary": row["latest_error_summary"],
+        "blocker_count": row["blocker_count"] or 0,
+        "warning_count": row["warning_count"] or 0,
+        "unresolved_issue_count": unresolved_issue_count or 0,
         "quality_status": quality_status or quality.get("status"),
         "quality_score": quality.get("score"),
         "llm_model": row["llm_model"],
