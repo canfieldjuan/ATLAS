@@ -260,6 +260,32 @@ export interface ClickSummary {
 
 export type CampaignStatus = 'draft' | 'approved' | 'queued' | 'sent' | 'cancelled' | 'expired'
 
+export interface CampaignFailureExplanation {
+  boundary?: string | null
+  primary_blocker?: string | null
+  cause_type?: string | null
+  blocking_issues: string[]
+  warnings: string[]
+  matched_groups: string[]
+  available_groups: string[]
+  missing_groups: string[]
+  required_proof_terms: string[]
+  used_proof_terms: string[]
+  unused_proof_terms: string[]
+  missing_inputs: string[]
+  missing_primary_inputs: string[]
+  context_sources: string[]
+  fallback_used?: boolean
+  reasoning_view_found?: boolean
+  anchor_count?: number
+  highlight_count?: number
+  reference_id_counts?: Record<string, number>
+  anchor_labels?: string[]
+  context_has_anchor_examples?: boolean
+  context_has_witness_highlights?: boolean
+  context_has_reference_ids?: boolean
+}
+
 export interface Campaign {
   id: string
   company_name: string
@@ -281,6 +307,7 @@ export interface Campaign {
   blocker_count?: number
   warning_count?: number
   latest_error_summary?: string | null
+  failure_explanation?: CampaignFailureExplanation | null
 }
 
 export interface CampaignStats {
@@ -297,6 +324,25 @@ export interface CampaignStats {
     by_boundary: Record<string, number>
     top_blockers: { reason: string; count: number }[]
   }
+}
+
+export interface CampaignQualityTrends {
+  days: number
+  top_n: number
+  top_blockers: { reason: string; count: number }[]
+  series: { day: string; reason: string; count: number }[]
+  totals_by_day: { day: string; blocker_total: number }[]
+}
+
+export interface CampaignQualityDiagnostics {
+  days: number
+  top_n: number
+  by_boundary: { boundary: string; count: number }[]
+  by_cause_type: { cause_type: string; count: number }[]
+  top_primary_blockers: { reason: string; count: number }[]
+  top_missing_inputs: { input: string; count: number }[]
+  by_target_mode: { target_mode: string; count: number }[]
+  top_vendors: { vendor_name: string; count: number }[]
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +486,7 @@ export interface ReviewQueueDraft {
   blocker_count?: number
   warning_count?: number
   latest_error_summary?: string | null
+  failure_explanation?: CampaignFailureExplanation | null
 }
 
 export interface AuditEvent {

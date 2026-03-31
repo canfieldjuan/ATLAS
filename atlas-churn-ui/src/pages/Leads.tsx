@@ -19,11 +19,14 @@ import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import UpgradeGate from '../components/UpgradeGate'
 import { PageError } from '../components/ErrorBoundary'
+import CampaignFailureExplanation from '../components/CampaignFailureExplanation'
+import CampaignQualityTrends from '../components/CampaignQualityTrends'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import {
   fetchHighIntent,
   fetchCampaigns,
+  fetchCampaignQualityTrends,
   fetchCampaignStats,
   generateCampaigns,
   approveCampaign,
@@ -32,6 +35,7 @@ import {
 } from '../api/client'
 import type {
   Campaign,
+  CampaignQualityTrends as CampaignQualityTrendsData,
   CampaignStats,
   HighIntentCompany,
 } from '../types'
@@ -40,6 +44,7 @@ interface LeadsData {
   opportunities: HighIntentCompany[]
   campaigns: Campaign[]
   stats: CampaignStats
+  qualityTrends: CampaignQualityTrendsData
 }
 
 function CampaignStatusBadge({ status }: { status: string }) {
@@ -175,6 +180,9 @@ function CampaignModal({
             warningCount={campaign.warning_count}
             latestErrorSummary={campaign.latest_error_summary}
           />
+          <CampaignFailureExplanation
+            explanation={campaign.failure_explanation}
+          />
         </div>
         {campaign.status === 'draft' && (
           <div className="flex items-center gap-3 p-5 pt-3 border-t border-slate-700/50 shrink-0">
@@ -220,7 +228,7 @@ export default function Leads() {
 
   const { data, loading, error, refresh, refreshing } = useApiData<LeadsData>(
     async () => {
-      const [oppRes, campRes, statsRes] = await Promise.all([
+      const [oppRes, campRes, statsRes, trendRes] = await Promise.all([
         fetchHighIntent({
           min_urgency: minUrgency,
           vendor_name: debouncedVendor || undefined,
@@ -228,11 +236,13 @@ export default function Leads() {
         }),
         fetchCampaigns({ limit: 200 }),
         fetchCampaignStats(),
+        fetchCampaignQualityTrends({ days: 14, top_n: 5 }),
       ])
       return {
         opportunities: oppRes.companies,
         campaigns: campRes.campaigns,
         stats: statsRes,
+        qualityTrends: trendRes,
       }
     },
     [minUrgency, debouncedVendor],
@@ -241,6 +251,7 @@ export default function Leads() {
   const opportunities = data?.opportunities ?? []
   const campaigns = data?.campaigns ?? []
   const stats = data?.stats ?? { by_status: {}, by_channel: {}, top_vendors: [], total: 0 }
+  const qualityTrends = data?.qualityTrends ?? null
 
   const campaignsSent = (stats.by_status['sent'] ?? 0) + (stats.by_status['approved'] ?? 0)
   const avgUrgency =
@@ -571,43 +582,50 @@ export default function Leads() {
       </div>
 
       {stats.quality && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-4">
-            <h3 className="text-sm font-medium text-white mb-3">Campaign Quality</h3>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <div className="text-slate-500">Pass</div>
-                <div className="text-green-400 font-medium">{stats.quality.pass}</div>
-              </div>
-              <div>
-                <div className="text-slate-500">Fail</div>
-                <div className="text-red-400 font-medium">{stats.quality.fail}</div>
-              </div>
-              <div>
-                <div className="text-slate-500">Missing Audit</div>
-                <div className="text-slate-300 font-medium">{stats.quality.missing}</div>
-              </div>
-              <div>
-                <div className="text-slate-500">Blockers</div>
-                <div className="text-red-300 font-medium">{stats.quality.blocker_total}</div>
-              </div>
-            </div>
-          </div>
-          <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-4">
-            <h3 className="text-sm font-medium text-white mb-3">Top Campaign Blockers</h3>
-            <div className="space-y-2">
-              {(stats.quality.top_blockers || []).slice(0, 5).map((item) => (
-                <div key={item.reason} className="flex items-start justify-between gap-3 text-sm">
-                  <span className="text-slate-300 break-words">{item.reason}</span>
-                  <span className="text-red-400 shrink-0">{item.count}</span>
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-4">
+              <h3 className="text-sm font-medium text-white mb-3">Campaign Quality</h3>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-slate-500">Pass</div>
+                  <div className="text-green-400 font-medium">{stats.quality.pass}</div>
                 </div>
-              ))}
-              {(stats.quality.top_blockers || []).length === 0 && (
-                <span className="text-slate-500 text-sm">No blocker summaries yet.</span>
-              )}
+                <div>
+                  <div className="text-slate-500">Fail</div>
+                  <div className="text-red-400 font-medium">{stats.quality.fail}</div>
+                </div>
+                <div>
+                  <div className="text-slate-500">Missing Audit</div>
+                  <div className="text-slate-300 font-medium">{stats.quality.missing}</div>
+                </div>
+                <div>
+                  <div className="text-slate-500">Blockers</div>
+                  <div className="text-red-300 font-medium">{stats.quality.blocker_total}</div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-4">
+              <h3 className="text-sm font-medium text-white mb-3">Top Campaign Blockers</h3>
+              <div className="space-y-2">
+                {(stats.quality.top_blockers || []).slice(0, 5).map((item) => (
+                  <div key={item.reason} className="flex items-start justify-between gap-3 text-sm">
+                    <span className="text-slate-300 break-words">{item.reason}</span>
+                    <span className="text-red-400 shrink-0">{item.count}</span>
+                  </div>
+                ))}
+                {(stats.quality.top_blockers || []).length === 0 && (
+                  <span className="text-slate-500 text-sm">No blocker summaries yet.</span>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+          <CampaignQualityTrends
+            data={qualityTrends}
+            loading={loading}
+            title="Campaign Blocker Trends"
+          />
+        </>
       )}
 
       {/* Opportunities Table */}

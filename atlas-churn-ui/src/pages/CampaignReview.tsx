@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import {
   MailSearch,
   RefreshCw,
@@ -13,9 +14,12 @@ import {
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
 import StatCard from '../components/StatCard'
+import CampaignFailureExplanation from '../components/CampaignFailureExplanation'
+import CampaignQualityTrends from '../components/CampaignQualityTrends'
 import type { ReviewQueueDraft, AuditEvent } from '../types'
 import {
   fetchReviewQueue,
+  fetchCampaignQualityTrends,
   fetchReviewQueueSummary,
   fetchCampaignAuditLog,
   bulkApproveCampaigns,
@@ -139,12 +143,32 @@ export default function CampaignReview() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
 
-  const { data: summaryData, loading: summaryLoading } = useApiData(
+  const {
+    data: summaryData,
+    loading: summaryLoading,
+    refresh: refreshSummary,
+    refreshing: summaryRefreshing,
+  } = useApiData(
     fetchReviewQueueSummary,
     [],
   )
+  const {
+    data: trendData,
+    loading: trendLoading,
+    refresh: refreshTrends,
+    refreshing: trendRefreshing,
+  } = useApiData(
+    () => fetchCampaignQualityTrends({ days: 14, top_n: 5 }),
+    [],
+  )
 
-  const { data: queueData, loading, error, refresh, refreshing } = useApiData(
+  const {
+    data: queueData,
+    loading,
+    error,
+    refresh: refreshQueue,
+    refreshing,
+  } = useApiData(
     () => fetchReviewQueue({ status: statusTab, include_prospects: true, limit: 200 }),
     [statusTab],
   )
@@ -181,7 +205,9 @@ export default function CampaignReview() {
         await bulkApproveCampaigns(Array.from(selectedIds), action)
       }
       setSelectedIds(new Set())
-      refresh()
+      refreshQueue()
+      refreshSummary()
+      refreshTrends()
     } finally {
       setBulkLoading(false)
     }
@@ -195,14 +221,27 @@ export default function CampaignReview() {
           <MailSearch className="h-6 w-6 text-cyan-400" />
           <h1 className="text-2xl font-bold text-white">Campaign Review</h1>
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/campaign-diagnostics"
+            className="flex items-center gap-2 rounded-lg bg-slate-800/50 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700/50"
+          >
+            <AlertTriangle className="h-4 w-4" />
+            Diagnostics
+          </Link>
+          <button
+            onClick={() => {
+              refreshQueue()
+              refreshSummary()
+              refreshTrends()
+            }}
+            disabled={refreshing || summaryRefreshing || trendRefreshing}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+          >
+            <RefreshCw className={clsx('h-4 w-4', (refreshing || summaryRefreshing || trendRefreshing) && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -286,6 +325,12 @@ export default function CampaignReview() {
           </div>
         </div>
       )}
+
+      <CampaignQualityTrends
+        data={trendData}
+        loading={trendLoading}
+        title="Campaign Blocker Trends"
+      />
 
       {/* Status tabs */}
       <div className="flex items-center justify-between">
@@ -454,6 +499,11 @@ export default function CampaignReview() {
                                 warningCount={draft.warning_count}
                                 latestErrorSummary={draft.latest_error_summary}
                               />
+                              <div className="mt-2">
+                                <CampaignFailureExplanation
+                                  explanation={draft.failure_explanation}
+                                />
+                              </div>
                             </div>
 
                             {/* Audit timeline toggle */}

@@ -728,8 +728,8 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
 
 function normalizeLabel(label: string | undefined, context: 'pain' | 'satisfaction'): string {
   if (!label) return ''
-  if (label.toLowerCase() === 'other') {
-    return context === 'pain' ? 'General Dissatisfaction' : 'General Satisfaction'
+  if (['other', 'general_dissatisfaction', 'overall_dissatisfaction'].includes(label.toLowerCase())) {
+    return context === 'pain' ? 'Overall Dissatisfaction' : 'Overall Satisfaction'
   }
   return label
 }

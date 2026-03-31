@@ -11,6 +11,7 @@ import {
   Newspaper,
   FileSearch,
   MailSearch,
+  AlertTriangle,
   Users,
   LogOut,
   Lock,
@@ -44,6 +45,7 @@ const links: SidebarLink[] = [
 const auditLinks: SidebarLink[] = [
   { to: '/blog-review', icon: FileSearch, label: 'Blog Review' },
   { to: '/campaign-review', icon: MailSearch, label: 'Campaigns' },
+  { to: '/campaign-diagnostics', icon: AlertTriangle, label: 'Campaign Diagnostics' },
   { to: '/briefing-review', icon: MailSearch, label: 'Briefings' },
   { to: '/pipeline-review', icon: Activity, label: 'Pipeline Review' },
   { to: '/prospects', icon: Users, label: 'Prospects' },

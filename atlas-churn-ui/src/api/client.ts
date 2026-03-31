@@ -15,7 +15,9 @@ import type {
   AffiliatePartner,
   ClickSummary,
   Campaign,
+  CampaignQualityDiagnostics,
   CampaignStats,
+  CampaignQualityTrends,
   VendorTarget,
   BlogDraftSummary,
   BlogDraftSummaryRollup,
@@ -367,6 +369,20 @@ export async function fetchCampaign(id: string) {
 
 export async function fetchCampaignStats() {
   return get<CampaignStats>(CAMPAIGNS_BASE, '/stats')
+}
+
+export async function fetchCampaignQualityTrends(params?: {
+  days?: number
+  top_n?: number
+}) {
+  return get<CampaignQualityTrends>(CAMPAIGNS_BASE, '/quality-trends', params)
+}
+
+export async function fetchCampaignQualityDiagnostics(params?: {
+  days?: number
+  top_n?: number
+}) {
+  return get<CampaignQualityDiagnostics>(CAMPAIGNS_BASE, '/quality-diagnostics', params)
 }
 
 export async function generateCampaigns(body?: {
