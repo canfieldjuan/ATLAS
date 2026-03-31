@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ..autonomous.tasks._b2b_specificity import (
-    merge_specificity_contexts,
-    specificity_audit_snapshot,
-    surface_specificity_context,
-)
+from .campaign_quality import campaign_quality_revalidation, coerce_json_dict
 
 DEFAULT_BACKFILL_STATUSES = (
     "draft",
@@ -20,37 +15,6 @@ DEFAULT_BACKFILL_STATUSES = (
     "cancelled",
     "expired",
 )
-
-
-def _coerce_json_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return dict(value)
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _campaign_specificity_context(
-    metadata: Any,
-    company_context: Any,
-) -> dict[str, Any]:
-    metadata_context = surface_specificity_context(
-        _coerce_json_dict(metadata),
-        surface="campaign",
-        nested_keys=("briefing_context",),
-    )
-    company_specificity = surface_specificity_context(
-        _coerce_json_dict(company_context),
-        surface="campaign",
-        nested_keys=("briefing_context",),
-    )
-    return merge_specificity_contexts(metadata_context, company_specificity)
-
-
 def derive_campaign_specificity_patch(
     row: Mapping[str, Any],
     *,
@@ -58,7 +22,7 @@ def derive_campaign_specificity_patch(
     require_anchor_support: bool,
     require_timing_or_numeric_when_available: bool,
 ) -> dict[str, Any]:
-    metadata = _coerce_json_dict(row.get("metadata"))
+    metadata = coerce_json_dict(row.get("metadata"))
     if isinstance(metadata.get("latest_specificity_audit"), dict):
         return {}
 
@@ -66,31 +30,32 @@ def derive_campaign_specificity_patch(
     if not body:
         return {}
 
-    context = _campaign_specificity_context(metadata, row.get("company_context"))
-    if not context:
-        return {}
-
-    audit = specificity_audit_snapshot(
-        body,
-        anchor_examples=context.get("anchor_examples"),
-        witness_highlights=context.get("witness_highlights"),
-        reference_ids=context.get("reference_ids"),
-        allow_company_names=False,
+    revalidation = campaign_quality_revalidation(
+        campaign={
+            "subject": str(row.get("subject") or ""),
+            "body": body,
+            "cta": str(row.get("cta") or ""),
+            "channel": str(row.get("channel") or ""),
+            "target_mode": str(row.get("target_mode") or ""),
+            "tier": str(row.get("tier") or ""),
+            "vendor_name": str(row.get("vendor_name") or ""),
+            "company_name": str(row.get("company_name") or ""),
+            "metadata": metadata,
+        },
+        boundary="backfill",
+        company_context=row.get("company_context"),
+        metadata=metadata,
         min_anchor_hits=int(min_anchor_hits),
         require_anchor_support=bool(require_anchor_support),
         require_timing_or_numeric_when_available=bool(
             require_timing_or_numeric_when_available
         ),
-        include_competitor_terms=str(row.get("channel") or "") != "email_cold",
     )
-    if not audit:
+    audit = revalidation.get("audit")
+    patched_metadata = revalidation.get("metadata")
+    if not isinstance(audit, dict) or not isinstance(patched_metadata, dict):
         return {}
-
-    metadata["latest_specificity_audit"] = {
-        **audit,
-        "boundary": "backfill",
-    }
-    return {"metadata": metadata}
+    return {"metadata": patched_metadata}
 
 
 async def plan_campaign_specificity_backfill(

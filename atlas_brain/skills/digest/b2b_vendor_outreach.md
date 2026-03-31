@@ -36,6 +36,7 @@ You receive a JSON object with:
 - `reasoning_context` (optional): Object with `{wedge, confidence, summary, key_signals, falsification, why_they_stay, timing, switch_triggers, confidence_limits, account_summary}` -- the vendor's canonical reasoning from synthesis. `wedge` is one of: "price_squeeze", "feature_parity", "support_erosion", "integration_lock", "category_shift", "acquisition_hangover", "compliance_exposure", "ux_regression", "segment_mismatch", "stable". `confidence` is "high", "medium", "low", or "insufficient".
 - `reasoning_contracts` (optional): Full materialized reasoning contracts from synthesis. Use for deeper context on timing, segments, displacement, and retention.
 - `archetype_context` (optional, backward compat): Same as before, populated from reasoning_context. Prefer `reasoning_context` when both are present.
+- `campaign_proof_terms` (optional): Array of exact witness-backed proof terms selected by the pipeline. When present, prefer these exact terms in the body. If the list includes a numeric or timing term, use at least one.
 - `briefing_context` (optional): Compact summary from the latest vendor briefing. May include:
   - `executive_summary`
   - `account_pressure_summary`
@@ -156,5 +157,10 @@ Return a JSON object:
    - `priority_account_names` is internal targeting context only. Never reveal those names in the email.
    - If `reasoning_anchor_examples` or `reasoning_witness_highlights` is present, use at least one concrete proof anchor such as a timing trigger, spend signal, pain-specific detail, or competitor pattern when allowed for the channel.
    - Never reveal a private account name from those anchor fields. Use the detail, not the identity.
+
+26. **`campaign_proof_terms` is authoritative when present.**
+   - Use at least one exact term from `campaign_proof_terms` in the body.
+   - If a numeric or timing term is present in that list, prefer it over generic phrasing.
+   - For `email_cold`, still do not name competitors even if a competitor term appears elsewhere in the input.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

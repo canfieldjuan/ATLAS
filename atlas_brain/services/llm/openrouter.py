@@ -108,15 +108,32 @@ class OpenRouterLLM(BaseModelService):
     def _is_anthropic_model(self) -> bool:
         return self.model.startswith("anthropic/")
 
+    @staticmethod
+    def _cacheable_anthropic_message(
+        msg: Message,
+        *,
+        seen_dynamic_turn: bool,
+    ) -> bool:
+        if len(msg.content) <= 1024:
+            return False
+        if msg.role == "system":
+            return True
+        return msg.role == "user" and not seen_dynamic_turn
+
     def _convert_messages(self, messages: list[Message]) -> list[dict]:
         result = []
         use_cache = self._is_anthropic_model()
+        seen_dynamic_turn = False
         for msg in messages:
             # For Anthropic models on OpenRouter: add cache_control to system
-            # messages >1024 chars so the prompt prefix is cached across calls.
-            if use_cache and msg.role == "system" and len(msg.content) > 1024:
+            # messages and large pre-assistant user payloads >1024 chars so the
+            # stable prompt prefix is cached across calls and validation retries.
+            if use_cache and self._cacheable_anthropic_message(
+                msg,
+                seen_dynamic_turn=seen_dynamic_turn,
+            ):
                 m = {
-                    "role": "system",
+                    "role": msg.role,
                     "content": [
                         {
                             "type": "text",
@@ -130,7 +147,20 @@ class OpenRouterLLM(BaseModelService):
             if msg.tool_calls:
                 m["tool_calls"] = msg.tool_calls
             result.append(m)
+            if msg.role in {"assistant", "tool"}:
+                seen_dynamic_turn = True
         return result
+
+    @staticmethod
+    def _cache_usage_fields(usage: dict[str, Any]) -> tuple[int, int]:
+        prompt_details = usage.get("prompt_tokens_details", {}) or {}
+        cached_tokens = prompt_details.get("cached_tokens")
+        cache_write_tokens = (
+            prompt_details.get("cache_write_tokens")
+            if prompt_details.get("cache_write_tokens") is not None
+            else usage.get("cache_creation_input_tokens")
+        )
+        return int(cached_tokens or 0), int(cache_write_tokens or 0)
 
     def _structured_response_format(self, **kwargs: Any) -> dict[str, Any] | None:
         """Prefer json_schema when guided_json is supplied."""
@@ -264,9 +294,10 @@ class OpenRouterLLM(BaseModelService):
 
             usage = data.get("usage", {})
             reasoning_tokens = usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
+            cached_tokens, cache_write_tokens = self._cache_usage_fields(usage)
             logger.info(
-                "OpenRouter chat: model=%s tokens=%s reasoning_tokens=%d content_len=%d",
-                self.model, usage, reasoning_tokens, len(content),
+                "OpenRouter chat: model=%s tokens=%s reasoning_tokens=%d cached_tokens=%d cache_write_tokens=%d content_len=%d",
+                self.model, usage, reasoning_tokens, cached_tokens, cache_write_tokens, len(content),
             )
 
             return {
@@ -276,12 +307,16 @@ class OpenRouterLLM(BaseModelService):
                     "input_tokens": usage.get("prompt_tokens", 0),
                     "output_tokens": usage.get("completion_tokens", 0),
                     "reasoning_tokens": reasoning_tokens,
+                    "cached_tokens": cached_tokens,
+                    "cache_write_tokens": cache_write_tokens,
                 },
                 "_trace_meta": {
                     "api_endpoint": f"{self.base_url}/chat/completions",
                     "provider_request_id": response.headers.get("x-request-id") or data.get("id", ""),
                     "finish_reason": choice.get("finish_reason"),
                     "native_finish_reason": choice.get("native_finish_reason"),
+                    "cached_tokens": cached_tokens,
+                    "cache_write_tokens": cache_write_tokens,
                 },
             }
         except httpx.HTTPStatusError as e:

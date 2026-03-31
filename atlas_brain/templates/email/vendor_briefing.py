@@ -609,7 +609,9 @@ def render_vendor_briefing_html(briefing: dict) -> str:
         "security": "Security",
         "onboarding": "Onboarding",
         "migration": "Migration",
-        "other": "General Dissatisfaction",
+        "other": "Overall Dissatisfaction",
+        "general_dissatisfaction": "Overall Dissatisfaction",
+        "overall_dissatisfaction": "Overall Dissatisfaction",
     }
     _seg_role_labels = {
         "economic_buyer": "Economic Buyer",
@@ -628,7 +630,7 @@ def render_vendor_briefing_html(briefing: dict) -> str:
         for seg in top_segments[:4]:
             role = _safe(_seg_role_labels.get(seg.get("role_type", ""), seg.get("role_type", "")))
             stage = _safe(_seg_stage_labels.get(seg.get("top_buying_stage", ""), seg.get("top_buying_stage", "")))
-            raw_pain = (seg.get("top_pain") or "other").lower()
+            raw_pain = (seg.get("top_pain") or "overall_dissatisfaction").lower()
             pain = _safe(_seg_pain_labels.get(raw_pain, raw_pain.title()))
             pain_color = _pain_color(raw_pain)
             rc = int(seg.get("review_count") or 0)

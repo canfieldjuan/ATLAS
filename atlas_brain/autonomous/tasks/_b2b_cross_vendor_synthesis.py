@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import date
 from typing import Any
 
@@ -168,6 +169,50 @@ def _append_citation_entry(
         "label": label,
         "reference_ids": _copy_reference_ids(refs),
     })
+
+
+def _normalize_citation_text(value: str) -> str:
+    text = (value or "").strip().lower()
+    if not text:
+        return ""
+    text = text.replace("→", "->")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _best_registry_sid_for_citation(
+    citation: str,
+    registry_map: dict[str, dict[str, Any]],
+) -> str | None:
+    citation_norm = _normalize_citation_text(citation)
+    if not citation_norm:
+        return None
+    if citation in registry_map:
+        return citation
+
+    best_sid: str | None = None
+    best_score = 0.0
+    citation_tokens = set(citation_norm.split())
+    for sid, item in registry_map.items():
+        label = str(item.get("label") or "")
+        label_norm = _normalize_citation_text(label)
+        if not label_norm:
+            continue
+        if citation_norm == label_norm:
+            return sid
+        label_tokens = set(label_norm.split())
+        overlap = citation_tokens.intersection(label_tokens)
+        if not overlap:
+            continue
+        score = len(overlap) / max(1, len(citation_tokens.union(label_tokens)))
+        if citation_norm in label_norm or label_norm in citation_norm:
+            score += 0.35
+        if score > best_score:
+            best_score = score
+            best_sid = sid
+    if best_score >= 0.45:
+        return best_sid
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +405,21 @@ def attach_cross_vendor_citation_registry(
             ),
             refs=combined_refs,
         )
+        for field in ("pressure_scores", "resource_indicators"):
+            item = packet.get(field) or {}
+            if not isinstance(item, dict):
+                continue
+            label_bits = ", ".join(
+                f"{key}={value}"
+                for key, value in item.items()
+                if value is not None and value != ""
+            )
+            _append_citation_entry(
+                registry,
+                sid=f"xv:asymmetry:{_slug(sorted_vendors[0] if sorted_vendors else '')}_{_slug(sorted_vendors[1] if len(sorted_vendors) > 1 else '')}:{field}",
+                label=f"{field}: {label_bits}",
+                refs=combined_refs,
+            )
 
     for vendor_key in ("vendor_a_pool", "vendor_b_pool", "vendor_a_profile", "vendor_b_profile"):
         item = packet.get(vendor_key) or {}
@@ -382,6 +442,33 @@ def attach_cross_vendor_citation_registry(
                 ),
                 refs=refs,
             )
+            for idx, target in enumerate(item.get("displacement_targets") or []):
+                competitor = str(
+                    target.get("to_vendor") or target.get("name") or ""
+                ).strip()
+                flow_summary = target.get("flow_summary") or {}
+                edge_metrics = target.get("edge_metrics") or {}
+                switch_reasons = target.get("switch_reasons") or []
+                reason_text = ""
+                if switch_reasons and isinstance(switch_reasons[0], dict):
+                    reason_text = str(
+                        switch_reasons[0].get("reason")
+                        or switch_reasons[0].get("reason_category")
+                        or switch_reasons[0].get("switch_reason")
+                        or ""
+                    ).strip()
+                _append_citation_entry(
+                    registry,
+                    sid=f"xv:vendor:{_slug(vendor)}:flow:{idx}:{_slug(competitor)}",
+                    label=(
+                        f"{vendor} displacement target: {vendor}->{competitor}, "
+                        f"total_flow_mentions={flow_summary.get('total_flow_mentions') or edge_metrics.get('mention_count') or 0}, "
+                        f"explicit_switch_count={flow_summary.get('explicit_switch_count') or 0}, "
+                        f"active_evaluation_count={flow_summary.get('active_evaluation_count') or 0}, "
+                        f"switch_reason={reason_text or 'unknown'}"
+                    ),
+                    refs=refs,
+                )
         else:
             _append_citation_entry(
                 registry,
@@ -452,10 +539,11 @@ def materialize_cross_vendor_reference_ids(
     witness_ids: list[str] = []
     for sid in citations:
         sid_text = str(sid).strip()
-        if not sid_text or sid_text not in registry_map:
+        resolved_sid = _best_registry_sid_for_citation(sid_text, registry_map)
+        if not resolved_sid:
             continue
-        normalized_citations.append(sid_text)
-        refs = _copy_reference_ids(registry_map[sid_text].get("reference_ids"))
+        normalized_citations.append(resolved_sid)
+        refs = _copy_reference_ids(registry_map[resolved_sid].get("reference_ids"))
         metric_ids.extend(refs["metric_ids"])
         witness_ids.extend(refs["witness_ids"])
 

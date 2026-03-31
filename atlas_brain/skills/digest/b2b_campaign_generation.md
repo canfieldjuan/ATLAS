@@ -44,6 +44,7 @@ You receive a JSON object with:
   - `primary_blog_post`
   - `supporting_blog_posts`
 - `reasoning_anchor_examples` / `reasoning_witness_highlights` / `reasoning_reference_ids` (optional): Sanitized witness-backed proof anchors derived from the grouped opportunity set. Use them to sharpen timing, spend, pain, workflow, and competitor specifics without revealing protected identities.
+- `campaign_proof_terms` (optional): Array of exact witness-backed proof terms selected by the pipeline. When present, prefer these exact terms in the body. If the list includes a numeric or timing term, use at least one.
 - `reasoning_context` (optional): Object with `{wedge, confidence, summary, key_signals, falsification}` -- the vendor's canonical reasoning from synthesis (preferred) or legacy churn signals (fallback). `wedge` is one of: "price_squeeze", "feature_parity", "support_erosion", "integration_lock", "category_shift", "acquisition_hangover", "compliance_exposure", "ux_regression", "segment_mismatch", "stable". `confidence` is "high", "medium", "low", or "insufficient". `summary` is the causal narrative. `key_signals` is an array of supporting evidence. `falsification` is an array of conditions that would disprove the classification.
 - `reasoning_contracts` (optional): Full materialized reasoning contracts from synthesis. Contains `vendor_core_reasoning`, `displacement_reasoning`, `category_reasoning`, `account_reasoning` when available. Use these for deeper context on timing, segments, and displacement dynamics.
 - `briefing_context.reasoning_anchor_examples` / `briefing_context.reasoning_witness_highlights` / `briefing_context.reasoning_reference_ids` (optional): Sanitized witness-backed proof anchors. Use them to sharpen timing, spend, pain, workflow, and competitor specifics without revealing private account identities.
@@ -164,5 +165,8 @@ Return a JSON object with the generated content. The structure depends on the ch
 27. **Use the comparison package when present**: If `comparison_asset.alternative_vendor` is present, orient the email around why that alternative is a better fit for the target's pain. Use `comparison_asset.selection_reason` and `comparison_asset.pain_categories` to sharpen the comparison, but never mention that the selection came from an internal scoring system.
 28. **Use witness-backed proof anchors when present**: If sanitized reasoning anchors are present, ground the body in at least one concrete detail such as a timing trigger, spend signal, pain-specific detail, workflow shift, or named competitor when the channel allows it. Do not stay at the level of generic category prose.
 29. **Do not reveal protected identities**: Even if reasoning anchors contain internal account context, never reveal private account names or review sources in the email body.
+30. **`campaign_proof_terms` is authoritative when present.**
+   - Use at least one exact term from `campaign_proof_terms` in the body.
+   - If a numeric or timing term is present in that list, prefer it over generic phrasing.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

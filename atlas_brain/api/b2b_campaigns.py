@@ -50,6 +50,13 @@ def _campaign_scope_clause(alias: str, user: AuthUser | None) -> tuple[str, list
     )
 
 
+def _campaign_activity_timestamp_sql(alias: str) -> str:
+    return (
+        f"COALESCE({alias}.clicked_at, {alias}.opened_at, {alias}.sent_at, "
+        f"{alias}.approved_at, {alias}.created_at)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
@@ -525,18 +532,19 @@ async def campaign_quality_trends(
 ):
     pool = _pool_or_503()
     scope, scope_params = _campaign_scope_clause("bc", user)
+    activity_ts = _campaign_activity_timestamp_sql("bc")
     params: list[Any] = list(scope_params)
     days_idx = len(params) + 1
     top_n_idx = len(params) + 2
     params.extend([days, top_n])
     if scope:
         where = (
-            f"{scope} AND COALESCE(bc.updated_at, bc.created_at) >= "
+            f"{scope} AND {activity_ts} >= "
             f"NOW() - (${days_idx}::int * INTERVAL '1 day')"
         )
     else:
         where = (
-            f" WHERE COALESCE(bc.updated_at, bc.created_at) >= "
+            f" WHERE {activity_ts} >= "
             f"NOW() - (${days_idx}::int * INTERVAL '1 day')"
         )
 
@@ -544,7 +552,7 @@ async def campaign_quality_trends(
         f"""
         WITH blocker_rows AS (
             SELECT
-                DATE_TRUNC('day', COALESCE(bc.updated_at, bc.created_at))::date::text AS day,
+                DATE_TRUNC('day', {activity_ts})::date::text AS day,
                 blocker.reason AS reason
             FROM b2b_campaigns bc
             JOIN LATERAL jsonb_array_elements_text(
@@ -570,7 +578,7 @@ async def campaign_quality_trends(
     daily_rows = await pool.fetch(
         f"""
         SELECT
-            DATE_TRUNC('day', COALESCE(bc.updated_at, bc.created_at))::date::text AS day,
+            DATE_TRUNC('day', {activity_ts})::date::text AS day,
             COALESCE(SUM(
                 jsonb_array_length(
                     COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
@@ -578,7 +586,7 @@ async def campaign_quality_trends(
             ), 0) AS blocker_total
         FROM b2b_campaigns bc
         {where}
-        GROUP BY DATE_TRUNC('day', COALESCE(bc.updated_at, bc.created_at))::date::text
+        GROUP BY DATE_TRUNC('day', {activity_ts})::date::text
         ORDER BY day ASC
         """,
         *params,
@@ -625,19 +633,20 @@ async def campaign_quality_diagnostics(
 ):
     pool = _pool_or_503()
     scope, scope_params = _campaign_scope_clause("bc", user)
+    activity_ts = _campaign_activity_timestamp_sql("bc")
     params: list[Any] = list(scope_params)
     days_idx = len(params) + 1
     top_n_idx = len(params) + 2
     params.extend([days, top_n])
     if scope:
         where = (
-            f"{scope} AND COALESCE(bc.updated_at, bc.created_at) >= "
+            f"{scope} AND {activity_ts} >= "
             f"NOW() - (${days_idx}::int * INTERVAL '1 day') "
             "AND COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'fail'"
         )
     else:
         where = (
-            " WHERE COALESCE(bc.updated_at, bc.created_at) >= "
+            f" WHERE {activity_ts} >= "
             f"NOW() - (${days_idx}::int * INTERVAL '1 day') "
             "AND COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'fail'"
         )

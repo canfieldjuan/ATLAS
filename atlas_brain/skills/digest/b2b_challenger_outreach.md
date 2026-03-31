@@ -30,6 +30,7 @@ You receive a JSON object with:
   - `feature_mentions`: Array of strings -- features of the challenger product mentioned positively
 - `key_quotes`: Array of strings -- verbatim evidence phrases from enrichment (e.g. "finally switching after 2 years of broken promises", "evaluated 3 alternatives last quarter"). Use 1-2 as inline proof points.
 - `tier`: "report" | "dashboard" | "api"
+- `campaign_proof_terms` (optional): Array of exact witness-backed proof terms selected by the pipeline. When present, prefer these exact terms in the body. If the list includes a numeric or timing term, use at least one.
 - `selling`: Object with `{sender_name, sender_title, sender_company, booking_url}`
   - `selling.blog_posts` (optional): Array of `{title, url, topic_type}` -- published analysis posts relevant to this challenger's space. Full URLs ready to embed.
 - `incumbent_archetypes` (optional): Object mapping churn archetype to array of incumbent vendor names losing customers with that pattern. Example: `{"pricing_shock": ["Vendor A", "Vendor B"], "feature_gap": ["Vendor C"]}`. When present, indicates WHY the challenger is winning -- the incumbents' churn patterns reveal the market dynamics.
@@ -147,5 +148,9 @@ Return a JSON object:
    - `priority_account_names` is internal targeting context only. Never reveal those names in the email.
    - If `reasoning_anchor_examples` or `reasoning_witness_highlights` is present, use at least one concrete proof anchor such as a timing trigger, spend signal, pain-specific detail, or incumbent pattern when allowed for the channel.
    - Never reveal a private account name from those anchor fields. Use the detail, not the identity.
+27. **`campaign_proof_terms` is authoritative when present.**
+   - Use at least one exact term from `campaign_proof_terms` in the body.
+   - If a numeric or timing term is present in that list, prefer it over generic phrasing.
+   - For `email_cold`, do not reveal specific incumbents even if an incumbent term appears elsewhere in the input.
 
 Return ONLY the JSON object, no markdown fences, no explanation.
