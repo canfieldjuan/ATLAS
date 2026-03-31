@@ -26,6 +26,7 @@ const Blog = lazy(() => import('./pages/Blog'))
 const BlogPost = lazy(() => import('./pages/BlogPost'))
 const Methodology = lazy(() => import('./pages/Methodology'))
 const BlogReview = lazy(() => import('./pages/BlogReview'))
+const BlogDiagnostics = lazy(() => import('./pages/BlogDiagnostics'))
 const CampaignReview = lazy(() => import('./pages/CampaignReview'))
 const CampaignDiagnostics = lazy(() => import('./pages/CampaignDiagnostics'))
 const BriefingReview = lazy(() => import('./pages/BriefingReview'))
@@ -97,6 +98,7 @@ export default function App() {
             <Route path="/challengers" element={renderLazyRoute(Challengers)} />
             <Route path="/affiliates" element={renderLazyRoute(Affiliates)} />
             <Route path="/blog-review" element={renderLazyRoute(BlogReview)} />
+            <Route path="/blog-diagnostics" element={renderLazyRoute(BlogDiagnostics)} />
             <Route path="/campaign-review" element={renderLazyRoute(CampaignReview)} />
             <Route path="/campaign-diagnostics" element={renderLazyRoute(CampaignDiagnostics)} />
             <Route path="/briefing-review" element={renderLazyRoute(BriefingReview)} />

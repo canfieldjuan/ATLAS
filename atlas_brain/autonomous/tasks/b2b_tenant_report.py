@@ -838,9 +838,58 @@ async def _run_tenant_synthesis_llm(
     max_tokens: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the existing tenant-report synthesis skill once."""
-    from ...pipelines.llm import call_llm_with_skill, parse_json_response
+    from ...pipelines.llm import (
+        call_llm_with_skill,
+        get_pipeline_llm,
+        parse_json_response,
+    )
+    from ...services.b2b.llm_exact_cache import (
+        CacheUnavailable,
+        build_skill_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
 
     llm_usage: dict[str, Any] = {}
+    cache_namespace = "b2b_tenant_report.synthesis_chunk"
+    request_envelope: dict[str, Any] | None = None
+    resolved_llm = get_pipeline_llm(workload="synthesis")
+    provider, model = llm_identity(resolved_llm)
+    if provider and model:
+        try:
+            _, request_envelope, _ = build_skill_request_envelope(
+                namespace=cache_namespace,
+                skill_name="digest/b2b_churn_intelligence",
+                payload=payload,
+                provider=provider,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=0.4,
+                response_format={"type": "json_object"},
+            )
+        except CacheUnavailable:
+            request_envelope = None
+
+    if request_envelope is not None:
+        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        if cached is not None:
+            parsed_cached = parse_json_response(
+                cached["response_text"],
+                recover_truncated=True,
+            )
+            if not parsed_cached.get("_parse_fallback"):
+                llm_usage.update(
+                    {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "model": cached["model"],
+                        "provider": cached["provider"],
+                        "cache_hit": True,
+                    }
+                )
+                return parsed_cached, llm_usage
+
     analysis = await asyncio.wait_for(
         asyncio.to_thread(
             call_llm_with_skill,
@@ -856,7 +905,38 @@ async def _run_tenant_synthesis_llm(
     )
     if not analysis:
         raise ValueError("tenant report llm returned no analysis")
-    return parse_json_response(analysis, recover_truncated=True), llm_usage
+    parsed = parse_json_response(analysis, recover_truncated=True)
+
+    if request_envelope is None:
+        provider = str(llm_usage.get("provider") or "")
+        model = str(llm_usage.get("model") or "")
+        if provider and model:
+            try:
+                _, request_envelope, _ = build_skill_request_envelope(
+                    namespace=cache_namespace,
+                    skill_name="digest/b2b_churn_intelligence",
+                    payload=payload,
+                    provider=provider,
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=0.4,
+                    response_format={"type": "json_object"},
+                )
+            except CacheUnavailable:
+                request_envelope = None
+
+    if request_envelope is not None and not parsed.get("_parse_fallback"):
+        await store_cached_text(
+            cache_namespace,
+            request_envelope,
+            provider=str(llm_usage.get("provider") or provider),
+            model=str(llm_usage.get("model") or model),
+            response_text=analysis,
+            usage=llm_usage,
+            metadata={"task": "tenant_report", "cache_stage": "synthesis_chunk"},
+        )
+
+    return parsed, llm_usage
 
 
 async def _run_chunked_tenant_synthesis(

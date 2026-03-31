@@ -594,7 +594,7 @@ async def _resolve_cross_vendor_battle(
                         if text:
                             normalized.append({"insight": text, "evidence": evidence})
                 key_insights = normalized
-            return {
+            result = {
                 "conclusion": conclusion.get("conclusion") or "",
                 "winner": conclusion.get("winner") or "",
                 "loser": conclusion.get("loser") or "",
@@ -602,6 +602,10 @@ async def _resolve_cross_vendor_battle(
                 "key_insights": key_insights,
                 "confidence": float(conclusion["confidence"]) if conclusion.get("confidence") is not None else None,
             }
+            reference_ids = entry.get("reference_ids")
+            if isinstance(reference_ids, dict) and reference_ids:
+                result["reference_ids"] = reference_ids
+            return result
 
     # Fall back to legacy DB query
     return await _fetch_cross_vendor_battle(pool, vendor_a, vendor_b, today)
@@ -1064,6 +1068,207 @@ def _fallback_target_accounts_from_reasoning(
     return targets, total_accounts if total_accounts is not None else len(targets), 0
 
 
+def _fallback_target_accounts_from_battle_card(
+    battle_card: dict[str, Any] | None,
+    *,
+    max_accounts: int,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Build lightweight target accounts from battle-card account signals."""
+    if not isinstance(battle_card, dict):
+        return [], 0, 0
+    targets_by_company: dict[str, dict[str, Any]] = {}
+
+    for item in battle_card.get("high_intent_companies") or []:
+        if not isinstance(item, dict):
+            continue
+        company = str(item.get("company") or "").strip()
+        if not company:
+            continue
+        key = company.casefold()
+        try:
+            urgency = float(item.get("urgency") or 0)
+        except (TypeError, ValueError):
+            urgency = 0.0
+        targets_by_company[key] = {
+            "company": company,
+            "opportunity_score": max(0, min(100, round(urgency * 10))),
+            "urgency": round(max(0.0, min(10.0, urgency)), 1),
+            "buying_stage": item.get("buying_stage") or item.get("stage") or "",
+            "seat_count": item.get("seat_count"),
+            "contract_end": item.get("contract_end"),
+            "industry": item.get("industry"),
+            "domain": item.get("domain"),
+            "annual_revenue_range": item.get("annual_revenue_range"),
+            "top_quote": item.get("top_quote"),
+            "considers_challenger": False,
+            "battle_card_backed": True,
+        }
+
+    for item in battle_card.get("active_evaluation_deadlines") or []:
+        if not isinstance(item, dict):
+            continue
+        company = str(item.get("company") or "").strip()
+        if not company:
+            continue
+        key = company.casefold()
+        try:
+            urgency = float(item.get("urgency") or 0)
+        except (TypeError, ValueError):
+            urgency = 0.0
+        target = targets_by_company.get(key, {
+            "company": company,
+            "opportunity_score": max(0, min(100, round(urgency * 10))),
+            "urgency": round(max(0.0, min(10.0, urgency)), 1),
+            "buying_stage": item.get("buying_stage") or "",
+            "seat_count": item.get("seat_count"),
+            "contract_end": item.get("contract_end"),
+            "industry": item.get("industry"),
+            "domain": item.get("domain"),
+            "annual_revenue_range": item.get("annual_revenue_range"),
+            "top_quote": item.get("top_quote"),
+            "considers_challenger": False,
+            "battle_card_backed": True,
+        })
+        if not target.get("contract_end") and item.get("contract_end"):
+            target["contract_end"] = item.get("contract_end")
+        if not target.get("buying_stage") and item.get("buying_stage"):
+            target["buying_stage"] = item.get("buying_stage")
+        if not target.get("top_quote") and item.get("top_quote"):
+            target["top_quote"] = item.get("top_quote")
+        target["opportunity_score"] = max(
+            int(target.get("opportunity_score") or 0),
+            max(0, min(100, round(urgency * 10))),
+        )
+        target["urgency"] = max(float(target.get("urgency") or 0), round(max(0.0, min(10.0, urgency)), 1))
+        targets_by_company[key] = target
+
+    targets = sorted(
+        targets_by_company.values(),
+        key=lambda item: (float(item.get("urgency") or 0), int(item.get("opportunity_score") or 0)),
+        reverse=True,
+    )
+    return targets[:max_accounts], len(targets), 0
+
+
+def _challenger_playbook_primary_segment(
+    segment_playbook: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(segment_playbook, dict):
+        return {}
+    priority = segment_playbook.get("priority_segments") or []
+    for item in priority:
+        if isinstance(item, dict) and (
+            item.get("segment") or item.get("best_opening_angle") or item.get("why_vulnerable")
+        ):
+            return item
+    return {}
+
+
+def _fallback_sales_playbook(
+    *,
+    incumbent: str,
+    challenger: str,
+    battle_card: dict[str, Any] | None,
+    segment_playbook: dict[str, Any] | None,
+    timing_summary: str,
+    displacement_detail: dict[str, Any],
+    head_to_head: dict[str, Any],
+) -> dict[str, Any]:
+    """Build deterministic sales playbook fields when persisted seller copy is empty."""
+    existing = {
+        "discovery_questions": [],
+        "landmine_questions": [],
+        "objection_handlers": [],
+        "talk_track": {},
+        "recommended_plays": [],
+    }
+    if isinstance(battle_card, dict):
+        existing = {
+            "discovery_questions": battle_card.get("discovery_questions") or [],
+            "landmine_questions": battle_card.get("landmine_questions") or [],
+            "objection_handlers": battle_card.get("objection_handlers") or [],
+            "talk_track": battle_card.get("talk_track") or battle_card.get("elevator_pitch") or {},
+            "recommended_plays": battle_card.get("recommended_plays") or [],
+        }
+    discovery = existing["discovery_questions"] if isinstance(existing["discovery_questions"], list) else []
+    landmine = existing["landmine_questions"] if isinstance(existing["landmine_questions"], list) else []
+    objections = existing["objection_handlers"] if isinstance(existing["objection_handlers"], list) else []
+    plays = existing["recommended_plays"] if isinstance(existing["recommended_plays"], list) else []
+    talk_track = existing["talk_track"] if isinstance(existing["talk_track"], dict) else {}
+
+    primary_segment = _challenger_playbook_primary_segment(segment_playbook if isinstance(segment_playbook, dict) else {})
+    segment_name = str(primary_segment.get("segment") or "the highest-friction evaluation segment").strip()
+    opening_angle = str(primary_segment.get("best_opening_angle") or "a cleaner alternative with less operational drag").strip()
+    why_vulnerable = str(primary_segment.get("why_vulnerable") or displacement_detail.get("primary_driver") or "").strip()
+    disqualifier = str(primary_segment.get("disqualifier") or "").strip()
+    battle_conclusion = str(head_to_head.get("conclusion") or "").strip()
+    timing_text = timing_summary.strip() or "Use this motion when active evaluation or renewal pressure is visible."
+
+    if not plays:
+        play: dict[str, Any] = {
+            "play": f"Target {segment_name} with {opening_angle}.",
+            "target_segment": segment_name,
+            "key_message": why_vulnerable or f"Show why {challenger} is the cleaner alternative to {incumbent}.",
+            "timing": timing_text,
+        }
+        secondary_play = {
+            "play": f"Run a side-by-side benchmark against {incumbent} before the next decision checkpoint.",
+            "target_segment": "active evaluation accounts",
+            "key_message": battle_conclusion or f"Give the buyer a concrete comparison between {challenger} and {incumbent}.",
+            "timing": "Before the next stakeholder review on fit, cost, or migration timing.",
+        }
+        plays = [play, secondary_play]
+
+    if not discovery:
+        discovery = [
+            f"What is driving this team to re-evaluate {incumbent} right now in {segment_name}?",
+            f"Which current workflow or cost issue would make {challenger} worth a formal benchmark?",
+        ]
+
+    if not landmine:
+        landmine = [
+            f"What happens if the current issues with {incumbent} remain unresolved through the next renewal or budget cycle?",
+            (
+                f"Where would {challenger} still be a bad fit for this account?"
+                if not disqualifier else
+                f"Would this account be disqualified by the current constraint: {disqualifier}?"
+            ),
+        ]
+
+    if not objections:
+        objections = [{
+            "objection": f"We already know how to operate {incumbent}.",
+            "acknowledge": "Operational familiarity is real, and switching always has a cost.",
+            "pivot": (
+                f"The better comparison is whether the current team can keep absorbing "
+                f"{why_vulnerable or 'the recurring friction'} without a clearer alternative."
+            ),
+            "proof_point": battle_conclusion or timing_text,
+        }]
+
+    if not talk_track or not all(str(talk_track.get(key) or "").strip() for key in ("opening", "mid_call_pivot", "closing")):
+        talk_track = {
+            "opening": (
+                battle_conclusion
+                or f"Teams are re-evaluating {incumbent} where {segment_name} is exposed to the current friction."
+            ),
+            "mid_call_pivot": (
+                f"Once that pain is confirmed, move to a concrete benchmark around {opening_angle.lower()}."
+            ),
+            "closing": (
+                f"Close on a short working session before the next decision checkpoint. {timing_text}"
+            ),
+        }
+
+    return {
+        "discovery_questions": discovery,
+        "landmine_questions": landmine,
+        "objection_handlers": objections,
+        "talk_track": talk_track,
+        "recommended_plays": plays,
+    }
+
+
 def _build_integration_comparison(
     incumbent_profile: dict | None,
     challenger_profile: dict | None,
@@ -1405,6 +1610,9 @@ def _build_challenger_brief(
             "confidence": cross_vendor_battle.get("confidence"),
             "key_insights": cross_vendor_battle.get("key_insights") or [],
         }
+        cross_vendor_reference_ids = cross_vendor_battle.get("reference_ids")
+        if isinstance(cross_vendor_reference_ids, dict) and cross_vendor_reference_ids:
+            head_to_head["reference_ids"] = cross_vendor_reference_ids
     else:
         # Synthesize from displacement data when no pairwise battle exists
         driver = displacement_detail.get("primary_driver") or "unknown"
@@ -1477,6 +1685,15 @@ def _build_challenger_brief(
         )
         if target_accounts or total_target:
             target_accounts_source = "account_reasoning"
+    elif battle_card:
+        target_accounts, total_target, considering_count = (
+            _fallback_target_accounts_from_battle_card(
+                battle_card,
+                max_accounts=max_target_accounts,
+            )
+        )
+        if target_accounts or total_target:
+            target_accounts_source = "battle_card"
 
     # --- sales_playbook (from battle card if available, fallback to segment_playbook) ---
     # LLM-enriched fields are added directly to the card dict (not nested).
@@ -1489,29 +1706,31 @@ def _build_challenger_brief(
             "talk_track": battle_card.get("talk_track") or battle_card.get("elevator_pitch") or "",
             "recommended_plays": battle_card.get("recommended_plays") or [],
         }
-    elif segment_playbook and isinstance(segment_playbook.get("priority_segments"), list):
-        _segs = segment_playbook["priority_segments"]
-        _plays = []
-        for _seg in _segs:
-            if not isinstance(_seg, dict):
-                continue
-            _play: dict[str, Any] = {}
-            _angle = _seg.get("best_opening_angle") or ""
-            _target = _seg.get("segment") or ""
-            _why = _seg.get("why_vulnerable") or ""
-            _disq = _seg.get("disqualifier") or ""
-            if _angle:
-                _play["play"] = _angle
-            if _target:
-                _play["target_segment"] = _target
-            if _why:
-                _play["key_message"] = _why
-            if _disq:
-                _play["timing"] = "Skip if: %s" % _disq
-            if _play:
-                _plays.append(_play)
-        if _plays:
-            sales_playbook = {"recommended_plays": _plays}
+    if (
+        not sales_playbook
+        or not any(
+            sales_playbook.get(key)
+            for key in (
+                "discovery_questions",
+                "landmine_questions",
+                "objection_handlers",
+                "recommended_plays",
+            )
+        )
+        or not (
+            isinstance(sales_playbook.get("talk_track"), dict)
+            and any(str(sales_playbook["talk_track"].get(key) or "").strip() for key in ("opening", "mid_call_pivot", "closing"))
+        )
+    ):
+        sales_playbook = _fallback_sales_playbook(
+            incumbent=incumbent,
+            challenger=challenger,
+            battle_card=battle_card,
+            segment_playbook=segment_playbook,
+            timing_summary=timing_summary,
+            displacement_detail=displacement_detail,
+            head_to_head=head_to_head,
+        )
 
     # --- integration_comparison ---
     integration_comparison = _build_integration_comparison(

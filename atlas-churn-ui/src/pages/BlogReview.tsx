@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   FileSearch,
   RefreshCw,
@@ -15,6 +16,7 @@ import DataTable from '../components/DataTable'
 import StatCard from '../components/StatCard'
 import UrgencyBadge from '../components/UrgencyBadge'
 import BlogArticleView, { resolveBlogArticleCta } from '../components/BlogArticleView'
+import BlogFailureExplanation from '../components/BlogFailureExplanation'
 import type { Column } from '../components/DataTable'
 import type { BlogDraftSummary, BlogDraft, BlogEvidence } from '../types'
 import { POSTS } from '../content/blog'
@@ -307,14 +309,23 @@ export default function BlogReview() {
           <FileSearch className="h-6 w-6 text-cyan-400" />
           <h1 className="text-2xl font-bold text-white">Blog Review</h1>
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/blog-diagnostics"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+          >
+            <ExternalLink className="h-4 w-4" />
+            Diagnostics
+          </Link>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Status filter tabs */}
@@ -503,6 +514,7 @@ export default function BlogReview() {
                       )}
                     </div>
                   )}
+                  <BlogFailureExplanation explanation={selectedDraft.failure_explanation} />
                   {activeTab === 'copy' ? (
                     <div
                       className="prose prose-invert prose-sm max-w-none"

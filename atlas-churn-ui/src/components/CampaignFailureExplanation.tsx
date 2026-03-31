@@ -65,9 +65,12 @@ export default function CampaignFailureExplanation({
   const boundary = boundaryLabel ?? explanation.boundary ?? null
   const causeType = explanation.cause_type ? formatCauseLabel(explanation.cause_type) : null
   const primaryBlocker = explanation.primary_blocker ?? blockers[0] ?? null
+  const hasFailureState = Boolean(primaryBlocker || blockers.length > 0 || explanation.cause_type)
   const sourceSummary = explanation.context_sources?.length
     ? explanation.context_sources.join(', ')
     : 'none'
+
+  if (!hasFailureState) return null
 
   return (
     <section className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">

@@ -23,6 +23,8 @@ import type {
   BlogDraftSummaryRollup,
   BlogDraft,
   BlogEvidence,
+  BlogQualityDiagnostics,
+  BlogQualityTrends,
   Prospect,
   ProspectStats,
   ReviewQueueDraft,
@@ -471,6 +473,20 @@ export async function fetchBlogDrafts(status?: string) {
 
 export async function fetchBlogDraftSummary() {
   return get<BlogDraftSummaryRollup>(BLOG_ADMIN_BASE, '/drafts/summary')
+}
+
+export async function fetchBlogQualityTrends(params?: {
+  days?: number
+  top_n?: number
+}) {
+  return get<BlogQualityTrends>(BLOG_ADMIN_BASE, '/quality-trends', params)
+}
+
+export async function fetchBlogQualityDiagnostics(params?: {
+  days?: number
+  top_n?: number
+}) {
+  return get<BlogQualityDiagnostics>(BLOG_ADMIN_BASE, '/quality-diagnostics', params)
 }
 
 export async function fetchBlogDraft(id: string) {

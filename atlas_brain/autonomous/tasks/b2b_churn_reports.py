@@ -45,6 +45,15 @@ def _build_scorecard_narrative_payload(
     """Build a compact LLM payload for scorecard narrative generation."""
     from ._b2b_shared import _build_scorecard_locked_facts
 
+    def _sort_text(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _sort_float(value: Any) -> float:
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
     payload = {
         key: scorecard[key]
         for key in (
@@ -61,30 +70,76 @@ def _build_scorecard_narrative_payload(
 
     feature_analysis = scorecard.get("feature_analysis") or {}
     if isinstance(feature_analysis, dict):
+        loved = list(feature_analysis.get("loved") or [])
+        hated = list(feature_analysis.get("hated") or [])
+        loved.sort(
+            key=lambda item: (
+                -_sort_float(item.get("score") if isinstance(item, dict) else 0),
+                _sort_text(item.get("feature") if isinstance(item, dict) else item),
+            )
+        )
+        hated.sort(
+            key=lambda item: (
+                -_sort_float(item.get("mentions") if isinstance(item, dict) else 0),
+                _sort_text(item.get("feature") if isinstance(item, dict) else item),
+            )
+        )
         payload["feature_analysis"] = {
-            "loved": list(feature_analysis.get("loved") or [])[:3],
-            "hated": list(feature_analysis.get("hated") or [])[:3],
+            "loved": loved[:3],
+            "hated": hated[:3],
         }
 
     churn_predictors = scorecard.get("churn_predictors") or {}
     if isinstance(churn_predictors, dict):
+        high_risk_industries = list(
+            churn_predictors.get("high_risk_industries") or []
+        )
+        high_risk_sizes = list(
+            churn_predictors.get("high_risk_sizes") or []
+        )
+        high_risk_industries.sort(
+            key=lambda item: (
+                -_sort_float(item.get("count") if isinstance(item, dict) else 0),
+                _sort_text(item.get("industry") if isinstance(item, dict) else item),
+            )
+        )
+        high_risk_sizes.sort(
+            key=lambda item: (
+                -_sort_float(item.get("count") if isinstance(item, dict) else 0),
+                _sort_text(item.get("size") if isinstance(item, dict) else item),
+            )
+        )
         payload["churn_predictors"] = {
-            "high_risk_industries": list(
-                churn_predictors.get("high_risk_industries") or []
-            )[:2],
-            "high_risk_sizes": list(
-                churn_predictors.get("high_risk_sizes") or []
-            )[:2],
+            "high_risk_industries": high_risk_industries[:2],
+            "high_risk_sizes": high_risk_sizes[:2],
             "dm_churn_rate": churn_predictors.get("dm_churn_rate"),
             "price_complaint_rate": churn_predictors.get("price_complaint_rate"),
         }
 
     competitor_overlap = scorecard.get("competitor_overlap") or []
     if competitor_overlap:
-        payload["competitor_overlap"] = list(competitor_overlap)[:3]
+        competitor_rows = list(competitor_overlap)
+        competitor_rows.sort(
+            key=lambda item: (
+                -_sort_float(item.get("mentions") if isinstance(item, dict) else 0),
+                _sort_text(item.get("competitor") if isinstance(item, dict) else item),
+            )
+        )
+        payload["competitor_overlap"] = competitor_rows[:3]
 
     cross_vendor_comparisons = scorecard.get("cross_vendor_comparisons") or []
     if cross_vendor_comparisons:
+        comparison_rows = [
+            item
+            for item in list(cross_vendor_comparisons)
+            if isinstance(item, dict)
+        ]
+        comparison_rows.sort(
+            key=lambda item: (
+                -_sort_float(item.get("confidence")),
+                _sort_text(item.get("opponent")),
+            )
+        )
         payload["cross_vendor_comparisons"] = [
             {
                 "opponent": item.get("opponent", ""),
@@ -92,8 +147,7 @@ def _build_scorecard_narrative_payload(
                 "confidence": item.get("confidence", 0),
                 "resource_advantage": item.get("resource_advantage", ""),
             }
-            for item in list(cross_vendor_comparisons)[:2]
-            if isinstance(item, dict)
+            for item in comparison_rows[:2]
         ]
         if not payload["cross_vendor_comparisons"]:
             payload.pop("cross_vendor_comparisons", None)
@@ -144,15 +198,30 @@ def _build_scorecard_narrative_payload(
         payload["confidence_limits"] = cp["limits"]
     cg = scorecard.get("coverage_gaps")
     if isinstance(cg, list) and cg:
+        coverage_rows = [g for g in cg if isinstance(g, dict)]
+        coverage_rows.sort(
+            key=lambda item: (
+                _sort_text(item.get("type")),
+                _sort_text(item.get("area")),
+            )
+        )
         payload["coverage_gaps"] = [
             {"type": g.get("type", ""), "area": g.get("area", "")}
-            for g in cg[:5] if isinstance(g, dict)
+            for g in coverage_rows[:5]
         ]
     ml = scorecard.get("metric_ledger")
     if isinstance(ml, list) and ml:
+        metric_rows = [m for m in ml if isinstance(m, dict)]
+        metric_rows.sort(
+            key=lambda item: (
+                _sort_text(item.get("label")),
+                _sort_text(item.get("scope")),
+                _sort_text(item.get("value")),
+            )
+        )
         payload["metric_ledger"] = [
             {"label": m.get("label", ""), "value": m.get("value"), "scope": m.get("scope", "")}
-            for m in ml[:10] if isinstance(m, dict)
+            for m in metric_rows[:10]
         ]
 
     return payload
@@ -357,6 +426,9 @@ def _attach_synthesis_contracts_to_report_entry(
             view.reasoning_contracts.get("schema_version") or "v1"
         )
         entry["reasoning_contracts"] = contracts
+    reference_ids = getattr(view, "reference_ids", None)
+    if isinstance(reference_ids, dict) and reference_ids:
+        entry["reference_ids"] = reference_ids
 
     if view.primary_wedge:
         entry["synthesis_wedge"] = view.primary_wedge.value
@@ -1026,12 +1098,32 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _validate_scorecard_expert_take,
     )
     from .b2b_churn_intelligence import (
+        _apply_vendor_scope_to_churn_inputs,
+        _normalize_test_vendors,
         reconstruct_reasoning_lookup,
         reconstruct_cross_vendor_lookup,
     )
 
     window_days = cfg.intelligence_window_days
     min_reviews = cfg.intelligence_min_reviews
+    task_metadata = task.metadata or {}
+    scoped_vendors = _normalize_test_vendors(task_metadata.get("test_vendors"))
+    selected_report_type = str(task_metadata.get("test_report_type") or "").strip()
+    persist_scoped_reports = bool(task_metadata.get("persist_scoped_reports"))
+    valid_report_types = {
+        "weekly_churn_feed",
+        "vendor_scorecard",
+        "displacement_report",
+        "category_overview",
+        "vendor_deep_dive",
+    }
+    if selected_report_type and selected_report_type not in valid_report_types:
+        logger.warning(
+            "Ignoring unsupported test_report_type=%s for churn reports",
+            selected_report_type,
+        )
+        selected_report_type = ""
+    selected_report_types = {selected_report_type} if selected_report_type else set()
 
     # --- Phase 1: Parallel data fetch ---
     try:
@@ -1087,6 +1179,63 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "No vendor scores"}
     competitive_disp = _aggregate_competitive_disp(competitive_disp)
 
+    if scoped_vendors:
+        raw_vendor_count = len(vendor_scores)
+        scoped_data, scoped_vendors = _apply_vendor_scope_to_churn_inputs(
+            {
+                "vendor_scores": vendor_scores,
+                "competitive_disp": competitive_disp,
+                "pain_dist": pain_dist,
+                "feature_gaps": feature_gaps,
+                "price_rates": price_rates,
+                "dm_rates": dm_rates,
+                "churning_companies": churning_companies,
+                "quotable_evidence": quotable_evidence,
+                "budget_signals": budget_signals,
+                "use_case_dist": use_case_dist,
+                "sentiment_traj": sentiment_traj,
+                "buyer_auth": buyer_auth,
+                "timeline_signals": timeline_signals,
+                "competitor_reasons": competitor_reasons,
+                "keyword_spikes": keyword_spikes,
+                "product_profiles_raw": product_profiles_raw,
+                "displacement_provenance": displacement_provenance,
+                "review_text_aggs": review_text_agg,
+                "department_dist": department_dist,
+                "contract_ctx_aggs": contract_ctx,
+            },
+            scoped_vendors,
+        )
+        vendor_scores = scoped_data["vendor_scores"]
+        competitive_disp = scoped_data["competitive_disp"]
+        pain_dist = scoped_data["pain_dist"]
+        feature_gaps = scoped_data["feature_gaps"]
+        price_rates = scoped_data["price_rates"]
+        dm_rates = scoped_data["dm_rates"]
+        churning_companies = scoped_data["churning_companies"]
+        quotable_evidence = scoped_data["quotable_evidence"]
+        budget_signals = scoped_data["budget_signals"]
+        use_case_dist = scoped_data["use_case_dist"]
+        sentiment_traj = scoped_data["sentiment_traj"]
+        buyer_auth = scoped_data["buyer_auth"]
+        timeline_signals = scoped_data["timeline_signals"]
+        competitor_reasons = scoped_data["competitor_reasons"]
+        keyword_spikes = scoped_data["keyword_spikes"]
+        product_profiles_raw = scoped_data["product_profiles_raw"]
+        displacement_provenance = scoped_data["displacement_provenance"]
+        review_text_agg = scoped_data["review_text_aggs"]
+        department_dist = scoped_data["department_dist"]
+        contract_ctx = scoped_data["contract_ctx_aggs"]
+        logger.info(
+            "Scoped churn reports to %d/%d vendors for test run: %s",
+            len(vendor_scores),
+            raw_vendor_count,
+            sorted(scoped_vendors),
+        )
+
+    if not vendor_scores:
+        return {"_skip_synthesis": "No vendor scores after vendor scope filter"}
+
     bundle = await _build_deterministic_report_bundle(
         pool,
         as_of=today,
@@ -1122,6 +1271,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     deterministic_displacement_map = bundle["displacement_map"]
     deterministic_category_overview = bundle["category_insights"]
     vendor_deep_dives = bundle["vendor_deep_dives"]
+    if scoped_vendors:
+        vendor_scope = {vendor.lower() for vendor in scoped_vendors}
+        reasoning_lookup = {
+            vendor: payload
+            for vendor, payload in reasoning_lookup.items()
+            if str(vendor or "").strip().lower() in vendor_scope
+        }
     synth_count = sum(
         1 for v in reasoning_lookup.values()
         if v.get("mode") == "synthesis"
@@ -1138,58 +1294,142 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     # --- Phase 5: Scorecard narrative LLM enrichment ---
-    from ...pipelines.llm import call_llm_with_skill, parse_json_response
+    from ...pipelines.llm import (
+        call_llm_with_skill,
+        get_pipeline_llm,
+        parse_json_response,
+    )
+    from ...services.b2b.llm_exact_cache import (
+        CacheUnavailable,
+        build_skill_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
 
     _llm_workload = "synthesis"
     _llm_max_tokens = _scorecard_narrative_max_tokens()
+    _cache_namespace = "b2b_churn_reports.scorecard_narrative"
+    _resolved_llm = get_pipeline_llm(workload=_llm_workload)
+    _provider, _model = llm_identity(_resolved_llm)
     scorecard_llm_failures = 0
+    scorecard_cache_hits = 0
     scorecard_reasoning_reused = 0
     scorecard_guardrail_fallbacks = 0
-    for sc in deterministic_vendor_scorecards:
-        reasoning_summary = sc.get("reasoning_summary", "")
-        if reasoning_summary and not sc.get("cross_vendor_comparisons"):
-            sc["expert_take"] = reasoning_summary
-            scorecard_reasoning_reused += 1
-            continue
-        try:
-            llm_input = _build_scorecard_narrative_payload(
-                sc,
-                reasoning_lookup=reasoning_lookup,
-            )
-            narrative = await asyncio.wait_for(
-                asyncio.to_thread(
-                    call_llm_with_skill,
-                    "digest/vendor_deep_dive_narrative",
-                    json.dumps(llm_input, default=str),
-                    max_tokens=_llm_max_tokens, temperature=0.3,
-                    response_format={"type": "json_object"},
-                    workload=_llm_workload,
-                ),
-                timeout=45,
-            )
-            parsed_narrative = parse_json_response(narrative)
-            expert_take = parsed_narrative.get("expert_take", "")
-            narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
-            if narrative_errors:
-                scorecard_guardrail_fallbacks += 1
-                sc["expert_take"] = _fallback_scorecard_expert_take(sc)
-            else:
-                sc["expert_take"] = expert_take
-        except Exception:
-            scorecard_llm_failures += 1
-            sc["expert_take"] = _fallback_scorecard_expert_take(sc)
-    if scorecard_llm_failures or scorecard_reasoning_reused or scorecard_guardrail_fallbacks:
-        logger.info(
-            "Scorecard LLM: %d failed, %d reused reasoning, %d guardrail fallbacks",
-            scorecard_llm_failures, scorecard_reasoning_reused, scorecard_guardrail_fallbacks,
-        )
-    scorecard_llm_generated = max(
-        0,
-        len(deterministic_vendor_scorecards)
-        - scorecard_reasoning_reused
-        - scorecard_llm_failures
-        - scorecard_guardrail_fallbacks,
+    should_generate_scorecard_narratives = (
+        not selected_report_types or "vendor_scorecard" in selected_report_types
     )
+    if should_generate_scorecard_narratives:
+        for sc in deterministic_vendor_scorecards:
+            reasoning_summary = sc.get("reasoning_summary", "")
+            if reasoning_summary and not sc.get("cross_vendor_comparisons"):
+                sc["expert_take"] = reasoning_summary
+                scorecard_reasoning_reused += 1
+                continue
+            try:
+                llm_input = _build_scorecard_narrative_payload(
+                    sc,
+                    reasoning_lookup=reasoning_lookup,
+                )
+                request_envelope: dict[str, Any] | None = None
+                if _provider and _model:
+                    try:
+                        _, request_envelope, _ = build_skill_request_envelope(
+                            namespace=_cache_namespace,
+                            skill_name="digest/vendor_deep_dive_narrative",
+                            payload=json.dumps(llm_input, default=str),
+                            provider=_provider,
+                            model=_model,
+                            max_tokens=_llm_max_tokens,
+                            temperature=0.3,
+                            response_format={"type": "json_object"},
+                        )
+                    except CacheUnavailable:
+                        request_envelope = None
+
+                if request_envelope is not None:
+                    cached = await lookup_cached_text(_cache_namespace, request_envelope)
+                    if cached is not None:
+                        parsed_narrative = parse_json_response(cached["response_text"])
+                        expert_take = parsed_narrative.get("expert_take", "")
+                        narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
+                        if not narrative_errors:
+                            scorecard_cache_hits += 1
+                            sc["expert_take"] = expert_take
+                            continue
+
+                narrative = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        call_llm_with_skill,
+                        "digest/vendor_deep_dive_narrative",
+                        json.dumps(llm_input, default=str),
+                        max_tokens=_llm_max_tokens, temperature=0.3,
+                        response_format={"type": "json_object"},
+                        workload=_llm_workload,
+                    ),
+                    timeout=45,
+                )
+                parsed_narrative = parse_json_response(narrative)
+                expert_take = parsed_narrative.get("expert_take", "")
+                narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
+                if narrative_errors:
+                    scorecard_guardrail_fallbacks += 1
+                    sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+                else:
+                    sc["expert_take"] = expert_take
+                    if request_envelope is None:
+                        try:
+                            _, request_envelope, _ = build_skill_request_envelope(
+                                namespace=_cache_namespace,
+                                skill_name="digest/vendor_deep_dive_narrative",
+                                payload=json.dumps(llm_input, default=str),
+                                provider=_provider,
+                                model=_model,
+                                max_tokens=_llm_max_tokens,
+                                temperature=0.3,
+                                response_format={"type": "json_object"},
+                            )
+                        except CacheUnavailable:
+                            request_envelope = None
+                    if request_envelope is not None:
+                        await store_cached_text(
+                            _cache_namespace,
+                            request_envelope,
+                            provider=_provider,
+                            model=_model,
+                            response_text=narrative,
+                            metadata={
+                                "task": "b2b_churn_reports",
+                                "vendor_name": sc.get("vendor_name") or sc.get("vendor"),
+                                "cache_stage": "scorecard_narrative",
+                            },
+                        )
+            except Exception:
+                scorecard_llm_failures += 1
+                sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+    if (
+        scorecard_llm_failures
+        or scorecard_cache_hits
+        or scorecard_reasoning_reused
+        or scorecard_guardrail_fallbacks
+    ):
+        logger.info(
+            "Scorecard LLM: %d cache hits, %d failed, %d reused reasoning, %d guardrail fallbacks",
+            scorecard_cache_hits,
+            scorecard_llm_failures,
+            scorecard_reasoning_reused,
+            scorecard_guardrail_fallbacks,
+        )
+    scorecard_llm_generated = 0
+    if should_generate_scorecard_narratives:
+        scorecard_llm_generated = max(
+            0,
+            len(deterministic_vendor_scorecards)
+            - scorecard_cache_hits
+            - scorecard_reasoning_reused
+            - scorecard_llm_failures
+            - scorecard_guardrail_fallbacks,
+        )
 
     # --- Phase 6: Build executive summaries ---
     parsed: dict[str, Any] = {
@@ -1217,6 +1457,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ("category_overview", deterministic_category_overview),
         ("vendor_deep_dive", vendor_deep_dives),
     ]
+    if selected_report_types:
+        report_types = [
+            (report_type, data)
+            for report_type, data in report_types
+            if report_type in selected_report_types
+        ]
 
     base_data_density = {
         "vendors_analyzed": len(vendor_scores),
@@ -1231,135 +1477,150 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     reports_persisted = 0
-    try:
-        async with pool.transaction() as conn:
-            for report_type, data in report_types:
-                report_density = dict(base_data_density)
-                report_llm_model = "pipeline_deterministic"
-                if report_type == "vendor_scorecard":
-                    report_density.update({
-                        "scorecard_reasoning_reused": scorecard_reasoning_reused,
-                        "scorecard_guardrail_fallbacks": scorecard_guardrail_fallbacks,
-                        "scorecard_llm_generated": scorecard_llm_generated,
-                        "scorecard_llm_failures": scorecard_llm_failures,
-                    })
-                    if scorecard_llm_generated > 0:
-                        report_llm_model = str(
-                            getattr(settings.llm, "openrouter_reasoning_model", "") or "pipeline_mixed"
-                        )
-                report_status = "published" if data else "failed"
-                latest_failure_step = None if data else "no_data"
-                latest_error_code = None if data else "no_data"
-                latest_error_summary = None if data else "Report has no data"
-                blocker_count = 0 if data else 1
-                report_row = await conn.fetchrow(
-                    """
-                    INSERT INTO b2b_intelligence (
-                        report_date, report_type, intelligence_data,
-                        executive_summary, data_density, status, llm_model,
-                        source_review_count, source_distribution,
-                        latest_run_id, latest_attempt_no, latest_failure_step,
-                        latest_error_code, latest_error_summary,
-                        blocker_count, warning_count, quality_score
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                              $10, $11, $12, $13, $14, $15, $16, $17)
-                    ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
-                                 LOWER(COALESCE(category_filter,'')),
-                                 COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
-                    DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
-                                  executive_summary = EXCLUDED.executive_summary,
-                                  data_density = EXCLUDED.data_density,
-                                  status = EXCLUDED.status,
-                                  llm_model = EXCLUDED.llm_model,
-                                  source_review_count = EXCLUDED.source_review_count,
-                                  source_distribution = EXCLUDED.source_distribution,
-                                  latest_run_id = EXCLUDED.latest_run_id,
-                                  latest_attempt_no = EXCLUDED.latest_attempt_no,
-                                  latest_failure_step = EXCLUDED.latest_failure_step,
-                                  latest_error_code = EXCLUDED.latest_error_code,
-                                  latest_error_summary = EXCLUDED.latest_error_summary,
-                                  blocker_count = EXCLUDED.blocker_count,
-                                  warning_count = EXCLUDED.warning_count,
-                                  quality_score = EXCLUDED.quality_score,
-                                  created_at = now()
-                    RETURNING id
-                    """,
-                    today,
-                    report_type,
-                    json.dumps(data, default=str),
-                    _exec_summaries.get(report_type, _fallback_summary),
-                    json.dumps(report_density),
-                    report_status,
-                    report_llm_model,
-                    report_source_review_count,
-                    report_source_dist,
-                    str(task.id),
-                    1,
-                    latest_failure_step,
-                    latest_error_code,
-                    latest_error_summary,
-                    blocker_count,
-                    0,
-                    ((data or {}).get("battle_card_quality") or {}).get("score") if isinstance(data, dict) else None,
-                )
-                reports_persisted += 1
-                from ..visibility import record_attempt
-                await record_attempt(
-                    pool, artifact_type="churn_report",
-                    artifact_id=str(report_row["id"]),
-                    run_id=str(task.id), stage="persistence",
-                    status="succeeded" if data else "failed",
-                    failure_step=latest_failure_step,
-                    error_message=latest_error_summary,
-                )
-                if not data:
-                    from ..visibility import emit_event
-                    await emit_event(
-                        pool,
-                        stage="reports",
-                        event_type="report_failed",
-                        entity_type="churn_report",
-                        entity_id=str(report_row["id"]),
-                        artifact_type="churn_report",
-                        run_id=str(task.id),
-                        severity="warning",
-                        actionable=False,
-                        reason_code="no_data",
-                        summary=f"{report_type} produced no data",
-                        source_table="b2b_intelligence",
-                        source_id=str(report_row["id"]),
+    should_persist_reports = not scoped_vendors or persist_scoped_reports
+    if should_persist_reports:
+        try:
+            async with pool.transaction() as conn:
+                for report_type, data in report_types:
+                    report_density = dict(base_data_density)
+                    report_llm_model = "pipeline_deterministic"
+                    if report_type == "vendor_scorecard":
+                        report_density.update({
+                            "scorecard_cache_hits": scorecard_cache_hits,
+                            "scorecard_reasoning_reused": scorecard_reasoning_reused,
+                            "scorecard_guardrail_fallbacks": scorecard_guardrail_fallbacks,
+                            "scorecard_llm_generated": scorecard_llm_generated,
+                            "scorecard_llm_failures": scorecard_llm_failures,
+                        })
+                        if scorecard_llm_generated > 0:
+                            report_llm_model = str(
+                                getattr(settings.llm, "openrouter_reasoning_model", "") or "pipeline_mixed"
+                            )
+                    report_status = "published" if data else "failed"
+                    latest_failure_step = None if data else "no_data"
+                    latest_error_code = None if data else "no_data"
+                    latest_error_summary = None if data else "Report has no data"
+                    blocker_count = 0 if data else 1
+                    report_row = await conn.fetchrow(
+                        """
+                        INSERT INTO b2b_intelligence (
+                            report_date, report_type, intelligence_data,
+                            executive_summary, data_density, status, llm_model,
+                            source_review_count, source_distribution,
+                            latest_run_id, latest_attempt_no, latest_failure_step,
+                            latest_error_code, latest_error_summary,
+                            blocker_count, warning_count, quality_score
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                                  $10, $11, $12, $13, $14, $15, $16, $17)
+                        ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
+                                     LOWER(COALESCE(category_filter,'')),
+                                     COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+                        DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data,
+                                      executive_summary = EXCLUDED.executive_summary,
+                                      data_density = EXCLUDED.data_density,
+                                      status = EXCLUDED.status,
+                                      llm_model = EXCLUDED.llm_model,
+                                      source_review_count = EXCLUDED.source_review_count,
+                                      source_distribution = EXCLUDED.source_distribution,
+                                      latest_run_id = EXCLUDED.latest_run_id,
+                                      latest_attempt_no = EXCLUDED.latest_attempt_no,
+                                      latest_failure_step = EXCLUDED.latest_failure_step,
+                                      latest_error_code = EXCLUDED.latest_error_code,
+                                      latest_error_summary = EXCLUDED.latest_error_summary,
+                                      blocker_count = EXCLUDED.blocker_count,
+                                      warning_count = EXCLUDED.warning_count,
+                                      quality_score = EXCLUDED.quality_score,
+                                      created_at = now()
+                        RETURNING id
+                        """,
+                        today,
+                        report_type,
+                        json.dumps(data, default=str),
+                        _exec_summaries.get(report_type, _fallback_summary),
+                        json.dumps(report_density),
+                        report_status,
+                        report_llm_model,
+                        report_source_review_count,
+                        report_source_dist,
+                        str(task.id),
+                        1,
+                        latest_failure_step,
+                        latest_error_code,
+                        latest_error_summary,
+                        blocker_count,
+                        0,
+                        ((data or {}).get("battle_card_quality") or {}).get("score") if isinstance(data, dict) else None,
                     )
-    except Exception:
-        logger.exception("Failed to persist intelligence reports")
-        from ..visibility import emit_event
-        await emit_event(
-            pool, stage="reports", event_type="persistence_failure",
-            entity_type="churn_report", entity_id="all",
-            summary="Failed to persist intelligence reports",
-            severity="critical", actionable=True,
-            run_id=str(task.id),
-            reason_code="persistence_exception",
+                    reports_persisted += 1
+                    from ..visibility import record_attempt
+                    await record_attempt(
+                        pool, artifact_type="churn_report",
+                        artifact_id=str(report_row["id"]),
+                        run_id=str(task.id), stage="persistence",
+                        status="succeeded" if data else "failed",
+                        failure_step=latest_failure_step,
+                        error_message=latest_error_summary,
+                    )
+                    if not data:
+                        from ..visibility import emit_event
+                        await emit_event(
+                            pool,
+                            stage="reports",
+                            event_type="report_failed",
+                            entity_type="churn_report",
+                            entity_id=str(report_row["id"]),
+                            artifact_type="churn_report",
+                            run_id=str(task.id),
+                            severity="warning",
+                            actionable=False,
+                            reason_code="no_data",
+                            summary=f"{report_type} produced no data",
+                            source_table="b2b_intelligence",
+                            source_id=str(report_row["id"]),
+                        )
+        except Exception:
+            logger.exception("Failed to persist intelligence reports")
+            from ..visibility import emit_event
+            await emit_event(
+                pool, stage="reports", event_type="persistence_failure",
+                entity_type="churn_report", entity_id="all",
+                summary="Failed to persist intelligence reports",
+                severity="critical", actionable=True,
+                run_id=str(task.id),
+                reason_code="persistence_exception",
+            )
+    else:
+        logger.info(
+            "Skipping report persistence for scoped churn-report test run: vendors=%s report_types=%s",
+            sorted(scoped_vendors),
+            sorted(selected_report_types) if selected_report_types else ["all"],
         )
 
     logger.info(
         "b2b_churn_reports: %d reports persisted, %d vendors, reasoning from %d vendors",
         reports_persisted, len(vendor_scores), len(reasoning_lookup),
     )
-    scorecard_llm_generated = max(
-        0,
-        len(deterministic_vendor_scorecards)
-        - scorecard_reasoning_reused
-        - scorecard_llm_failures
-        - scorecard_guardrail_fallbacks,
-    )
+    if should_generate_scorecard_narratives:
+        scorecard_llm_generated = max(
+            0,
+            len(deterministic_vendor_scorecards)
+            - scorecard_cache_hits
+            - scorecard_reasoning_reused
+            - scorecard_llm_failures
+            - scorecard_guardrail_fallbacks,
+        )
 
     return {
         "_skip_synthesis": "B2B churn reports complete",
         "reports_persisted": reports_persisted,
         "vendors_analyzed": len(vendor_scores),
         "reasoning_vendors": len(reasoning_lookup),
+        "scorecard_cache_hits": scorecard_cache_hits,
         "scorecard_reasoning_reused": scorecard_reasoning_reused,
         "scorecard_guardrail_fallbacks": scorecard_guardrail_fallbacks,
         "scorecard_llm_generated": scorecard_llm_generated,
         "scorecard_llm_failures": scorecard_llm_failures,
+        "persistence_skipped": not should_persist_reports,
+        "selected_report_types": sorted(selected_report_types),
+        "scoped_vendors": sorted(scoped_vendors),
     }

@@ -324,6 +324,15 @@ function toTargetAccounts(value: unknown): ChallengerTargetAccountViewModel[] {
   }))
 }
 
+function toCrossVendorBattle(value: unknown): CrossVendorBattleViewModel | undefined {
+  const battle = toCrossVendorBattles([value])[0]
+  if (!battle) return undefined
+  return {
+    ...battle,
+    reference_ids: toReasoningReferenceIds(asRecord(value).reference_ids),
+  }
+}
+
 function toSalesPlaybook(value: unknown): ChallengerSalesPlaybookViewModel {
   const obj = asRecord(value)
   return {
@@ -345,7 +354,7 @@ function toIntegrationComparison(value: unknown): IntegrationComparisonViewModel
 }
 
 export function toChallengerBriefViewModel(value: UnknownRecord): ChallengerBriefViewModel {
-  const headToHead = toCrossVendorBattles([value.head_to_head])[0]
+  const headToHead = toCrossVendorBattle(value.head_to_head)
   return {
     incumbent: asString(value.incumbent),
     challenger: asString(value.challenger),
@@ -366,6 +375,7 @@ export function toChallengerBriefViewModel(value: UnknownRecord): ChallengerBrie
     ) as Record<string, boolean>,
     reasoning_anchor_examples: toReasoningAnchorExamples(value.reasoning_anchor_examples),
     reasoning_witness_highlights: toReasoningWitnesses(value.reasoning_witness_highlights),
+    reasoning_source: asString(value.reasoning_source),
     reasoning_reference_ids: toReasoningReferenceIds(value.reasoning_reference_ids),
   }
 }
@@ -473,7 +483,7 @@ export function toWeeklyChurnFeedItems(value: unknown): WeeklyChurnFeedItemViewM
   const items = Array.isArray(value)
     ? value
     : asRecord(value).weekly_churn_feed
-  return toRecordArray(items).map((item) => ({
+    return toRecordArray(items).map((item) => ({
     vendor: asString(item.vendor),
     category: asString(item.category),
     total_reviews: asNumber(item.total_reviews) ?? null,
@@ -503,7 +513,14 @@ export function toWeeklyChurnFeedItems(value: unknown): WeeklyChurnFeedItemViewM
       decision_maker: account.decision_maker === true,
       confidence_score: asNumber(account.confidence_score) ?? null,
     })),
-    category_council: toCategoryCouncil(item.category_council),
+    category_council: (() => {
+      const council = toCategoryCouncil(item.category_council)
+      if (!council) return null
+      return {
+        ...council,
+        reference_ids: toReasoningReferenceIds(asRecord(item.category_council).reference_ids),
+      }
+    })(),
     retention_strengths: toRecordArray(item.retention_strengths).map((s) => ({
       area: asString(s.area),
       mention_count: asNumber(s.mention_count) ?? null,
@@ -511,6 +528,8 @@ export function toWeeklyChurnFeedItems(value: unknown): WeeklyChurnFeedItemViewM
     account_pressure_summary: asString(item.account_pressure_summary),
     timing_summary: asString(item.timing_summary),
     priority_timing_triggers: toStringArray(item.priority_timing_triggers),
+    reasoning_source: asString(item.reasoning_source),
+    reasoning_reference_ids: toReasoningReferenceIds(item.reference_ids ?? item.reasoning_reference_ids),
   }))
 }
 
@@ -633,10 +652,19 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     weakness_analysis: toWeaknessAnalysis(value.weakness_analysis),
     customer_pain_quotes: toPainQuotes(value.customer_pain_quotes),
     competitor_differentiators: toCompetitorDifferentiators(value.competitor_differentiators),
-    cross_vendor_battles: toCrossVendorBattles(value.cross_vendor_battles),
+    cross_vendor_battles: toRecordArray(value.cross_vendor_battles)
+      .map((item) => toCrossVendorBattle(item))
+      .filter((item): item is CrossVendorBattleViewModel => Boolean(item)),
     competitive_landscape: toCompetitiveLandscape(value.competitive_landscape),
     resource_asymmetry: toResourceAsymmetry(value.resource_asymmetry),
-    category_council: toCategoryCouncil(value.category_council),
+    category_council: (() => {
+      const council = toCategoryCouncil(value.category_council)
+      if (!council) return null
+      return {
+        ...council,
+        reference_ids: toReasoningReferenceIds(asRecord(value.category_council).reference_ids),
+      }
+    })(),
     objection_handlers: toObjectionHandlers(value.objection_handlers),
     objection_metrics: Object.keys(objectionData).length > 0 ? {
       avg_urgency: asNumber(objectionData.avg_urgency) ?? null,
@@ -705,6 +733,8 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     llm_render_status: asString(value.llm_render_status),
     quality_status: asString(value.quality_status ?? asRecord(value.battle_card_quality).status),
     quality_score: asNumber(asRecord(value.battle_card_quality).score) ?? null,
+    reasoning_source: asString(value.reasoning_source),
+    reasoning_reference_ids: toReasoningReferenceIds(value.reference_ids ?? value.reasoning_reference_ids),
   }
 }
 
@@ -766,6 +796,15 @@ export function toAccountsInMotionViewModel(value: UnknownRecord): AccountsInMot
     timing_metrics: toTimingMetrics(value.timing_metrics),
     priority_timing_triggers: toStringArray(value.priority_timing_triggers),
     segment_targeting_summary: asString(value.segment_targeting_summary),
-    category_council: toCategoryCouncil(value.category_council) ?? undefined,
+    category_council: (() => {
+      const council = toCategoryCouncil(value.category_council)
+      if (!council) return undefined
+      return {
+        ...council,
+        reference_ids: toReasoningReferenceIds(asRecord(value.category_council).reference_ids),
+      }
+    })(),
+    reasoning_source: asString(value.reasoning_source),
+    reasoning_reference_ids: toReasoningReferenceIds(value.reference_ids ?? value.reasoning_reference_ids),
   }
 }

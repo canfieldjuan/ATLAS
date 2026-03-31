@@ -88,6 +88,67 @@ def _get_tier1_client(cfg):
     return _tier1_client
 
 
+async def _lookup_cached_json_response(
+    namespace: str,
+    *,
+    provider: str,
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    max_tokens: int,
+    temperature: float,
+    response_format: dict[str, Any] | None = None,
+    guided_json: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Lookup a cached structured response and return the envelope either way."""
+    from ...pipelines.llm import clean_llm_output, parse_json_response
+    from ...services.b2b.llm_exact_cache import build_request_envelope, lookup_cached_text
+
+    request_envelope = build_request_envelope(
+        provider=provider,
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
+        guided_json=guided_json,
+    )
+    cached = await lookup_cached_text(namespace, request_envelope)
+    if cached is None:
+        return None, request_envelope
+
+    text = clean_llm_output(cached["response_text"])
+    parsed = parse_json_response(text, recover_truncated=True)
+    if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+        return parsed, request_envelope
+    return None, request_envelope
+
+
+async def _store_cached_json_response(
+    namespace: str,
+    request_envelope: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    response_text: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Store a validated structured response for later exact reuse."""
+    from ...services.b2b.llm_exact_cache import store_cached_text
+
+    await store_cached_text(
+        namespace,
+        request_envelope,
+        provider=provider,
+        model=model,
+        response_text=response_text,
+        metadata=metadata,
+    )
+
+
 async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None, str | None]:
     """Tier 1 extraction: deterministic fields via local vLLM.
 
@@ -101,7 +162,22 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
         return None, None
 
     model_id = cfg.enrichment_tier1_model
+    request_envelope: dict[str, Any] | None = None
     try:
+        cached, request_envelope = await _lookup_cached_json_response(
+            "b2b_enrichment.tier1",
+            provider="vllm",
+            model=model_id,
+            system_prompt=skill.content,
+            user_content=payload_json,
+            max_tokens=cfg.enrichment_tier1_max_tokens,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            guided_json=_TIER1_JSON_SCHEMA,
+        )
+        if cached is not None:
+            return cached, model_id
+
         resp = await client.post(
             "/v1/chat/completions",
             json={
@@ -125,6 +201,15 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)
         if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+            if request_envelope is not None:
+                await _store_cached_json_response(
+                    "b2b_enrichment.tier1",
+                    request_envelope,
+                    provider="vllm",
+                    model=model_id,
+                    response_text=text,
+                    metadata={"tier": 1, "backend": "vllm"},
+                )
             return parsed, model_id
         return None, model_id
     except (json.JSONDecodeError, ValueError):
@@ -151,7 +236,21 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
         return None, None
 
     model_id = cfg.enrichment_openrouter_model or "openai/gpt-oss-120b"
+    request_envelope: dict[str, Any] | None = None
     try:
+        cached, request_envelope = await _lookup_cached_json_response(
+            "b2b_enrichment.tier1",
+            provider="openrouter",
+            model=model_id,
+            system_prompt=skill.content,
+            user_content=payload_json,
+            max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        if cached is not None:
+            return cached, model_id
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -195,6 +294,15 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
             text = clean_llm_output(text)
             parsed = parse_json_response(text, recover_truncated=True)
             if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                if request_envelope is not None:
+                    await _store_cached_json_response(
+                        "b2b_enrichment.tier1",
+                        request_envelope,
+                        provider="openrouter",
+                        model=model_id,
+                        response_text=text,
+                        metadata={"tier": 1, "backend": "openrouter"},
+                    )
                 return parsed, model_id
             logger.warning("OpenRouter tier 1 returned unparseable JSON")
             return None, model_id
@@ -254,6 +362,20 @@ async def _call_vllm_tier2(
     payload_json = json.dumps(payload)
 
     try:
+        request_envelope: dict[str, Any] | None
+        cached, request_envelope = await _lookup_cached_json_response(
+            "b2b_enrichment.tier2",
+            provider="vllm",
+            model=tier2_model,
+            system_prompt=skill.content,
+            user_content=payload_json,
+            max_tokens=cfg.enrichment_tier2_max_tokens,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        if cached is not None:
+            return cached, tier2_model
+
         resp = await client.post(
             "/v1/chat/completions",
             json={
@@ -276,6 +398,15 @@ async def _call_vllm_tier2(
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)
         if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+            if request_envelope is not None:
+                await _store_cached_json_response(
+                    "b2b_enrichment.tier2",
+                    request_envelope,
+                    provider="vllm",
+                    model=tier2_model,
+                    response_text=text,
+                    metadata={"tier": 2, "backend": "vllm"},
+                )
             return parsed, tier2_model
         return None, tier2_model
     except Exception:
@@ -330,6 +461,20 @@ async def _call_openrouter_tier2(
     payload_json = json.dumps(payload)
 
     try:
+        request_envelope: dict[str, Any] | None
+        cached, request_envelope = await _lookup_cached_json_response(
+            "b2b_enrichment.tier2",
+            provider="openrouter",
+            model=model_id,
+            system_prompt=skill.content,
+            user_content=payload_json,
+            max_tokens=cfg.enrichment_tier2_max_tokens,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        if cached is not None:
+            return cached, model_id
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.enrichment_tier2_timeout_seconds, connect=10.0)) as client:
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -363,6 +508,15 @@ async def _call_openrouter_tier2(
             text = clean_llm_output(text)
             parsed = parse_json_response(text, recover_truncated=True)
             if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                if request_envelope is not None:
+                    await _store_cached_json_response(
+                        "b2b_enrichment.tier2",
+                        request_envelope,
+                        provider="openrouter",
+                        model=model_id,
+                        response_text=text,
+                        metadata={"tier": 2, "backend": "openrouter"},
+                    )
                 return parsed, model_id
             logger.warning("OpenRouter tier 2 returned unparseable JSON")
             return None, model_id

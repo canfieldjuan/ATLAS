@@ -38,6 +38,8 @@ for _mod in (
     sys.modules.setdefault(_mod, MagicMock())
 
 import atlas_brain.autonomous.tasks.b2b_churn_intelligence as churn_intel_mod
+import atlas_brain.autonomous.tasks.b2b_churn_reports as churn_reports_mod
+import atlas_brain.services.b2b.llm_exact_cache as exact_cache_mod
 from atlas_brain.autonomous.tasks._b2b_shared import (
     _battle_card_companies_from_evidence_vault,
     _build_battle_card_locked_facts,
@@ -75,6 +77,7 @@ from atlas_brain.autonomous.tasks.b2b_battle_cards import (
     _battle_card_row_status,
     _build_battle_card_render_payload,
     _evaluate_battle_card_quality,
+    _populate_battle_card_fallback_sales_copy,
     _prioritize_seller_usable_primary_weakness,
     _promote_account_reasoning_to_battle_card,
     _battle_card_llm_options,
@@ -392,6 +395,10 @@ class TestChurnReportReasoningContracts:
         view = load_synthesis_view(
             {
                 "schema_version": "2.1",
+                "reference_ids": {
+                    "metric_ids": ["metric:zendesk:1"],
+                    "witness_ids": ["witness:zendesk:1"],
+                },
                 "reasoning_contracts": {
                     "vendor_core_reasoning": {
                         "schema_version": "v1",
@@ -438,6 +445,8 @@ class TestChurnReportReasoningContracts:
         assert "reasoning_contracts" in entry
         assert entry["reasoning_contracts"]["displacement_reasoning"]["migration_proof"]["switch_volume"]["value"] == 0
         assert "migration_proof" not in entry
+        assert entry["reference_ids"]["metric_ids"] == ["metric:zendesk:1"]
+        assert entry["reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
 
     def test_consumers_require_account_reasoning_contract(self):
         view = load_synthesis_view(
@@ -624,6 +633,148 @@ class TestChurnVendorScoping:
 
         assert names == ["Zendesk"]
         assert [row["vendor_name"] for row in scoped["vendor_scores"]] == ["Zendesk"]
+
+    @pytest.mark.asyncio
+    async def test_churn_reports_run_scopes_test_vendors_and_skips_persistence(self, monkeypatch):
+        pool = type(
+            "Pool",
+            (),
+            {
+                "is_initialized": True,
+                "transaction": MagicMock(side_effect=AssertionError("scoped test run should not persist")),
+            },
+        )()
+        captured: dict[str, Any] = {}
+
+        async def fake_gather(*coros, **_kwargs):
+            for coro in coros:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (
+                [
+                    {"vendor_name": "Zendesk", "score": 1},
+                    {"vendor_name": "Freshdesk", "score": 2},
+                ],
+                [{"vendor": "Zendesk", "competitor": "Freshdesk", "mention_count": 3}],
+                [{"vendor": "Zendesk", "category": "support", "count": 4}],
+                [{"vendor": "Zendesk", "feature": "routing", "count": 2}],
+                [],
+                [{"vendor": "Zendesk", "price_complaint_rate": 0.2}],
+                [{"vendor": "Zendesk", "dm_churn_rate": 0.1}],
+                [{"vendor": "Zendesk", "company": "Acme"}],
+                [{"vendor": "Zendesk", "quotes": ["quote"]}],
+                [{"vendor": "Zendesk", "annual_spend_signals": []}],
+                [{"vendor": "Zendesk", "data": [{"vendor_name": "Zendesk", "module": "Support"}]}],
+                [{"vendor": "Zendesk", "positive": 1}],
+                [{"vendor": "Zendesk", "tenure": "1-2y", "count": 1}],
+                [{"vendor": "Zendesk", "role_types": {"admin": 1}}],
+                [{"vendor": "Zendesk", "evaluation_deadline": "2026-04-01"}],
+                [{"vendor": "Zendesk", "reason": "price"}],
+                [{"vendor": "Zendesk", "keyword": "migration"}],
+                {"reviews_in_analysis_window": 1, "source_distribution": {}},
+                [{"vendor_name": "Zendesk", "strengths": []}],
+                [],
+                {("Zendesk", "Freshdesk"): {"source_distribution": {"reddit": 3}}},
+                ([{"vendor_name": "Zendesk", "quote": "z"}], []),
+                [{"vendor_name": "Zendesk", "department": "Support"}],
+                ([{"vendor_name": "Zendesk", "segment": "SMB"}], []),
+                [{"vendor_name": "Zendesk", "trigger": "renewal"}],
+            )
+
+        async def fake_build_bundle(*_args, **kwargs):
+            captured["vendor_scores"] = kwargs["vendor_scores"]
+            return {
+                "weekly_churn_feed": [],
+                "vendor_scorecards": [
+                    {
+                        "vendor": "Zendesk",
+                        "reasoning_summary": "Scoped summary",
+                        "cross_vendor_comparisons": [],
+                    }
+                ],
+                "displacement_map": [],
+                "category_insights": [],
+                "vendor_deep_dives": [],
+                "reasoning_lookup": {
+                    "Zendesk": {"mode": "synthesis"},
+                    "Freshdesk": {"mode": "legacy"},
+                },
+                "xv_lookup": {"battles": {}, "councils": {}, "asymmetries": {}},
+                "synthesis_views": {},
+                "evidence_vault_lookup": {},
+                "attached_contract_vendors": 0,
+            }
+
+        monkeypatch.setattr(churn_reports_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(churn_reports_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(churn_reports_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(churn_reports_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 31)))
+        monkeypatch.setattr(churn_reports_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(churn_reports_mod, "_build_deterministic_report_bundle", fake_build_bundle)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._build_validated_executive_summary",
+            lambda *args, **kwargs: "summary",
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._executive_source_list",
+            lambda: [],
+        )
+
+        task = type(
+            "Task",
+            (),
+            {
+                "id": uuid4(),
+                "metadata": {
+                    "_execution_id": str(uuid4()),
+                    "test_vendors": ["Zendesk"],
+                    "test_report_type": "vendor_scorecard",
+                },
+            },
+        )()
+
+        result = await churn_reports_mod.run(task)
+
+        assert [row["vendor_name"] for row in captured["vendor_scores"]] == ["Zendesk"]
+        assert result["reports_persisted"] == 0
+        assert result["persistence_skipped"] is True
+        assert result["vendors_analyzed"] == 1
+        assert result["reasoning_vendors"] == 1
+        assert result["scorecard_cache_hits"] == 0
+        assert result["selected_report_types"] == ["vendor_scorecard"]
+        assert result["scoped_vendors"] == ["Zendesk"]
+
+
+@pytest.mark.asyncio
+async def test_lookup_cached_text_parses_stringified_json_fields(monkeypatch):
+    class FakePool:
+        async def fetchrow(self, *_args, **_kwargs):
+            return {
+                "cache_key": "abc",
+                "namespace": "demo",
+                "provider": "provider",
+                "model": "model",
+                "response_text": "{\"expert_take\":\"cached\"}",
+                "usage_json": "{\"prompt_tokens\":123}",
+                "metadata": "{\"cache_version\":\"v1\",\"vendor_name\":\"Zendesk\"}",
+                "created_at": "2026-03-31T01:00:00Z",
+                "last_hit_at": "2026-03-31T01:05:00Z",
+                "hit_count": 4,
+            }
+
+    monkeypatch.setattr(exact_cache_mod, "is_b2b_llm_exact_cache_enabled", lambda: True)
+
+    hit = await exact_cache_mod.lookup_cached_text(
+        "demo",
+        {"messages": [{"role": "user", "content": "x"}]},
+        pool=FakePool(),
+    )
+
+    assert hit is not None
+    assert hit["usage"] == {"prompt_tokens": 123}
+    assert hit["metadata"] == {"cache_version": "v1", "vendor_name": "Zendesk"}
+    assert hit["hit_count"] == 4
 
 
 class TestAccountIntelligenceHygiene:
@@ -1678,6 +1829,84 @@ class TestBattleCardQualityGate:
         assert card["battle_card_quality"]["schema_version"] == "v1"
         assert card["quality_status"] == quality["status"] == "deterministic_fallback"
         assert _battle_card_row_status(card) == "deterministic_fallback"
+
+    def test_final_quality_populates_grounded_fallback_sales_copy(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "evidence_window_days": 21,
+            "llm_render_status": "failed",
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+            "weakness_analysis": [
+                {
+                    "weakness": "Pricing pressure is creating renewal scrutiny",
+                    "evidence": "21.3% price complaint rate across 1,156 reviews",
+                    "customer_quote": "We need better control over rising platform costs.",
+                    "winning_position": "Emphasize transparent pricing, packaging clarity, and spend controls.",
+                }
+            ],
+            "anchor_examples": {
+                "named_account": [
+                    {
+                        "reviewer_company": "Acme Transit",
+                        "competitor": "BigCommerce",
+                        "time_anchor": "renewal planning",
+                    }
+                ]
+            },
+            "incumbent_strengths": [
+                {
+                    "area": "Ease of use",
+                    "mention_count": 14,
+                    "customer_quote": "The setup is familiar and easy for the team.",
+                }
+            ],
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [
+                            {
+                                "segment": "Mid-market retail operators",
+                                "best_opening_angle": "a pricing and renewal benchmark",
+                                "sample_size": 11,
+                            }
+                        ],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [
+                                {"role_type": "economic_buyer", "source_id": "segment:role:economic_buyer"},
+                            ],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal planning this quarter",
+                        "active_eval_signals": {
+                            "value": 9,
+                            "source_id": "segment:aggregate:active_eval_signal_count",
+                        },
+                    },
+                },
+            },
+        }
+        _populate_battle_card_fallback_sales_copy(card)
+        quality = _apply_battle_card_quality(card, phase="final")
+        assert card["executive_summary"]
+        assert card["talk_track"]["opening"]
+        assert len(card["recommended_plays"]) >= 1
+        assert card["discovery_questions"]
+        assert card["landmine_questions"]
+        assert card["objection_handlers"]
+        assert card["why_they_stay"]["strengths"]
+        assert "acme transit" in json.dumps(card, default=str).lower()
+        assert not any(
+            "model sales copy missing after render failure" in item
+            for item in quality["failed_checks"]
+        )
 
 
 class TestBattleCardSalesCopyParsing:
@@ -2795,6 +3024,44 @@ class TestVendorExecutiveSummary:
         assert "account signals" not in summary
         assert "Strongest vendor-level churn signals" in summary
         assert "Zendesk" in summary
+
+    @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")
+    def test_prefers_churn_aligned_representative_quote_over_positive_quote(self, mock_settings):
+        mock_settings.b2b_churn.intelligence_executive_sources = "g2,capterra"
+        feed = [
+            {
+                "vendor": "Mailchimp",
+                "churn_signal_density": 41.2,
+                "total_reviews": 88,
+                "avg_urgency": 4.1,
+                "top_pain": "pricing",
+                "pain_breakdown": [{"category": "pricing", "count": 34}],
+                "top_displacement_targets": [{"competitor": "Klaviyo", "mentions": 9}],
+                "key_quote": "The platform is easy to set up and the email builder is intuitive.",
+                "named_accounts": [],
+            },
+            {
+                "vendor": "Zendesk",
+                "churn_signal_density": 38.6,
+                "total_reviews": 59,
+                "avg_urgency": 7.4,
+                "top_pain": "support",
+                "pain_breakdown": [{"category": "support", "count": 21}],
+                "top_displacement_targets": [{"competitor": "Freshdesk", "mentions": 12}],
+                "key_quote": "Support response times keep getting worse and we are evaluating alternatives before renewal.",
+                "named_accounts": [],
+            },
+        ]
+        summary = _build_validated_executive_summary(
+            {"weekly_churn_feed": feed},
+            data_context={
+                "enrichment_period": {"earliest": "2026-03-01", "latest": "2026-03-07"},
+                "source_distribution": {"g2": {"reviews": 40, "high_urgency": 5}},
+            },
+            executive_sources=["g2", "capterra"],
+        )
+        assert "Support response times keep getting worse" in summary
+        assert "easy to set up and the email builder is intuitive" not in summary
 
 
 # ---------------------------------------------------------------------------

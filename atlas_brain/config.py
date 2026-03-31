@@ -2566,6 +2566,12 @@ class B2BChurnConfig(BaseSettings):
         default=True,
         description="Re-run the deterministic blog quality and specificity gate before admin publish",
     )
+    blog_quality_backfill_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Default lookback window in days for recent blog quality backfills",
+    )
     # Blog auto-deploy (git push + Vercel deploy hook)
     blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
     blog_auto_deploy_branch: str = Field(default="main", description="Git branch to push B2B blog commits to")
@@ -2629,6 +2635,10 @@ class B2BChurnConfig(BaseSettings):
         ge=256,
         le=8192,
         description="Max output tokens for vendor scorecard narratives when the synthesis model is DeepSeek",
+    )
+    llm_exact_cache_enabled: bool = Field(
+        default=False,
+        description="Enable exact-match Postgres caching for B2B/reporting LLM calls",
     )
 
     # Briefing gate (email capture for full report)

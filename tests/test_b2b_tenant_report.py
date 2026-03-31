@@ -1,5 +1,7 @@
 import json
 from datetime import date
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -16,6 +18,7 @@ from atlas_brain.autonomous.tasks.b2b_tenant_report import (
     _apply_tenant_vendor_context,
     _filter_tenant_payload_for_vendors,
     _merge_tenant_chunk_outputs,
+    _run_tenant_synthesis_llm,
     _tenant_payload_vendor_chunks,
     _tenant_report_chunk_size,
     _tenant_report_data_density,
@@ -63,6 +66,48 @@ def test_tenant_report_data_density_includes_llm_and_reasoning_counts():
     assert density["synthesis_contract_vendors"] == 4
     assert density["llm_input_tokens"] == 123
     assert density["llm_output_tokens"] == 45
+
+
+@pytest.mark.asyncio
+async def test_run_tenant_synthesis_llm_uses_exact_cache_hit(monkeypatch):
+    cached_response = {
+        "response_text": json.dumps({"weekly_churn_feed": [{"vendor": "Zendesk"}]}),
+        "model": "anthropic/claude-sonnet-4-5",
+        "provider": "openrouter",
+    }
+
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **_kwargs: SimpleNamespace(name="openrouter", model="anthropic/claude-sonnet-4-5"),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.llm_exact_cache.build_skill_request_envelope",
+        lambda **_kwargs: ("cache-key", {"messages": [{"role": "user", "content": "cached"}]}, []),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.llm_exact_cache.lookup_cached_text",
+        AsyncMock(return_value=cached_response),
+    )
+
+    def _unexpected_llm_call(*_args, **_kwargs):
+        raise AssertionError("tenant report LLM should not run on exact-cache hit")
+
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.call_llm_with_skill",
+        _unexpected_llm_call,
+    )
+
+    parsed, usage = await _run_tenant_synthesis_llm(
+        {"vendor_churn_scores": [{"vendor_name": "Zendesk"}]},
+        max_tokens=512,
+    )
+
+    assert parsed["weekly_churn_feed"] == [{"vendor": "Zendesk"}]
+    assert usage["cache_hit"] is True
+    assert usage["input_tokens"] == 0
+    assert usage["output_tokens"] == 0
+    assert usage["model"] == "anthropic/claude-sonnet-4-5"
+    assert usage["provider"] == "openrouter"
 
 
 def test_tenant_payload_vendor_chunks_groups_categories_before_splitting(monkeypatch):

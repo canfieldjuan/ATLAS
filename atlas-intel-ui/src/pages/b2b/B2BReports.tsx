@@ -95,6 +95,49 @@ function fmt(v: string | undefined | null): string {
   return v.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+function reasoningSourceLabel(value: unknown): string {
+  if (typeof value !== 'string' || !value) return 'Deterministic'
+  if (value === 'b2b_reasoning_synthesis') return 'Synthesis-backed'
+  return value.replace(/_/g, ' ')
+}
+
+function referenceIdCounts(value: unknown): { metrics: number; witnesses: number; total: number } {
+  const obj = value && typeof value === 'object' && !Array.isArray(value) ? value as AnyData : {}
+  const metricIds = Array.isArray(obj.metric_ids) ? obj.metric_ids : []
+  const witnessIds = Array.isArray(obj.witness_ids) ? obj.witness_ids : []
+  return {
+    metrics: metricIds.length,
+    witnesses: witnessIds.length,
+    total: metricIds.length + witnessIds.length,
+  }
+}
+
+function ProvenancePills({
+  source,
+  referenceIds,
+  extra = [],
+}: {
+  source?: unknown
+  referenceIds?: unknown
+  extra?: Array<string | null | undefined>
+}) {
+  const counts = referenceIdCounts(referenceIds)
+  const pills = [
+    `Source: ${reasoningSourceLabel(source)}`,
+    counts.total > 0 ? `${counts.total} refs` : 'No refs',
+    counts.metrics > 0 ? `${counts.metrics} metrics` : null,
+    counts.witnesses > 0 ? `${counts.witnesses} witnesses` : null,
+    ...extra,
+  ].filter(Boolean) as string[]
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-3">
+      {pills.map((pill) => (
+        <Badge key={pill} text={pill} color="bg-slate-800 text-slate-300" />
+      ))}
+    </div>
+  )
+}
+
 /* ------------------------------------------------------------------ */
 /*  Challenger Brief renderer                                          */
 /* ------------------------------------------------------------------ */
@@ -117,6 +160,13 @@ function ChallengerBriefView({ d }: { d: AnyData }) {
         <span className="text-lg font-bold text-white">{d.challenger} vs {d.incumbent}</span>
       </div>
       {d.category && <span className="text-xs text-slate-500">{d.category}</span>}
+      <ProvenancePills
+        source={d.reasoning_source}
+        referenceIds={d.reasoning_reference_ids}
+        extra={[
+          h2h.reference_ids ? `Head-to-head refs: ${referenceIdCounts(h2h.reference_ids).total}` : null,
+        ]}
+      />
 
       {/* Data sources pills */}
       <div className="flex flex-wrap gap-1.5 mt-3">
@@ -224,6 +274,10 @@ function ChallengerBriefView({ d }: { d: AnyData }) {
       {/* Head to Head */}
       {Object.keys(h2h).length > 0 && (h2h.conclusion || h2h.winner) && (
         <Section title="Head to Head" icon={<Swords className="h-4 w-4" />}>
+          <ProvenancePills
+            source={h2h.synthesized ? 'displacement_fallback' : 'b2b_reasoning_synthesis'}
+            referenceIds={h2h.reference_ids}
+          />
           <div className="bg-slate-900/40 rounded-lg p-3 space-y-1">
             {h2h.winner && <Metric label="Winner" value={h2h.winner} color="text-cyan-400 font-bold" />}
             {h2h.confidence != null && <Metric label="Confidence" value={pct(h2h.confidence)} />}
@@ -379,6 +433,13 @@ function AccountsInMotionView({ d }: { d: AnyData }) {
         <span className="text-lg font-bold text-white">Accounts In Motion: {d.vendor}</span>
       </div>
       {d.category && <span className="text-xs text-slate-500">{d.category}</span>}
+      <ProvenancePills
+        source={d.reasoning_source}
+        referenceIds={d.reference_ids || d.reasoning_reference_ids}
+        extra={[
+          d.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(d.category_council.reference_ids).total}` : null,
+        ]}
+      />
 
       <div className="bg-slate-900/40 rounded-lg p-3 space-y-1 mt-3">
         <Metric label="Total Accounts" value={d.total_accounts_in_motion} color="text-cyan-400 font-bold" />
@@ -418,6 +479,19 @@ function AccountsInMotionView({ d }: { d: AnyData }) {
             <Metric label="Market Regime" value={fmt(xvc.market_regime)} />
           </div>
           {xvc.battle_conclusion && <p className="text-xs text-slate-300 mt-1">{xvc.battle_conclusion}</p>}
+        </Section>
+      )}
+
+      {d.category_council && (d.category_council.conclusion || d.category_council.market_regime) && (
+        <Section title="Category Council" icon={<Users className="h-4 w-4" />}>
+          <ProvenancePills source="b2b_reasoning_synthesis" referenceIds={d.category_council.reference_ids} />
+          <div className="bg-slate-900/40 rounded-lg p-3 space-y-1">
+            <Metric label="Market Regime" value={fmt(d.category_council.market_regime)} />
+            <Metric label="Winner" value={d.category_council.winner} color="text-green-400" />
+            <Metric label="Loser" value={d.category_council.loser} color="text-red-400" />
+            <Metric label="Confidence" value={pct(d.category_council.confidence)} />
+          </div>
+          {d.category_council.conclusion && <p className="text-xs text-slate-300 mt-1">{d.category_council.conclusion}</p>}
         </Section>
       )}
 
@@ -481,6 +555,13 @@ function BattleCardView({ d }: { d: AnyData }) {
         <span className="text-lg font-bold text-white">Battle Card: {d.vendor || 'Unknown'}</span>
         {qualityBadge(qualityStatus)}
       </div>
+      <ProvenancePills
+        source={d.reasoning_source}
+        referenceIds={d.reference_ids || d.reasoning_reference_ids}
+        extra={[
+          d.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(d.category_council.reference_ids).total}` : null,
+        ]}
+      />
 
       <div className="bg-slate-900/40 rounded-lg p-3 space-y-1 mt-3">
         <Metric label="Churn Pressure" value={d.churn_pressure_score != null ? `${Number(d.churn_pressure_score).toFixed(0)}/100` : null} color={Number(d.churn_pressure_score || 0) >= 60 ? 'text-red-400 font-bold' : 'text-amber-400 font-bold'} />
@@ -574,6 +655,20 @@ function BattleCardView({ d }: { d: AnyData }) {
               <p className="text-xs text-white font-medium">{play.play}</p>
               {play.target_segment && <p className="text-[10px] text-slate-500">Target: {play.target_segment}</p>}
               {play.key_message && <p className="text-[10px] text-slate-400">{play.key_message}</p>}
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {Array.isArray(d.cross_vendor_battles) && d.cross_vendor_battles.length > 0 && (
+        <Section title="Cross-vendor Battles" icon={<Swords className="h-4 w-4" />}>
+          {(d.cross_vendor_battles as AnyData[]).slice(0, 4).map((battle, i) => (
+            <div key={`${battle.opponent || 'battle'}-${i}`} className="bg-slate-900/30 rounded p-2 mb-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-white font-medium">{battle.opponent || battle.loser || battle.winner || 'Cross-vendor battle'}</p>
+                <ProvenancePills source="b2b_reasoning_synthesis" referenceIds={battle.reference_ids} />
+              </div>
+              {battle.conclusion && <p className="text-xs text-slate-300 mt-1">{battle.conclusion}</p>}
             </div>
           ))}
         </Section>

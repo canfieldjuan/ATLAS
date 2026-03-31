@@ -1,6 +1,8 @@
 """Tests for cross-vendor synthesis packet builders and compatibility helpers."""
 
 import json
+from datetime import date
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,6 +13,7 @@ from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
     build_pairwise_battle_packet,
     build_resource_asymmetry_packet,
     compute_cross_vendor_evidence_hash,
+    load_cross_vendor_synthesis_lookup,
     materialize_cross_vendor_reference_ids,
     normalize_cross_vendor_contract,
     to_legacy_cross_vendor_conclusion,
@@ -257,6 +260,125 @@ class TestCrossVendorCitationRegistry:
             "metric:freshdesk:1",
             "metric:zendesk:1",
         ]
+
+
+@pytest.mark.asyncio
+async def test_load_cross_vendor_synthesis_lookup_preserves_reference_ids():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[
+        {
+            "analysis_type": "pairwise_battle",
+            "vendors": ["Zendesk", "Freshdesk"],
+            "category": None,
+            "synthesis": {
+                "conclusion": {
+                    "winner": "Freshdesk",
+                    "loser": "Zendesk",
+                    "conclusion": "Freshdesk wins on pricing pressure.",
+                    "confidence": 0.82,
+                },
+                "reference_ids": {
+                    "metric_ids": ["metric:pair:1"],
+                    "witness_ids": ["witness:pair:1"],
+                },
+            },
+            "as_of_date": date(2026, 3, 30),
+            "created_at": "2026-03-31T00:00:00Z",
+        }
+    ])
+
+    lookup = await load_cross_vendor_synthesis_lookup(
+        pool,
+        as_of=date(2026, 3, 30),
+        analysis_window_days=30,
+    )
+
+    entry = lookup["battles"][("Freshdesk", "Zendesk")]
+    assert entry["reference_ids"]["metric_ids"] == ["metric:pair:1"]
+    assert entry["reference_ids"]["witness_ids"] == ["witness:pair:1"]
+
+
+@pytest.mark.asyncio
+async def test_load_cross_vendor_synthesis_lookup_accepts_top_level_contract_shape():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[
+        {
+            "analysis_type": "pairwise_battle",
+            "vendors": ["Amazon Web Services", "Google Cloud Platform"],
+            "category": None,
+            "synthesis": {
+                "winner": "Google Cloud Platform",
+                "loser": "Amazon Web Services",
+                "conclusion": "GCP is displacing AWS on pricing clarity.",
+                "confidence": 0.74,
+                "reference_ids": {
+                    "metric_ids": ["metric:aws_gcp:1"],
+                    "witness_ids": ["witness:aws_gcp:1"],
+                },
+            },
+            "as_of_date": date(2026, 3, 30),
+            "created_at": "2026-03-31T00:00:00Z",
+        }
+    ])
+
+    lookup = await load_cross_vendor_synthesis_lookup(
+        pool,
+        as_of=date(2026, 3, 30),
+        analysis_window_days=30,
+    )
+
+    entry = lookup["battles"][("Amazon Web Services", "Google Cloud Platform")]
+    assert entry["conclusion"]["winner"] == "Google Cloud Platform"
+    assert entry["conclusion"]["conclusion"] == "GCP is displacing AWS on pricing clarity."
+    assert entry["reference_ids"]["metric_ids"] == ["metric:aws_gcp:1"]
+
+
+@pytest.mark.asyncio
+async def test_load_cross_vendor_synthesis_lookup_prefers_older_row_with_reference_ids():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[
+        {
+            "analysis_type": "pairwise_battle",
+            "vendors": ["Amazon Web Services", "Google Cloud Platform"],
+            "category": None,
+            "synthesis": {
+                "winner": "Google Cloud Platform",
+                "loser": "Amazon Web Services",
+                "conclusion": "Newer row without structured provenance.",
+                "confidence": 0.8,
+            },
+            "as_of_date": date(2026, 3, 31),
+            "created_at": "2026-03-31T05:07:12Z",
+        },
+        {
+            "analysis_type": "pairwise_battle",
+            "vendors": ["Amazon Web Services", "Google Cloud Platform"],
+            "category": None,
+            "synthesis": {
+                "winner": "Google Cloud Platform",
+                "loser": "Amazon Web Services",
+                "conclusion": "Older row with structured provenance.",
+                "confidence": 0.74,
+                "reference_ids": {
+                    "metric_ids": ["metric:aws_gcp:1"],
+                    "witness_ids": ["witness:aws_gcp:1"],
+                },
+            },
+            "as_of_date": date(2026, 3, 30),
+            "created_at": "2026-03-31T05:35:44Z",
+        },
+    ])
+
+    lookup = await load_cross_vendor_synthesis_lookup(
+        pool,
+        as_of=date(2026, 3, 31),
+        analysis_window_days=30,
+    )
+
+    entry = lookup["battles"][("Amazon Web Services", "Google Cloud Platform")]
+    assert entry["conclusion"]["conclusion"] == "Older row with structured provenance."
+    assert entry["reference_ids"]["metric_ids"] == ["metric:aws_gcp:1"]
+    assert entry["reference_ids"]["witness_ids"] == ["witness:aws_gcp:1"]
 
 
 # ---------------------------------------------------------------------------

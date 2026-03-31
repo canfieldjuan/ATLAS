@@ -303,6 +303,45 @@ class TestBuildChallengerBrief:
         assert brief["data_sources"]["battle_card"] is False
         assert brief["data_sources"]["accounts_in_motion"] is False
 
+    def test_battle_card_account_fallback_populates_targets_when_other_sources_missing(self):
+        battle_card = {
+            "high_intent_companies": [
+                {
+                    "company": "Acme Corp",
+                    "urgency": 8.4,
+                    "buying_stage": "evaluation",
+                    "contract_end": "2026-06-30",
+                    "industry": "SaaS",
+                    "domain": "acme.example",
+                }
+            ],
+            "active_evaluation_deadlines": [
+                {
+                    "company": "Beta Inc",
+                    "urgency": 7.6,
+                    "buying_stage": "renewal_decision",
+                    "contract_end": "2026-07-15",
+                    "top_quote": "We are benchmarking alternatives before renewal.",
+                }
+            ],
+        }
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=battle_card,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+        assert brief["target_accounts_source"] == "battle_card"
+        assert brief["total_target_accounts"] == 2
+        assert brief["target_accounts"][0]["battle_card_backed"] is True
+        assert {row["company"] for row in brief["target_accounts"]} == {"Acme Corp", "Beta Inc"}
+
     def test_full_brief(self):
         """Brief with all sources present."""
         battle_card = {
@@ -385,6 +424,10 @@ class TestBuildChallengerBrief:
             "durability": "Durable",
             "key_insights": ["Freshdesk wins deals < $50k ARR"],
             "confidence": 0.78,
+            "reference_ids": {
+                "metric_ids": ["metric:pair:1"],
+                "witness_ids": ["witness:pair:1"],
+            },
         }
 
         brief = _build_challenger_brief(
@@ -411,6 +454,7 @@ class TestBuildChallengerBrief:
         assert brief["head_to_head"]["winner"] == "Freshdesk"
         assert brief["head_to_head"]["loser"] == "Zendesk"
         assert brief["head_to_head"]["confidence"] == 0.78
+        assert brief["head_to_head"]["reference_ids"]["metric_ids"] == ["metric:pair:1"]
         assert brief["category_council"]["winner"] == "Zoho Desk"
         assert brief["category_council"]["market_regime"] == "price_competition"
         assert len(brief["target_accounts"]) == 1
@@ -426,6 +470,62 @@ class TestBuildChallengerBrief:
             assert brief["data_sources"][k] is True
         assert brief["data_sources"]["evidence_vault"] is False
         assert brief["category"] == "Helpdesk"
+
+    def test_segment_playbook_fallback_populates_sales_playbook_when_battle_card_copy_is_empty(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "segment_playbook": {
+                    "confidence": "medium",
+                    "priority_segments": [
+                        {
+                            "segment": "Operations teams",
+                            "best_opening_angle": "an uptime and support benchmark",
+                            "why_vulnerable": "Operations is absorbing repeated support escalations and renewal friction.",
+                            "disqualifier": "Skip if the team is locked into a long-term enterprise agreement with no near-term decision point",
+                        },
+                    ],
+                },
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "Before renewal",
+                    "active_eval_signals": {"value": 2, "source_id": "accounts:summary:active_eval_signal_count"},
+                },
+            },
+            "Zendesk",
+        )
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card={
+                "discovery_questions": [],
+                "landmine_questions": [],
+                "objection_handlers": [],
+                "talk_track": "",
+                "recommended_plays": [],
+            },
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle={
+                "winner": "Freshdesk",
+                "loser": "Zendesk",
+                "conclusion": "Freshdesk is winning where support responsiveness becomes a renewal issue.",
+                "durability": "durable",
+                "key_insights": [{"insight": "Support friction is the main opening", "evidence": "support"}],
+                "confidence": 0.73,
+            },
+            max_target_accounts=15,
+        )
+        assert brief["sales_playbook"]["recommended_plays"]
+        assert brief["sales_playbook"]["discovery_questions"]
+        assert brief["sales_playbook"]["landmine_questions"]
+        assert brief["sales_playbook"]["objection_handlers"]
+        assert brief["sales_playbook"]["talk_track"]["opening"]
+        assert "support benchmark" in json.dumps(brief["sales_playbook"], default=str).lower()
 
     def test_evidence_vault_fallback_populates_weaknesses_and_quotes(self):
         """Vault fills incumbent evidence when battle card is absent."""
@@ -1668,6 +1768,31 @@ class TestResolveCrossVendorBattle:
 
         for key in ("conclusion", "winner", "loser", "durability", "key_insights", "confidence"):
             assert key in result
+
+    async def test_preserves_reference_ids_from_synthesis_entry(self):
+        entry = {
+            "conclusion": {
+                "conclusion": "Freshdesk gaining on pricing advantage",
+                "winner": "Freshdesk",
+                "loser": "Zendesk",
+                "confidence": 0.85,
+                "durability_assessment": "structural",
+                "key_insights": [{"insight": "Price gap", "evidence": "0.28 vs 0.24"}],
+            },
+            "reference_ids": {
+                "metric_ids": ["metric:pair:1"],
+                "witness_ids": ["witness:pair:1"],
+            },
+        }
+        xv = {"battles": {("Freshdesk", "Zendesk"): entry}}
+        pool = MagicMock()
+
+        result = await brief_mod._resolve_cross_vendor_battle(
+            pool, "Zendesk", "Freshdesk", date(2026, 3, 29), xv,
+        )
+
+        assert result["reference_ids"]["metric_ids"] == ["metric:pair:1"]
+        assert result["reference_ids"]["witness_ids"] == ["witness:pair:1"]
 
     async def test_string_key_insights_normalized(self):
         entry = {

@@ -968,6 +968,9 @@ def _build_vendor_aggregate(
                 reasoning_contracts["schema_version"] = "v1"
         if reasoning_contracts:
             result["reasoning_contracts"] = reasoning_contracts
+            reference_ids = getattr(view, "reference_ids", None)
+            if isinstance(reference_ids, dict) and reference_ids:
+                result["reference_ids"] = reference_ids
             vendor_core = reasoning_contracts.get("vendor_core_reasoning") or {}
             account_reasoning = reasoning_contracts.get("account_reasoning") or {}
             if isinstance(account_reasoning, dict) and account_reasoning:

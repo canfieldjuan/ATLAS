@@ -44,6 +44,7 @@ const links: SidebarLink[] = [
 
 const auditLinks: SidebarLink[] = [
   { to: '/blog-review', icon: FileSearch, label: 'Blog Review' },
+  { to: '/blog-diagnostics', icon: AlertTriangle, label: 'Blog Diagnostics' },
   { to: '/campaign-review', icon: MailSearch, label: 'Campaigns' },
   { to: '/campaign-diagnostics', icon: AlertTriangle, label: 'Campaign Diagnostics' },
   { to: '/briefing-review', icon: MailSearch, label: 'Briefings' },

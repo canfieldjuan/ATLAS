@@ -623,6 +623,196 @@ def _battle_card_anchor_signal_terms(card: dict[str, Any]) -> dict[str, set[str]
     }
 
 
+def _battle_card_anchor_phrase(card: dict[str, Any]) -> str:
+    """Build a seller-safe anchor phrase from surfaced witness examples."""
+    anchors = _battle_card_anchor_examples(card)
+    for rows in anchors.values():
+        for witness in rows:
+            if not isinstance(witness, dict):
+                continue
+            company = str(witness.get("reviewer_company") or "").strip()
+            competitor = str(witness.get("competitor") or "").strip()
+            time_anchor = str(witness.get("time_anchor") or "").strip()
+            parts: list[str] = []
+            if company:
+                parts.append(f"accounts like {company}")
+            if competitor:
+                parts.append(f"while evaluating {competitor}")
+            if time_anchor:
+                parts.append(f"during {time_anchor}")
+            if parts:
+                return " ".join(parts)
+    return ""
+
+
+def _populate_battle_card_fallback_sales_copy(card: dict[str, Any]) -> None:
+    """Fill empty battle-card seller-copy fields from deterministic evidence."""
+    from ._b2b_shared import (
+        _battle_card_best_supported_quote,
+        _battle_card_fallback_recommended_plays,
+        _battle_card_quote_terms,
+        _battle_card_safe_play_text,
+        _battle_card_safe_summary,
+        _battle_card_structured_proof_text,
+        _battle_card_winning_position,
+    )
+
+    weak_rows = card.get("weakness_analysis") if isinstance(card.get("weakness_analysis"), list) else []
+    primary = weak_rows[0] if weak_rows and isinstance(weak_rows[0], dict) else {}
+    weakness_headline = str(primary.get("weakness") or "").strip()
+    weakness_evidence = str(primary.get("evidence") or "").strip()
+    weakness_quote = str(primary.get("customer_quote") or "").strip()
+    weakness_area = str(primary.get("area") or primary.get("weakness") or "").strip()
+    anchor_phrase = _battle_card_anchor_phrase(card)
+    proof_point = _battle_card_structured_proof_text(card)
+    if anchor_phrase:
+        proof_point = f"{proof_point} This is already visible in {anchor_phrase}."
+
+    if not weakness_quote and weakness_area:
+        weakness_quote = _battle_card_best_supported_quote(
+            card,
+            f"{weakness_area} {weakness_evidence}",
+            preferred_terms=_battle_card_quote_terms(weakness_area),
+        )
+
+    summary = str(card.get("executive_summary") or "").strip()
+    if not summary:
+        summary = _battle_card_safe_summary(card)
+        if weakness_headline:
+            summary = f"{summary} {weakness_headline}."
+        if anchor_phrase:
+            summary = f"{summary} The strongest current signal is coming from {anchor_phrase}."
+        card["executive_summary"] = summary.strip()
+
+    plays = card.get("recommended_plays") if isinstance(card.get("recommended_plays"), list) else []
+    if not plays:
+        cfg = settings.b2b_churn
+        min_total_plays = int(getattr(cfg, "battle_card_quality_min_total_plays", 2))
+        fallback_plays = _battle_card_fallback_recommended_plays(card, limit=max(min_total_plays, 1))
+        if fallback_plays:
+            card["recommended_plays"] = fallback_plays
+
+    talk_track = card.get("talk_track") if isinstance(card.get("talk_track"), dict) else {}
+    if not talk_track or not all(str(talk_track.get(key) or "").strip() for key in ("opening", "mid_call_pivot", "closing")):
+        opening = (
+            f"Buyers are re-evaluating {card.get('vendor') or 'the incumbent'} "
+            f"because {weakness_area or 'current friction'} keeps showing up."
+        )
+        if anchor_phrase:
+            opening = f"{opening} The clearest signal is coming from {anchor_phrase}."
+        mid_call = _battle_card_safe_play_text(card, "talk_track.mid_call_pivot")
+        if weakness_evidence:
+            mid_call = f"{mid_call} The evidence already shows {weakness_evidence.lower()}."
+        closing = _battle_card_safe_play_text(card, "talk_track.closing")
+        card["talk_track"] = {
+            "opening": opening.strip(),
+            "mid_call_pivot": mid_call.strip(),
+            "closing": closing.strip(),
+        }
+
+    if not isinstance(card.get("discovery_questions"), list) or not card.get("discovery_questions"):
+        discovery_questions = [
+            f"Where is {weakness_area or 'buyer friction'} creating the most pain in the current workflow?",
+            "What would trigger a formal evaluation or renewal benchmark in the next planning cycle?",
+        ]
+        if anchor_phrase:
+            discovery_questions[1] = f"What changed for {anchor_phrase} that moved this into an active evaluation?"
+        card["discovery_questions"] = discovery_questions
+
+    if not isinstance(card.get("landmine_questions"), list) or not card.get("landmine_questions"):
+        landmine_questions = [
+            f"What happens if {weakness_area or 'this friction'} is still unresolved at renewal?",
+            "How much manual work is the team absorbing today to keep the incumbent setup operating?",
+        ]
+        if anchor_phrase:
+            landmine_questions[0] = f"What happens if the issues visible in {anchor_phrase} are still unresolved at renewal?"
+        card["landmine_questions"] = landmine_questions
+
+    handlers = card.get("objection_handlers") if isinstance(card.get("objection_handlers"), list) else []
+    if not handlers:
+        strengths = card.get("incumbent_strengths") if isinstance(card.get("incumbent_strengths"), list) else []
+        top_strength: dict[str, Any] = {}
+        for item in strengths:
+            if not isinstance(item, dict):
+                continue
+            area = str(item.get("area") or "").strip()
+            if area and not _is_generic_other_weakness(area):
+                top_strength = item
+                break
+        strength_area = str(top_strength.get("area") or "operational familiarity").strip()
+        strength_quote = str(top_strength.get("customer_quote") or "").strip()
+        acknowledge = f"It makes sense that teams stay for {strength_area}."
+        if strength_quote:
+            acknowledge = f"{acknowledge} Buyers still call out that strength directly."
+        card["objection_handlers"] = [{
+            "objection": f"The incumbent is still good enough on {strength_area}.",
+            "acknowledge": acknowledge,
+            "pivot": (
+                f"The better question is whether {weakness_area or 'buyer friction'} is creating enough drag "
+                "to justify a cleaner alternative before renewal."
+            ),
+            "proof_point": proof_point,
+        }]
+
+    why_they_stay = card.get("why_they_stay") if isinstance(card.get("why_they_stay"), dict) else {}
+    why_strengths = why_they_stay.get("strengths") if isinstance(why_they_stay.get("strengths"), list) else []
+    if not why_they_stay or not why_strengths:
+        strengths = card.get("incumbent_strengths") if isinstance(card.get("incumbent_strengths"), list) else []
+        normalized_strengths: list[dict[str, str]] = []
+        for item in strengths:
+            if not isinstance(item, dict):
+                continue
+            area = str(item.get("area") or "").strip()
+            if not area or _is_generic_other_weakness(area):
+                continue
+            evidence = str(item.get("customer_quote") or "").strip()
+            if not evidence:
+                evidence = f"Customers still cite {area.lower()} as a reason to stay."
+            normalized_strengths.append({
+                "area": area,
+                "evidence": evidence,
+                "how_to_neutralize": _battle_card_winning_position(weakness_area or area).rstrip(".") + ".",
+            })
+            if len(normalized_strengths) >= 2:
+                break
+        if not normalized_strengths:
+            normalized_strengths.append({
+                "area": "Operational familiarity",
+                "evidence": "Teams often stay when the incumbent still feels familiar to day-to-day operators.",
+                "how_to_neutralize": _battle_card_winning_position(weakness_area or "operational familiarity").rstrip(".") + ".",
+            })
+        if normalized_strengths:
+            card["why_they_stay"] = {
+                "summary": "The incumbent still holds on where teams feel the current setup is familiar and good enough.",
+                "strengths": normalized_strengths,
+            }
+
+    plays = card.get("recommended_plays") if isinstance(card.get("recommended_plays"), list) else []
+    if len(plays) > 1:
+        normalized_timings: set[str] = set()
+        distinct_defaults = [
+            "During renewal planning this quarter.",
+            "Immediately after an evaluation checkpoint or pricing objection.",
+            "Before the next stakeholder review on fit, cost, or migration timing.",
+        ]
+        next_default = 0
+        for item in plays:
+            if not isinstance(item, dict):
+                continue
+            timing = str(item.get("timing") or "").strip()
+            norm = timing.lower()
+            if timing and norm not in normalized_timings:
+                normalized_timings.add(norm)
+                continue
+            while next_default < len(distinct_defaults) and distinct_defaults[next_default].lower() in normalized_timings:
+                next_default += 1
+            if next_default >= len(distinct_defaults):
+                break
+            item["timing"] = distinct_defaults[next_default]
+            normalized_timings.add(item["timing"].lower())
+            next_default += 1
+
+
 def _evaluate_battle_card_quality(
     card: dict[str, Any],
     *,
@@ -943,6 +1133,8 @@ def _evaluate_battle_card_quality(
 
 
 def _apply_battle_card_quality(card: dict[str, Any], *, phase: str) -> dict[str, Any]:
+    if phase == _QUALITY_PHASE_FINAL:
+        _populate_battle_card_fallback_sales_copy(card)
     quality = _evaluate_battle_card_quality(card, phase=phase)
     card["battle_card_quality"] = quality
     card["quality_status"] = quality.get("status") or _QUALITY_STATUS_NEEDS_REVIEW
@@ -2047,6 +2239,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 if quality.get("status") == _QUALITY_STATUS_FALLBACK:
                     await _bc_cache.invalidate(pattern_sig, reason="quality_gate")
                     _drop_llm_sales_copy(card)
+                    _populate_battle_card_fallback_sales_copy(card)
                     card["llm_render_status"] = "failed_quality_gate"
                     failed_checks = quality.get("failed_checks") if isinstance(quality.get("failed_checks"), list) else []
                     if failed_checks:
@@ -2173,6 +2366,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             quality = _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
             if quality.get("status") == _QUALITY_STATUS_FALLBACK:
                 _drop_llm_sales_copy(card)
+                _populate_battle_card_fallback_sales_copy(card)
                 card["llm_render_status"] = "failed_quality_gate"
                 failed_checks = quality.get("failed_checks") if isinstance(quality.get("failed_checks"), list) else []
                 if failed_checks:

@@ -782,6 +782,10 @@ class TestBuildVendorAggregate:
             primary_wedge = _Wedge()
             wedge_label = "Pricing Shock"
             meta = {"evidence_window_start": "2026-02-01", "evidence_window_end": "2026-03-01"}
+            reference_ids = {
+                "metric_ids": ["metric:zendesk:1"],
+                "witness_ids": ["witness:zendesk:1"],
+            }
 
             @staticmethod
             def contract(name):
@@ -853,6 +857,8 @@ class TestBuildVendorAggregate:
         assert agg["reasoning_source"] == "b2b_reasoning_synthesis"
         assert agg["synthesis_wedge"] == "pricing_shock"
         assert "reasoning_contracts" in agg
+        assert agg["reference_ids"]["metric_ids"] == ["metric:zendesk:1"]
+        assert agg["reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
         assert agg["reasoning_contracts"]["vendor_core_reasoning"]["causal_narrative"]["confidence"] == "high"
         assert agg["account_reasoning"]["top_accounts"][0]["name"] == "Acme Corp"
         assert agg["account_pressure_summary"] == (

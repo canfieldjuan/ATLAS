@@ -19,6 +19,13 @@ from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
 from ..autonomous.visibility import emit_event, record_attempt
+from ..services.blog_quality import (
+    blog_failure_explanation,
+    blog_quality_projection,
+    blog_quality_revalidation,
+    blog_row_content,
+    blog_row_to_blueprint,
+)
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.blog_admin")
@@ -47,6 +54,7 @@ class BlogDraftSummary(BaseModel):
     latest_error_code: Optional[str] = None
     latest_error_summary: Optional[str] = None
     unresolved_issue_count: int = 0
+    failure_explanation: Optional[dict] = None
 
 
 class BlogDraftDetail(BaseModel):
@@ -75,6 +83,7 @@ class BlogDraftDetail(BaseModel):
     latest_error_code: Optional[str] = None
     latest_error_summary: Optional[str] = None
     unresolved_issue_count: int = 0
+    failure_explanation: Optional[dict] = None
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
     target_keyword: Optional[str] = None
@@ -141,6 +150,7 @@ def _row_to_summary(row) -> dict:
         "latest_error_code": row.get("latest_error_code"),
         "latest_error_summary": row.get("latest_error_summary"),
         "unresolved_issue_count": row.get("unresolved_issue_count") or 0,
+        "failure_explanation": blog_failure_explanation(row.get("data_context")),
     }
 
 
@@ -155,6 +165,7 @@ def _render_md(text: str) -> str:
 
 def _row_to_detail(row) -> dict:
     raw_content = row["content"] or ""
+    data_context = _safe_json(row.get("data_context"))
     return {
         "id": str(row["id"]),
         "slug": row["slug"],
@@ -164,7 +175,7 @@ def _row_to_detail(row) -> dict:
         "tags": _safe_json(row.get("tags", [])),
         "content": _render_md(raw_content),
         "charts": _safe_json(row.get("charts", [])),
-        "data_context": _safe_json(row.get("data_context")),
+        "data_context": data_context,
         "status": row["status"],
         "reviewer_notes": row.get("reviewer_notes"),
         "llm_model": row.get("llm_model"),
@@ -181,6 +192,7 @@ def _row_to_detail(row) -> dict:
         "latest_error_code": row.get("latest_error_code"),
         "latest_error_summary": row.get("latest_error_summary"),
         "unresolved_issue_count": row.get("unresolved_issue_count") or 0,
+        "failure_explanation": blog_failure_explanation(data_context),
         "seo_title": row.get("seo_title"),
         "seo_description": row.get("seo_description"),
         "target_keyword": row.get("target_keyword"),
@@ -192,60 +204,20 @@ def _row_to_detail(row) -> dict:
 
 
 def _stored_row_to_blueprint(row):
-    from ..autonomous.tasks.b2b_blog_post_generation import ChartSpec, PostBlueprint
+    return blog_row_to_blueprint(row)
 
-    raw_charts = _safe_json(row.get("charts", []))
-    charts: list[ChartSpec] = []
-    for idx, chart in enumerate(raw_charts if isinstance(raw_charts, list) else []):
-        if not isinstance(chart, dict):
-            continue
-        charts.append(
-            ChartSpec(
-                chart_id=str(chart.get("chart_id") or f"chart_{idx + 1}"),
-                chart_type=str(chart.get("chart_type") or "bar"),
-                title=str(chart.get("title") or f"Chart {idx + 1}"),
-                data=chart.get("data") if isinstance(chart.get("data"), list) else [],
-                config=chart.get("config") if isinstance(chart.get("config"), dict) else {},
-            )
-        )
 
-    data_context = _safe_json(row.get("data_context"))
-    if not isinstance(data_context, dict):
-        data_context = {}
-
-    quotable_phrases = data_context.get("quotable_phrases")
-    if not isinstance(quotable_phrases, list):
-        quotable_phrases = []
-
-    return PostBlueprint(
-        topic_type=str(row.get("topic_type") or ""),
-        slug=str(row.get("slug") or ""),
-        suggested_title=str(row.get("title") or ""),
-        tags=_safe_json(row.get("tags", [])) if isinstance(_safe_json(row.get("tags", [])), list) else [],
-        data_context=data_context,
-        sections=[],
-        charts=charts,
-        quotable_phrases=quotable_phrases,
-        cta=_safe_json(row.get("cta")) if isinstance(_safe_json(row.get("cta")), dict) else None,
+def _publish_revalidation_result(row) -> dict:
+    blueprint = _stored_row_to_blueprint(row)
+    return blog_quality_revalidation(
+        blueprint=blueprint,
+        content=blog_row_content(row),
+        boundary="publish",
     )
 
 
 def _publish_revalidation_report(row) -> dict:
-    from ..autonomous.tasks.b2b_blog_post_generation import (
-        _apply_blog_quality_gate,
-        _with_unresolved_critical_warnings,
-    )
-
-    blueprint = _stored_row_to_blueprint(row)
-    _, report = _apply_blog_quality_gate(
-        blueprint,
-        {
-            "title": row.get("title") or blueprint.suggested_title,
-            "description": row.get("description") or "",
-            "content": row.get("content") or "",
-        },
-    )
-    return _with_unresolved_critical_warnings(report)
+    return _publish_revalidation_result(row)["audit"]
 
 
 # -- endpoints ----------------------------------------------------
@@ -267,7 +239,7 @@ async def list_drafts(
             SELECT id, slug, title, topic_type, status, llm_model, created_at, published_at,
                    rejected_at, rejection_reason, quality_score, quality_threshold,
                    blocker_count, warning_count, latest_failure_step,
-                   latest_error_code, latest_error_summary,
+                   latest_error_code, latest_error_summary, data_context,
                    (
                      SELECT COUNT(*)
                      FROM pipeline_visibility_reviews r
@@ -288,7 +260,7 @@ async def list_drafts(
             SELECT id, slug, title, topic_type, status, llm_model, created_at, published_at,
                    rejected_at, rejection_reason, quality_score, quality_threshold,
                    blocker_count, warning_count, latest_failure_step,
-                   latest_error_code, latest_error_summary,
+                   latest_error_code, latest_error_summary, data_context,
                    (
                      SELECT COUNT(*)
                      FROM pipeline_visibility_reviews r
@@ -399,6 +371,240 @@ async def draft_summary(_user: AuthUser = Depends(require_auth)):
                 for item in blocker_rows
             ],
         },
+    }
+
+
+@router.get("/quality-trends")
+async def blog_quality_trends(
+    days: int = Query(14, ge=1, le=90),
+    top_n: int = Query(5, ge=1, le=20),
+    _user: AuthUser = Depends(require_auth),
+):
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(503, "Database not ready")
+
+    trend_rows = await pool.fetch(
+        """
+        WITH blocker_rows AS (
+            SELECT
+                DATE_TRUNC('day', created_at)::date::text AS day,
+                blocker.reason AS reason
+            FROM blog_posts
+            JOIN LATERAL jsonb_array_elements_text(
+                COALESCE(data_context->'latest_quality_audit'->'blocking_issues', '[]'::jsonb)
+            ) AS blocker(reason) ON TRUE
+            WHERE created_at >= NOW() - ($1::int * INTERVAL '1 day')
+        ),
+        top_reasons AS (
+            SELECT reason, COUNT(*) AS total
+            FROM blocker_rows
+            GROUP BY reason
+            ORDER BY total DESC, reason ASC
+            LIMIT $2
+        )
+        SELECT blocker_rows.day, blocker_rows.reason, COUNT(*) AS cnt
+        FROM blocker_rows
+        JOIN top_reasons USING (reason)
+        GROUP BY blocker_rows.day, blocker_rows.reason, top_reasons.total
+        ORDER BY blocker_rows.day ASC, top_reasons.total DESC, blocker_rows.reason ASC
+        """,
+        days,
+        top_n,
+    )
+    daily_rows = await pool.fetch(
+        """
+        SELECT
+            DATE_TRUNC('day', created_at)::date::text AS day,
+            COALESCE(SUM(
+                jsonb_array_length(
+                    COALESCE(data_context->'latest_quality_audit'->'blocking_issues', '[]'::jsonb)
+                )
+            ), 0) AS blocker_total
+        FROM blog_posts
+        WHERE created_at >= NOW() - ($1::int * INTERVAL '1 day')
+        GROUP BY DATE_TRUNC('day', created_at)::date::text
+        ORDER BY day ASC
+        """,
+        days,
+    )
+    reason_totals: dict[str, int] = {}
+    for row in trend_rows:
+        reason = str(row["reason"] or "")
+        reason_totals[reason] = reason_totals.get(reason, 0) + int(row["cnt"] or 0)
+
+    top_blockers = sorted(
+        ({"reason": reason, "count": count} for reason, count in reason_totals.items()),
+        key=lambda item: (-item["count"], item["reason"]),
+    )
+    return {
+        "days": int(days),
+        "top_n": int(top_n),
+        "top_blockers": top_blockers,
+        "series": [
+            {
+                "day": str(row["day"] or ""),
+                "reason": str(row["reason"] or ""),
+                "count": int(row["cnt"] or 0),
+            }
+            for row in trend_rows
+        ],
+        "totals_by_day": [
+            {
+                "day": str(row["day"] or ""),
+                "blocker_total": int(row["blocker_total"] or 0),
+            }
+            for row in daily_rows
+        ],
+    }
+
+
+@router.get("/quality-diagnostics")
+async def blog_quality_diagnostics(
+    days: int = Query(14, ge=1, le=90),
+    top_n: int = Query(10, ge=1, le=50),
+    _user: AuthUser = Depends(require_auth),
+):
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        raise HTTPException(503, "Database not ready")
+
+    where = (
+        "WHERE created_at >= NOW() - ($1::int * INTERVAL '1 day') "
+        "AND COALESCE(data_context->'latest_quality_audit'->>'status', '') = 'fail'"
+    )
+    boundary_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(data_context->'latest_quality_audit'->>'boundary', 'missing') AS boundary,
+               COUNT(*) AS cnt
+        FROM blog_posts
+        {where}
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
+        LIMIT $2
+        """,
+        days,
+        top_n,
+    )
+    cause_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(
+                   data_context->'latest_quality_audit'->'failure_explanation'->>'cause_type',
+                   'unknown'
+               ) AS cause_type,
+               COUNT(*) AS cnt
+        FROM blog_posts
+        {where}
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
+        LIMIT $2
+        """,
+        days,
+        top_n,
+    )
+    blocker_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(
+                   data_context->'latest_quality_audit'->'failure_explanation'->>'primary_blocker',
+                   data_context->'latest_quality_audit'->>'primary_blocker',
+                   data_context->'latest_quality_audit'->'blocking_issues'->>0,
+                   'unknown'
+               ) AS reason,
+               COUNT(*) AS cnt
+        FROM blog_posts
+        {where}
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
+        LIMIT $2
+        """,
+        days,
+        top_n,
+    )
+    missing_input_rows = await pool.fetch(
+        f"""
+        SELECT missing_input.input AS input, COUNT(*) AS cnt
+        FROM blog_posts
+        JOIN LATERAL jsonb_array_elements_text(
+            COALESCE(
+                data_context->'latest_quality_audit'->'failure_explanation'->'missing_inputs',
+                '[]'::jsonb
+            )
+        ) AS missing_input(input) ON TRUE
+        {where}
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
+        LIMIT $2
+        """,
+        days,
+        top_n,
+    )
+    topic_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(topic_type, 'unknown') AS topic_type, COUNT(*) AS cnt
+        FROM blog_posts
+        {where}
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
+        LIMIT $2
+        """,
+        days,
+        top_n,
+    )
+    subject_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(
+                   NULLIF(
+                       TRIM(
+                           COALESCE(
+                               data_context->>'vendor',
+                               data_context->>'vendor_a',
+                               data_context->>'vendor_name',
+                               data_context->>'category',
+                               ''
+                           )
+                       ),
+                       ''
+                   ),
+                   'unknown'
+               ) AS subject,
+               COUNT(*) AS cnt
+        FROM blog_posts
+        {where}
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
+        LIMIT $2
+        """,
+        days,
+        top_n,
+    )
+
+    return {
+        "days": int(days),
+        "top_n": int(top_n),
+        "by_boundary": [
+            {"boundary": str(row["boundary"] or "missing"), "count": int(row["cnt"] or 0)}
+            for row in boundary_rows
+        ],
+        "by_cause_type": [
+            {"cause_type": str(row["cause_type"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in cause_rows
+        ],
+        "top_primary_blockers": [
+            {"reason": str(row["reason"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in blocker_rows
+        ],
+        "top_missing_inputs": [
+            {"input": str(row["input"] or ""), "count": int(row["cnt"] or 0)}
+            for row in missing_input_rows
+        ],
+        "by_topic_type": [
+            {"topic_type": str(row["topic_type"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in topic_rows
+        ],
+        "top_subjects": [
+            {"subject": str(row["subject"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in subject_rows
+        ],
     }
 
 
@@ -593,30 +799,34 @@ async def publish_draft(
     from ..config import settings
 
     if settings.b2b_churn.blog_publish_revalidate_enabled:
-        report = _publish_revalidation_report(row)
+        result = _publish_revalidation_result(row)
+        report = result["audit"]
+        projection = blog_quality_projection(report, boundary="publish")
         if report.get("status") != "pass":
             blocking_issues = list(report.get("blocking_issues") or [])
             warnings = list(report.get("warnings") or [])
-            summary = ", ".join(blocking_issues[:3]) or "publish_revalidation_failed"
+            summary = projection["error_summary"] or "publish_revalidation_failed"
             await pool.execute(
                 """
                 UPDATE blog_posts
-                SET latest_failure_step = $1,
-                    latest_error_code = $2,
-                    latest_error_summary = $3,
-                    quality_score = $4,
-                    quality_threshold = $5,
-                    blocker_count = $6,
-                    warning_count = $7
-                WHERE id = $8
+                SET data_context = $1::jsonb,
+                    latest_failure_step = $2,
+                    latest_error_code = $3,
+                    latest_error_summary = $4,
+                    quality_score = $5,
+                    quality_threshold = $6,
+                    blocker_count = $7,
+                    warning_count = $8
+                WHERE id = $9
                 """,
-                "publish_validation",
-                "publish_revalidation_failed",
+                json.dumps(result["data_context"], default=str),
+                projection["failure_step"],
+                projection["error_code"],
                 summary,
-                report.get("score"),
-                report.get("threshold"),
-                len(blocking_issues),
-                len(warnings),
+                projection["score"],
+                projection["threshold"],
+                projection["blocker_count"],
+                projection["warning_count"],
                 draft_id,
             )
             await record_attempt(
@@ -650,21 +860,39 @@ async def publish_draft(
                 detail=report,
             )
             raise HTTPException(409, summary)
+    else:
+        result = _publish_revalidation_result(row)
+        report = result["audit"]
+        projection = blog_quality_projection(report, boundary="publish")
 
     now = datetime.now(timezone.utc)
     await pool.execute(
         """
         UPDATE blog_posts
-        SET status = 'published',
-            published_at = $1,
+        SET data_context = $1::jsonb,
+            status = 'published',
+            published_at = $2,
             rejected_at = NULL,
             rejection_reason = NULL,
-            latest_failure_step = NULL,
-            latest_error_code = NULL,
-            latest_error_summary = NULL
-        WHERE id = $2
+            latest_failure_step = $3,
+            latest_error_code = $4,
+            latest_error_summary = $5,
+            quality_score = $6,
+            quality_threshold = $7,
+            blocker_count = $8,
+            warning_count = $9
+        WHERE id = $10
         """,
-        now, draft_id,
+        json.dumps(result["data_context"], default=str),
+        now,
+        projection["failure_step"],
+        projection["error_code"],
+        projection["error_summary"],
+        projection["score"],
+        projection["threshold"],
+        projection["blocker_count"],
+        projection["warning_count"],
+        draft_id,
     )
     await record_attempt(
         pool,
@@ -744,8 +972,8 @@ async def generate_post(
         _check_data_sufficiency,
         _gather_data,
         _build_blueprint,
-        _generate_content,
-        _enforce_blog_quality,
+        _generate_content_async,
+        _enforce_blog_quality_async,
         _assemble_and_store,
         build_manual_topic_ctx,
     )
@@ -796,26 +1024,39 @@ async def generate_post(
         })
 
     blueprint = _build_blueprint(req.topic_type, topic_ctx, data)
-    content = _generate_content(llm, blueprint, cfg.blog_post_max_tokens)
+    content = await _generate_content_async(llm, blueprint, cfg.blog_post_max_tokens)
     if content is None:
         raise HTTPException(500, "LLM content generation failed")
 
-    content, quality_report = _enforce_blog_quality(
+    content, quality_report = await _enforce_blog_quality_async(
         llm,
         blueprint,
         content,
         cfg.blog_post_max_tokens,
     )
     if content is None:
+        audit = blog_quality_revalidation(
+            blueprint=blueprint,
+            content=None,
+            boundary="manual_generate",
+            report=quality_report,
+        )["audit"]
         raise HTTPException(
             422,
             {
                 "error": "Generated content failed quality gate",
-                "blocking_issues": quality_report.get("blocking_issues", []),
-                "warnings": quality_report.get("warnings", []),
+                "blocking_issues": audit.get("blocking_issues", []),
+                "warnings": audit.get("warnings", []),
+                "failure_explanation": audit.get("failure_explanation"),
             },
         )
-    blueprint.data_context["generation_quality"] = quality_report
+    result = blog_quality_revalidation(
+        blueprint=blueprint,
+        content=content,
+        boundary="manual_generate",
+        report=quality_report,
+    )
+    blueprint.data_context = result["data_context"]
 
     post_id = await _assemble_and_store(pool, blueprint, content, llm)
     if not post_id:

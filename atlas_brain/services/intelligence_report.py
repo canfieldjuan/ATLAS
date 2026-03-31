@@ -117,16 +117,73 @@ async def generate_report(
 
     # Call LLM with skill
     from ..config import settings
-    from ..pipelines.llm import call_llm_with_skill
+    from ..pipelines.llm import call_llm_with_skill, get_pipeline_llm
+    from ..services.b2b.llm_exact_cache import (
+        CacheUnavailable,
+        build_skill_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
 
     cfg = settings.external_data
     usage: dict[str, Any] = {}
-    report_text = call_llm_with_skill(
-        skill_name, payload,
-        max_tokens=cfg.report_full_max_tokens if report_type == "full" else cfg.report_executive_max_tokens,
-        temperature=cfg.report_temperature,
-        usage_out=usage,
-    )
+    max_tokens = cfg.report_full_max_tokens if report_type == "full" else cfg.report_executive_max_tokens
+    cache_namespace = "intelligence_report.report"
+    resolved_llm = get_pipeline_llm(workload="synthesis")
+    provider, model = llm_identity(resolved_llm)
+    request_envelope: dict[str, Any] | None = None
+    if provider and model:
+        try:
+            _, request_envelope, _ = build_skill_request_envelope(
+                namespace=cache_namespace,
+                skill_name=skill_name,
+                payload=payload,
+                provider=provider,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=cfg.report_temperature,
+            )
+        except CacheUnavailable:
+            request_envelope = None
+
+    report_text: str | None = None
+    if request_envelope is not None:
+        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        if cached is not None:
+            report_text = cached["response_text"]
+            usage.update(
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "model": cached["model"],
+                    "provider": cached["provider"],
+                    "cache_hit": True,
+                }
+            )
+
+    if report_text is None:
+        report_text = call_llm_with_skill(
+            skill_name, payload,
+            max_tokens=max_tokens,
+            temperature=cfg.report_temperature,
+            workload="synthesis",
+            usage_out=usage,
+        )
+        if report_text and request_envelope is not None:
+            await store_cached_text(
+                cache_namespace,
+                request_envelope,
+                provider=str(usage.get("provider") or provider),
+                model=str(usage.get("model") or model),
+                response_text=report_text,
+                usage=usage,
+                metadata={
+                    "report_type": report_type,
+                    "entity_name": entity_name,
+                    "entity_type": entity_type,
+                },
+            )
     if usage.get("input_tokens"):
         logger.info("intelligence_report LLM tokens: in=%d out=%d model=%s type=%s",
                      usage["input_tokens"], usage["output_tokens"],
@@ -206,7 +263,14 @@ async def generate_report_package(
     report engagement would look like, not the report itself.
     """
     from ..config import settings
-    from ..pipelines.llm import call_llm_with_skill
+    from ..pipelines.llm import call_llm_with_skill, get_pipeline_llm
+    from ..services.b2b.llm_exact_cache import (
+        CacheUnavailable,
+        build_skill_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
 
     cfg = settings.external_data
     payload = {
@@ -223,11 +287,60 @@ async def generate_report_package(
     }
 
     builder_usage: dict[str, Any] = {}
-    text = call_llm_with_skill(
-        "intelligence/report_builder", payload,
-        max_tokens=cfg.report_builder_max_tokens, temperature=cfg.report_temperature,
-        usage_out=builder_usage,
-    )
+    cache_namespace = "intelligence_report.report_builder"
+    resolved_llm = get_pipeline_llm(workload="synthesis")
+    provider, model = llm_identity(resolved_llm)
+    request_envelope: dict[str, Any] | None = None
+    if provider and model:
+        try:
+            _, request_envelope, _ = build_skill_request_envelope(
+                namespace=cache_namespace,
+                skill_name="intelligence/report_builder",
+                payload=payload,
+                provider=provider,
+                model=model,
+                max_tokens=cfg.report_builder_max_tokens,
+                temperature=cfg.report_temperature,
+            )
+        except CacheUnavailable:
+            request_envelope = None
+
+    text: str | None = None
+    if request_envelope is not None:
+        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        if cached is not None:
+            text = cached["response_text"]
+            builder_usage.update(
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "model": cached["model"],
+                    "provider": cached["provider"],
+                    "cache_hit": True,
+                }
+            )
+
+    if text is None:
+        text = call_llm_with_skill(
+            "intelligence/report_builder", payload,
+            max_tokens=cfg.report_builder_max_tokens, temperature=cfg.report_temperature,
+            workload="synthesis",
+            usage_out=builder_usage,
+        )
+        if text and request_envelope is not None:
+            await store_cached_text(
+                cache_namespace,
+                request_envelope,
+                provider=str(builder_usage.get("provider") or provider),
+                model=str(builder_usage.get("model") or model),
+                response_text=text,
+                usage=builder_usage,
+                metadata={
+                    "entity_name": entity_name,
+                    "client_profile": client_profile,
+                    "price_band": price_band,
+                },
+            )
     if builder_usage.get("input_tokens"):
         logger.info("report_builder LLM tokens: in=%d out=%d model=%s",
                      builder_usage["input_tokens"], builder_usage["output_tokens"],

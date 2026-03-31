@@ -1153,7 +1153,51 @@ def _ensure_methodology_context(
     return updated
 
 
-def _enforce_blog_quality(
+def _finalize_blog_generation_content(
+    content_obj: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Strip cache-only fields before returning assembled blog content."""
+    if content_obj is None:
+        return None
+    return {
+        key: value
+        for key, value in content_obj.items()
+        if not str(key).startswith("_cache_")
+    }
+
+
+async def _store_blog_generation_cache(
+    blueprint: PostBlueprint,
+    content_obj: dict[str, Any] | None,
+) -> None:
+    """Persist the final approved blog generation result in the exact cache."""
+    from ...services.b2b.llm_exact_cache import store_cached_text
+
+    if not isinstance(content_obj, dict):
+        return
+    request_envelope = content_obj.get("_cache_request_envelope")
+    provider_name = str(content_obj.get("_cache_provider") or "")
+    model_name = str(content_obj.get("_cache_model") or "")
+    if not isinstance(request_envelope, dict) or not provider_name or not model_name:
+        return
+    await store_cached_text(
+        "b2b_blog_post_generation.content",
+        request_envelope,
+        provider=provider_name,
+        model=model_name,
+        response_text=json.dumps(
+            _finalize_blog_generation_content(content_obj),
+            separators=(",", ":"),
+            default=str,
+        ),
+        metadata={
+            "slug": blueprint.slug,
+            "topic_type": blueprint.topic_type,
+        },
+    )
+
+
+async def _enforce_blog_quality_async(
     llm,
     blueprint: PostBlueprint,
     content: dict[str, Any],
@@ -1167,7 +1211,53 @@ def _enforce_blog_quality(
     initial_critical = _critical_quality_warnings(report)
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
     if not needs_retry:
-        return current, report
+        await _store_blog_generation_cache(blueprint, current)
+        return _finalize_blog_generation_content(current), report
+
+    retry = await _generate_content_async(
+        llm,
+        blueprint,
+        max_tokens,
+        related_posts=related_posts,
+        quality_feedback=_quality_feedback(report),
+    )
+    if retry is None:
+        if initial_critical:
+            return None, _with_unresolved_critical_warnings(report)
+        return None, report
+
+    retry = _ensure_methodology_context(blueprint, retry)
+    _inject_affiliate_links(blueprint, retry)
+    retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
+    retry_report = _with_unresolved_critical_warnings(retry_report)
+    if retry_report.get("status") != "pass":
+        return None, retry_report
+    await _store_blog_generation_cache(blueprint, retry)
+    return _finalize_blog_generation_content(retry), retry_report
+
+
+def _enforce_blog_quality(
+    llm,
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+    max_tokens: int,
+    related_posts: list[dict[str, str]] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Sync wrapper retained for local/unit-test callers."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("Use _enforce_blog_quality_async() from async contexts")
+
+    current = _ensure_methodology_context(blueprint, dict(content or {}))
+    _inject_affiliate_links(blueprint, current)
+    current, report = _apply_blog_quality_gate(blueprint, current)
+    initial_critical = _critical_quality_warnings(report)
+    needs_retry = report.get("status") != "pass" or bool(initial_critical)
+    if not needs_retry:
+        return _finalize_blog_generation_content(current), report
 
     retry = _generate_content(
         llm,
@@ -1187,7 +1277,26 @@ def _enforce_blog_quality(
     retry_report = _with_unresolved_critical_warnings(retry_report)
     if retry_report.get("status") != "pass":
         return None, retry_report
-    return retry, retry_report
+    return _finalize_blog_generation_content(retry), retry_report
+
+
+def _canonicalize_blog_quality(
+    blueprint: PostBlueprint,
+    *,
+    content: dict[str, Any] | None,
+    report: dict[str, Any],
+    boundary: str,
+) -> dict[str, Any]:
+    from ...services.blog_quality import blog_quality_revalidation
+
+    result = blog_quality_revalidation(
+        blueprint=blueprint,
+        content=content,
+        boundary=boundary,
+        report=report,
+    )
+    blueprint.data_context = result["data_context"]
+    return result["audit"]
 
 
 # -- entry point --------------------------------------------------
@@ -1272,7 +1381,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 ]
             except Exception:
                 blueprint.data_context["_known_vendors"] = []
-        content = _generate_content(
+        content = await _generate_content_async(
             llm, blueprint, cfg.blog_post_max_tokens,
             related_posts=link_posts,
         )
@@ -1306,7 +1415,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             continue
 
-        content, quality_report = _enforce_blog_quality(
+        content, quality_report = await _enforce_blog_quality_async(
             llm,
             blueprint,
             content,
@@ -1314,11 +1423,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             related_posts=link_posts,
         )
         if content is None:
+            quality_audit = _canonicalize_blog_quality(
+                blueprint,
+                content=None,
+                report=quality_report,
+                boundary="generation",
+            )
             logger.warning(
                 "Quality gate failed for %s (%s): %s",
                 blueprint.slug,
                 blueprint.topic_type,
-                ", ".join(quality_report.get("blocking_issues", [])[:4]) or "unknown issues",
+                ", ".join(quality_audit.get("blocking_issues", [])[:4]) or "unknown issues",
             )
             from ..visibility import record_attempt, emit_event
             await _upsert_blog_post_state(
@@ -1328,28 +1443,28 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 status="rejected",
                 run_id=str(task.id),
                 attempt_no=1,
-                score=quality_report.get("score"),
-                threshold=quality_report.get("threshold"),
-                blocker_count=len(quality_report.get("blocking_issues", [])),
-                warning_count=len(quality_report.get("warnings", [])),
+                score=quality_audit.get("score"),
+                threshold=quality_audit.get("threshold"),
+                blocker_count=len(quality_audit.get("blocking_issues", [])),
+                warning_count=len(quality_audit.get("warnings", [])),
                 failure_step="quality_gate",
                 error_code="quality_gate_rejection",
-                error_summary=", ".join(quality_report.get("blocking_issues", [])[:3]),
-                rejection_reason=", ".join(quality_report.get("blocking_issues", [])[:3]),
+                error_summary=", ".join(quality_audit.get("blocking_issues", [])[:3]),
+                rejection_reason=", ".join(quality_audit.get("blocking_issues", [])[:3]),
                 content=content,
             )
             await record_attempt(
                 pool, artifact_type="blog_post", artifact_id=blueprint.slug,
                 run_id=str(task.id), attempt_no=1, stage="quality_gate",
                 status="rejected",
-                score=quality_report.get("score"),
-                threshold=quality_report.get("threshold"),
-                blocker_count=len(quality_report.get("blocking_issues", [])),
-                warning_count=len(quality_report.get("warnings", [])),
-                blocking_issues=quality_report.get("blocking_issues"),
-                warnings=quality_report.get("warnings"),
+                score=quality_audit.get("score"),
+                threshold=quality_audit.get("threshold"),
+                blocker_count=len(quality_audit.get("blocking_issues", [])),
+                warning_count=len(quality_audit.get("warnings", [])),
+                blocking_issues=quality_audit.get("blocking_issues"),
+                warnings=quality_audit.get("warnings"),
                 failure_step="quality_gate",
-                error_message=", ".join(quality_report.get("blocking_issues", [])[:3]),
+                error_message=", ".join(quality_audit.get("blocking_issues", [])[:3]),
             )
             await emit_event(
                 pool, stage="blog", event_type="quality_gate_rejection",
@@ -1357,12 +1472,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 summary=f"Quality gate rejected {blueprint.slug} ({topic_type})",
                 severity="warning", actionable=True,
                 artifact_type="blog_post", run_id=str(task.id),
-                reason_code=quality_report.get("blocking_issues", ["unknown"])[0][:80] if quality_report.get("blocking_issues") else "unknown",
+                reason_code=quality_audit.get("blocking_issues", ["unknown"])[0][:80] if quality_audit.get("blocking_issues") else "unknown",
                 decision="rejected",
-                detail=quality_report,
+                detail=quality_audit,
             )
             continue
-        blueprint.data_context["generation_quality"] = quality_report
+        quality_audit = _canonicalize_blog_quality(
+            blueprint,
+            content=content,
+            report=quality_report,
+            boundary="generation",
+        )
 
         post_id = await _assemble_and_store(
             pool,
@@ -1388,11 +1508,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             pool, artifact_type="blog_post", artifact_id=blueprint.slug,
             run_id=str(task.id), attempt_no=1, stage="quality_gate",
             status="succeeded",
-            score=quality_report.get("score"),
-            threshold=quality_report.get("threshold"),
-            blocker_count=len(quality_report.get("blocking_issues", [])),
-            warning_count=len(quality_report.get("warnings", [])),
-            warnings=quality_report.get("warnings"),
+            score=quality_audit.get("score"),
+            threshold=quality_audit.get("threshold"),
+            blocker_count=len(quality_audit.get("blocking_issues", [])),
+            warning_count=len(quality_audit.get("warnings", [])),
+            warnings=quality_audit.get("warnings"),
         )
 
         n_charts = len(blueprint.charts)
@@ -1500,7 +1620,7 @@ async def _regenerate_existing_posts(
             link_posts = await _fetch_related_for_linking(
                 pool, blueprint.tags, blueprint.slug,
             )
-            content = _generate_content(
+            content = await _generate_content_async(
                 llm, blueprint, cfg.blog_post_max_tokens,
                 related_posts=link_posts,
             )
@@ -1519,7 +1639,7 @@ async def _regenerate_existing_posts(
                 )
                 continue
 
-            content, quality_report = _enforce_blog_quality(
+            content, quality_report = await _enforce_blog_quality_async(
                 llm,
                 blueprint,
                 content,
@@ -1527,10 +1647,16 @@ async def _regenerate_existing_posts(
                 related_posts=link_posts,
             )
             if content is None:
+                quality_audit = _canonicalize_blog_quality(
+                    blueprint,
+                    content=None,
+                    report=quality_report,
+                    boundary="generation",
+                )
                 logger.warning(
                     "Regen quality gate failed for %s: %s",
                     slug,
-                    ", ".join(quality_report.get("blocking_issues", [])[:4]) or "unknown issues",
+                    ", ".join(quality_audit.get("blocking_issues", [])[:4]) or "unknown issues",
                 )
                 await _upsert_blog_post_state(
                     pool,
@@ -1539,17 +1665,22 @@ async def _regenerate_existing_posts(
                     status="rejected",
                     run_id=str(task.id),
                     attempt_no=1,
-                    score=quality_report.get("score"),
-                    threshold=quality_report.get("threshold"),
-                    blocker_count=len(quality_report.get("blocking_issues", [])),
-                    warning_count=len(quality_report.get("warnings", [])),
+                    score=quality_audit.get("score"),
+                    threshold=quality_audit.get("threshold"),
+                    blocker_count=len(quality_audit.get("blocking_issues", [])),
+                    warning_count=len(quality_audit.get("warnings", [])),
                     failure_step="quality_gate",
                     error_code="quality_gate_rejection",
-                    error_summary=", ".join(quality_report.get("blocking_issues", [])[:3]),
-                    rejection_reason=", ".join(quality_report.get("blocking_issues", [])[:3]),
+                    error_summary=", ".join(quality_audit.get("blocking_issues", [])[:3]),
+                    rejection_reason=", ".join(quality_audit.get("blocking_issues", [])[:3]),
                 )
                 continue
-            blueprint.data_context["generation_quality"] = quality_report
+            _canonicalize_blog_quality(
+                blueprint,
+                content=content,
+                report=quality_report,
+                boundary="generation",
+            )
 
             post_id = await _assemble_and_store(
                 pool,
@@ -6047,13 +6178,18 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
 
 # -- Stage 4: Content Generation ----------------------------------
 
-def _generate_content(
+async def _generate_content_async(
     llm, blueprint: PostBlueprint, max_tokens: int,
     related_posts: list[dict[str, str]] | None = None,
     quality_feedback: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Single LLM call: blueprint in, {title, description, content} out."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
+    from ...services.b2b.llm_exact_cache import (
+        build_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+    )
     from ...skills.registry import get_skill_registry
 
     skill = get_skill_registry().get("digest/b2b_blog_post_generation")
@@ -6121,9 +6257,29 @@ def _generate_content(
         Message(role="system", content=skill.content),
         Message(role="user", content=json.dumps(payload, separators=(",", ":"), default=str)),
     ]
+    provider_name, model_name = llm_identity(llm)
+    request_envelope = build_request_envelope(
+        provider=provider_name,
+        model=model_name,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0.7,
+    )
 
     try:
-        result = llm.chat(messages=messages, max_tokens=max_tokens, temperature=0.7)
+        cached = await lookup_cached_text(
+            "b2b_blog_post_generation.content",
+            request_envelope,
+        )
+        result = None
+        text = cached["response_text"] if cached is not None else None
+        if text is None:
+            result = await asyncio.to_thread(
+                llm.chat,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.7,
+            )
         _usage = result.get("usage", {}) if isinstance(result, dict) else {}
         if _usage.get("input_tokens"):
             logger.info("b2b_blog_post_generation LLM tokens: in=%d out=%d",
@@ -6157,7 +6313,8 @@ def _generate_content(
                            inference_time_ms=_trace_meta.get("inference_time_ms"),
                            queue_time_ms=_trace_meta.get("queue_time_ms"),
                            metadata=_biz_ctx)
-        text = result.get("response", "") if isinstance(result, dict) else str(result)
+        if text is None:
+            text = result.get("response", "") if isinstance(result, dict) else str(result)
         logger.info("Blog LLM raw response length: %d chars", len(text or ""))
         if not text:
             logger.error("Blog LLM returned empty response for %s", blueprint.slug)
@@ -6201,10 +6358,34 @@ def _generate_content(
         if blueprint.cta and parsed.get("cta_body"):
             blueprint.cta["body"] = str(parsed["cta_body"])[:200]
 
+        parsed["_cache_request_envelope"] = request_envelope
+        parsed["_cache_provider"] = provider_name
+        parsed["_cache_model"] = model_name
         return parsed
     except Exception:
         logger.exception("LLM content generation failed")
         return None
+
+
+def _generate_content(
+    llm, blueprint: PostBlueprint, max_tokens: int,
+    related_posts: list[dict[str, str]] | None = None,
+    quality_feedback: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Sync wrapper retained for local/unit-test callers."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            _generate_content_async(
+                llm,
+                blueprint,
+                max_tokens,
+                related_posts=related_posts,
+                quality_feedback=quality_feedback,
+            )
+        )
+    raise RuntimeError("Use _generate_content_async() from async contexts")
 
 
 # -- Stage 5: Assembly & Storage ----------------------------------
@@ -6409,7 +6590,10 @@ async def _assemble_and_store(
     attempt_no: int | None = None,
 ) -> str:
     """Store the assembled post as a draft in blog_posts."""
+    from ...services.blog_quality import blog_quality_summary
+
     charts_json = [asdict(c) for c in blueprint.charts]
+    quality = blog_quality_summary(blueprint.data_context)
     post_id = await _upsert_blog_post_state(
         pool,
         blueprint,
@@ -6417,10 +6601,10 @@ async def _assemble_and_store(
         status="draft",
         run_id=run_id,
         attempt_no=attempt_no,
-        score=(blueprint.data_context.get("generation_quality") or {}).get("score"),
-        threshold=(blueprint.data_context.get("generation_quality") or {}).get("threshold"),
-        blocker_count=len((blueprint.data_context.get("generation_quality") or {}).get("blocking_issues", []) or []),
-        warning_count=len((blueprint.data_context.get("generation_quality") or {}).get("warnings", []) or []),
+        score=quality.get("score"),
+        threshold=quality.get("threshold"),
+        blocker_count=len(quality.get("blocking_issues", []) or []),
+        warning_count=len(quality.get("warnings", []) or []),
         content=content,
     )
     if not post_id:

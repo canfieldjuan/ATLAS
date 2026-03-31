@@ -2058,7 +2058,13 @@ def _best_cross_vendor_comparison(scorecard: dict[str, Any]) -> dict[str, Any] |
     ]
     if not comparisons:
         return None
-    return max(comparisons, key=lambda comp: float(comp.get("confidence") or 0))
+    return max(
+        comparisons,
+        key=lambda comp: (
+            float(comp.get("confidence") or 0),
+            str(comp.get("opponent") or "").strip().lower(),
+        ),
+    )
 
 
 def _build_scorecard_locked_facts(scorecard: dict[str, Any]) -> dict[str, Any]:
@@ -2070,12 +2076,12 @@ def _build_scorecard_locked_facts(scorecard: dict[str, Any]) -> dict[str, Any]:
     if float(scorecard.get("archetype_confidence") or 0) >= _synthesis_reference_confidence_min():
         if scorecard.get("archetype"):
             locked["archetype"] = scorecard["archetype"]
-    allowed_opponents = [
-        str(comp.get("opponent") or "")
+    allowed_opponents = sorted({
+        str(comp.get("opponent") or "").strip()
         for comp in (scorecard.get("cross_vendor_comparisons") or [])
-        if str(comp.get("opponent") or "")
+        if str(comp.get("opponent") or "").strip()
         and float(comp.get("confidence") or 0) >= _synthesis_reference_confidence_min()
-    ]
+    })
     if allowed_opponents:
         locked["allowed_opponents"] = allowed_opponents
     best = _best_cross_vendor_comparison(scorecard)
@@ -2804,6 +2810,38 @@ def _is_generic_pain_label(label: Any) -> bool:
     return _normalize_generic_pain_label(label) == "overall_dissatisfaction"
 
 
+def _executive_summary_representative_quote(
+    feed: list[dict[str, Any]],
+    *,
+    limit: int = 5,
+) -> str | None:
+    """Pick a churn-aligned representative quote from the weekly feed."""
+    candidates: list[tuple[int, float, int, str]] = []
+    fallback_quotes: list[tuple[int, float, int, str]] = []
+    for idx, entry in enumerate(feed[: max(limit, 1)]):
+        if not isinstance(entry, dict):
+            continue
+        quote = str(entry.get("key_quote") or "").strip()
+        if not quote:
+            continue
+        try:
+            urgency = float(entry.get("avg_urgency") or 0.0)
+        except (TypeError, ValueError):
+            urgency = 0.0
+        ranked = (idx, urgency, len(quote), quote)
+        if _quote_has_pain_signal(quote, urgency=urgency):
+            candidates.append(ranked)
+        else:
+            fallback_quotes.append(ranked)
+    if candidates:
+        candidates.sort(key=lambda item: (-item[1], item[0], -item[2]))
+        return candidates[0][3]
+    if fallback_quotes:
+        fallback_quotes.sort(key=lambda item: (item[0], -item[1], -item[2]))
+        return fallback_quotes[0][3]
+    return None
+
+
 def _build_validated_executive_summary(
     parsed: dict[str, Any],
     *,
@@ -3039,7 +3077,7 @@ def _build_validated_executive_summary(
     top_vendors: list[str] = []
     top_pains: list[str] = []
     top_alternatives: list[str] = []
-    quote = None
+    quote = _executive_summary_representative_quote(top_entries)
     churn_density_defined = False
 
     for entry in top_entries:
@@ -3075,8 +3113,6 @@ def _build_validated_executive_summary(
             comp = dt.get("competitor", "")
             if comp and comp not in top_alternatives:
                 top_alternatives.append(comp)
-        if not quote and entry.get("key_quote"):
-            quote = str(entry["key_quote"])
 
     lines = [
         (

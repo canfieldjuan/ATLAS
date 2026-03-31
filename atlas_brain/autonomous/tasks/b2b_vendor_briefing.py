@@ -792,33 +792,61 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
             if isinstance(a, dict) and a.get("title")
         ],
     }
+    payload_json = json.dumps(payload)
+    cache_namespace = "b2b_vendor_briefing.analyst_summary"
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.b2b_churn.briefing_analyst_model,
-                    "messages": [
-                        {"role": "system", "content": _ANALYST_SYSTEM_PROMPT},
-                        {"role": "user", "content": json.dumps(payload)},
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 4000,
-                    "reasoning": {"effort": "low"},
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        from ...services.b2b.llm_exact_cache import (
+            build_request_envelope,
+            lookup_cached_text,
+            store_cached_text,
+        )
 
-        content = data["choices"][0]["message"].get("content")
-        if not content:
-            logger.warning("Analyst enrichment returned empty content")
-            return
+        request_envelope = build_request_envelope(
+            provider="openrouter",
+            model=settings.b2b_churn.briefing_analyst_model,
+            messages=[
+                {"role": "system", "content": _ANALYST_SYSTEM_PROMPT},
+                {"role": "user", "content": payload_json},
+            ],
+            max_tokens=4000,
+            temperature=0.3,
+            extra={"reasoning": {"effort": "low"}},
+        )
+        content: str | None = None
+        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        if cached is not None:
+            try:
+                json.loads(cached["response_text"])
+                content = cached["response_text"]
+            except json.JSONDecodeError:
+                content = None
+
+        if content is None:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.b2b_churn.briefing_analyst_model,
+                        "messages": [
+                            {"role": "system", "content": _ANALYST_SYSTEM_PROMPT},
+                            {"role": "user", "content": payload_json},
+                        ],
+                        "temperature": 0.3,
+                        "max_tokens": 4000,
+                        "reasoning": {"effort": "low"},
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            content = data["choices"][0]["message"].get("content")
+            if not content:
+                logger.warning("Analyst enrichment returned empty content")
+                return
 
         result = json.loads(content)
 
@@ -834,6 +862,18 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
             briefing["displacement_qualifier"] = result["displacement_qualifier"]
         if result.get("account_persona_context"):
             briefing["account_persona_context"] = result["account_persona_context"]
+
+        await store_cached_text(
+            cache_namespace,
+            request_envelope,
+            provider="openrouter",
+            model=settings.b2b_churn.briefing_analyst_model,
+            response_text=content,
+            metadata={
+                "vendor_name": briefing.get("vendor_name"),
+                "category": briefing.get("category"),
+            },
+        )
 
         logger.info(
             "Analyst enrichment applied for %s (tone_band=%s)",
@@ -1067,25 +1107,47 @@ async def _llm_call(
     system_prompt: str,
     user_prompt: str,
     max_tokens: int = 1024,
+    *,
+    cache_namespace: str = "b2b_vendor_briefing.account_card",
+    cache_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Single LLM call returning parsed JSON or None."""
     from ...services.protocols import Message
+    from ...services.b2b.llm_exact_cache import (
+        build_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
 
     messages = [
         Message(role="system", content=system_prompt),
         Message(role="user", content=user_prompt),
     ]
+    provider_name, model_name = llm_identity(llm)
+    request_envelope = build_request_envelope(
+        provider=provider_name,
+        model=model_name,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0.3,
+    )
 
     try:
+        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        text: str | None = None
+        usage: dict[str, int] = {}
+        if cached is not None:
+            text = cached["response_text"]
+
         if hasattr(llm, "chat_async"):
-            text = (await llm.chat_async(
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.3,
-            )).strip()
-            usage = {}
-            model_name = getattr(llm, "model_name", "unknown")
-        else:
+            if text is None:
+                text = (await llm.chat_async(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.3,
+                )).strip()
+        elif text is None:
             result = await asyncio.wait_for(
                 asyncio.to_thread(
                     llm.chat,
@@ -1097,7 +1159,6 @@ async def _llm_call(
             )
             text = result.get("response", "").strip() if isinstance(result, dict) else str(result).strip()
             usage = result.get("usage", {}) if isinstance(result, dict) else {}
-            model_name = result.get("model", "unknown") if isinstance(result, dict) else "unknown"
 
         if not text:
             return None
@@ -1107,7 +1168,47 @@ async def _llm_call(
         text = re.sub(r"\n?```$", "", text)
         text = text.strip()
 
-        data = json.loads(text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            if cached is None:
+                raise
+            logger.warning("Cached account card response was invalid JSON; retrying live")
+            text = None
+            usage = {}
+            if hasattr(llm, "chat_async"):
+                text = (await llm.chat_async(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.3,
+                )).strip()
+            else:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        llm.chat,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=0.3,
+                    ),
+                    timeout=60,
+                )
+                text = result.get("response", "").strip() if isinstance(result, dict) else str(result).strip()
+                usage = result.get("usage", {}) if isinstance(result, dict) else {}
+            if not text:
+                return None
+            text = re.sub(r"^```\w*\n?", "", text)
+            text = re.sub(r"\n?```$", "", text)
+            text = text.strip()
+            data = json.loads(text)
+        await store_cached_text(
+            cache_namespace,
+            request_envelope,
+            provider=provider_name,
+            model=model_name,
+            response_text=text,
+            usage=usage,
+            metadata=cache_metadata,
+        )
         return {
             "data": data,
             "model": model_name,

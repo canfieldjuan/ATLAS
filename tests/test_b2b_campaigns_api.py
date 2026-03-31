@@ -549,17 +549,17 @@ async def test_campaign_quality_trends_returns_series(monkeypatch):
 async def test_campaign_quality_diagnostics_returns_grouped_failure_explanations(monkeypatch):
     class Pool:
         async def fetch(self, query, *_args):
-            if "GROUP BY boundary" in query:
+            if "COALESCE(bc.metadata->'latest_specificity_audit'->>'boundary', 'missing') AS boundary" in query:
                 return [{"boundary": "manual_approval", "cnt": 2}]
-            if "GROUP BY cause_type" in query:
+            if "failure_explanation'->>'cause_type'" in query:
                 return [{"cause_type": "content_ignored_available_evidence", "cnt": 2}]
-            if "GROUP BY reason" in query:
+            if "failure_explanation'->>'primary_blocker'" in query:
                 return [{"reason": "missing_exact_proof_term", "cnt": 2}]
-            if "GROUP BY missing_input.input" in query:
+            if "jsonb_array_elements_text" in query:
                 return [{"input": "reasoning_reference_ids", "cnt": 1}]
-            if "GROUP BY target_mode" in query:
+            if "COALESCE(bc.target_mode, bc.metadata->>'target_mode', 'unknown') AS target_mode" in query:
                 return [{"target_mode": "vendor_retention", "cnt": 2}]
-            if "GROUP BY vendor_name" in query:
+            if "COALESCE(bc.vendor_name, 'unknown') AS vendor_name" in query:
                 return [{"vendor_name": "Slack", "cnt": 2}]
             return []
 

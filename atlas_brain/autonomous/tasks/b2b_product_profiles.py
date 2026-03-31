@@ -522,6 +522,11 @@ async def _synthesize_profile(
 
     Returns (summary, pain_addressed).
     """
+    from ...services.b2b.llm_exact_cache import (
+        build_request_envelope,
+        lookup_cached_text,
+        store_cached_text,
+    )
     from ...skills import get_skill_registry
 
     skill = get_skill_registry().get("b2b/product_profile_synthesis")
@@ -551,6 +556,11 @@ async def _synthesize_profile(
 
     cfg = settings.b2b_churn
     backend = cfg.product_profile_llm_backend
+    model_id = (
+        cfg.product_profile_openrouter_model
+        if backend == "openrouter"
+        else cfg.product_profile_vllm_model
+    )
 
     messages = [
         {"role": "system", "content": skill.content},
@@ -561,9 +571,33 @@ async def _synthesize_profile(
     _owns_client = client is None
 
     try:
+        cache_namespace = "b2b_product_profiles.synthesis"
+        request_envelope = build_request_envelope(
+            provider=backend,
+            model=model_id,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.3,
+        )
+        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        text: str | None = None
+        if cached is not None:
+            candidate = str(cached["response_text"] or "").strip()
+            candidate = re.sub(r"<think>[\s\S]*?</think>", "", candidate).strip()
+            candidate = re.sub(r"^```(?:json)?\s*\n?", "", candidate)
+            candidate = re.sub(r"\n?```\s*$", "", candidate)
+            candidate = candidate.strip()
+            try:
+                json.loads(candidate)
+            except json.JSONDecodeError:
+                text = None
+            else:
+                text = candidate
+
         if backend == "openrouter":
-            text = await _call_openrouter(messages, max_tokens, cfg, _client)
-        else:
+            if text is None:
+                text = await _call_openrouter(messages, max_tokens, cfg, _client)
+        elif text is None:
             text = await _call_vllm(messages, max_tokens, cfg, _client)
 
         if not text:
@@ -594,6 +628,17 @@ async def _synthesize_profile(
             else:
                 validated_pain[cat] = pain_heuristic.get(cat, 0.5)
 
+        await store_cached_text(
+            cache_namespace,
+            request_envelope,
+            provider=backend,
+            model=model_id,
+            response_text=text,
+            metadata={
+                "vendor_name": vendor_name,
+                "product_category": metrics.get("product_category"),
+            },
+        )
         return summary, validated_pain
 
     except json.JSONDecodeError:

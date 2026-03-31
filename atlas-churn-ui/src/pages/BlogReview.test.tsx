@@ -96,6 +96,7 @@ describe('BlogReview preview mode', () => {
       </MemoryRouter>,
     )
 
+    expect(screen.getByRole('link', { name: 'Diagnostics' })).toHaveAttribute('href', '/blog-diagnostics')
     await user.click(await screen.findByText(draftSummary.title))
 
     await screen.findByText('Reviewer Notes')

@@ -117,18 +117,73 @@ async def run_intervention_pipeline(
     }
 
     from ..config import settings
-    from ..pipelines.llm import call_llm_with_skill
+    from ..pipelines.llm import call_llm_with_skill, get_pipeline_llm
+    from ..services.b2b.llm_exact_cache import (
+        CacheUnavailable,
+        build_skill_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
 
     cfg = settings.external_data
     total_input_tokens = 0
     total_output_tokens = 0
 
     stage1_usage: dict[str, Any] = {}
-    playbook_text = call_llm_with_skill(
-        "intelligence/adaptive_intervention", playbook_payload,
-        max_tokens=cfg.intervention_stage1_max_tokens, temperature=cfg.intervention_temperature,
-        usage_out=stage1_usage,
-    )
+    stage1_namespace = "intervention.stage1"
+    stage1_llm = get_pipeline_llm(workload="synthesis")
+    stage1_provider, stage1_model = llm_identity(stage1_llm)
+    stage1_request: dict[str, Any] | None = None
+    if stage1_provider and stage1_model:
+        try:
+            _, stage1_request, _ = build_skill_request_envelope(
+                namespace=stage1_namespace,
+                skill_name="intelligence/adaptive_intervention",
+                payload=playbook_payload,
+                provider=stage1_provider,
+                model=stage1_model,
+                max_tokens=cfg.intervention_stage1_max_tokens,
+                temperature=cfg.intervention_temperature,
+            )
+        except CacheUnavailable:
+            stage1_request = None
+
+    playbook_text: str | None = None
+    if stage1_request is not None:
+        cached = await lookup_cached_text(stage1_namespace, stage1_request)
+        if cached is not None:
+            playbook_text = cached["response_text"]
+            stage1_usage.update(
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "model": cached["model"],
+                    "provider": cached["provider"],
+                    "cache_hit": True,
+                }
+            )
+
+    if playbook_text is None:
+        playbook_text = call_llm_with_skill(
+            "intelligence/adaptive_intervention", playbook_payload,
+            max_tokens=cfg.intervention_stage1_max_tokens, temperature=cfg.intervention_temperature,
+            workload="synthesis",
+            usage_out=stage1_usage,
+        )
+        if playbook_text and stage1_request is not None:
+            await store_cached_text(
+                stage1_namespace,
+                stage1_request,
+                provider=str(stage1_usage.get("provider") or stage1_provider),
+                model=str(stage1_usage.get("model") or stage1_model),
+                response_text=playbook_text,
+                usage=stage1_usage,
+                metadata={
+                    "entity_name": entity_name,
+                    "audience": audience,
+                },
+            )
     total_input_tokens += stage1_usage.get("input_tokens", 0)
     total_output_tokens += stage1_usage.get("output_tokens", 0)
 
@@ -167,11 +222,60 @@ async def run_intervention_pipeline(
         simulation_payload["sensor_analysis"] = sensor_summary
 
     stage2_usage: dict[str, Any] = {}
-    simulation_text = call_llm_with_skill(
-        "intelligence/simulated_evolution", simulation_payload,
-        max_tokens=cfg.intervention_stage2_max_tokens, temperature=cfg.intervention_temperature,
-        usage_out=stage2_usage,
-    )
+    stage2_namespace = "intervention.stage2"
+    stage2_llm = get_pipeline_llm(workload="synthesis")
+    stage2_provider, stage2_model = llm_identity(stage2_llm)
+    stage2_request: dict[str, Any] | None = None
+    if stage2_provider and stage2_model:
+        try:
+            _, stage2_request, _ = build_skill_request_envelope(
+                namespace=stage2_namespace,
+                skill_name="intelligence/simulated_evolution",
+                payload=simulation_payload,
+                provider=stage2_provider,
+                model=stage2_model,
+                max_tokens=cfg.intervention_stage2_max_tokens,
+                temperature=cfg.intervention_temperature,
+            )
+        except CacheUnavailable:
+            stage2_request = None
+
+    simulation_text: str | None = None
+    if stage2_request is not None:
+        cached = await lookup_cached_text(stage2_namespace, stage2_request)
+        if cached is not None:
+            simulation_text = cached["response_text"]
+            stage2_usage.update(
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "model": cached["model"],
+                    "provider": cached["provider"],
+                    "cache_hit": True,
+                }
+            )
+
+    if simulation_text is None:
+        simulation_text = call_llm_with_skill(
+            "intelligence/simulated_evolution", simulation_payload,
+            max_tokens=cfg.intervention_stage2_max_tokens, temperature=cfg.intervention_temperature,
+            workload="synthesis",
+            usage_out=stage2_usage,
+        )
+        if simulation_text and stage2_request is not None:
+            await store_cached_text(
+                stage2_namespace,
+                stage2_request,
+                provider=str(stage2_usage.get("provider") or stage2_provider),
+                model=str(stage2_usage.get("model") or stage2_model),
+                response_text=simulation_text,
+                usage=stage2_usage,
+                metadata={
+                    "entity_name": entity_name,
+                    "audience": audience,
+                    "simulation_horizon": simulation_horizon,
+                },
+            )
     total_input_tokens += stage2_usage.get("input_tokens", 0)
     total_output_tokens += stage2_usage.get("output_tokens", 0)
 
@@ -259,11 +363,46 @@ async def run_intervention_pipeline(
             }
 
             stage3_usage: dict[str, Any] = {}
-            narrative_text = call_llm_with_skill(
-                "intelligence/autonomous_narrative_architect", narrative_payload,
-                max_tokens=cfg.intervention_stage3_max_tokens, temperature=cfg.intervention_temperature,
-                usage_out=stage3_usage,
-            )
+            stage3_namespace = "intervention.stage3"
+            stage3_llm = get_pipeline_llm(workload="synthesis")
+            stage3_provider, stage3_model = llm_identity(stage3_llm)
+            stage3_request: dict[str, Any] | None = None
+            if stage3_provider and stage3_model:
+                try:
+                    _, stage3_request, _ = build_skill_request_envelope(
+                        namespace=stage3_namespace,
+                        skill_name="intelligence/autonomous_narrative_architect",
+                        payload=narrative_payload,
+                        provider=stage3_provider,
+                        model=stage3_model,
+                        max_tokens=cfg.intervention_stage3_max_tokens,
+                        temperature=cfg.intervention_temperature,
+                    )
+                except CacheUnavailable:
+                    stage3_request = None
+
+            narrative_text: str | None = None
+            if stage3_request is not None:
+                cached = await lookup_cached_text(stage3_namespace, stage3_request)
+                if cached is not None:
+                    narrative_text = cached["response_text"]
+                    stage3_usage.update(
+                        {
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "model": cached["model"],
+                            "provider": cached["provider"],
+                            "cache_hit": True,
+                        }
+                    )
+
+            if narrative_text is None:
+                narrative_text = call_llm_with_skill(
+                    "intelligence/autonomous_narrative_architect", narrative_payload,
+                    max_tokens=cfg.intervention_stage3_max_tokens, temperature=cfg.intervention_temperature,
+                    workload="synthesis",
+                    usage_out=stage3_usage,
+                )
             total_input_tokens += stage3_usage.get("input_tokens", 0)
             total_output_tokens += stage3_usage.get("output_tokens", 0)
 
@@ -291,6 +430,24 @@ async def run_intervention_pipeline(
                         "content_check": content_check,
                     }
                 else:
+                    if (
+                        narrative_text
+                        and stage3_request is not None
+                        and not stage3_usage.get("cache_hit")
+                    ):
+                        await store_cached_text(
+                            stage3_namespace,
+                            stage3_request,
+                            provider=str(stage3_usage.get("provider") or stage3_provider),
+                            model=str(stage3_usage.get("model") or stage3_model),
+                            response_text=narrative_text,
+                            usage=stage3_usage,
+                            metadata={
+                                "entity_name": entity_name,
+                                "audience": audience,
+                                "risk_tolerance": risk_tolerance,
+                            },
+                        )
                     await gate.log_event(
                         event_type="intervention.stage_completed",
                         source=requested_by or "unknown",

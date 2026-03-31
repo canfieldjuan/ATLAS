@@ -25,6 +25,7 @@ import type {
   ObjectionHandlerViewModel,
   RecommendedPlayViewModel,
   ReasoningAnchorExamplesViewModel,
+  ReasoningReferenceIdsViewModel,
   ReasoningWitnessViewModel,
   TalkTrackViewModel,
   VendorDeepDiveViewModel,
@@ -68,6 +69,49 @@ function MetricRow({ label, value, color }: { label: string; value: string | num
     <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 text-sm items-start">
       <span className="text-slate-400 min-w-0 break-words">{label}</span>
       <span className={clsx('min-w-0 break-words text-right', color ?? 'text-white')}>{String(value)}</span>
+    </div>
+  )
+}
+
+function reasoningSourceLabel(value: string | undefined): string {
+  if (!value) return 'Deterministic'
+  if (value === 'b2b_reasoning_synthesis') return 'Synthesis-backed'
+  return value.replace(/_/g, ' ')
+}
+
+function referenceIdCounts(referenceIds: ReasoningReferenceIdsViewModel | undefined): { metrics: number; witnesses: number; total: number } {
+  const metrics = referenceIds?.metric_ids.length ?? 0
+  const witnesses = referenceIds?.witness_ids.length ?? 0
+  return { metrics, witnesses, total: metrics + witnesses }
+}
+
+function ProvenanceStrip({
+  source,
+  referenceIds,
+  extraBadges = [],
+}: {
+  source?: string
+  referenceIds?: ReasoningReferenceIdsViewModel
+  extraBadges?: string[]
+}) {
+  const counts = referenceIdCounts(referenceIds)
+  const badges = [
+    `Source: ${reasoningSourceLabel(source)}`,
+    counts.total > 0 ? `${counts.total} refs` : 'No refs',
+    counts.metrics > 0 ? `${counts.metrics} metrics` : null,
+    counts.witnesses > 0 ? `${counts.witnesses} witnesses` : null,
+    ...extraBadges,
+  ].filter(Boolean) as string[]
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {badges.map((badge) => (
+        <span
+          key={badge}
+          className="px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300"
+        >
+          {badge}
+        </span>
+      ))}
     </div>
   )
 }
@@ -170,6 +214,11 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
 
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
+      <ProvenanceStrip
+        source={data.reasoning_source}
+        referenceIds={data.reasoning_reference_ids}
+        extraBadges={h2h.reference_ids ? [`Head-to-head refs: ${referenceIdCounts(h2h.reference_ids).total}`] : []}
+      />
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(sources).map(([key, value]) => (
           <span
@@ -380,6 +429,12 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
 
       {(h2h.conclusion || h2h.winner) && (
         <SectionCard title="Head to Head" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
+          <div className="mb-3">
+            <ProvenanceStrip
+              source={h2h.synthesized ? 'displacement_fallback' : 'b2b_reasoning_synthesis'}
+              referenceIds={h2h.reference_ids}
+            />
+          </div>
           <div className="space-y-1">
             {h2h.winner && <MetricRow label="Winner" value={h2h.winner} color="text-cyan-400 font-bold" />}
             {h2h.confidence != null && <MetricRow label="Confidence" value={formatPercent(h2h.confidence)} />}
@@ -553,6 +608,11 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
 
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
+      <ProvenanceStrip
+        source={data.reasoning_source}
+        referenceIds={data.reasoning_reference_ids}
+        extraBadges={data.category_council?.reference_ids ? [`Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}`] : []}
+      />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-xs text-slate-400 mb-1">Total Accounts</p>
@@ -654,6 +714,12 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
 
       {data.category_council && (data.category_council.conclusion || data.category_council.market_regime) && (
         <SectionCard title="Category Council" icon={<Users className="h-4 w-4 text-emerald-400" />}>
+          <div className="mb-3">
+            <ProvenanceStrip
+              source="b2b_reasoning_synthesis"
+              referenceIds={data.category_council.reference_ids}
+            />
+          </div>
           <div className="space-y-1">
             {data.category_council.market_regime && <MetricRow label="Market Regime" value={data.category_council.market_regime.replace(/_/g, ' ')} />}
             {data.category_council.winner && <MetricRow label="Category Winner" value={data.category_council.winner} color="text-green-400" />}
@@ -748,6 +814,14 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
     : null
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
+      <ProvenanceStrip
+        source={data.reasoning_source}
+        referenceIds={data.reasoning_reference_ids}
+        extraBadges={[
+          data.cross_vendor_battles.length > 0 ? `${data.cross_vendor_battles.length} battle refs` : '',
+          data.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}` : '',
+        ].filter(Boolean)}
+      />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-xs text-slate-400 mb-1">Churn Pressure</p>
@@ -872,6 +946,22 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
                 </ul>
               </div>
             )}
+          </div>
+        </SectionCard>
+      )}
+
+      {data.cross_vendor_battles.length > 0 && (
+        <SectionCard title="Cross-vendor Battles" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
+          <div className="space-y-3">
+            {data.cross_vendor_battles.slice(0, 4).map((battle, index) => (
+              <div key={`${battle.opponent ?? 'battle'}-${index}`} className="bg-slate-800/50 rounded-lg p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-white">{battle.opponent ?? battle.loser ?? battle.winner ?? 'Cross-vendor battle'}</p>
+                  <ProvenanceStrip source="b2b_reasoning_synthesis" referenceIds={battle.reference_ids} />
+                </div>
+                {battle.conclusion && <p className="text-sm text-slate-300 mt-2">{battle.conclusion}</p>}
+              </div>
+            ))}
           </div>
         </SectionCard>
       )}
@@ -1415,6 +1505,11 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
             key={`${item.vendor ?? 'feed'}-${index}`}
             className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-2.5"
           >
+            <ProvenanceStrip
+              source={item.reasoning_source}
+              referenceIds={item.reasoning_reference_ids}
+              extraBadges={item.category_council?.reference_ids ? [`Council refs: ${referenceIdCounts(item.category_council.reference_ids).total}`] : []}
+            />
             {/* Header row */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-200">

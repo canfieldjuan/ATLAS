@@ -88,6 +88,7 @@ export interface CrossVendorBattleViewModel {
   conclusion?: string
   confidence?: number | null
   key_insights: KeyInsightViewModel[]
+  reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ChallengerBriefDisplacementViewModel {
@@ -172,6 +173,7 @@ export interface ChallengerBriefViewModel {
   data_sources: Record<string, boolean>
   reasoning_anchor_examples?: ReasoningAnchorExamplesViewModel
   reasoning_witness_highlights?: ReasoningWitnessViewModel[]
+  reasoning_source?: string
   reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
@@ -216,6 +218,7 @@ export interface CategoryCouncilViewModel {
   loser?: string
   durability?: string
   key_insights: KeyInsightViewModel[]
+  reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ActiveEvaluationDeadlineViewModel {
@@ -312,6 +315,8 @@ export interface BattleCardViewModel {
   llm_render_status?: string
   quality_status?: string
   quality_score?: number | null
+  reasoning_source?: string
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ComparisonMetricSnapshotViewModel {
@@ -410,6 +415,8 @@ export interface WeeklyChurnFeedItemViewModel {
   account_pressure_summary?: string
   timing_summary?: string
   priority_timing_triggers: string[]
+  reasoning_source?: string
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface DeepDivePainBreakdownViewModel {
@@ -527,4 +534,6 @@ export interface AccountsInMotionViewModel {
   priority_timing_triggers?: string[]
   segment_targeting_summary?: string
   category_council?: CategoryCouncilViewModel
+  reasoning_source?: string
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }

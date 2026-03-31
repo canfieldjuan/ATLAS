@@ -3522,6 +3522,12 @@ async def _generate_content(
 ) -> dict[str, Any] | None:
     """Call LLM, validate output, retry once if word count exceeded."""
     from ...pipelines.llm import clean_llm_output
+    from ...services.b2b.llm_exact_cache import (
+        build_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
 
     request_payload = payload
     working_payload = dict(payload)
@@ -3533,6 +3539,8 @@ async def _generate_content(
     last_max = 0
     retry_reasons: list[str] = []
     specificity_context = _campaign_specificity_context(request_payload)
+    provider_name, model_name = llm_identity(llm)
+    cache_namespace = "b2b_campaign_generation.content"
     if specificity_context:
         request_payload["_campaign_specificity_context"] = specificity_context
         proof_terms = _campaign_specificity_terms(
@@ -3571,7 +3579,20 @@ async def _generate_content(
                         f"format.\n\n{user_content}"
                     )
 
-        text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
+        request_envelope = build_request_envelope(
+            provider=provider_name,
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        text = cached["response_text"] if cached is not None else None
+        if text is None:
+            text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
         if not text:
             request_payload["_generation_audit"] = {
                 "status": "failed",
@@ -3734,6 +3755,18 @@ async def _generate_content(
             "validation_issues": issues,
             "specificity": specificity,
         }
+        await store_cached_text(
+            cache_namespace,
+            request_envelope,
+            provider=provider_name,
+            model=model_name,
+            response_text=json.dumps(validated, separators=(",", ":"), default=str),
+            metadata={
+                "channel": channel,
+                "tier": tier,
+                "target_mode": target_mode,
+            },
+        )
         return validated
 
     request_payload["_generation_audit"] = {

@@ -533,19 +533,30 @@ async def campaign_quality_trends(
     pool = _pool_or_503()
     scope, scope_params = _campaign_scope_clause("bc", user)
     activity_ts = _campaign_activity_timestamp_sql("bc")
-    params: list[Any] = list(scope_params)
-    days_idx = len(params) + 1
-    top_n_idx = len(params) + 2
-    params.extend([days, top_n])
+    trend_params: list[Any] = list(scope_params)
+    days_idx = len(trend_params) + 1
+    top_n_idx = len(trend_params) + 2
+    trend_params.extend([days, top_n])
+    daily_params: list[Any] = list(scope_params)
+    daily_days_idx = len(daily_params) + 1
+    daily_params.append(days)
     if scope:
-        where = (
+        trend_where = (
             f"{scope} AND {activity_ts} >= "
             f"NOW() - (${days_idx}::int * INTERVAL '1 day')"
         )
+        daily_where = (
+            f"{scope} AND {activity_ts} >= "
+            f"NOW() - (${daily_days_idx}::int * INTERVAL '1 day')"
+        )
     else:
-        where = (
+        trend_where = (
             f" WHERE {activity_ts} >= "
             f"NOW() - (${days_idx}::int * INTERVAL '1 day')"
+        )
+        daily_where = (
+            f" WHERE {activity_ts} >= "
+            f"NOW() - (${daily_days_idx}::int * INTERVAL '1 day')"
         )
 
     trend_rows = await pool.fetch(
@@ -558,7 +569,7 @@ async def campaign_quality_trends(
             JOIN LATERAL jsonb_array_elements_text(
                 COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
             ) AS blocker(reason) ON TRUE
-            {where}
+            {trend_where}
         ),
         top_reasons AS (
             SELECT reason, COUNT(*) AS total
@@ -573,7 +584,7 @@ async def campaign_quality_trends(
         GROUP BY blocker_rows.day, blocker_rows.reason, top_reasons.total
         ORDER BY blocker_rows.day ASC, top_reasons.total DESC, blocker_rows.reason ASC
         """,
-        *params,
+        *trend_params,
     )
     daily_rows = await pool.fetch(
         f"""
@@ -585,11 +596,11 @@ async def campaign_quality_trends(
                 )
             ), 0) AS blocker_total
         FROM b2b_campaigns bc
-        {where}
+        {daily_where}
         GROUP BY DATE_TRUNC('day', {activity_ts})::date::text
         ORDER BY day ASC
         """,
-        *params,
+        *daily_params,
     )
     reason_totals: dict[str, int] = {}
     for row in trend_rows:
@@ -657,8 +668,8 @@ async def campaign_quality_diagnostics(
                COUNT(*) AS cnt
         FROM b2b_campaigns bc
         {where}
-        GROUP BY boundary
-        ORDER BY cnt DESC, boundary ASC
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
         LIMIT ${top_n_idx}
         """,
         *params,
@@ -672,8 +683,8 @@ async def campaign_quality_diagnostics(
                COUNT(*) AS cnt
         FROM b2b_campaigns bc
         {where}
-        GROUP BY cause_type
-        ORDER BY cnt DESC, cause_type ASC
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
         LIMIT ${top_n_idx}
         """,
         *params,
@@ -689,8 +700,8 @@ async def campaign_quality_diagnostics(
                COUNT(*) AS cnt
         FROM b2b_campaigns bc
         {where}
-        GROUP BY reason
-        ORDER BY cnt DESC, reason ASC
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
         LIMIT ${top_n_idx}
         """,
         *params,
@@ -706,8 +717,8 @@ async def campaign_quality_diagnostics(
             )
         ) AS missing_input(input) ON TRUE
         {where}
-        GROUP BY missing_input.input
-        ORDER BY cnt DESC, missing_input.input ASC
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
         LIMIT ${top_n_idx}
         """,
         *params,
@@ -718,8 +729,8 @@ async def campaign_quality_diagnostics(
                COUNT(*) AS cnt
         FROM b2b_campaigns bc
         {where}
-        GROUP BY target_mode
-        ORDER BY cnt DESC, target_mode ASC
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
         LIMIT ${top_n_idx}
         """,
         *params,
@@ -730,8 +741,8 @@ async def campaign_quality_diagnostics(
                COUNT(*) AS cnt
         FROM b2b_campaigns bc
         {where}
-        GROUP BY vendor_name
-        ORDER BY cnt DESC, vendor_name ASC
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
         LIMIT ${top_n_idx}
         """,
         *params,

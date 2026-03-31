@@ -714,8 +714,7 @@ async def load_cross_vendor_synthesis_lookup(
 
     rows = await pool.fetch(
         """
-        SELECT DISTINCT ON (analysis_type, vendors, category)
-               analysis_type, vendors, category, synthesis,
+        SELECT analysis_type, vendors, category, synthesis,
                as_of_date, created_at
         FROM b2b_cross_vendor_reasoning_synthesis
         WHERE as_of_date <= $1
@@ -731,6 +730,15 @@ async def load_cross_vendor_synthesis_lookup(
     councils: dict[str, dict] = {}
     asymmetries: dict[tuple[str, ...], dict] = {}
 
+    def _prefer_candidate(existing: dict[str, Any] | None, candidate: dict[str, Any]) -> bool:
+        if existing is None:
+            return True
+        existing_refs = bool(existing.get("reference_ids"))
+        candidate_refs = bool(candidate.get("reference_ids"))
+        if not existing_refs and candidate_refs:
+            return True
+        return False
+
     for r in rows:
         atype = r["analysis_type"]
         vendors = list(r["vendors"]) if r["vendors"] else []
@@ -744,10 +752,17 @@ async def load_cross_vendor_synthesis_lookup(
         if not isinstance(raw, dict):
             continue
 
-        # The synthesis column stores the full contract. Extract the
-        # conclusion sub-dict that matches legacy shape.
-        conclusion = raw.get("conclusion") or raw
-        confidence = float(conclusion.get("confidence") or raw.get("confidence") or 0)
+        # The synthesis column stores either:
+        # 1. a normalized top-level contract with winner/loser/conclusion keys
+        # 2. a wrapper object with a nested "conclusion" dict
+        nested_conclusion = raw.get("conclusion")
+        if isinstance(nested_conclusion, dict):
+            conclusion = nested_conclusion
+        else:
+            conclusion = raw
+        confidence = float(
+            conclusion.get("confidence") or raw.get("confidence") or 0,
+        )
 
         entry = {
             "conclusion": conclusion,
@@ -757,17 +772,20 @@ async def load_cross_vendor_synthesis_lookup(
             "computed_date": r["as_of_date"],
             "source": "synthesis",
         }
+        reference_ids = raw.get("reference_ids")
+        if isinstance(reference_ids, dict) and reference_ids:
+            entry["reference_ids"] = _copy_reference_ids(reference_ids)
 
         if atype == "pairwise_battle" and len(vendors) >= 2:
             key = tuple(sorted(vendors))
-            if key not in battles or confidence > battles[key].get("confidence", 0):
+            if _prefer_candidate(battles.get(key), entry):
                 battles[key] = entry
         elif atype == "category_council" and category:
-            if category not in councils or confidence > councils[category].get("confidence", 0):
+            if _prefer_candidate(councils.get(category), entry):
                 councils[category] = entry
         elif atype == "resource_asymmetry" and len(vendors) >= 2:
             key = tuple(sorted(vendors))
-            if key not in asymmetries or confidence > asymmetries[key].get("confidence", 0):
+            if _prefer_candidate(asymmetries.get(key), entry):
                 asymmetries[key] = entry
 
     return {"battles": battles, "councils": councils, "asymmetries": asymmetries}

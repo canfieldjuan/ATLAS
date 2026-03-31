@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -233,6 +234,105 @@ def test_get_base_enrichment_llm_respects_local_only(monkeypatch):
         "try_openrouter": False,
         "auto_activate_ollama": False,
     }]
+
+
+@pytest.mark.asyncio
+async def test_call_vllm_tier1_uses_exact_cache_hit(monkeypatch):
+    class _Registry:
+        def get(self, name):
+            if name == "digest/b2b_churn_extraction_tier1":
+                return SimpleNamespace(content="tier1")
+            return None
+
+    monkeypatch.setattr("atlas_brain.skills.get_skill_registry", lambda: _Registry())
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_lookup_cached_json_response",
+        AsyncMock(
+            return_value=(
+                {"specific_complaints": ["support delays"], "churn_signals": {"actively_evaluating": True}},
+                {"messages": [{"role": "user", "content": "cached"}]},
+            )
+        ),
+    )
+    client = SimpleNamespace(
+        post=AsyncMock(side_effect=AssertionError("tier1 HTTP should not run on exact-cache hit"))
+    )
+    cfg = SimpleNamespace(
+        enrichment_tier1_model="qwen3-30b",
+        enrichment_tier1_max_tokens=512,
+    )
+
+    parsed, model = await b2b_enrichment._call_vllm_tier1(
+        json.dumps({"vendor_name": "Zendesk"}),
+        cfg,
+        client,
+    )
+
+    assert parsed["specific_complaints"] == ["support delays"]
+    assert parsed["churn_signals"]["actively_evaluating"] is True
+    assert model == "qwen3-30b"
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_openrouter_tier2_uses_exact_cache_hit(monkeypatch):
+    class _Registry:
+        def get(self, name):
+            if name == "digest/b2b_churn_extraction_tier2":
+                return SimpleNamespace(content="tier2")
+            return None
+
+    monkeypatch.setattr("atlas_brain.skills.get_skill_registry", lambda: _Registry())
+    monkeypatch.setattr(
+        b2b_enrichment,
+        "_lookup_cached_json_response",
+        AsyncMock(
+            return_value=(
+                {"pain_categories": [{"category": "pricing", "severity": "primary"}]},
+                {"messages": [{"role": "user", "content": "cached"}]},
+            )
+        ),
+    )
+    cfg = SimpleNamespace(
+        openrouter_api_key="test-key",
+        enrichment_tier2_openrouter_model="anthropic/claude-haiku-4-5",
+        enrichment_openrouter_model="openai/gpt-oss-120b",
+        enrichment_tier2_max_tokens=512,
+        enrichment_tier2_timeout_seconds=30.0,
+    )
+    row = {
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk",
+        "product_category": "Helpdesk",
+        "source": "g2",
+        "raw_metadata": {},
+        "content_type": "review",
+        "rating": 2.0,
+        "rating_max": 5,
+        "summary": "Pricing issues",
+        "review_text": "We are evaluating alternatives because pricing keeps rising.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Support",
+        "reviewer_company": "Acme",
+        "company_size_raw": "201-500",
+        "reviewer_industry": "SaaS",
+    }
+    tier1_result = {
+        "specific_complaints": ["pricing keeps rising"],
+        "quotable_phrases": ["evaluating alternatives"],
+    }
+
+    parsed, model = await b2b_enrichment._call_openrouter_tier2(
+        tier1_result,
+        row,
+        cfg,
+        truncate_length=3000,
+    )
+
+    assert parsed["pain_categories"] == [{"category": "pricing", "severity": "primary"}]
+    assert model == "anthropic/claude-haiku-4-5"
 
 
 @pytest.mark.asyncio

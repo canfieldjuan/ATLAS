@@ -5,6 +5,7 @@ Usage:
     ATLAS_B2B_CHURN_ENABLED=true python scripts/test_intelligence_subset.py
     ATLAS_B2B_CHURN_ENABLED=true python scripts/test_intelligence_subset.py --vendors "Shopify,Salesforce,Jira"
     ATLAS_B2B_CHURN_ENABLED=true python scripts/test_intelligence_subset.py --vendors Shopify --report vendor_scorecard
+    ATLAS_B2B_CHURN_ENABLED=true python scripts/test_intelligence_subset.py --vendors Shopify --report vendor_scorecard --skip-intelligence
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -29,7 +31,7 @@ VALID_REPORT_TYPES = ("weekly_churn_feed", "vendor_scorecard", "displacement_rep
 
 async def _run_intelligence(vendors: str) -> dict:
     from atlas_brain.autonomous.tasks.b2b_churn_intelligence import run
-    task = SimpleNamespace(metadata={"test_vendors": vendors})
+    task = SimpleNamespace(id=uuid4(), metadata={"test_vendors": vendors})
     print(f"\n[1/2] Running intelligence for: {vendors}")
     print(f"      LLM backend: {settings.b2b_churn.intelligence_llm_backend}")
     result = await run(task)
@@ -66,12 +68,18 @@ async def _fetch_weekly_feed(pool) -> dict | None:
     return dict(row) if row else None
 
 
-async def _run_reports(vendors: list[str]) -> None:
+async def _run_reports(vendors: list[str], report_type: str) -> None:
     from atlas_brain.autonomous.tasks.b2b_churn_reports import run as reports_run
-    task = SimpleNamespace(metadata={})
-    print("\n[2/2] Running reports task...")
+    task = SimpleNamespace(
+        id=uuid4(),
+        metadata={
+            "test_vendors": vendors,
+            "test_report_type": report_type,
+        },
+    )
+    print(f"\n[2/2] Running reports task for {report_type}...")
     result = await reports_run(task)
-    print(f"      Done: {result.get('_skip_synthesis', result)}")
+    print(f"      Done: {json.dumps(result, indent=2, default=str)}")
 
 
 async def _main(args: argparse.Namespace) -> None:
@@ -89,12 +97,14 @@ async def _main(args: argparse.Namespace) -> None:
     print(f"Report type   : {args.report}")
     print(f"LLM backend   : {cfg.intelligence_llm_backend}")
 
-    # Step 1: run intelligence scoped to vendor subset
-    await _run_intelligence(args.vendors)
+    # Step 1: optionally refresh intelligence scoped to vendor subset
+    if args.skip_intelligence:
+        print("\n[1/2] Skipping intelligence refresh; reusing current signal state")
+    else:
+        await _run_intelligence(args.vendors)
 
-    # Step 2: run reports to build scorecards from the fresh signals
-    if args.report != "weekly_churn_feed":
-        await _run_reports(vendor_list)
+    # Step 2: run reports scoped to the same vendor subset
+    await _run_reports(vendor_list, args.report)
 
     # Step 3: fetch and print signals directly from b2b_churn_signals (bypasses limit=15 in scorecard builder)
     print(f"\n{'='*60}")
@@ -156,4 +166,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--vendors", default=DEFAULT_VENDORS, help="Comma-separated vendor names")
     parser.add_argument("--report", default="vendor_scorecard", choices=VALID_REPORT_TYPES)
+    parser.add_argument(
+        "--skip-intelligence",
+        action="store_true",
+        help="Reuse the current signal state and only run the scoped reports step",
+    )
     asyncio.run(_main(parser.parse_args()))

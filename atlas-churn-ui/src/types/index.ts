@@ -368,6 +368,7 @@ export interface BlogDraftSummary {
   latest_error_code?: string | null
   latest_error_summary?: string | null
   unresolved_issue_count?: number
+  failure_explanation?: CampaignFailureExplanation | null
 }
 
 export interface BlogDraft extends BlogDraftSummary {
@@ -392,6 +393,25 @@ export interface BlogDraft extends BlogDraftSummary {
     vendor_filter?: string | null
     category_filter?: string | null
   } | null
+}
+
+export interface BlogQualityTrends {
+  days: number
+  top_n: number
+  top_blockers: { reason: string; count: number }[]
+  series: { day: string; reason: string; count: number }[]
+  totals_by_day: { day: string; blocker_total: number }[]
+}
+
+export interface BlogQualityDiagnostics {
+  days: number
+  top_n: number
+  by_boundary: { boundary: string; count: number }[]
+  by_cause_type: { cause_type: string; count: number }[]
+  top_primary_blockers: { reason: string; count: number }[]
+  top_missing_inputs: { input: string; count: number }[]
+  by_topic_type: { topic_type: string; count: number }[]
+  top_subjects: { subject: string; count: number }[]
 }
 
 export interface BlogDraftSummaryRollup {
