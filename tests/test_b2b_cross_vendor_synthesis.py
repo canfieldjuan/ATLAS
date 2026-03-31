@@ -235,6 +235,29 @@ class TestCrossVendorCitationRegistry:
             "witness:zendesk:1",
         ]
 
+    def test_materialize_reference_ids_resolves_prose_citations(self):
+        packet = build_pairwise_battle_packet(
+            "Zendesk", "Freshdesk", _EDGE, _POOL_LAYERS, _PROFILES,
+        )
+        packet = attach_cross_vendor_citation_registry(
+            packet,
+            analysis_type="pairwise_battle",
+            vendors=["Zendesk", "Freshdesk"],
+            category=None,
+            vendor_reference_lookup=_VENDOR_REFERENCE_LOOKUP,
+        )
+        synthesis = {
+            "citations": [
+                "Zendesk->Freshdesk displacement edge: mention_count=12, signal_strength=strong, primary_driver=pricing",
+            ],
+        }
+        result = materialize_cross_vendor_reference_ids(synthesis, packet)
+        assert result["citations"] == ["xv:pairwise:edge:zendesk_to_freshdesk"]
+        assert result["reference_ids"]["metric_ids"] == [
+            "metric:freshdesk:1",
+            "metric:zendesk:1",
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Evidence hash tests

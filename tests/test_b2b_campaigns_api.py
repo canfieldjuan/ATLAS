@@ -7,6 +7,12 @@ import pytest
 from atlas_brain.api import b2b_campaigns as mod
 
 
+def test_campaign_activity_timestamp_sql_uses_real_campaign_columns():
+    assert mod._campaign_activity_timestamp_sql("bc") == (
+        "COALESCE(bc.clicked_at, bc.opened_at, bc.sent_at, bc.approved_at, bc.created_at)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_review_candidates_endpoint_uses_helper(monkeypatch):
     captured = {}
