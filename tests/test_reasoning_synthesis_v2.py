@@ -4160,6 +4160,101 @@ class TestReasoningSynthesisTask:
         assert len(retry_events) == 1
 
     @pytest.mark.asyncio
+    async def test_run_retries_with_targeted_guidance_for_contract_gaps(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+                self.executemany_calls = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                rows = list(args_iterable)
+                self.executemany_calls.append((query, rows))
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self, responses):
+                self._responses = list(responses)
+                self.calls = []
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                idx = len(self.calls)
+                self.calls.append({"messages": messages})
+                return {
+                    "response": self._responses[idx],
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                }
+
+        layers = _make_layers()
+        packet = compress_vendor_pools("RetryVendor", layers)
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        invalid_synthesis = deepcopy(valid_synthesis)
+        invalid_synthesis.pop("migration_proof", None)
+        invalid_synthesis["category_reasoning"] = {
+            "market_regime": "",
+            "narrative": "",
+            "citations": [],
+        }
+        invalid_synthesis["competitive_reframes"]["reframes"][0]["citations"] = [
+            "witness:not_in_packet",
+        ]
+
+        fake_pool = FakePool()
+        fake_llm = FakeLLM([
+            json.dumps(invalid_synthesis),
+            json.dumps(valid_synthesis),
+        ])
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"RetryVendor": layers}
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
+            lambda cfg: fake_llm,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_attempts", 2, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_retry_delay_seconds", 0.0, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={"force": True}))
+
+        assert result["vendors_reasoned"] == 1
+        assert len(fake_llm.calls) == 2
+        retry_text = "\n".join(
+            msg.content
+            for msg in fake_llm.calls[1]["messages"]
+            if msg.role == "user"
+        )
+        assert "migration_proof" in retry_text
+        assert "market_regime and narrative" in retry_text
+        assert "already present in the input packet" in retry_text
+
+    @pytest.mark.asyncio
     async def test_record_validation_attempt_escalates_repeated_and_costly_retries(self):
         from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
             ValidationError,

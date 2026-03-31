@@ -127,6 +127,36 @@ class _CampaignPool:
         return "UPDATE 1"
 
 
+class _FallbackReasoningView:
+    def consumer_context(self, consumer):
+        assert consumer == "campaign"
+        return {
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "witness:r1:0",
+                        "excerpt_text": "a customer hit a $200k/year renewal decision in Q2",
+                        "time_anchor": "Q2 renewal",
+                        "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                        "competitor": "Freshdesk",
+                        "pain_category": "pricing",
+                    },
+                ],
+            },
+            "witness_highlights": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "a customer hit a $200k/year renewal decision in Q2",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Freshdesk",
+                    "pain_category": "pricing",
+                },
+            ],
+            "reference_ids": {"witness_ids": ["witness:r1:0"]},
+        }
+
+
 @pytest.mark.asyncio
 async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monkeypatch):
     campaign_id = uuid4()
@@ -241,6 +271,90 @@ async def test_queue_campaign_for_send_blocks_generic_copy_when_revalidation_fai
 
 
 @pytest.mark.asyncio
+async def test_approve_campaign_uses_synthesis_fallback_and_records_success(monkeypatch):
+    campaign_id = uuid4()
+    pool = _CampaignPool({
+        "id": campaign_id,
+        "vendor_name": "Slack",
+        "company_name": "Slack",
+        "status": "draft",
+        "sequence_id": None,
+        "step_number": 1,
+        "recipient_email": "owner@example.com",
+        "subject": "Renewal pressure",
+        "body": "<p>The Q2 renewal now carries a $200k/year pricing issue and Freshdesk is showing up.</p>",
+        "channel": "email_followup",
+        "metadata": {
+            "generation_audit": {"status": "succeeded"},
+        },
+        "company_context": None,
+    })
+
+    async def _fake_reasoning_view(pool, vendor_name):
+        assert vendor_name == "Slack"
+        return _FallbackReasoningView()
+
+    record_attempt = AsyncMock()
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", True)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.load_best_reasoning_view",
+        _fake_reasoning_view,
+    )
+    monkeypatch.setattr(mod, "log_campaign_event", AsyncMock())
+    monkeypatch.setattr(mod, "record_attempt", record_attempt)
+    monkeypatch.setattr(mod, "emit_event", AsyncMock())
+
+    result = await mod.approve_campaign(str(campaign_id))
+
+    assert result["ok"] is True
+    assert any("SET metadata = $1::jsonb" in call[0] for call in pool.execute_calls)
+    metadata_update = next(call for call in pool.execute_calls if "SET metadata = $1::jsonb" in call[0])
+    assert "reasoning_anchor_examples" in metadata_update[1][0]
+    assert "campaign_proof_terms" in metadata_update[1][0]
+    assert "latest_specificity_audit" in metadata_update[1][0]
+    record_attempt.assert_awaited_once()
+    kwargs = record_attempt.await_args.kwargs
+    assert kwargs["stage"] == "manual_approval"
+    assert kwargs["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_approve_campaign_blocks_report_tier_language(monkeypatch):
+    campaign_id = uuid4()
+    pool = _CampaignPool({
+        "id": campaign_id,
+        "status": "draft",
+        "sequence_id": None,
+        "step_number": 1,
+        "recipient_email": "owner@example.com",
+        "subject": "Renewal pressure",
+        "body": "<p>Get the dashboard before renewal.</p>",
+        "cta": "Open the dashboard",
+        "channel": "email_cold",
+        "target_mode": "vendor_retention",
+        "metadata": {
+            "tier": "report",
+            "generation_audit": {"status": "succeeded"},
+        },
+        "company_context": None,
+    })
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "revalidate_before_manual_approval", True)
+    monkeypatch.setattr(mod, "log_campaign_event", AsyncMock())
+    monkeypatch.setattr(mod, "record_attempt", AsyncMock())
+    monkeypatch.setattr(mod, "emit_event", AsyncMock())
+
+    with pytest.raises(mod.HTTPException) as exc:
+        await mod.approve_campaign(str(campaign_id))
+
+    assert exc.value.status_code == 409
+    assert "report_tier_language:dashboard" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch):
     created_at = datetime(2026, 3, 30, 20, 0, tzinfo=timezone.utc)
 
@@ -292,6 +406,8 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
     assert result["campaigns"][0]["blocker_count"] == 1
     assert result["campaigns"][0]["warning_count"] == 1
     assert result["campaigns"][0]["latest_error_summary"].startswith("content does not reference")
+    assert result["campaigns"][0]["failure_explanation"]["primary_blocker"].startswith("content does not reference")
+    assert result["campaigns"][0]["failure_explanation"]["boundary"] is None
 
 
 @pytest.mark.asyncio
@@ -350,6 +466,8 @@ async def test_review_queue_surfaces_quality_summary_from_metadata(monkeypatch):
     assert result["drafts"][0]["blocker_count"] == 1
     assert result["drafts"][0]["warning_count"] == 1
     assert result["drafts"][0]["latest_error_summary"].startswith("content does not reference")
+    assert result["drafts"][0]["failure_explanation"]["primary_blocker"].startswith("content does not reference")
+    assert result["drafts"][0]["failure_explanation"]["blocking_issues"][0].startswith("content does not reference")
 
 
 @pytest.mark.asyncio
@@ -391,6 +509,65 @@ async def test_campaign_stats_returns_quality_rollup(monkeypatch):
     assert result["quality"]["warning_total"] == 4
     assert result["quality"]["by_boundary"]["manual_approval"] == 2
     assert result["quality"]["top_blockers"][0]["reason"].startswith("content does not reference")
+
+
+@pytest.mark.asyncio
+async def test_campaign_quality_trends_returns_series(monkeypatch):
+    class Pool:
+        async def fetch(self, query, *_args):
+            if "WITH blocker_rows AS" in query:
+                return [
+                    {"day": "2026-03-28", "reason": "missing_exact_proof_term", "cnt": 2},
+                    {"day": "2026-03-29", "reason": "missing_exact_proof_term", "cnt": 1},
+                    {"day": "2026-03-29", "reason": "report_tier_language:dashboard", "cnt": 1},
+                ]
+            if "SUM(" in query and "blocker_total" in query:
+                return [
+                    {"day": "2026-03-28", "blocker_total": 2},
+                    {"day": "2026-03-29", "blocker_total": 2},
+                ]
+            return []
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+
+    result = await mod.campaign_quality_trends(days=7, top_n=3, user=None)
+
+    assert result["days"] == 7
+    assert result["top_n"] == 3
+    assert result["top_blockers"][0] == {"reason": "missing_exact_proof_term", "count": 3}
+    assert result["series"][0]["day"] == "2026-03-28"
+    assert result["totals_by_day"][1]["blocker_total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_campaign_quality_diagnostics_returns_grouped_failure_explanations(monkeypatch):
+    class Pool:
+        async def fetch(self, query, *_args):
+            if "GROUP BY boundary" in query:
+                return [{"boundary": "manual_approval", "cnt": 2}]
+            if "GROUP BY cause_type" in query:
+                return [{"cause_type": "content_ignored_available_evidence", "cnt": 2}]
+            if "GROUP BY reason" in query:
+                return [{"reason": "missing_exact_proof_term", "cnt": 2}]
+            if "GROUP BY missing_input.input" in query:
+                return [{"input": "reasoning_reference_ids", "cnt": 1}]
+            if "GROUP BY target_mode" in query:
+                return [{"target_mode": "vendor_retention", "cnt": 2}]
+            if "GROUP BY vendor_name" in query:
+                return [{"vendor_name": "Slack", "cnt": 2}]
+            return []
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+
+    result = await mod.campaign_quality_diagnostics(days=7, top_n=5, user=None)
+
+    assert result["days"] == 7
+    assert result["top_n"] == 5
+    assert result["by_cause_type"][0]["cause_type"] == "content_ignored_available_evidence"
+    assert result["top_primary_blockers"][0]["reason"] == "missing_exact_proof_term"
+    assert result["top_missing_inputs"][0]["input"] == "reasoning_reference_ids"
+    assert result["by_target_mode"][0]["target_mode"] == "vendor_retention"
+    assert result["top_vendors"][0]["vendor_name"] == "Slack"
 
 
 @pytest.mark.asyncio

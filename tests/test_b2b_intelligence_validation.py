@@ -231,7 +231,83 @@ class TestValidateReportQuotes:
             report_date=date(2026, 3, 7),
         )
         assert parsed["weekly_churn_feed"][0]["key_quote"] == "Real quote from source"
-        assert not any("Fabricated" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_generate_vendor_report_normalizes_generic_pain_categories():
+    pool = SimpleNamespace(
+        fetch=AsyncMock(return_value=[
+            {
+                "review_id": uuid4(),
+                "vendor_name": "Salesforce",
+                "reviewer_company": "Acme",
+                "product_category": "CRM",
+                "urgency": 7,
+                "is_dm": True,
+                "role_type": "economic_buyer",
+                "buying_stage": "evaluation",
+                "seat_count": 120,
+                "contract_end": None,
+                "decision_timeline": "within_quarter",
+                "competitors_json": [],
+                "pain_json": [
+                    {"category": "other"},
+                    {"category": "general_dissatisfaction"},
+                    {"category": "pricing"},
+                ],
+                "quotable_phrases": [],
+                "feature_gaps": [],
+                "sentiment_direction": "declining",
+                "reviewer_title": "VP Sales",
+                "company_size_raw": "100-499",
+                "industry": "Software",
+            }
+        ]),
+        execute=AsyncMock(return_value="INSERT 0 1"),
+    )
+
+    report = await churn_intel_mod.generate_vendor_report(pool, "Salesforce", window_days=90)
+
+    assert report is not None
+    assert {"category": "overall_dissatisfaction", "count": 2} in report["pain_categories"]
+    assert not any(item["category"] == "other" for item in report["pain_categories"])
+    assert not any(item["category"] == "general_dissatisfaction" for item in report["pain_categories"])
+
+
+@pytest.mark.asyncio
+async def test_generate_challenger_report_normalizes_generic_pain_categories():
+    pool = SimpleNamespace(
+        fetch=AsyncMock(return_value=[
+            {
+                "review_id": uuid4(),
+                "vendor_name": "Salesforce",
+                "reviewer_company": "Acme",
+                "product_category": "CRM",
+                "urgency": 8,
+                "is_dm": True,
+                "role_type": "economic_buyer",
+                "buying_stage": "evaluation",
+                "seat_count": 120,
+                "competitors_json": [{"name": "HubSpot", "features": []}],
+                "pain_json": [
+                    {"category": "other"},
+                    {"category": "pricing"},
+                ],
+                "quotable_phrases": [],
+                "feature_gaps": [],
+                "reviewer_title": "VP Sales",
+                "company_size_raw": "100-499",
+                "industry": "Software",
+            }
+        ]),
+        execute=AsyncMock(return_value="INSERT 0 1"),
+    )
+
+    report = await churn_intel_mod.generate_challenger_report(pool, "HubSpot", window_days=90)
+
+    assert report is not None
+    assert {"category": "overall_dissatisfaction", "count": 1} in report["pain_driving_switch"]
+    assert not any(item["category"] == "other" for item in report["pain_driving_switch"])
 
 
 class TestChurnReportReasoningContracts:

@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -54,6 +55,66 @@ class _FakePool:
     async def execute(self, query, *args):
         self.execute_calls.append((query, args))
         return "OK"
+
+
+def _html_body(*paragraphs: str) -> str:
+    return "".join(f"<p>{paragraph}</p>" for paragraph in paragraphs)
+
+
+def _html_body_with_min_words(*paragraphs: str, min_words: int = 80) -> str:
+    filler = (
+        "We can walk through the evidence, timing, costs, workflow impact, and next step "
+        "in a short review so the message stays specific instead of generic."
+    )
+    parts = [paragraph for paragraph in paragraphs if paragraph]
+    while len(" ".join(parts).split()) < min_words:
+        parts.append(filler)
+    return _html_body(*parts)
+
+
+def _campaign_reasoning_view(vendor_name: str = "Asana"):
+    from datetime import date
+
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
+
+    raw = {
+        "reasoning_contracts": {
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "medium",
+                    "summary": "Pricing pressure is clustering around renewal moments.",
+                    "key_signals": ["Q2 renewal pressure"],
+                },
+            },
+            "displacement_reasoning": {
+                "switch_triggers": [
+                    {"type": "deadline", "description": "Q2 renewal"},
+                ],
+            },
+            "schema_version": "v2",
+        },
+        "reference_ids": {"witness_ids": ["witness:r1:0"]},
+        "packet_artifacts": {
+            "witness_pack": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "A customer hit a $200k/year pricing issue at Q2 renewal.",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "ClickUp",
+                    "pain_category": "pricing",
+                    "salience_score": 9.8,
+                },
+            ],
+            "section_packets": {
+                "anchor_examples": {
+                    "outlier_or_named_account": ["witness:r1:0"],
+                },
+            },
+        },
+    }
+    return SynthesisView(vendor_name, raw, schema_version="v2", as_of_date=date(2026, 3, 30))
 
 
 def test_briefing_context_from_data_parses_string_payload():
@@ -268,6 +329,90 @@ async def test_generate_vendor_campaigns_uses_mode_aware_briefing_context(monkey
     )
     assert payload["briefing_context"]["priority_account_names"] == ["Acme", "Beta"]
     assert payload["briefing_context"]["top_displacement_targets"] == ["ClickUp"]
+    assert result["generated"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_vendor_campaigns_injects_synthesis_anchor_examples(monkeypatch):
+    captured_payloads = []
+
+    async def _fake_fetch_vendor_targets(pool, vendor_filter):
+        return [{
+            "company_name": "Asana",
+            "contact_name": "Alex",
+            "contact_role": "VP Customer Success",
+            "contact_email": "alex@asana.test",
+            "tier": "report",
+            "products_tracked": ["Asana"],
+        }]
+
+    async def _fake_fetch_opportunities(pool, min_score, limit, company_filter=None, dm_only=False):
+        return [{
+            "vendor_name": "Asana",
+            "review_id": "rev-1",
+            "product_category": "Project Management",
+            "opportunity_score": 91,
+            "urgency": 9,
+            "pain_json": [{"category": "pricing"}],
+            "competitors": [{"name": "ClickUp", "reason": "pricing"}],
+            "feature_gaps": [{"feature": "reporting"}],
+            "quotable_phrases": [{"text": "pricing has become a renewal issue"}],
+            "contract_end": None,
+            "decision_timeline": "30 days",
+            "buying_stage": "evaluation",
+            "seat_count": 120,
+            "industry": "Software",
+            "score_components": {"base": 1},
+        }]
+
+    async def _fake_generate_content(llm, skill_content, payload, max_tokens, temperature):
+        captured_payloads.append(payload)
+        return {
+            "subject": "Renewal pressure",
+            "body": "<p>The Q2 renewal now carries a $200k/year pricing issue and ClickUp is showing up.</p>",
+            "cta": "Book time",
+        }
+
+    async def _fake_trend(pool, vendor_name, products=None):
+        return "increasing"
+
+    async def _fake_blog_posts(*args, **kwargs):
+        return []
+
+    async def _fake_reasoning_view(*args, **kwargs):
+        return _campaign_reasoning_view("Asana")
+
+    monkeypatch.setattr(mod, "_fetch_vendor_targets", _fake_fetch_vendor_targets)
+    monkeypatch.setattr(mod, "_fetch_opportunities", _fake_fetch_opportunities)
+    monkeypatch.setattr(mod, "_generate_content", _fake_generate_content)
+    monkeypatch.setattr(mod, "_compute_vendor_trend", _fake_trend)
+    monkeypatch.setattr(mod, "_fetch_blog_posts", _fake_blog_posts)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.load_best_reasoning_view",
+        _fake_reasoning_view,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.llm_router.get_llm",
+        lambda workload: SimpleNamespace(model="test-model"),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: _FakeSkillRegistry(),
+    )
+    monkeypatch.setattr(mod.settings.campaign_sequence, "enabled", False, raising=False)
+
+    result = await mod._generate_vendor_campaigns(
+        _FakePool({}),
+        min_score=50,
+        limit=1,
+        vendor_filter=None,
+    )
+
+    payload = captured_payloads[0]
+    anchor = payload["reasoning_anchor_examples"]["outlier_or_named_account"][0]
+    assert anchor["witness_id"] == "witness:r1:0"
+    assert payload["reasoning_witness_highlights"][0]["competitor"] == "ClickUp"
+    assert payload["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
     assert result["generated"] == 2
 
 
@@ -914,7 +1059,10 @@ async def test_generate_content_appends_signoff_when_missing(monkeypatch):
     async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
         return json.dumps({
             "subject": "CrowdStrike vs SentinelOne",
-            "body": "<p>Hi there,</p><p>Here is the comparison.</p>",
+            "body": _html_body_with_min_words(
+                "Hi there,",
+                "Here is the comparison between CrowdStrike and SentinelOne, with the switching pressure showing up in pricing, security workflow fit, and the timing of the current evaluation cycle.",
+            ),
             "cta": "Read the analysis",
         })
 
@@ -955,10 +1103,9 @@ async def test_generate_content_retries_when_anchor_backed_context_is_ignored(mo
         }),
         json.dumps({
             "subject": "Renewal pressure",
-            "body": (
-                "<p>Teams are hitting a $200k/year renewal flashpoint in Q2, which makes the pricing risk concrete instead of theoretical. "
-                "That timing window is where we keep seeing the signal compress into active evaluation.</p>"
-                "<p>Freshdesk keeps showing up in those pricing conversations, so the competitive angle is now visible enough to act on before the renewal locks in.</p>"
+            "body": _html_body_with_min_words(
+                "Teams are hitting a $200k/year renewal flashpoint in Q2, which makes the pricing risk concrete instead of theoretical. That timing window is where we keep seeing the signal compress into active evaluation.",
+                "Freshdesk keeps showing up in those pricing conversations, so the competitive angle is now visible enough to act on before the renewal locks in.",
             ),
             "cta": "Book time",
         }),
@@ -1029,9 +1176,9 @@ async def test_generate_content_retries_when_top_level_anchor_context_is_ignored
         }),
         json.dumps({
             "subject": "Switch signal",
-            "body": (
-                "<p>Teams are running into a 120-seat pricing problem inside a 30-day evaluation window.</p>"
-                "<p>ClickUp is showing up in that workflow-specific comparison often enough to sharpen the next step.</p>"
+            "body": _html_body_with_min_words(
+                "Teams are running into a 120-seat pricing problem inside a 30-day evaluation window, which turns the budget issue into an operational decision instead of a vague complaint.",
+                "ClickUp is showing up in that workflow-specific comparison often enough to sharpen the next step and give the team a credible alternative during the active evaluation.",
             ),
             "cta": "Book time",
         }),
@@ -1095,9 +1242,9 @@ async def test_generate_content_records_generation_audit_on_success(monkeypatch)
     async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
         return json.dumps({
             "subject": "Renewal pressure",
-            "body": (
-                "<p>The Q2 renewal now carries a $200k/year pricing issue.</p>"
-                "<p>Freshdesk is showing up in those active evaluations.</p>"
+            "body": _html_body_with_min_words(
+                "The Q2 renewal now carries a $200k/year pricing issue, and the account is revisiting whether the current spend still matches day-to-day usage across the team.",
+                "Freshdesk is showing up in those active evaluations, which gives the buying group a real alternative before the renewal window closes.",
             ),
             "cta": "Book time",
         })
@@ -1149,11 +1296,282 @@ async def test_generate_content_records_generation_audit_on_success(monkeypatch)
     assert result is not None
     assert payload["_generation_audit"]["status"] == "succeeded"
     assert payload["_generation_audit"]["specificity"]["status"] == "pass"
+    assert payload["campaign_proof_terms"][:2] == ["$200k/year", "q2 renewal"]
     assert payload["_campaign_specificity_context"]["reference_ids"]["witness_ids"] == ["witness:r1:0"]
+
+
+@pytest.mark.asyncio
+async def test_generate_content_specificity_retry_names_exact_anchor_terms(monkeypatch):
+    user_contents = []
+    responses = [
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": (
+                "<p>Teams are seeing broad pressure and the pattern is widening.</p>"
+                "<p>We can share the signal map if it helps.</p>"
+            ),
+            "cta": "Book time",
+        }),
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": _html_body_with_min_words(
+                "Teams are hitting a $200k/year renewal issue in Q2 and that is when the signal turns active instead of staying theoretical.",
+                "Freshdesk is showing up in those pricing conversations often enough to act on it before the renewal closes the current path.",
+            ),
+            "cta": "Book time",
+        }),
+    ]
+
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
+        user_contents.append(user_content)
+        return responses.pop(0)
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_followup",
+        "briefing_context": {
+            "reasoning_anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "witness:r1:0",
+                        "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                        "time_anchor": "Q2 renewal",
+                        "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                        "competitor": "Freshdesk",
+                        "pain_category": "pricing",
+                    },
+                ],
+            },
+            "reasoning_witness_highlights": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Freshdesk",
+                    "pain_category": "pricing",
+                },
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
+        },
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    assert result is not None
+    assert len(user_contents) == 2
+    assert "campaign_proof_terms" in user_contents[0]
+    assert "$200k/year" in user_contents[1]
+    assert "Q2 renewal" in user_contents[1]
+
+
+@pytest.mark.asyncio
+async def test_call_llm_uses_configured_campaign_timeout(monkeypatch):
+    import asyncio
+
+    captured = {}
+
+    async def _fake_to_thread(fn, *args, **kwargs):
+        return {"response": "ok"}
+
+    async def _fake_wait_for(coro, timeout):
+        captured["timeout"] = timeout
+        return await coro
+
+    monkeypatch.setattr(asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(asyncio, "wait_for", _fake_wait_for)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "llm_timeout_seconds", 42.0)
+
+    class _FakeSyncLLM:
+        def chat(self, *, messages, max_tokens, temperature):
+            return {"response": "unused"}
+
+    result = await mod._call_llm(
+        _FakeSyncLLM(),
+        "system",
+        "user",
+        256,
+        0.1,
+    )
+
+    assert result == "ok"
+    assert captured["timeout"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_generate_content_retries_when_body_is_too_short_for_mode(monkeypatch):
+    user_contents = []
+    responses = [
+        json.dumps({
+            "subject": "Switch signal",
+            "body": "<p>Teams are seeing pressure. We can share details.</p>",
+            "cta": "Book time",
+        }),
+        json.dumps({
+            "subject": "Switch signal",
+            "body": _html_body_with_min_words(
+                "Teams are seeing pricing pressure during the renewal window, and the operating pain is now concrete enough to plan around instead of leaving in abstract budget language.",
+                "We can share the workflow-specific comparison and the timing details if that helps your team evaluate next steps with more concrete evidence.",
+            ),
+            "cta": "Book time",
+        }),
+    ]
+
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
+        user_contents.append(user_content)
+        return responses.pop(0)
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_followup",
+        "target_mode": "churning_company",
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    assert result is not None
+    assert len(user_contents) == 2
+    assert "MUST be at least 75 words" in user_contents[1]
+
+
+@pytest.mark.asyncio
+async def test_generate_content_blocks_vendor_cold_email_with_competitor_name(monkeypatch):
+    responses = [
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": _html_body_with_min_words(
+                "Freshdesk keeps showing up in the active conversations around pricing pressure, and that comparison is becoming hard to ignore during the renewal cycle.",
+            ),
+            "cta": "Book time",
+        }),
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": _html_body_with_min_words(
+                "Freshdesk keeps showing up in the active conversations around pricing pressure, and that comparison is becoming hard to ignore during the renewal cycle.",
+            ),
+            "cta": "Book time",
+        }),
+    ]
+
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature):
+        return responses.pop(0)
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_cold",
+        "target_mode": "vendor_retention",
+        "competitors_considering": [{"name": "Freshdesk", "reason": "pricing"}],
+        "tier": "report",
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    assert result is None
+    assert payload["_generation_audit"]["failure_reason"] == "specificity_gate"
+    assert "competitor_name_in_email_cold:Freshdesk" in payload["_generation_audit"]["specificity"]["blocking_issues"]
+
+
+def test_campaign_prompt_contracts_include_campaign_proof_terms():
+    prompt_files = [
+        Path("atlas_brain/skills/digest/b2b_campaign_generation.md"),
+        Path("atlas_brain/skills/digest/b2b_challenger_outreach.md"),
+        Path("atlas_brain/skills/digest/b2b_vendor_outreach.md"),
+    ]
+
+    for path in prompt_files:
+        content = path.read_text(encoding="utf-8")
+        assert "campaign_proof_terms" in content, path.as_posix()
+        assert "authoritative when present" in content.lower(), path.as_posix()
+
+
+def test_campaign_word_limits_are_mode_aware():
+    assert mod._campaign_word_limits(
+        channel="email_cold",
+        target_mode="vendor_retention",
+    ) == (50, 125)
+    assert mod._campaign_word_limits(
+        channel="email_followup",
+        target_mode="challenger_intel",
+    ) == (75, 150)
+    assert mod._campaign_word_limits(
+        channel="email_followup",
+        target_mode="churning_company",
+    ) == (75, 125)
+    assert mod._campaign_word_limits(
+        channel="linkedin",
+        target_mode="churning_company",
+    ) == (0, 100)
+
+
+def test_validate_campaign_content_uses_target_mode_specific_word_limits():
+    over_limit = " ".join(f"word{i}" for i in range(130))
+    under_limit = " ".join(f"word{i}" for i in range(60))
+
+    _, too_long = mod._validate_campaign_content(
+        {
+            "subject": "Renewal pressure",
+            "body": f"<p>{over_limit}</p>",
+            "cta": "Book time",
+        },
+        "email_followup",
+        target_mode="churning_company",
+    )
+    _, too_short = mod._validate_campaign_content(
+        {
+            "subject": "Renewal pressure",
+            "body": f"<p>{under_limit}</p>",
+            "cta": "Book time",
+        },
+        "email_cold",
+        target_mode="churning_company",
+    )
+
+    assert too_long["word_count"] == 130
+    assert too_long["max_words"] == 125
+    assert too_short["word_count"] == 60
+    assert too_short["min_words"] == 75
 
 
 def test_campaign_storage_metadata_includes_specificity_context_and_audit():
     payload = {
+        "tier": "report",
+        "campaign_proof_terms": ["$200k/year", "q2 renewal"],
         "_campaign_specificity_context": {
             "anchor_examples": {
                 "outlier_or_named_account": [
@@ -1178,8 +1596,11 @@ def test_campaign_storage_metadata_includes_specificity_context_and_audit():
     metadata = mod._campaign_storage_metadata(payload)
 
     assert metadata["reasoning_anchor_examples"]["outlier_or_named_account"][0]["witness_id"] == "witness:r1:0"
+    assert metadata["campaign_proof_terms"] == ["$200k/year", "q2 renewal"]
+    assert metadata["tier"] == "report"
     assert metadata["generation_audit"]["status"] == "succeeded"
     assert metadata["latest_specificity_audit"]["status"] == "pass"
+    assert metadata["latest_specificity_audit"]["boundary"] == "generation"
 
 
 # ---------------------------------------------------------------------------

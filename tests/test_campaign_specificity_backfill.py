@@ -47,6 +47,9 @@ def test_derive_campaign_specificity_patch_backfills_latest_audit():
     assert audit["status"] == "fail"
     assert audit["anchor_count"] == 1
     assert "content does not reference any witness-backed anchor" in audit["blocking_issues"][0]
+    assert audit["failure_explanation"]["boundary"] == "backfill"
+    assert audit["failure_explanation"]["cause_type"] == "content_ignored_available_evidence"
+    assert audit["failure_explanation"]["missing_inputs"] == []
 
 
 def test_derive_campaign_specificity_patch_preserves_existing_audit():

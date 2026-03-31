@@ -12,6 +12,7 @@ from atlas_brain.autonomous.tasks.b2b_tenant_report import (
     _apply_tenant_synthesis_context,
     _build_deterministic_tenant_report,
     _build_deterministic_tenant_report_from_raw,
+    _tenant_displacement_backfill_row,
     _apply_tenant_vendor_context,
     _filter_tenant_payload_for_vendors,
     _merge_tenant_chunk_outputs,
@@ -29,6 +30,14 @@ def test_tenant_report_llm_model_uses_actual_model():
 def test_tenant_report_llm_model_defaults_when_missing():
     assert _tenant_report_llm_model({}) == "pipeline_deterministic"
     assert _tenant_report_llm_model(None) == "pipeline_deterministic"
+
+
+def test_tenant_displacement_backfill_uses_overall_dissatisfaction_fallback():
+    row = _tenant_displacement_backfill_row(
+        {"vendor": "Salesforce", "competitor": "HubSpot", "mention_count": 2},
+        reason_lookup={},
+    )
+    assert row["primary_driver"] == "overall_dissatisfaction"
 
 
 def test_tenant_report_data_density_includes_llm_and_reasoning_counts():

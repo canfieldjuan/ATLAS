@@ -5,6 +5,12 @@ import pytest
 from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
 
 
+def test_default_pain_label_maps_generic_buckets_to_overall_dissatisfaction():
+    assert briefing_mod._default_pain_label("other") == "Overall Dissatisfaction"
+    assert briefing_mod._default_pain_label("general_dissatisfaction") == "Overall Dissatisfaction"
+    assert briefing_mod._default_pain_label("overall_dissatisfaction") == "Overall Dissatisfaction"
+
+
 def test_apply_evidence_vault_to_briefing_fills_sparse_fields():
     briefing = {
         "evidence": [],

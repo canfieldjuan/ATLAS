@@ -30,6 +30,41 @@ class _Pool:
         self.execute = AsyncMock(return_value="UPDATE 0")
 
 
+def test_normalize_pain_category_maps_legacy_other_to_overall_dissatisfaction():
+    assert b2b_enrichment._normalize_pain_category("other") == "overall_dissatisfaction"
+    assert b2b_enrichment._normalize_pain_category("general_dissatisfaction") == "overall_dissatisfaction"
+
+
+def test_normalize_pain_category_accepts_new_specific_buckets():
+    assert b2b_enrichment._normalize_pain_category("admin_burden") == "admin_burden"
+    assert b2b_enrichment._normalize_pain_category("integration_debt") == "integration_debt"
+
+
+def test_is_no_signal_result_accepts_empty_community_discussion_without_rating():
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "support_escalation": False,
+            "contract_renewal_mentioned": False,
+        },
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "event_mentions": [],
+        "feature_gaps": [],
+    }
+    row = {
+        "content_type": "community_discussion",
+        "rating": None,
+    }
+
+    assert b2b_enrichment._is_no_signal_result(result, row) is True
+
+
 @pytest.mark.asyncio
 async def test_run_limits_rounds_and_reports_orphan_recovery(monkeypatch):
     rows = [{"id": uuid4(), "enrichment_attempts": 0}]

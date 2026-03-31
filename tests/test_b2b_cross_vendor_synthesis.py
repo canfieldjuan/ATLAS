@@ -6,10 +6,12 @@ import pytest
 
 from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
     _sorted_vendors,
+    attach_cross_vendor_citation_registry,
     build_category_council_packet,
     build_pairwise_battle_packet,
     build_resource_asymmetry_packet,
     compute_cross_vendor_evidence_hash,
+    materialize_cross_vendor_reference_ids,
     normalize_cross_vendor_contract,
     to_legacy_cross_vendor_conclusion,
 )
@@ -64,6 +66,17 @@ _PROFILES = {
         "primary_use_cases": ["Support"],
         "typical_company_size": "11-50",
         "typical_industries": ["E-commerce"],
+    },
+}
+
+_VENDOR_REFERENCE_LOOKUP = {
+    "Zendesk": {
+        "metric_ids": ["metric:zendesk:1"],
+        "witness_ids": ["witness:zendesk:1"],
+    },
+    "Freshdesk": {
+        "metric_ids": ["metric:freshdesk:1"],
+        "witness_ids": ["witness:freshdesk:1"],
     },
 }
 
@@ -160,6 +173,67 @@ class TestBuildResourceAsymmetryPacket:
             "Zendesk", "Freshdesk", _POOL_LAYERS, _PROFILES,
         )
         assert 0.0 < packet["divergence_score"] < 1.0
+
+
+class TestCrossVendorCitationRegistry:
+    def test_pairwise_packet_gets_citation_registry(self):
+        packet = build_pairwise_battle_packet(
+            "Zendesk", "Freshdesk", _EDGE, _POOL_LAYERS, _PROFILES,
+        )
+        packet = attach_cross_vendor_citation_registry(
+            packet,
+            analysis_type="pairwise_battle",
+            vendors=["Zendesk", "Freshdesk"],
+            category=None,
+            vendor_reference_lookup=_VENDOR_REFERENCE_LOOKUP,
+        )
+        registry = packet["citation_registry"]
+        assert registry
+        assert any(item["_sid"] == "xv:pairwise:edge:zendesk_to_freshdesk" for item in registry)
+        pool_entry = next(
+            item for item in registry if item["_sid"] == "xv:vendor:zendesk:pool"
+        )
+        assert pool_entry["reference_ids"]["metric_ids"] == ["metric:zendesk:1"]
+        assert pool_entry["reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
+
+    def test_materialize_reference_ids_maps_cited_registry_entries(self):
+        packet = build_pairwise_battle_packet(
+            "Zendesk", "Freshdesk", _EDGE, _POOL_LAYERS, _PROFILES,
+        )
+        packet = attach_cross_vendor_citation_registry(
+            packet,
+            analysis_type="pairwise_battle",
+            vendors=["Zendesk", "Freshdesk"],
+            category=None,
+            vendor_reference_lookup=_VENDOR_REFERENCE_LOOKUP,
+        )
+        synthesis = {
+            "winner": "Freshdesk",
+            "loser": "Zendesk",
+            "conclusion": "Freshdesk wins on pricing pressure.",
+            "confidence": 0.8,
+            "durability_assessment": "structural",
+            "key_insights": [],
+            "falsification_conditions": [],
+            "citations": [
+                "xv:vendor:zendesk:pool",
+                "xv:vendor:freshdesk:pool",
+                "not:a:real:packet:id",
+            ],
+        }
+        result = materialize_cross_vendor_reference_ids(synthesis, packet)
+        assert result["citations"] == [
+            "xv:vendor:zendesk:pool",
+            "xv:vendor:freshdesk:pool",
+        ]
+        assert result["reference_ids"]["metric_ids"] == [
+            "metric:freshdesk:1",
+            "metric:zendesk:1",
+        ]
+        assert result["reference_ids"]["witness_ids"] == [
+            "witness:freshdesk:1",
+            "witness:zendesk:1",
+        ]
 
 
 # ---------------------------------------------------------------------------

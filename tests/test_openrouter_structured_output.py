@@ -115,3 +115,49 @@ def test_openrouter_unstructured_request_can_use_reasoning_fallback():
     result = llm.chat(_sample_messages(), max_tokens=256)
 
     assert result["response"] == "Pricing pressure is rising."
+
+
+def test_openrouter_anthropic_caches_stable_system_and_initial_user_prefix():
+    llm = OpenRouterLLM(model="anthropic/claude-sonnet-4-6", api_key="test-key")
+
+    payload = llm._convert_messages([
+        Message(role="system", content="s" * 1500),
+        Message(role="user", content="u" * 3000),
+        Message(role="assistant", content='{"draft":true}'),
+        Message(role="user", content="fix this"),
+    ])
+
+    assert payload[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert payload[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert payload[2]["content"] == '{"draft":true}'
+    assert payload[3]["content"] == "fix this"
+
+
+def test_openrouter_reports_cache_usage_fields():
+    client = MagicMock()
+    client.post.return_value = _FakeResponse(
+        {
+            "choices": [{"message": {"content": '{"ok":true}'}}],
+            "usage": {
+                "prompt_tokens": 2500,
+                "completion_tokens": 400,
+                "completion_tokens_details": {"reasoning_tokens": 120},
+                "prompt_tokens_details": {
+                    "cached_tokens": 2200,
+                    "cache_write_tokens": 2400,
+                },
+            },
+        }
+    )
+    llm = OpenRouterLLM(model="anthropic/claude-sonnet-4-6", api_key="test-key")
+    llm._sync_client = client
+
+    result = llm.chat(_sample_messages(), max_tokens=256)
+
+    assert result["usage"]["input_tokens"] == 2500
+    assert result["usage"]["output_tokens"] == 400
+    assert result["usage"]["reasoning_tokens"] == 120
+    assert result["usage"]["cached_tokens"] == 2200
+    assert result["usage"]["cache_write_tokens"] == 2400
+    assert result["_trace_meta"]["cached_tokens"] == 2200
+    assert result["_trace_meta"]["cache_write_tokens"] == 2400

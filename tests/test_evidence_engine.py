@@ -112,17 +112,24 @@ class TestPainOverride:
         result = engine.override_pain("other", ["The cost is way too expensive for what you get"])
         assert result == "pricing"
 
+    def test_overall_dissatisfaction_triggers_override(self, engine):
+        result = engine.override_pain(
+            "overall_dissatisfaction",
+            ["We need a dedicated Salesforce admin just to maintain workflows"],
+        )
+        assert result == "admin_burden"
+
     def test_other_with_support_keywords(self, engine):
         result = engine.override_pain("other", ["customer service is terrible", "ticket response time is awful"])
         assert result == "support"
 
     def test_other_with_no_keywords(self, engine):
         result = engine.override_pain("other", ["just not great overall"])
-        assert result == "other"
+        assert result == "overall_dissatisfaction"
 
     def test_other_with_empty_complaints(self, engine):
         result = engine.override_pain("other", [])
-        assert result == "other"
+        assert result == "overall_dissatisfaction"
 
     def test_highest_keyword_count_wins(self, engine):
         result = engine.override_pain("other", [
@@ -135,6 +142,20 @@ class TestPainOverride:
     def test_quotable_phrases_scanned(self, engine):
         result = engine.override_pain("other", [], quotable_phrases=["incredibly slow loading times"])
         assert result == "performance"
+
+    def test_salesforce_customization_maps_to_admin_burden(self, engine):
+        result = engine.override_pain(
+            "other",
+            ["Out of the box Salesforce does 60% of what we need and the rest requires consultants or Apex"],
+        )
+        assert result == "admin_burden"
+
+    def test_salesforce_app_exchange_maps_to_integration_debt(self, engine):
+        result = engine.override_pain(
+            "other",
+            ["AppExchange integrations keep breaking after updates and require constant maintenance"],
+        )
+        assert result == "integration_debt"
 
 
 # -- Recommend Derivation --------------------------------------------------
