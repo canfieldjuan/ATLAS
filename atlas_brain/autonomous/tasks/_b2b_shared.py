@@ -2793,6 +2793,17 @@ def _build_reason_lookup(competitor_reasons: list[dict[str, Any]]) -> dict[tuple
     return lookup
 
 
+def _normalize_generic_pain_label(label: Any) -> str:
+    raw = str(label or "").strip().lower()
+    if raw in {"other", "general_dissatisfaction", "overall_dissatisfaction"}:
+        return "overall_dissatisfaction"
+    return raw
+
+
+def _is_generic_pain_label(label: Any) -> bool:
+    return _normalize_generic_pain_label(label) == "overall_dissatisfaction"
+
+
 def _build_validated_executive_summary(
     parsed: dict[str, Any],
     *,
@@ -2859,7 +2870,7 @@ def _build_validated_executive_summary(
 
         s2 = f"{top_vendor} scored highest at {top_score:.1f}"
         s2 += f" ({top_density}% churn density -- share of reviews containing explicit switching signals)"
-        if top_pain and top_pain.lower() not in ("other", "unknown"):
+        if top_pain and not _is_generic_pain_label(top_pain) and top_pain.lower() != "unknown":
             s2 += f", driven primarily by {top_pain} complaints"
         if dm_rate and dm_rate >= 0.3:
             s2 += f"; {dm_rate:.0%} of switching signals came from decision-makers"
@@ -2913,7 +2924,7 @@ def _build_validated_executive_summary(
         top_count = top.get("mention_count", 0)
         top_driver = top.get("primary_driver", "")
         s2 = f"The strongest flow is {top_from} -> {top_to} ({top_count} mentions)"
-        if top_driver and top_driver.lower() != "other":
+        if top_driver and not _is_generic_pain_label(top_driver):
             s2 += f", driven by {top_driver}"
         s2 += "."
         lines.append(s2)
@@ -2922,7 +2933,7 @@ def _build_validated_executive_summary(
         driver_counts: dict[str, int] = {}
         for e in disp:
             d = e.get("primary_driver") or None
-            if d and d.lower() != "other":
+            if d and not _is_generic_pain_label(d):
                 driver_counts[d] = driver_counts.get(d, 0) + e.get("mention_count", 0)
         if driver_counts and total_mentions:
             ranked_drivers = sorted(driver_counts.items(), key=lambda x: -x[1])
@@ -2990,7 +3001,7 @@ def _build_validated_executive_summary(
                 f" at {hottest_density}% churn density"
                 " (share of reviews with explicit switching signals)"
             )
-            if pain and pain.lower() not in ("other", "unknown"):
+            if pain and not _is_generic_pain_label(pain) and pain.lower() != "unknown":
                 s2 += f", driven by {pain}"
             s2 += "."
             lines.append(s2)
@@ -3013,7 +3024,7 @@ def _build_validated_executive_summary(
         pain_counts: dict[str, int] = {}
         for cat in cats:
             p = cat.get("dominant_pain", "")
-            if p and p.lower() not in ("other", "unknown"):
+            if p and not _is_generic_pain_label(p) and p.lower() != "unknown":
                 pain_counts[p] = pain_counts.get(p, 0) + 1
         if pain_counts:
             top_pain_name, top_pain_ct = max(pain_counts.items(), key=lambda x: x[1])
@@ -3048,16 +3059,16 @@ def _build_validated_executive_summary(
                 else:
                     parts[0] += ")"
             top_vendors.append(parts[0])
-        # Extract pains from pain_breakdown or top_pain -- skip vague "other"
+        # Extract pains from pain_breakdown or top_pain -- skip generic fallback labels
         pain_breakdown = entry.get("pain_breakdown", [])
         if pain_breakdown:
             for pb in pain_breakdown[:2]:
                 p = pb.get("category", "")
-                if p and p.lower() != "other" and p not in top_pains:
+                if p and not _is_generic_pain_label(p) and p not in top_pains:
                     top_pains.append(str(p))
         elif entry.get("top_pain"):
             p = str(entry["top_pain"])
-            if p.lower() != "other" and p not in top_pains:
+            if not _is_generic_pain_label(p) and p not in top_pains:
                 top_pains.append(p)
         # Extract alternatives from displacement targets
         for dt in entry.get("top_displacement_targets", []) or []:
@@ -4171,15 +4182,15 @@ async def _fetch_pain_distribution(pool, window_days: int) -> list[dict[str, Any
         ),
         pain_labels AS (
             -- Multi-label path: unnest pain_categories array with severity weights.
-            -- When a label is 'other' and pain_cluster is set, substitute the cluster
-            -- name so reports show e.g. 'product_stagnation' instead of 'other'.
+            -- When a label is the generic fallback bucket and pain_cluster is set,
+            -- substitute the cluster name so reports show something more specific.
             SELECT b.vendor_name,
                    b.urgency,
                    CASE
-                       WHEN p.value->>'category' = 'other' AND b.pain_cluster IS NOT NULL
+                       WHEN p.value->>'category' IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction') AND b.pain_cluster IS NOT NULL
                        THEN b.pain_cluster
-                       WHEN p.value->>'category' = 'other'
-                       THEN 'general_dissatisfaction'
+                       WHEN p.value->>'category' IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction')
+                       THEN 'overall_dissatisfaction'
                        ELSE p.value->>'category'
                    END AS pain,
                    CASE p.value->>'severity'
@@ -4199,14 +4210,14 @@ async def _fetch_pain_distribution(pool, window_days: int) -> list[dict[str, Any
             UNION ALL
 
             -- Fallback: reviews with no pain_categories array.
-            -- Same cluster substitution for 'other'.
+            -- Same cluster substitution for generic fallback labels.
             SELECT b.vendor_name,
                    b.urgency,
                    CASE
-                       WHEN b.fallback_pain = 'other' AND b.pain_cluster IS NOT NULL
+                       WHEN b.fallback_pain IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction') AND b.pain_cluster IS NOT NULL
                        THEN b.pain_cluster
-                       WHEN b.fallback_pain = 'other'
-                       THEN 'general_dissatisfaction'
+                       WHEN b.fallback_pain IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction')
+                       THEN 'overall_dissatisfaction'
                        ELSE b.fallback_pain
                    END AS pain,
                    1.0 AS weight
@@ -5104,9 +5115,8 @@ def _merge_pain_lookup_with_evidence_vault(
             key = str(item.get("key") or "").strip().lower()
             if not key:
                 continue
-            # Map legacy 'other' vault entries to general_dissatisfaction
-            if key == "other":
-                key = "general_dissatisfaction"
+            if key in {"other", "general_dissatisfaction"}:
+                key = "overall_dissatisfaction"
             metrics = item.get("supporting_metrics") or {}
             vault_entries.append({
                 "category": key,
@@ -5939,7 +5949,7 @@ def _build_pain_lookup(pain_dist: list[dict]) -> dict[str, list[dict]]:
     for row in pain_dist:
         vendor = row.get("vendor", "")
         lookup.setdefault(vendor, []).append({
-            "category": row.get("pain", "other"),
+            "category": _normalize_generic_pain_label(row.get("pain")) or "overall_dissatisfaction",
             "count": row.get("complaint_count", 0),
             "avg_urgency": round(row.get("avg_urgency", 0), 1),
         })
@@ -7966,7 +7976,7 @@ def build_displacement_dynamics(
     # --- Edge metrics (from persisted displacement edges) ---
     edge_metrics = {
         "mention_count": eg.get("mention_count") or 0,
-        "primary_driver": eg.get("primary_driver") if eg.get("primary_driver") != "other" else None,
+        "primary_driver": eg.get("primary_driver") if not _is_generic_pain_label(eg.get("primary_driver")) else None,
         "signal_strength": eg.get("signal_strength"),
         "key_quote": eg.get("key_quote"),
         "confidence_score": _sf(eg.get("confidence_score")),

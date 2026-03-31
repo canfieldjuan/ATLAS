@@ -47,8 +47,8 @@ enrichment:
     clamp: [0, 10]
 
   pain_override:
-    description: "Override 'other' pain_category using keyword scan"
-    trigger: {field: pain_category, eq: other}
+    description: "Override generic pain_category using keyword scan"
+    trigger: {field: pain_category, in: [other, general_dissatisfaction, overall_dissatisfaction]}
     keyword_map:
       pricing: [expensive, cost, price, pricing, budget, overpriced, overcharge, costly, fee, fees, subscription, invoice, invoiced, billing, billed, charged, charge, refund, cost increase, price increase, pay for every, paying for, paid for, invested, overpay, nickel and dime, hidden cost, hidden fee, sticker shock, renewal cost, renewal price, per seat, per user, add-on cost, upsell, price hike, price jump, not worth the price, too much money, waste of money, money pit, rates, rate increase, not transparent about, deceptive pricing, bait and switch]
       support: [support, response time, ticket, customer service, helpdesk, wait time, unresponsive, no help, unhelpful, ignored, no response, ghosted, runaround, passed around, escalation, complaint, complaints team]
@@ -63,8 +63,12 @@ enrichment:
       contract_lock_in: [lock-in, locked in, exit cost, switching cost, vendor lock, contract trap, penalty, cancel, cancellation, terminate, termination, auto renew, automatic renewal, renewed without notice, notice period, contract term, billing dispute, runaround, unsubscribe, delete my account, close my account, deactivate, cannot cancel, won't let me cancel, impossible to cancel, trying to cancel]
       data_migration: [data migration, export, portability, data export, migrate data, data transfer, import]
       api_limitations: [api limit, rate limit, api limitation, missing endpoint, api documentation, throttle, api quota]
+      outcome_gap: [out of the box, only does, partial fit, does 60, does 70, does 80, not enough for our use case, had to work around, had to supplement, needed another tool, does not cover our process, poor fit for our workflow, missing business process support]
+      admin_burden: [dedicated admin, dedicated administrator, salesforce admin, consultant, consultants, consulting, requires consultants, apex, apex development, flow builder, workflow maintenance, maintain workflows, cumbersome setup, too much setup, too much configuration, admin overhead, maintenance overhead, hard to administer, needs constant maintenance, steep learning curve for admins, training investment]
+      ai_hallucination: [hallucination, hallucinates, made up answer, fabricated answer, wrong answer from ai, unsafe ai response, ai gave incorrect, ai summary was wrong, generated false]
+      integration_debt: [app exchange, appexchange, connector broke, integration broke, brittle integration, brittle connector, sync breaks, sync broke, integration maintenance, integration drift, middleware dependency, custom integration, patch integration after updates, update broke integration, after updates, constant maintenance, breaking after updates]
     scan_fields: [specific_complaints, quotable_phrases, pricing_phrases, feature_gaps, recommendation_language]
-    fallback: other
+    fallback: overall_dissatisfaction
 
   recommend_derivation:
     description: "Derive would_recommend from extracted language + rating"

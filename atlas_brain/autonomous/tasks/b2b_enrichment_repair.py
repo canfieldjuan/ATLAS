@@ -28,6 +28,8 @@ _REPAIR_JSON_SCHEMA: dict[str, Any] = {
     },
 }
 
+_GENERIC_PAIN_BUCKETS = ("other", "general_dissatisfaction", "overall_dissatisfaction")
+
 
 def _shadow_quarantine_reasons(row: dict[str, Any]) -> list[str]:
     source = str(row.get("source") or "").strip().lower()
@@ -178,6 +180,53 @@ async def _repair_rows(rows, cfg, pool, *, concurrency_override: int | None = No
     return counts
 
 
+async def _demote_stale_no_signal_rows(pool, *, limit: int) -> int:
+    rows = await pool.fetch(
+        """
+        SELECT id, vendor_name, product_name, product_category, source, raw_metadata,
+               rating, rating_max, summary, review_text, pros, cons,
+               reviewer_title, reviewer_company, company_size_raw,
+               reviewer_industry, content_type, enrichment
+        FROM b2b_reviews
+        WHERE enrichment_status = 'enriched'
+          AND COALESCE(low_fidelity, false) = false
+          AND COALESCE(enrichment->>'pain_category', '') = ANY($1::text[])
+          AND COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) = 0
+          AND COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) = 0
+          AND COALESCE(jsonb_array_length(enrichment->'quotable_phrases'), 0) = 0
+          AND COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) = 0
+          AND COALESCE(jsonb_array_length(enrichment->'recommendation_language'), 0) = 0
+          AND COALESCE(jsonb_array_length(enrichment->'feature_gaps'), 0) = 0
+          AND COALESCE(jsonb_array_length(enrichment->'event_mentions'), 0) = 0
+        ORDER BY imported_at DESC NULLS LAST, id
+        LIMIT $2
+        """,
+        list(_GENERIC_PAIN_BUCKETS),
+        limit,
+    )
+
+    demoted = 0
+    for row in rows:
+        baseline = base_enrichment._coerce_json_dict(row.get("enrichment"))
+        if not baseline or not base_enrichment._is_no_signal_result(baseline, dict(row)):
+            continue
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment_status = 'no_signal',
+                enrichment_repair_status = 'promoted',
+                enrichment_repair_attempts = enrichment_repair_attempts + 1,
+                enrichment_repaired_at = $2,
+                enrichment_repair_applied_fields = '["status:no_signal_cleanup"]'::jsonb
+            WHERE id = $1
+            """,
+            row["id"],
+            datetime.now(timezone.utc),
+        )
+        demoted += 1
+    return demoted
+
+
 async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
     result = await pool.execute(
         """
@@ -276,6 +325,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         min_value=1,
         max_value=100,
     )
+    stale_no_signal_demoted = await _demote_stale_no_signal_rows(
+        pool,
+        limit=max_batch,
+    )
 
     promoted = 0
     shadowed = 0
@@ -295,7 +348,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                   AND (enrichment_repair_status IS NULL OR enrichment_repair_status = 'failed')
                   AND (
                     (
-                      COALESCE(enrichment->>'pain_category', 'other') = 'other'
+                      COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction')
                       AND review_text ~* '(cancel|cancellation|billing dispute|refund denied|runaround|automatic renewal|auto renew|renewed without notice|charged|invoiced|price increase|overcharg)'
                     )
                     OR (
@@ -307,7 +360,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       AND review_text ~* '(billing|invoice|invoiced|charged|refund|renewal|price increase|cost increase|automatic renewal|auto renew|overcharg)'
                     )
                     OR (
-                      COALESCE(enrichment->>'pain_category', 'other') NOT IN ('pricing', 'contract_lock_in')
+                      COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') NOT IN ('pricing', 'contract_lock_in')
                       AND (
                         review_text ~* '\\$\\s?\\d'
                         OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
@@ -364,13 +417,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         rounds += 1
         await asyncio.sleep(1)
 
-    if rounds == 0:
+    if rounds == 0 and stale_no_signal_demoted == 0:
         return {"_skip_synthesis": "No enriched reviews need repair"}
     return {
         "promoted": promoted,
         "shadowed": shadowed,
         "failed": failed,
         "rounds": rounds,
+        "stale_no_signal_demoted": stale_no_signal_demoted,
         "orphaned_recovered": orphaned,
         "_skip_synthesis": "B2B enrichment repair complete",
     }

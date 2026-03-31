@@ -54,6 +54,44 @@ def _validation_feedback(vresult: Any, limit: int) -> list[str]:
     return feedback
 
 
+def _retry_guidance(vresult: Any) -> list[str]:
+    """Add targeted correction hints for recurring synthesis failures."""
+    findings = list(getattr(vresult, "errors", []) or []) + list(
+        getattr(vresult, "warnings", []) or [],
+    )
+    seen_codes = {
+        str(getattr(finding, "code", "") or "").strip()
+        for finding in findings
+        if str(getattr(finding, "code", "") or "").strip()
+    }
+    guidance: list[str] = []
+    if "missing_section" in seen_codes:
+        guidance.append(
+            "Include reasoning_contracts.displacement_reasoning.migration_proof "
+            "as a complete object. Do not omit migration_proof even when evidence "
+            "is thin; keep the section present and use cautious confidence/data_gaps.",
+        )
+    if (
+        "missing_category_reasoning" in seen_codes
+        or "empty_category_reasoning" in seen_codes
+    ):
+        guidance.append(
+            "category_reasoning must not leave both market_regime and narrative "
+            "empty. If evidence is mixed, provide a cautious narrative explaining "
+            "the uncertainty instead of returning blanks.",
+        )
+    if (
+        "missing_citations" in seen_codes
+        or "unknown_packet_citation" in seen_codes
+    ):
+        guidance.append(
+            "Every competitive_reframes.reframes[*].citations and other cited "
+            "sections must use only _sid values already present in the input "
+            "packet. Do not invent witness ids or leave reframe citations empty.",
+        )
+    return guidance
+
+
 def _validation_rows(vresult: Any) -> list[dict[str, Any]]:
     """Normalize validator findings into row payloads."""
     rows: list[dict[str, Any]] = []
@@ -673,12 +711,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     feedback = "\n".join(
                         f"- {reason}" for reason in failure_reasons[:feedback_limit]
                     )
+                    retry_guidance = (
+                        _retry_guidance(last_validation)
+                        if last_validation is not None
+                        else []
+                    )
+                    guidance_block = ""
+                    if retry_guidance:
+                        guidance_block = (
+                            "\nAdditional requirements:\n"
+                            + "\n".join(f"- {item}" for item in retry_guidance)
+                        )
                     messages.append(Message(
                         role="user",
                         content=(
                             "Your previous response was rejected. "
                             "Return a complete corrected JSON object only.\n"
                             f"Fix these issues:\n{feedback}"
+                            f"{guidance_block}"
                         ),
                     ))
                 try:
@@ -1168,10 +1218,12 @@ async def _run_cross_vendor_synthesis(
     from ...services.protocols import Message
     from ._b2b_cross_vendor_synthesis import (
         _sorted_vendors,
+        attach_cross_vendor_citation_registry,
         build_category_council_packet,
         build_pairwise_battle_packet,
         build_resource_asymmetry_packet,
         compute_cross_vendor_evidence_hash,
+        materialize_cross_vendor_reference_ids,
         normalize_cross_vendor_contract,
         to_legacy_cross_vendor_conclusion,
     )
@@ -1300,6 +1352,35 @@ async def _run_cross_vendor_synthesis(
     except Exception:
         logger.debug("Product profile fetch failed for xv synthesis")
 
+    vendor_reference_lookup: dict[str, dict[str, Any]] = {}
+    try:
+        reference_rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (vendor_name)
+                   vendor_name, synthesis
+            FROM b2b_reasoning_synthesis
+            WHERE as_of_date <= $1
+              AND analysis_window_days = $2
+            ORDER BY vendor_name, as_of_date DESC, created_at DESC
+            """,
+            today,
+            window_days,
+        )
+        for row in reference_rows:
+            synthesis = row["synthesis"]
+            if isinstance(synthesis, str):
+                try:
+                    synthesis = json.loads(synthesis)
+                except Exception:
+                    synthesis = {}
+            if not isinstance(synthesis, dict):
+                continue
+            vendor_reference_lookup[row["vendor_name"]] = (
+                synthesis.get("reference_ids") or {}
+            )
+    except Exception:
+        logger.debug("Vendor synthesis reference lookup failed for xv synthesis")
+
     # Build displacement map
     try:
         disp_rows = await pool.fetch(
@@ -1422,7 +1503,13 @@ async def _run_cross_vendor_synthesis(
             CROSS_VENDOR_BATTLE_SYNTHESIS_PROMPT,
             _sorted_vendors(vendor_a, vendor_b),
             None,
-            packet,
+            attach_cross_vendor_citation_registry(
+                packet,
+                analysis_type="pairwise_battle",
+                vendors=_sorted_vendors(vendor_a, vendor_b),
+                category=None,
+                vendor_reference_lookup=vendor_reference_lookup,
+            ),
         ))
 
     for cat, eco_ev in categories:
@@ -1439,7 +1526,13 @@ async def _run_cross_vendor_synthesis(
             CATEGORY_COUNCIL_SYNTHESIS_PROMPT,
             sorted(cat_vendors),
             cat,
-            packet,
+            attach_cross_vendor_citation_registry(
+                packet,
+                analysis_type="category_council",
+                vendors=sorted(cat_vendors),
+                category=cat,
+                vendor_reference_lookup=vendor_reference_lookup,
+            ),
         ))
 
     for vendor_a, vendor_b in asymmetry_pairs:
@@ -1451,7 +1544,13 @@ async def _run_cross_vendor_synthesis(
             RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT,
             _sorted_vendors(vendor_a, vendor_b),
             None,
-            packet,
+            attach_cross_vendor_citation_registry(
+                packet,
+                analysis_type="resource_asymmetry",
+                vendors=_sorted_vendors(vendor_a, vendor_b),
+                category=None,
+                vendor_reference_lookup=vendor_reference_lookup,
+            ),
         ))
 
     if not work_items:
@@ -1545,6 +1644,9 @@ async def _run_cross_vendor_synthesis(
                     parsed = parse_json_response(text, recover_truncated=True)
                     if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
                         synthesis = normalize_cross_vendor_contract(parsed, analysis_type)
+                        synthesis = materialize_cross_vendor_reference_ids(
+                            synthesis, packet,
+                        )
                         break
                 except asyncio.TimeoutError:
                     if attempt + 1 >= xv_max_attempts:

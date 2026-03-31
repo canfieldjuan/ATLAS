@@ -13,6 +13,10 @@ _TIMING_TEXT_RE = re.compile(
     r"\b(?:renewal|deadline|contract|quarter|month|week|year|q[1-4]|fy\d{2,4}|today|tomorrow|immediate)\b",
     re.IGNORECASE,
 )
+_REPORT_TIER_BANNED = re.compile(
+    r"\b(dashboard|live feed|free trial|software|platform)\b",
+    re.IGNORECASE,
+)
 
 
 def _normalize_text(value: Any) -> str:
@@ -27,6 +31,20 @@ def _copy_json_dict(value: Any) -> dict[str, Any]:
 
 def _copy_json_list(value: Any) -> list[Any]:
     return copy.deepcopy(value) if isinstance(value, list) else []
+
+
+def _reference_id_counts(reference_ids: Any) -> dict[str, int]:
+    if not isinstance(reference_ids, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for key, value in reference_ids.items():
+        if isinstance(value, list):
+            counts[str(key)] = len([item for item in value if str(item or "").strip()])
+        elif isinstance(value, dict):
+            counts[str(key)] = len(value)
+        elif value not in (None, "", [], {}):
+            counts[str(key)] = 1
+    return counts
 
 
 def _coerce_anchor_examples(value: Any) -> dict[str, list[dict[str, Any]]]:
@@ -445,17 +463,266 @@ def specificity_audit_snapshot(
         for key, values in (evaluation.get("signal_terms") or {}).items()
         if values
     }
+    matched_groups = list(evaluation.get("matched_groups") or [])
+    available_groups = sorted(signal_terms.keys())
     return {
         "status": "fail" if evaluation.get("blocking_issues") else "pass",
         "blocking_issues": list(evaluation.get("blocking_issues") or []),
         "warnings": list(evaluation.get("warnings") or []),
-        "matched_groups": list(evaluation.get("matched_groups") or []),
-        "available_groups": sorted(signal_terms.keys()),
+        "matched_groups": matched_groups,
+        "available_groups": available_groups,
+        "missing_groups": [
+            group for group in available_groups if group not in set(matched_groups)
+        ],
         "signal_terms": signal_terms,
         "anchor_count": sum(len(rows) for rows in (anchor_examples or {}).values()),
         "anchor_labels": sorted((anchor_examples or {}).keys()),
         "highlight_count": len(witness_highlights or []),
         "reference_ids": _copy_json_dict(reference_ids),
+        "reference_id_counts": _reference_id_counts(reference_ids),
+    }
+
+
+def campaign_proof_terms_from_audit(
+    audit: dict[str, Any] | None,
+    *,
+    channel: str,
+    limit: int,
+) -> list[str]:
+    if not isinstance(audit, dict):
+        return []
+    signal_terms = audit.get("signal_terms")
+    if not isinstance(signal_terms, dict):
+        return []
+
+    blocking_issues = [
+        str(issue).strip().lower()
+        for issue in (audit.get("blocking_issues") or [])
+        if str(issue or "").strip()
+    ]
+    prefer_numeric_timing = any(
+        "timing or numeric anchor" in issue for issue in blocking_issues
+    )
+    group_order = ["numeric_terms", "timing_terms"]
+    if not prefer_numeric_timing:
+        if channel != "email_cold":
+            group_order.append("competitor_terms")
+        group_order.extend(["pain_terms", "workflow_terms"])
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for group_name in group_order:
+        values = signal_terms.get(group_name)
+        if not isinstance(values, list):
+            continue
+        ranked_values = sorted(
+            (str(value or "").strip() for value in values),
+            key=lambda token: (-len(token), token.lower()),
+        )
+        for token in ranked_values:
+            if not token:
+                continue
+            rendered = token.replace("_", " ")
+            marker = rendered.lower()
+            if marker in seen:
+                continue
+            resolved.append(rendered)
+            seen.add(marker)
+            if len(resolved) >= max(1, int(limit)):
+                return resolved
+    return resolved
+
+
+def _campaign_collection(payload: dict[str, Any], key: str) -> Any:
+    value = payload.get(key)
+    if value not in (None, "", [], {}):
+        return value
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata.get(key)
+    return None
+
+
+def _campaign_name_terms(value: Any) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    rows: list[Any] = []
+    if isinstance(value, list):
+        rows = list(value)
+    elif isinstance(value, dict):
+        rows = [value]
+
+    for row in rows:
+        name = ""
+        if isinstance(row, dict):
+            for key in ("name", "vendor_name", "incumbent_vendor", "alternative_vendor"):
+                candidate = str(row.get(key) or "").strip()
+                if candidate:
+                    name = candidate
+                    break
+        else:
+            name = str(row or "").strip()
+        marker = _normalize_text(name)
+        if not marker or marker in seen:
+            continue
+        seen.add(marker)
+        terms.append(name)
+    return terms
+
+
+def _campaign_private_company_terms(
+    anchor_examples: dict[str, list[dict[str, Any]]] | None,
+    witness_highlights: list[dict[str, Any]] | None,
+) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for group_rows in (anchor_examples or {}).values():
+        rows.extend(group_rows)
+    rows.extend(witness_highlights or [])
+    for row in rows:
+        company = str(row.get("reviewer_company") or "").strip()
+        marker = _normalize_text(company)
+        if not marker or marker in seen:
+            continue
+        seen.add(marker)
+        terms.append(company)
+    return terms
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        marker = str(value or "").strip().lower()
+        if not marker or marker in seen:
+            continue
+        seen.add(marker)
+        resolved.append(str(value).strip())
+    return resolved
+
+
+def campaign_policy_audit_snapshot(
+    *,
+    subject: str,
+    body: str,
+    cta: str,
+    campaign: dict[str, Any] | None = None,
+    anchor_examples: dict[str, list[dict[str, Any]]] | None = None,
+    witness_highlights: list[dict[str, Any]] | None = None,
+    reference_ids: dict[str, Any] | None = None,
+    campaign_proof_terms: list[str] | None = None,
+    min_anchor_hits: int = 1,
+    require_anchor_support: bool = True,
+    require_timing_or_numeric_when_available: bool = False,
+    proof_term_limit: int = 3,
+) -> dict[str, Any]:
+    payload = campaign if isinstance(campaign, dict) else {}
+    channel = str(payload.get("channel") or "").strip()
+    target_mode = str(payload.get("target_mode") or "").strip()
+    tier = str(payload.get("tier") or "").strip()
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        if not tier:
+            tier = str(metadata.get("tier") or "").strip()
+        if not target_mode:
+            target_mode = str(metadata.get("target_mode") or "").strip()
+
+    audit = specificity_audit_snapshot(
+        body,
+        anchor_examples=anchor_examples,
+        witness_highlights=witness_highlights,
+        reference_ids=reference_ids,
+        allow_company_names=False,
+        min_anchor_hits=min_anchor_hits,
+        require_anchor_support=require_anchor_support,
+        require_timing_or_numeric_when_available=require_timing_or_numeric_when_available,
+        include_competitor_terms=channel != "email_cold",
+    )
+    blocking_issues = list(audit.get("blocking_issues") or [])
+    warnings = list(audit.get("warnings") or [])
+
+    proof_terms = _dedupe_strings(
+        [str(term or "").strip() for term in (campaign_proof_terms or []) if str(term or "").strip()]
+    )
+    if not proof_terms:
+        proof_terms = _dedupe_strings(
+            [
+                str(term or "").strip()
+                for term in (_campaign_collection(payload, "campaign_proof_terms") or [])
+                if str(term or "").strip()
+            ]
+        )
+    if not proof_terms:
+        proof_terms = campaign_proof_terms_from_audit(
+            audit,
+            channel=channel,
+            limit=proof_term_limit,
+        )
+
+    normalized_body = _normalize_text(body)
+    normalized_message = _normalize_text(" ".join(part for part in (subject, body, cta) if part))
+    normalized_report = _normalize_text(" ".join(part for part in (body, cta) if part))
+    used_proof_terms = [
+        term for term in proof_terms if _contains_term(normalized_body, term)
+    ]
+
+    if proof_terms and require_anchor_support and (anchor_examples or witness_highlights):
+        if not used_proof_terms:
+            blocking_issues.append("missing_exact_proof_term")
+
+    if tier.lower() == "report":
+        report_match = _REPORT_TIER_BANNED.search(normalized_report)
+        if report_match:
+            blocking_issues.append(f"report_tier_language:{report_match.group(1)}")
+
+    forbidden_label = ""
+    forbidden_terms: list[str] = []
+    if channel == "email_cold":
+        if target_mode == "vendor_retention":
+            forbidden_label = "competitor_name_in_email_cold"
+            forbidden_terms.extend(
+                _campaign_name_terms(_campaign_collection(payload, "competitors_considering"))
+            )
+            signal_summary = payload.get("signal_summary")
+            if isinstance(signal_summary, dict):
+                forbidden_terms.extend(
+                    _campaign_name_terms(signal_summary.get("competitor_distribution"))
+                )
+        elif target_mode == "challenger_intel":
+            forbidden_label = "incumbent_name_in_email_cold"
+            forbidden_terms.extend(
+                _campaign_name_terms(_campaign_collection(payload, "competitors_considering"))
+            )
+            signal_summary = payload.get("signal_summary")
+            if isinstance(signal_summary, dict):
+                forbidden_terms.extend(
+                    _campaign_name_terms(signal_summary.get("incumbents_losing"))
+                )
+            incumbent_archetypes = payload.get("incumbent_archetypes")
+            if isinstance(incumbent_archetypes, dict):
+                for rows in incumbent_archetypes.values():
+                    forbidden_terms.extend(_campaign_name_terms(rows))
+    for term in _dedupe_strings(forbidden_terms):
+        if _contains_term(normalized_message, term):
+            blocking_issues.append(f"{forbidden_label}:{term}")
+
+    for company in _campaign_private_company_terms(anchor_examples, witness_highlights):
+        if _contains_term(normalized_message, company):
+            blocking_issues.append(f"private_account_name_leak:{company}")
+
+    deduped_blockers = _dedupe_strings(blocking_issues)
+    deduped_warnings = _dedupe_strings(warnings)
+    return {
+        **audit,
+        "status": "fail" if deduped_blockers else "pass",
+        "blocking_issues": deduped_blockers,
+        "warnings": deduped_warnings,
+        "campaign_proof_terms": proof_terms,
+        "required_proof_terms": proof_terms,
+        "used_proof_terms": used_proof_terms,
+        "unused_proof_terms": [term for term in proof_terms if term not in used_proof_terms],
+        "primary_blocker": deduped_blockers[0] if deduped_blockers else None,
     }
 
 

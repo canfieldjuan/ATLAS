@@ -19,6 +19,9 @@ The input payload contains:
   integration counts, recommendation ratios
 - ``vendor_a_profile`` / ``vendor_b_profile``: product profiles
 - ``divergence_score``: pre-computed score indicating resource gap magnitude
+- ``citation_registry``: allowed packet-level citation entries.  Every item has
+  a stable ``_sid`` and a human-readable label.  ``citations`` MUST use only
+  these ``_sid`` values.
 
 CRITICAL RULES:
 
@@ -31,6 +34,8 @@ CRITICAL RULES:
 5. Every ``key_insight`` must have ``insight`` and ``evidence`` fields.
 6. ``confidence`` is a float 0.0-1.0.
 7. Do NOT invent data not present in the evidence.
+8. ``citations`` must be an array of ``citation_registry[*]._sid`` values only.
+   Do NOT paste prose into ``citations``.
 
 OUTPUT SCHEMA:
 

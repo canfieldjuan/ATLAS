@@ -17,12 +17,14 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
 from ..autonomous.tasks._b2b_specificity import (
-    merge_specificity_contexts,
-    specificity_audit_snapshot,
+    latest_specificity_audit,
     specificity_quality_summary,
-    surface_specificity_context,
 )
 from ..config import settings
+from ..services.campaign_quality import (
+    campaign_quality_revalidation_with_fallback,
+    coerce_json_dict,
+)
 from ..storage.database import get_db_pool
 from ..autonomous.visibility import emit_event, record_attempt
 from ..autonomous.tasks.campaign_audit import log_campaign_event
@@ -134,67 +136,79 @@ def _affected_rows(result: str) -> int:
 
 
 def _coerce_json_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _campaign_specificity_context(
-    metadata: Any,
-    company_context: Any,
-) -> dict[str, Any]:
-    metadata_context = surface_specificity_context(
-        _coerce_json_dict(metadata),
-        surface="campaign",
-        nested_keys=("briefing_context",),
-    )
-    company_specificity = surface_specificity_context(
-        _coerce_json_dict(company_context),
-        surface="campaign",
-        nested_keys=("briefing_context",),
-    )
-    return merge_specificity_contexts(metadata_context, company_specificity)
-
-
-def _campaign_revalidation_audit(
-    *,
-    campaign: dict[str, Any],
-    company_context: Any = None,
-) -> dict[str, Any]:
-    context = _campaign_specificity_context(
-        campaign.get("metadata"),
-        company_context,
-    )
-    if not context:
-        return {}
-    return specificity_audit_snapshot(
-        str(campaign.get("body") or ""),
-        anchor_examples=context.get("anchor_examples"),
-        witness_highlights=context.get("witness_highlights"),
-        reference_ids=context.get("reference_ids"),
-        allow_company_names=False,
-        min_anchor_hits=int(settings.b2b_campaign.specificity_min_anchor_hits),
-        require_anchor_support=bool(settings.b2b_campaign.specificity_require_anchor_support),
-        require_timing_or_numeric_when_available=bool(
-            settings.b2b_campaign.specificity_require_timing_or_numeric_when_available
-        ),
-        include_competitor_terms=str(campaign.get("channel") or "") != "email_cold",
-    )
+    return coerce_json_dict(value)
 
 
 def _campaign_response_quality(metadata: Any) -> dict[str, Any]:
-    summary = specificity_quality_summary(_coerce_json_dict(metadata))
+    resolved_metadata = _coerce_json_dict(metadata)
+    summary = specificity_quality_summary(resolved_metadata)
+    failure_explanation = _campaign_failure_explanation(resolved_metadata)
     return {
         "quality_status": summary.get("quality_status"),
         "blocker_count": summary.get("blocker_count"),
         "warning_count": summary.get("warning_count"),
         "latest_error_summary": summary.get("latest_error_summary"),
+        "failure_explanation": failure_explanation,
+    }
+
+
+def _campaign_failure_explanation(metadata: Any) -> dict[str, Any] | None:
+    audit = latest_specificity_audit(_coerce_json_dict(metadata))
+    explanation = audit.get("failure_explanation")
+    if isinstance(explanation, dict):
+        if explanation.get("boundary") is None and audit.get("boundary") is not None:
+            return {
+                **explanation,
+                "boundary": audit.get("boundary"),
+            }
+        return explanation
+    if not isinstance(audit, dict) or not audit:
+        return None
+    blocking_issues = list(audit.get("blocking_issues") or [])
+    warnings = list(audit.get("warnings") or [])
+    if not blocking_issues and not warnings:
+        return None
+    reference_id_counts = audit.get("reference_id_counts")
+    return {
+        "boundary": audit.get("boundary"),
+        "primary_blocker": audit.get("primary_blocker") or (
+            blocking_issues[0] if blocking_issues else None
+        ),
+        "cause_type": audit.get("cause_type"),
+        "blocking_issues": blocking_issues,
+        "warnings": warnings,
+        "matched_groups": list(audit.get("matched_groups") or []),
+        "available_groups": list(audit.get("available_groups") or []),
+        "missing_groups": list(audit.get("missing_groups") or []),
+        "required_proof_terms": list(
+            audit.get("required_proof_terms")
+            or audit.get("campaign_proof_terms")
+            or []
+        ),
+        "used_proof_terms": list(audit.get("used_proof_terms") or []),
+        "unused_proof_terms": list(audit.get("unused_proof_terms") or []),
+        "missing_inputs": list(audit.get("missing_inputs") or []),
+        "missing_primary_inputs": list(audit.get("missing_primary_inputs") or []),
+        "context_sources": list(audit.get("context_sources") or []),
+        "fallback_used": (
+            audit.get("fallback_used")
+            if isinstance(audit.get("fallback_used"), bool)
+            else None
+        ),
+        "reasoning_view_found": (
+            audit.get("reasoning_view_found")
+            if isinstance(audit.get("reasoning_view_found"), bool)
+            else None
+        ),
+        "anchor_count": int(audit.get("anchor_count") or 0),
+        "highlight_count": int(audit.get("highlight_count") or 0),
+        "reference_id_counts": (
+            reference_id_counts if isinstance(reference_id_counts, dict) else {}
+        ),
+        "anchor_labels": list(audit.get("anchor_labels") or []),
+        "context_has_anchor_examples": bool(audit.get("anchor_count")),
+        "context_has_witness_highlights": bool(audit.get("highlight_count")),
+        "context_has_reference_ids": bool(reference_id_counts),
     }
 
 
@@ -203,17 +217,10 @@ async def _persist_campaign_revalidation(
     *,
     campaign_id: _uuid.UUID,
     metadata: dict[str, Any],
-    audit: dict[str, Any],
-    action: str,
 ) -> None:
-    merged_metadata = dict(metadata)
-    merged_metadata["latest_specificity_audit"] = {
-        **audit,
-        "boundary": action,
-    }
     await pool.execute(
         "UPDATE b2b_campaigns SET metadata = $1::jsonb WHERE id = $2",
-        json.dumps(merged_metadata, default=str),
+        json.dumps(metadata, default=str),
         campaign_id,
     )
 
@@ -226,24 +233,36 @@ async def _enforce_campaign_revalidation(
     company_context: Any,
     action: str,
 ) -> None:
-    audit = _campaign_revalidation_audit(
+    revalidation = await campaign_quality_revalidation_with_fallback(
+        pool,
         campaign=campaign,
+        boundary=action,
         company_context=company_context,
     )
+    audit = revalidation["audit"]
     if not audit:
         return
-    metadata = _coerce_json_dict(campaign.get("metadata"))
     await _persist_campaign_revalidation(
         pool,
         campaign_id=campaign_id,
-        metadata=metadata,
-        audit=audit,
-        action=action,
+        metadata=revalidation["metadata"],
     )
-    if audit.get("status") != "fail":
-        return
     blocking_issues = list(audit.get("blocking_issues") or [])
     warnings = list(audit.get("warnings") or [])
+    if audit.get("status") != "fail":
+        await record_attempt(
+            pool,
+            artifact_type="campaign",
+            artifact_id=str(campaign_id),
+            attempt_no=1,
+            stage=action,
+            status="succeeded",
+            blocker_count=0,
+            warning_count=len(warnings),
+            warnings=warnings,
+        )
+        return
+
     summary = blocking_issues[0] if blocking_issues else "campaign_revalidation_failed"
     await log_campaign_event(
         pool,
@@ -388,6 +407,7 @@ async def list_campaigns(
             "blocker_count": quality["blocker_count"],
             "warning_count": quality["warning_count"],
             "latest_error_summary": quality["latest_error_summary"],
+            "failure_explanation": quality["failure_explanation"],
         })
 
     return {"campaigns": campaigns, "count": len(campaigns)}
@@ -494,6 +514,247 @@ async def campaign_stats(user: AuthUser | None = Depends(optional_auth)):
                 for r in blocker_rows
             ],
         },
+    }
+
+
+@router.get("/quality-trends")
+async def campaign_quality_trends(
+    days: int = Query(14, ge=1, le=90),
+    top_n: int = Query(5, ge=1, le=20),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    scope, scope_params = _campaign_scope_clause("bc", user)
+    params: list[Any] = list(scope_params)
+    days_idx = len(params) + 1
+    top_n_idx = len(params) + 2
+    params.extend([days, top_n])
+    if scope:
+        where = (
+            f"{scope} AND COALESCE(bc.updated_at, bc.created_at) >= "
+            f"NOW() - (${days_idx}::int * INTERVAL '1 day')"
+        )
+    else:
+        where = (
+            f" WHERE COALESCE(bc.updated_at, bc.created_at) >= "
+            f"NOW() - (${days_idx}::int * INTERVAL '1 day')"
+        )
+
+    trend_rows = await pool.fetch(
+        f"""
+        WITH blocker_rows AS (
+            SELECT
+                DATE_TRUNC('day', COALESCE(bc.updated_at, bc.created_at))::date::text AS day,
+                blocker.reason AS reason
+            FROM b2b_campaigns bc
+            JOIN LATERAL jsonb_array_elements_text(
+                COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
+            ) AS blocker(reason) ON TRUE
+            {where}
+        ),
+        top_reasons AS (
+            SELECT reason, COUNT(*) AS total
+            FROM blocker_rows
+            GROUP BY reason
+            ORDER BY total DESC, reason ASC
+            LIMIT ${top_n_idx}
+        )
+        SELECT blocker_rows.day, blocker_rows.reason, COUNT(*) AS cnt
+        FROM blocker_rows
+        JOIN top_reasons USING (reason)
+        GROUP BY blocker_rows.day, blocker_rows.reason, top_reasons.total
+        ORDER BY blocker_rows.day ASC, top_reasons.total DESC, blocker_rows.reason ASC
+        """,
+        *params,
+    )
+    daily_rows = await pool.fetch(
+        f"""
+        SELECT
+            DATE_TRUNC('day', COALESCE(bc.updated_at, bc.created_at))::date::text AS day,
+            COALESCE(SUM(
+                jsonb_array_length(
+                    COALESCE(bc.metadata->'latest_specificity_audit'->'blocking_issues', '[]'::jsonb)
+                )
+            ), 0) AS blocker_total
+        FROM b2b_campaigns bc
+        {where}
+        GROUP BY DATE_TRUNC('day', COALESCE(bc.updated_at, bc.created_at))::date::text
+        ORDER BY day ASC
+        """,
+        *params,
+    )
+    reason_totals: dict[str, int] = {}
+    for row in trend_rows:
+        reason = str(row["reason"] or "")
+        reason_totals[reason] = reason_totals.get(reason, 0) + int(row["cnt"] or 0)
+
+    top_blockers = sorted(
+        (
+            {"reason": reason, "count": count}
+            for reason, count in reason_totals.items()
+        ),
+        key=lambda item: (-item["count"], item["reason"]),
+    )
+    return {
+        "days": int(days),
+        "top_n": int(top_n),
+        "top_blockers": top_blockers,
+        "series": [
+            {
+                "day": str(row["day"] or ""),
+                "reason": str(row["reason"] or ""),
+                "count": int(row["cnt"] or 0),
+            }
+            for row in trend_rows
+        ],
+        "totals_by_day": [
+            {
+                "day": str(row["day"] or ""),
+                "blocker_total": int(row["blocker_total"] or 0),
+            }
+            for row in daily_rows
+        ],
+    }
+
+
+@router.get("/quality-diagnostics")
+async def campaign_quality_diagnostics(
+    days: int = Query(14, ge=1, le=90),
+    top_n: int = Query(10, ge=1, le=50),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    scope, scope_params = _campaign_scope_clause("bc", user)
+    params: list[Any] = list(scope_params)
+    days_idx = len(params) + 1
+    top_n_idx = len(params) + 2
+    params.extend([days, top_n])
+    if scope:
+        where = (
+            f"{scope} AND COALESCE(bc.updated_at, bc.created_at) >= "
+            f"NOW() - (${days_idx}::int * INTERVAL '1 day') "
+            "AND COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'fail'"
+        )
+    else:
+        where = (
+            " WHERE COALESCE(bc.updated_at, bc.created_at) >= "
+            f"NOW() - (${days_idx}::int * INTERVAL '1 day') "
+            "AND COALESCE(bc.metadata->'latest_specificity_audit'->>'status', '') = 'fail'"
+        )
+
+    boundary_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(bc.metadata->'latest_specificity_audit'->>'boundary', 'missing') AS boundary,
+               COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        {where}
+        GROUP BY boundary
+        ORDER BY cnt DESC, boundary ASC
+        LIMIT ${top_n_idx}
+        """,
+        *params,
+    )
+    cause_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(
+                   bc.metadata->'latest_specificity_audit'->'failure_explanation'->>'cause_type',
+                   'unknown'
+               ) AS cause_type,
+               COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        {where}
+        GROUP BY cause_type
+        ORDER BY cnt DESC, cause_type ASC
+        LIMIT ${top_n_idx}
+        """,
+        *params,
+    )
+    blocker_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(
+                   bc.metadata->'latest_specificity_audit'->'failure_explanation'->>'primary_blocker',
+                   bc.metadata->'latest_specificity_audit'->>'primary_blocker',
+                   bc.metadata->'latest_specificity_audit'->'blocking_issues'->>0,
+                   'unknown'
+               ) AS reason,
+               COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        {where}
+        GROUP BY reason
+        ORDER BY cnt DESC, reason ASC
+        LIMIT ${top_n_idx}
+        """,
+        *params,
+    )
+    missing_input_rows = await pool.fetch(
+        f"""
+        SELECT missing_input.input AS input, COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        JOIN LATERAL jsonb_array_elements_text(
+            COALESCE(
+                bc.metadata->'latest_specificity_audit'->'failure_explanation'->'missing_inputs',
+                '[]'::jsonb
+            )
+        ) AS missing_input(input) ON TRUE
+        {where}
+        GROUP BY missing_input.input
+        ORDER BY cnt DESC, missing_input.input ASC
+        LIMIT ${top_n_idx}
+        """,
+        *params,
+    )
+    mode_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(bc.target_mode, bc.metadata->>'target_mode', 'unknown') AS target_mode,
+               COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        {where}
+        GROUP BY target_mode
+        ORDER BY cnt DESC, target_mode ASC
+        LIMIT ${top_n_idx}
+        """,
+        *params,
+    )
+    vendor_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(bc.vendor_name, 'unknown') AS vendor_name,
+               COUNT(*) AS cnt
+        FROM b2b_campaigns bc
+        {where}
+        GROUP BY vendor_name
+        ORDER BY cnt DESC, vendor_name ASC
+        LIMIT ${top_n_idx}
+        """,
+        *params,
+    )
+
+    return {
+        "days": int(days),
+        "top_n": int(top_n),
+        "by_boundary": [
+            {"boundary": str(row["boundary"] or "missing"), "count": int(row["cnt"] or 0)}
+            for row in boundary_rows
+        ],
+        "by_cause_type": [
+            {"cause_type": str(row["cause_type"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in cause_rows
+        ],
+        "top_primary_blockers": [
+            {"reason": str(row["reason"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in blocker_rows
+        ],
+        "top_missing_inputs": [
+            {"input": str(row["input"] or ""), "count": int(row["cnt"] or 0)}
+            for row in missing_input_rows
+        ],
+        "by_target_mode": [
+            {"target_mode": str(row["target_mode"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in mode_rows
+        ],
+        "top_vendors": [
+            {"vendor_name": str(row["vendor_name"] or "unknown"), "count": int(row["cnt"] or 0)}
+            for row in vendor_rows
+        ],
     }
 
 

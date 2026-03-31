@@ -17,11 +17,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.campaign_quality import campaign_quality_revalidation
 from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ..visibility import emit_event, record_attempt
 from ._b2b_specificity import (
+    campaign_proof_terms_from_audit,
     merge_specificity_contexts,
     specificity_audit_snapshot,
     surface_specificity_context,
@@ -85,12 +87,6 @@ def _build_selling_context(
 # ---------------------------------------------------------------------------
 # Post-generation validation
 # ---------------------------------------------------------------------------
-
-_WORD_LIMITS: dict[str, tuple[int, int]] = {
-    "email_cold": (50, 150),
-    "email_followup": (75, 150),
-    "linkedin": (0, 100),
-}
 
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _MD_ITALIC_RE = re.compile(r"(?<!\w)\*([^*]+)\*(?!\w)")
@@ -176,6 +172,33 @@ def _truncate_to_limit(body: str, max_words: int) -> str:
     return truncated if truncated.strip() else body
 
 
+def _campaign_word_limits(
+    *,
+    channel: str,
+    target_mode: str | None,
+) -> tuple[int, int] | None:
+    raw_limits = settings.b2b_campaign.word_limits
+    if not isinstance(raw_limits, dict):
+        return None
+    normalized_mode = str(target_mode or "").strip().lower()
+    mode_limits = raw_limits.get(normalized_mode)
+    if not isinstance(mode_limits, dict):
+        mode_limits = raw_limits.get("default")
+    if not isinstance(mode_limits, dict):
+        return None
+    resolved = mode_limits.get(str(channel or "").strip())
+    if not isinstance(resolved, list) or len(resolved) != 2:
+        return None
+    try:
+        min_words = int(resolved[0])
+        max_words = int(resolved[1])
+    except (TypeError, ValueError):
+        return None
+    if min_words < 0 or max_words < min_words:
+        return None
+    return min_words, max_words
+
+
 def _append_signoff(body: str, payload: dict[str, Any]) -> str:
     """Append a deterministic sender sign-off when the model omits one."""
     if _SIGNOFF_RE.search(body):
@@ -199,7 +222,10 @@ def _append_signoff(body: str, payload: dict[str, Any]) -> str:
 
 
 def _validate_campaign_content(
-    parsed: dict[str, Any], channel: str, tier: str = "",
+    parsed: dict[str, Any],
+    channel: str,
+    tier: str = "",
+    target_mode: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Validate and fix campaign content. Returns (fixed_content, issues_dict)."""
     issues: dict[str, Any] = {}
@@ -239,12 +265,15 @@ def _validate_campaign_content(
         return parsed, issues
 
     # Word count
-    limits = _WORD_LIMITS.get(channel)
+    limits = _campaign_word_limits(channel=channel, target_mode=target_mode)
     if limits:
         plain = _HTML_TAG_RE.sub(" ", body)
         wc = len(plain.split())
-        _, max_words = limits
-        if wc > max_words:
+        min_words, max_words = limits
+        if wc < min_words:
+            issues["word_count"] = wc
+            issues["min_words"] = min_words
+        elif wc > max_words:
             issues["word_count"] = wc
             issues["max_words"] = max_words
             # Apply truncation as fallback (caller may retry first)
@@ -291,6 +320,23 @@ def _campaign_specificity_context(payload: dict[str, Any]) -> dict[str, Any]:
     return merge_specificity_contexts(direct, nested)
 
 
+def _inject_reasoning_campaign_context(
+    target: dict[str, Any],
+    consumer_context: dict[str, Any] | None,
+) -> None:
+    if not isinstance(target, dict) or not isinstance(consumer_context, dict):
+        return
+    anchors = consumer_context.get("anchor_examples")
+    if isinstance(anchors, dict) and anchors:
+        target["reasoning_anchor_examples"] = anchors
+    highlights = consumer_context.get("witness_highlights")
+    if isinstance(highlights, list) and highlights:
+        target["reasoning_witness_highlights"] = highlights
+    reference_ids = consumer_context.get("reference_ids")
+    if isinstance(reference_ids, dict) and reference_ids:
+        target["reasoning_reference_ids"] = reference_ids
+
+
 def _campaign_specificity_audit(
     *,
     body: str,
@@ -315,22 +361,101 @@ def _campaign_specificity_audit(
     )
 
 
+def _campaign_specificity_terms(
+    specificity: dict[str, Any] | None,
+    *,
+    channel: str,
+) -> list[str]:
+    return campaign_proof_terms_from_audit(
+        specificity,
+        channel=channel,
+        limit=int(settings.b2b_campaign.specificity_revision_term_limit),
+    )
+
+
+def _campaign_specificity_revision(
+    *,
+    channel: str,
+    specificity: dict[str, Any] | None,
+) -> str:
+    lines = [
+        "REVISION REQUIRED: The previous body failed the witness-backed specificity gate.",
+    ]
+    exact_terms = _campaign_specificity_terms(specificity, channel=channel)
+    blocking_issues = [
+        str(issue).strip().lower()
+        for issue in (specificity or {}).get("blocking_issues", [])
+        if str(issue or "").strip()
+    ]
+    if any("timing or numeric anchor" in issue for issue in blocking_issues):
+        if exact_terms:
+            lines.append(
+                "Rewrite the body so it explicitly mentions at least one of these exact numeric or timing details: "
+                + "; ".join(exact_terms)
+                + "."
+            )
+        else:
+            lines.append(
+                "Rewrite the body so it explicitly mentions a concrete numeric or timing anchor from the provided witness-backed context."
+            )
+    elif exact_terms:
+        lines.append(
+            "Rewrite the body so it explicitly uses at least one of these exact witness-backed proof terms: "
+            + "; ".join(exact_terms)
+            + "."
+        )
+    else:
+        lines.append(
+            "Rewrite the body so it explicitly uses a concrete witness-backed proof anchor instead of aggregate summary language."
+        )
+    if any(issue.startswith("report_tier_language:") for issue in blocking_issues):
+        lines.append(
+            "Remove dashboard, live feed, free trial, software, and platform language from report-tier copy."
+        )
+    if channel == "email_cold":
+        if any(issue.startswith("incumbent_name_in_email_cold:") for issue in blocking_issues):
+            lines.append("Do not name incumbents in the cold email.")
+        else:
+            lines.append("Do not name competitors in the cold email.")
+    lines.append("Do not reveal private account names or review sources.")
+    return " ".join(lines)
+
+
 def _campaign_storage_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
-    specificity_context = payload.get("_campaign_specificity_context")
-    if isinstance(specificity_context, dict):
-        if specificity_context.get("anchor_examples"):
-            metadata["reasoning_anchor_examples"] = specificity_context["anchor_examples"]
-        if specificity_context.get("witness_highlights"):
-            metadata["reasoning_witness_highlights"] = specificity_context["witness_highlights"]
-        if specificity_context.get("reference_ids"):
-            metadata["reasoning_reference_ids"] = specificity_context["reference_ids"]
+    revalidation = payload.get("_campaign_revalidation")
+    if isinstance(revalidation, dict):
+        merged_metadata = revalidation.get("metadata")
+        if isinstance(merged_metadata, dict):
+            metadata.update(merged_metadata)
+    if not metadata:
+        tier = str(payload.get("tier") or "").strip()
+        if tier:
+            metadata["tier"] = tier
+        specificity_context = payload.get("_campaign_specificity_context")
+        if isinstance(specificity_context, dict):
+            if specificity_context.get("anchor_examples"):
+                metadata["reasoning_anchor_examples"] = specificity_context["anchor_examples"]
+            if specificity_context.get("witness_highlights"):
+                metadata["reasoning_witness_highlights"] = specificity_context["witness_highlights"]
+            if specificity_context.get("reference_ids"):
+                metadata["reasoning_reference_ids"] = specificity_context["reference_ids"]
+        proof_terms = payload.get("campaign_proof_terms")
+        if isinstance(proof_terms, list) and proof_terms:
+            metadata["campaign_proof_terms"] = [
+                str(term or "").strip()
+                for term in proof_terms
+                if str(term or "").strip()
+            ]
     generation_audit = payload.get("_generation_audit")
     if isinstance(generation_audit, dict) and generation_audit:
         metadata["generation_audit"] = generation_audit
         specificity = generation_audit.get("specificity")
         if isinstance(specificity, dict) and specificity:
-            metadata["latest_specificity_audit"] = specificity
+            metadata["latest_specificity_audit"] = {
+                **specificity,
+                "boundary": "generation",
+            }
     return metadata
 
 
@@ -1507,7 +1632,11 @@ async def _generate_churning_company_campaigns(
             cold_email_content: dict[str, str] | None = None
 
             for channel in cfg.channels:
-                payload = {**persona_context, "channel": channel}
+                payload = {
+                    **persona_context,
+                    "channel": channel,
+                    "target_mode": "churning_company",
+                }
                 artifact_id = _campaign_artifact_key(
                     company_name=company_name,
                     batch_id=persona_batch_id,
@@ -1969,6 +2098,10 @@ async def _generate_vendor_campaigns(
 
         vendor_reasoning = await load_best_reasoning_view(pool, vendor_name)
         if vendor_reasoning is not None:
+            _inject_reasoning_campaign_context(
+                vendor_ctx,
+                vendor_reasoning.consumer_context("campaign"),
+            )
             cn = vendor_reasoning.section("causal_narrative")
             wedge = vendor_reasoning.primary_wedge
             wedge_label = wedge.value if wedge else cn.get("primary_wedge", "")
@@ -2065,6 +2198,7 @@ async def _generate_vendor_campaigns(
                     blog_posts=vendor_blog_urls,
                 ),
                 "channel": channel,
+                "target_mode": "vendor_retention",
             }
             artifact_id = _campaign_artifact_key(
                 company_name=vendor_name,
@@ -2546,6 +2680,7 @@ async def _generate_challenger_campaigns(
                     blog_posts=challenger_blog_urls,
                 ),
                 "channel": channel,
+                "target_mode": "challenger_intel",
             }
             artifact_id = _campaign_artifact_key(
                 company_name=challenger_name,
@@ -3369,7 +3504,7 @@ async def _call_llm(
                     max_tokens=max_tokens,
                     temperature=temperature,
                 ),
-                timeout=120,
+                timeout=float(settings.b2b_campaign.llm_timeout_seconds),
             )
             text = result.get("response", "").strip()
         return text or None
@@ -3392,12 +3527,25 @@ async def _generate_content(
     working_payload = dict(payload)
     channel = payload.get("channel", "")
     tier = payload.get("tier", "")
+    target_mode = payload.get("target_mode")
     last_wc = 0
+    last_min = 0
     last_max = 0
     retry_reasons: list[str] = []
     specificity_context = _campaign_specificity_context(request_payload)
     if specificity_context:
         request_payload["_campaign_specificity_context"] = specificity_context
+        proof_terms = _campaign_specificity_terms(
+            _campaign_specificity_audit(
+                body="",
+                channel=channel,
+                specificity_context=specificity_context,
+            ),
+            channel=channel,
+        )
+        if proof_terms:
+            request_payload["campaign_proof_terms"] = proof_terms
+            working_payload["campaign_proof_terms"] = proof_terms
 
     for attempt in range(2):
         user_content = json.dumps(working_payload, separators=(",", ":"), default=str)
@@ -3407,13 +3555,21 @@ async def _generate_content(
             revision = working_payload.pop("_revision", None)
             if revision:
                 user_content = f"{revision}\n\n{user_content}"
-            elif last_wc and last_max:
-                user_content = (
-                    f"REVISION REQUIRED: The previous body was {last_wc} words "
-                    f"but MUST be under {last_max} words. Rewrite the body "
-                    f"shorter -- cut sentences, not words. Return the same JSON "
-                    f"format.\n\n{user_content}"
-                )
+            elif last_wc:
+                if last_min and last_wc < last_min:
+                    user_content = (
+                        f"REVISION REQUIRED: The previous body was {last_wc} words "
+                        f"but MUST be at least {last_min} words. Add one or two "
+                        f"concrete sentences using the provided evidence. Return "
+                        f"the same JSON format.\n\n{user_content}"
+                    )
+                elif last_max:
+                    user_content = (
+                        f"REVISION REQUIRED: The previous body was {last_wc} words "
+                        f"but MUST be under {last_max} words. Rewrite the body "
+                        f"shorter -- cut sentences, not words. Return the same JSON "
+                        f"format.\n\n{user_content}"
+                    )
 
         text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
         if not text:
@@ -3449,7 +3605,12 @@ async def _generate_content(
             return None
 
         # Validate and fix
-        validated, issues = _validate_campaign_content(parsed, channel, tier=tier)
+        validated, issues = _validate_campaign_content(
+            parsed,
+            channel,
+            tier=tier,
+            target_mode=target_mode,
+        )
 
         if issues.get("missing_field"):
             logger.warning("Campaign missing required field: %s", issues["missing_field"])
@@ -3491,54 +3652,79 @@ async def _generate_content(
         if issues.get("word_count") and attempt == 0:
             # Retry with correction prompt
             last_wc = issues["word_count"]
-            last_max = issues["max_words"]
-            logger.info(
-                "Campaign body %d words (max %d), retrying with correction",
-                last_wc, last_max,
-            )
+            last_min = int(issues.get("min_words") or 0)
+            last_max = int(issues.get("max_words") or 0)
+            if last_min and last_wc < last_min:
+                logger.info(
+                    "Campaign body %d words (min %d), retrying with correction",
+                    last_wc, last_min,
+                )
+            else:
+                logger.info(
+                    "Campaign body %d words (max %d), retrying with correction",
+                    last_wc, last_max,
+                )
             retry_reasons.append("word_count")
             continue
 
         if issues.get("word_count"):
-            logger.warning(
-                "Campaign body still %d words after retry, truncated to %d",
-                issues["word_count"], issues["max_words"],
-            )
-
-        if specificity_context:
-            specificity = _campaign_specificity_audit(
-                body=validated.get("body") or "",
-                channel=channel,
-                specificity_context=specificity_context,
-            )
-            if specificity.get("blocking_issues"):
-                if attempt == 0:
-                    retry_reasons.append("specificity")
-                    working_payload = {
-                        **working_payload,
-                        "_revision": (
-                            "REVISION REQUIRED: The body is still too generic for the witness-backed briefing context. "
-                            "Use at least one concrete anchor from the provided reasoning context, such as a timing trigger, "
-                            "spend signal, pain-specific detail, or competitive alternative when allowed for the channel. "
-                            "Do not reveal private account names or review sources."
-                        ),
-                    }
-                    continue
+            if issues.get("min_words"):
                 logger.warning(
-                    "Campaign specificity gate failed: %s",
-                    "; ".join(specificity["blocking_issues"]),
+                    "Campaign body still %d words after retry, below min %d",
+                    issues["word_count"], issues["min_words"],
                 )
                 request_payload["_generation_audit"] = {
                     "status": "failed",
                     "attempts": attempt + 1,
                     "retry_reasons": retry_reasons,
-                    "failure_reason": "specificity_gate",
+                    "failure_reason": "word_count_too_short",
                     "validation_issues": issues,
-                    "specificity": specificity,
                 }
                 return None
-        else:
-            specificity = None
+            logger.warning(
+                "Campaign body still %d words after retry, truncated to %d",
+                issues["word_count"], issues["max_words"],
+            )
+
+        revalidation = campaign_quality_revalidation(
+            campaign={
+                **request_payload,
+                "subject": validated.get("subject") or "",
+                "body": validated.get("body") or "",
+                "cta": validated.get("cta") or "",
+            },
+            boundary="generation",
+            specificity_context=specificity_context,
+        )
+        request_payload["_campaign_revalidation"] = revalidation
+        specificity = revalidation["audit"]
+        if specificity.get("campaign_proof_terms") and not request_payload.get("campaign_proof_terms"):
+            request_payload["campaign_proof_terms"] = list(specificity["campaign_proof_terms"])
+            working_payload["campaign_proof_terms"] = list(specificity["campaign_proof_terms"])
+        if specificity.get("blocking_issues"):
+            if attempt == 0:
+                retry_reasons.append("specificity")
+                working_payload = {
+                    **working_payload,
+                    "_revision": _campaign_specificity_revision(
+                        channel=channel,
+                        specificity=specificity,
+                    ),
+                }
+                continue
+            logger.warning(
+                "Campaign specificity gate failed: %s",
+                "; ".join(specificity["blocking_issues"]),
+            )
+            request_payload["_generation_audit"] = {
+                "status": "failed",
+                "attempts": attempt + 1,
+                "retry_reasons": retry_reasons,
+                "failure_reason": "specificity_gate",
+                "validation_issues": issues,
+                "specificity": specificity,
+            }
+            return None
 
         validated["body"] = _append_signoff(validated["body"], request_payload)
         request_payload["_generation_audit"] = {

@@ -443,7 +443,15 @@ def _is_generic_other_weakness(label: str) -> bool:
     text = str(label or "").strip().lower()
     if not text:
         return False
-    return text == "other" or text.startswith("other ") or text.startswith("other_")
+    return (
+        text == "other"
+        or text.startswith("other ")
+        or text.startswith("other_")
+        or text == "general_dissatisfaction"
+        or text.startswith("general_dissatisfaction ")
+        or text == "overall_dissatisfaction"
+        or text.startswith("overall_dissatisfaction ")
+    )
 
 
 def _prioritize_seller_usable_primary_weakness(card: dict[str, Any]) -> None:
@@ -712,7 +720,7 @@ def _evaluate_battle_card_quality(
         primary = weak_rows[0] if isinstance(weak_rows[0], dict) else {}
         primary_label = _battle_card_primary_weakness_label(primary)
         if _is_generic_other_weakness(primary_label):
-            hard_blockers.append("primary weakness is generic 'other' instead of seller-usable wedge")
+            hard_blockers.append("primary weakness is generic fallback dissatisfaction instead of seller-usable wedge")
 
     hi_accounts = card.get("high_intent_companies") if isinstance(card.get("high_intent_companies"), list) else []
     qualified_accounts = []

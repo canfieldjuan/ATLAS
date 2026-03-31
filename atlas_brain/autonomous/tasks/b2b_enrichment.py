@@ -528,7 +528,7 @@ def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
     ranked = [(score, category) for category, score in scored.items() if score > 0]
     ranked.sort(reverse=True)
     if not ranked:
-        return [{"category": "other", "severity": "primary"}]
+        return [{"category": "overall_dissatisfaction", "severity": "primary"}]
     categories = [{"category": ranked[0][1], "severity": "primary"}]
     for _score, category in ranked[1:3]:
         if category != categories[0]["category"]:
@@ -827,6 +827,9 @@ def _is_no_signal_result(result: dict, source_row: dict[str, Any]) -> bool:
         return False
     if result.get("event_mentions") or result.get("feature_gaps"):
         return False
+    content_type = str(source_row.get("content_type") or "").strip().lower()
+    if content_type in {"community_discussion", "comment"}:
+        return True
     rating = source_row.get("rating")
     try:
         return float(rating or 0) >= 3.0
@@ -899,15 +902,15 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     )
 
     # 2. pain_category (backward compat top-level field)
-    primary_pain = "other"
+    primary_pain = "overall_dissatisfaction"
     if pain_cats:
         primary_list = [p for p in pain_cats if isinstance(p, dict) and p.get("severity") == "primary"]
         if primary_list:
-            primary_pain = primary_list[0].get("category", "other")
+            primary_pain = primary_list[0].get("category", "overall_dissatisfaction")
         elif isinstance(pain_cats[0], dict):
-            primary_pain = pain_cats[0].get("category", "other")
+            primary_pain = pain_cats[0].get("category", "overall_dissatisfaction")
     result["pain_category"] = engine.override_pain(
-        primary_pain,
+        _normalize_pain_category(primary_pain),
         complaints,
         quotable,
         _normalize_text_list(result.get("pricing_phrases")),
@@ -1917,9 +1920,23 @@ def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) ->
 
 _KNOWN_PAIN_CATEGORIES = {
     "pricing", "features", "reliability", "support", "integration",
-    "performance", "security", "ux", "onboarding", "other",
+    "performance", "security", "ux", "onboarding", "overall_dissatisfaction",
     "technical_debt", "contract_lock_in", "data_migration", "api_limitations",
+    "outcome_gap", "admin_burden", "ai_hallucination", "integration_debt",
 }
+
+_LEGACY_GENERIC_PAIN_CATEGORIES = {"other", "general_dissatisfaction"}
+
+
+def _normalize_pain_category(category: Any) -> str:
+    raw = str(category or "").strip().lower()
+    if not raw:
+        return "overall_dissatisfaction"
+    if raw in _LEGACY_GENERIC_PAIN_CATEGORIES:
+        return "overall_dissatisfaction"
+    if raw in _KNOWN_PAIN_CATEGORIES:
+        return raw
+    return "overall_dissatisfaction"
 
 
 def _coerce_bool(value: Any) -> bool | None:
@@ -2285,7 +2302,7 @@ def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) ->
     }
     timeline = _coerce_json_dict(result.get("timeline"))
 
-    if str(result.get("pain_category") or "").strip().lower() == "other" and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
+    if _normalize_pain_category(result.get("pain_category")) == "overall_dissatisfaction" and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
         for field in ("specific_complaints", "pricing_phrases", "recommendation_language"):
             _add_target(field)
     if not competitors and _contains_any(review_blob, _REPAIR_COMPETITOR_PATTERNS):
@@ -2622,11 +2639,13 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         logger.warning("feature_gaps is not a list: %s", type(fg).__name__)
         result["feature_gaps"] = []
 
-    # Coerce unknown pain_category to "other"
+    # Coerce unknown / legacy generic pain_category to the canonical fallback
     pain = result.get("pain_category")
-    if pain and pain not in _KNOWN_PAIN_CATEGORIES:
-        logger.warning("Unknown pain_category: %r -- coercing to 'other'", pain)
-        result["pain_category"] = "other"
+    if pain is not None:
+        normalized_pain = _normalize_pain_category(pain)
+        if normalized_pain != str(pain).strip().lower():
+            logger.warning("Normalizing pain_category %r -> %r", pain, normalized_pain)
+        result["pain_category"] = normalized_pain
 
     # --- New expanded field validation (permissive: coerce, never reject) ---
 
@@ -2640,9 +2659,7 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
             for item in pc:
                 if not isinstance(item, dict):
                     continue
-                cat = item.get("category", "other")
-                if cat not in _KNOWN_PAIN_CATEGORIES:
-                    cat = "other"
+                cat = _normalize_pain_category(item.get("category", "overall_dissatisfaction"))
                 sev = item.get("severity", "minor")
                 if sev not in _KNOWN_SEVERITY_LEVELS:
                     sev = "minor"

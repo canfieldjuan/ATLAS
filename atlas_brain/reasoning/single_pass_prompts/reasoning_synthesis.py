@@ -97,6 +97,23 @@ CRITICAL RULES:
 
 17. ``proof_point.source_id`` must come from ``precomputed_aggregates`` only.
 
+18. Never omit ``migration_proof``.  When the evidence is weak, still
+    return the full section with cautious confidence, explicit data_gaps,
+    and valid packet citations rather than dropping the object.
+
+19. ``category_reasoning`` must not leave both ``market_regime`` and
+    ``narrative`` empty.  If category evidence is mixed or thin, provide
+    a cautious narrative that states the uncertainty.
+
+20. Every ``competitive_reframes.reframes[*].citations`` entry must
+    contain at least one valid packet ``_sid``.  Never invent witness IDs
+    or cite values that do not exist in the input packet.
+
+21. Before returning, self-check that these sections are present and
+    non-empty enough to pass validation: ``causal_narrative``,
+    ``segment_playbook``, ``timing_intelligence``, ``competitive_reframes``,
+    ``migration_proof``, ``account_reasoning``, and ``category_reasoning``.
+
 OUTPUT SCHEMA:
 
 {{

@@ -3257,6 +3257,35 @@ class B2BCampaignConfig(BaseSettings):
     dedup_days: int = Field(default=7, ge=1, description="Days before re-targeting same company")
     retention_days: int = Field(default=90, ge=1, description="Days to retain expired/sent campaigns before cleanup")
     max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
+    llm_timeout_seconds: float = Field(
+        default=120.0,
+        ge=5.0,
+        le=300.0,
+        description="Timeout for a single campaign LLM generation call",
+    )
+    word_limits: dict[str, dict[str, list[int]]] = Field(
+        default_factory=lambda: {
+            "default": {
+                "email_cold": [50, 150],
+                "email_followup": [75, 150],
+                "linkedin": [0, 100],
+            },
+            "vendor_retention": {
+                "email_cold": [50, 125],
+                "email_followup": [75, 150],
+            },
+            "challenger_intel": {
+                "email_cold": [50, 125],
+                "email_followup": [75, 150],
+            },
+            "churning_company": {
+                "email_cold": [75, 150],
+                "email_followup": [75, 125],
+                "linkedin": [0, 100],
+            },
+        },
+        description="Per-target-mode campaign word limits by channel as [min_words, max_words]",
+    )
     temperature: float = Field(default=0.7, description="LLM sampling temperature")
     default_sender_name: str = Field(default="", description="Sender name for outreach")
     default_sender_title: str = Field(default="", description="Sender title for outreach")
@@ -3308,6 +3337,12 @@ class B2BCampaignConfig(BaseSettings):
     specificity_require_timing_or_numeric_when_available: bool = Field(
         default=True,
         description="Require campaign drafts to mention a timing or numeric anchor when one is available in briefing-backed witnesses",
+    )
+    specificity_revision_term_limit: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        description="Max exact witness-backed proof terms to surface in campaign prompt retries",
     )
     revalidate_before_manual_approval: bool = Field(
         default=True,

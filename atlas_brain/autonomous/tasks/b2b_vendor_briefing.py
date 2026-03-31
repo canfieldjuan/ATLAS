@@ -439,7 +439,9 @@ _PAIN_LABEL_FALLBACKS = {
     "security": "Security and Compliance Concerns",
     "onboarding": "Onboarding Friction",
     "migration": "Migration Complexity",
-    "other": "Other or Unspecified Factors",
+    "other": "Overall Dissatisfaction",
+    "general_dissatisfaction": "Overall Dissatisfaction",
+    "overall_dissatisfaction": "Overall Dissatisfaction",
 }
 
 
@@ -454,7 +456,7 @@ def _tone_band(score: float, urgency: float) -> str:
 
 def _default_pain_label(category: Any) -> str:
     """Return a readable pain label without relying on LLM enrichment."""
-    raw = str(category or "other").strip().lower()
+    raw = str(category or "overall_dissatisfaction").strip().lower()
     return _PAIN_LABEL_FALLBACKS.get(raw, raw.replace("_", " ").title())
 
 

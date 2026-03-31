@@ -121,10 +121,14 @@ class EvidenceEngine:
         feature_gaps: list[str] | None = None,
         recommendation_language: list[str] | None = None,
     ) -> str:
-        """Override 'other' pain_category using keyword scan."""
+        """Override generic pain_category using keyword scan."""
         cfg = self._enrichment.get("pain_override", {})
         trigger = cfg.get("trigger", {})
-        if pain_category != trigger.get("eq", "other"):
+        trigger_values = trigger.get("in")
+        if isinstance(trigger_values, list):
+            if pain_category not in {str(v).strip().lower() for v in trigger_values if str(v).strip()}:
+                return pain_category
+        elif pain_category != trigger.get("eq", "other"):
             return pain_category
 
         keyword_map: dict[str, list[str]] = cfg.get("keyword_map", {})
@@ -143,18 +147,23 @@ class EvidenceEngine:
             texts.extend(recommendation_language or [])
 
         if not texts:
-            return cfg.get("fallback", "other")
+            return cfg.get("fallback", "overall_dissatisfaction")
 
         combined = " ".join(texts).lower()
+
+        def _keyword_hits(keyword: str) -> bool:
+            pattern = rf"(?<!\w){re.escape(str(keyword or '').lower())}(?!\w)"
+            return bool(re.search(pattern, combined))
+
         scores: dict[str, int] = {}
         for category, keywords in keyword_map.items():
-            count = sum(1 for kw in keywords if kw in combined)
+            count = sum(1 for kw in keywords if _keyword_hits(str(kw)))
             if count > 0:
                 scores[category] = count
 
         if scores:
             return max(scores, key=scores.get)
-        return cfg.get("fallback", "other")
+        return cfg.get("fallback", "overall_dissatisfaction")
 
     def derive_recommend(
         self,

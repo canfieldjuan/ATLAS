@@ -13,14 +13,13 @@ from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from ...config import settings
+from ...services.campaign_quality import (
+    campaign_quality_revalidation_with_fallback,
+    coerce_json_dict,
+)
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ..visibility import emit_event, record_attempt
-from ._b2b_specificity import (
-    merge_specificity_contexts,
-    specificity_audit_snapshot,
-    surface_specificity_context,
-)
 from .campaign_audit import log_campaign_event
 
 logger = logging.getLogger("atlas.autonomous.tasks.campaign_send")
@@ -140,20 +139,6 @@ def _snap_to_business_hours(dt: datetime, cfg) -> datetime:
     return local.astimezone(timezone.utc)
 
 
-def _campaign_send_specificity_context(metadata, company_context) -> dict[str, object]:
-    metadata_context = surface_specificity_context(
-        metadata if isinstance(metadata, dict) else {},
-        surface="campaign",
-        nested_keys=("briefing_context",),
-    )
-    company_specificity = surface_specificity_context(
-        company_context if isinstance(company_context, dict) else {},
-        surface="campaign",
-        nested_keys=("briefing_context",),
-    )
-    return merge_specificity_contexts(metadata_context, company_specificity)
-
-
 async def run(task: ScheduledTask) -> dict:
     """Send queued campaign emails past the cancel window."""
     cfg = settings.campaign_sequence
@@ -188,8 +173,8 @@ async def run(task: ScheduledTask) -> dict:
         """
         SELECT bc.id, bc.sequence_id, bc.step_number,
                bc.recipient_email, bc.from_email,
-               bc.subject, bc.body, bc.company_name,
-               bc.channel, bc.metadata,
+               bc.subject, bc.body, bc.cta, bc.company_name,
+               bc.channel, bc.target_mode, bc.competitors_considering, bc.metadata,
                cs.company_context
         FROM b2b_campaigns bc
         LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
@@ -278,15 +263,7 @@ async def run(task: ScheduledTask) -> dict:
                 continue
 
         if settings.b2b_campaign.revalidate_before_send:
-            raw_metadata = c.get("metadata")
-            metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
-            if not metadata and isinstance(raw_metadata, str):
-                try:
-                    parsed_metadata = json.loads(raw_metadata)
-                except (json.JSONDecodeError, TypeError):
-                    parsed_metadata = {}
-                if isinstance(parsed_metadata, dict):
-                    metadata = parsed_metadata
+            metadata = coerce_json_dict(c.get("metadata"))
             company_context = c.get("company_context")
             if isinstance(company_context, str):
                 try:
@@ -294,90 +271,93 @@ async def run(task: ScheduledTask) -> dict:
                 except (json.JSONDecodeError, TypeError):
                     parsed_context = {}
                 company_context = parsed_context if isinstance(parsed_context, dict) else {}
-            specificity_context = _campaign_send_specificity_context(metadata, company_context)
-            if specificity_context:
-                audit = specificity_audit_snapshot(
-                    c.get("body", "") or "",
-                    anchor_examples=specificity_context.get("anchor_examples"),
-                    witness_highlights=specificity_context.get("witness_highlights"),
-                    reference_ids=specificity_context.get("reference_ids"),
-                    allow_company_names=False,
-                    min_anchor_hits=int(settings.b2b_campaign.specificity_min_anchor_hits),
-                    require_anchor_support=bool(settings.b2b_campaign.specificity_require_anchor_support),
-                    require_timing_or_numeric_when_available=bool(
-                        settings.b2b_campaign.specificity_require_timing_or_numeric_when_available
-                    ),
-                    include_competitor_terms=str(c.get("channel") or "") != "email_cold",
-                )
-                metadata["latest_specificity_audit"] = {
-                    **audit,
-                    "boundary": "send",
-                }
+            revalidation = await campaign_quality_revalidation_with_fallback(
+                pool,
+                campaign={
+                    **c,
+                    "metadata": metadata,
+                },
+                boundary="send",
+                company_context=company_context,
+            )
+            audit = revalidation["audit"]
+            metadata = revalidation["metadata"]
+            await pool.execute(
+                "UPDATE b2b_campaigns SET metadata = $1::jsonb WHERE id = $2",
+                json.dumps(metadata, default=str),
+                campaign_id,
+            )
+            blocking_issues = list(audit.get("blocking_issues") or [])
+            warnings = list(audit.get("warnings") or [])
+            if audit.get("status") == "fail":
+                summary = blocking_issues[0] if blocking_issues else "send_revalidation_failed"
                 await pool.execute(
-                    "UPDATE b2b_campaigns SET metadata = $1::jsonb WHERE id = $2",
-                    json.dumps(metadata, default=str),
+                    """
+                    UPDATE b2b_campaigns
+                    SET status = 'draft',
+                        approved_at = NULL
+                    WHERE id = $1
+                    """,
                     campaign_id,
                 )
-                if audit.get("status") == "fail":
-                    blocking_issues = list(audit.get("blocking_issues") or [])
-                    warnings = list(audit.get("warnings") or [])
-                    summary = blocking_issues[0] if blocking_issues else "send_revalidation_failed"
-                    await pool.execute(
-                        """
-                        UPDATE b2b_campaigns
-                        SET status = 'draft',
-                            approved_at = NULL
-                        WHERE id = $1
-                        """,
-                        campaign_id,
-                    )
-                    await log_campaign_event(
-                        pool,
-                        event_type="send_revalidation_blocked",
-                        source="system",
-                        campaign_id=campaign_id,
-                        sequence_id=sequence_id,
-                        step_number=c.get("step_number"),
-                        recipient_email=c["recipient_email"],
-                        subject=c.get("subject"),
-                        error_detail=summary,
-                        metadata={"audit": audit},
-                    )
-                    await record_attempt(
-                        pool,
-                        artifact_type="campaign",
-                        artifact_id=str(campaign_id),
-                        attempt_no=1,
-                        stage="send_validation",
-                        status="rejected",
-                        blocker_count=len(blocking_issues),
-                        warning_count=len(warnings),
-                        blocking_issues=blocking_issues,
-                        warnings=warnings,
-                        failure_step="send_validation",
-                        error_message=summary,
-                    )
-                    await emit_event(
-                        pool,
-                        stage="campaign_send",
-                        event_type="revalidation_blocked",
-                        entity_type="campaign",
-                        entity_id=str(campaign_id),
-                        summary=f"Campaign send blocked for {campaign_id}",
-                        severity="warning",
-                        actionable=True,
-                        artifact_type="campaign",
-                        reason_code=summary[:80],
-                        decision="reverted_to_draft",
-                        detail={"audit": audit},
-                    )
-                    failed_count += 1
-                    logger.warning(
-                        "Send blocked for campaign %s: %s",
-                        campaign_id,
-                        summary,
-                    )
-                    continue
+                await log_campaign_event(
+                    pool,
+                    event_type="send_revalidation_blocked",
+                    source="system",
+                    campaign_id=campaign_id,
+                    sequence_id=sequence_id,
+                    step_number=c.get("step_number"),
+                    recipient_email=c["recipient_email"],
+                    subject=c.get("subject"),
+                    error_detail=summary,
+                    metadata={"audit": audit},
+                )
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=str(campaign_id),
+                    attempt_no=1,
+                    stage="send_validation",
+                    status="rejected",
+                    blocker_count=len(blocking_issues),
+                    warning_count=len(warnings),
+                    blocking_issues=blocking_issues,
+                    warnings=warnings,
+                    failure_step="send_validation",
+                    error_message=summary,
+                )
+                await emit_event(
+                    pool,
+                    stage="campaign_send",
+                    event_type="revalidation_blocked",
+                    entity_type="campaign",
+                    entity_id=str(campaign_id),
+                    summary=f"Campaign send blocked for {campaign_id}",
+                    severity="warning",
+                    actionable=True,
+                    artifact_type="campaign",
+                    reason_code=summary[:80],
+                    decision="reverted_to_draft",
+                    detail={"audit": audit},
+                )
+                failed_count += 1
+                logger.warning(
+                    "Send blocked for campaign %s: %s",
+                    campaign_id,
+                    summary,
+                )
+                continue
+            await record_attempt(
+                pool,
+                artifact_type="campaign",
+                artifact_id=str(campaign_id),
+                attempt_no=1,
+                stage="send_validation",
+                status="succeeded",
+                blocker_count=0,
+                warning_count=len(warnings),
+                warnings=warnings,
+            )
 
         try:
             # CAN-SPAM: inject unsubscribe footer + headers

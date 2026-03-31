@@ -22,6 +22,9 @@ The input payload contains:
   weaknesses, integrations, use cases, typical company size, typical industries
 - ``vendor_a_pool`` / ``vendor_b_pool``: scored pool summaries (pain distribution,
   urgency, competitor flows, budget pressure, segment data)
+- ``citation_registry``: allowed packet-level citation entries.  Every item has
+  a stable ``_sid`` and a human-readable label.  ``citations`` MUST use only
+  these ``_sid`` values.
 
 CRITICAL RULES:
 
@@ -37,6 +40,8 @@ CRITICAL RULES:
 5. ``confidence`` is a float 0.0-1.0.
 6. Do NOT invent data not present in the evidence.
 7. ``falsification_conditions``: what specific evidence would prove this wrong?
+8. ``citations`` must be an array of ``citation_registry[*]._sid`` values only.
+   Do NOT paste prose into ``citations``.
 
 OUTPUT SCHEMA:
 

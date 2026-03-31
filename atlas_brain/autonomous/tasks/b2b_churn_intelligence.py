@@ -56,6 +56,10 @@ _PERSISTENCE_PHASES = (
     "core_marker",
 )
 
+
+def _normalize_report_pain_category(category: Any) -> str:
+    return _normalize_generic_pain_label(category)
+
 # ---------------------------------------------------------------------------
 # Shared helpers (extracted to _b2b_shared.py)
 # ---------------------------------------------------------------------------
@@ -67,6 +71,7 @@ from ._b2b_shared import (  # noqa: E402
     _safe_json,
     _intelligence_source_allowlist,
     _eligible_review_filters,
+    _normalize_generic_pain_label,
     _build_deterministic_vendor_feed,
     _build_deterministic_displacement_map,
     _build_exploratory_payload,
@@ -3682,7 +3687,8 @@ async def generate_vendor_report(
         pain = _safe_json(s.get("pain_json"))
         for p in pain:
             if isinstance(p, dict) and p.get("category"):
-                pain_counts[p["category"]] = pain_counts.get(p["category"], 0) + 1
+                category = _normalize_report_pain_category(p["category"])
+                pain_counts[category] = pain_counts.get(category, 0) + 1
 
     # Competitive displacement
     comp_counts: dict[str, int] = {}
@@ -3860,7 +3866,8 @@ async def _vendor_snapshot_from_pools(
         else:
             cat = ev.get("key") or label
             if cat:
-                pain_counts[cat] = pain_counts.get(cat, 0) + count
+                category = _normalize_report_pain_category(cat)
+                pain_counts[category] = pain_counts.get(category, 0) + count
         best_quote = ev.get("best_quote")
         if best_quote and best_quote not in quote_highlights and len(quote_highlights) < 5:
             quote_highlights.append(str(best_quote))
@@ -4227,7 +4234,8 @@ async def _company_snapshot_from_signals(
             categories[str(category)] = categories.get(str(category), 0) + 1
         pain = r["pain_category"] or ""
         if pain:
-            pains[pain] = pains.get(pain, 0) + 1
+            category = _normalize_report_pain_category(pain)
+            pains[category] = pains.get(category, 0) + 1
         role = r["buyer_role"] or ""
         if role:
             role_levels[role] = role_levels.get(role, 0) + 1
@@ -4953,7 +4961,8 @@ async def generate_challenger_report(
         pain = _safe_json(s.get("pain_json"))
         for p in pain:
             if isinstance(p, dict) and p.get("category"):
-                pain_counts[p["category"]] = pain_counts.get(p["category"], 0) + 1
+                category = _normalize_report_pain_category(p["category"])
+                pain_counts[category] = pain_counts.get(category, 0) + 1
 
     # Incumbents losing (the vendor_name on each review is the incumbent)
     incumbent_counts: dict[str, int] = {}

@@ -3649,7 +3649,7 @@ async def _gather_data(
             vn = r["vendor_name"]
             if vn not in vendor_pain_map:
                 vendor_pain_map[vn] = {
-                    "vendor": vn, "review_count": 0, "top_pain": "other",
+                    "vendor": vn, "review_count": 0, "top_pain": "overall_dissatisfaction",
                     "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] else 0,
                 }
             vendor_pain_map[vn]["review_count"] += r["review_count"]

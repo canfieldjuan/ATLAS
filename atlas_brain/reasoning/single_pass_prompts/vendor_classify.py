@@ -46,17 +46,17 @@ CLASSIFICATION RULES:
 2. archetype_scores are heuristic pre-scores -- treat them as hypotheses, NOT as the answer. Override them when the evidence disagrees.
 3. If the top pain category is "ux" or "usability", the archetype should be leadership_redesign, NOT pricing_shock.
 4. If the top pain category is "pricing" AND price_complaint_rate > 0.15, then pricing_shock is justified.
-5. If the top pain is "other" or ambiguous, look at the SECOND pain category and displacement data.
+5. If the top pain is "overall_dissatisfaction" (or legacy "other") or ambiguous, look at the SECOND pain category and displacement data.
 6. Use "mixed" when the top two pain categories are within 20% of each other and map to different archetypes.
-7. "other" HANDLING (in priority order):
-   a. If raw complaints classified as "other" clearly fit an existing category,
+7. Generic fallback pain handling (in priority order):
+   a. If raw complaints classified as "overall_dissatisfaction" (or legacy "other") clearly fit an existing category,
       reclassify them and adjust counts accordingly.
    b. If they form a coherent new pattern, name it descriptively
       (e.g., "data migration friction") and treat it as that pattern.
-   c. If neither applies, exclude "other" from the archetype decision
-      entirely and add "unclassifiable complaints in 'other' category"
+   c. If neither applies, exclude the generic fallback bucket from the archetype decision
+      entirely and add "unclassifiable complaints in generic dissatisfaction bucket"
       to uncertainty_sources.
-   In ALL cases, "other" must never appear in executive_summary or key_signals.
+   In ALL cases, raw "other" must never appear in executive_summary or key_signals.
 
 ECOSYSTEM REASONING:
 You are not classifying this vendor in isolation. The evidence includes displacement
@@ -167,7 +167,7 @@ Output ONLY valid JSON (after optional <scratchpad> block):
 }\
 """
 
-# Auto-computed prompt version hash — changes when the prompt text changes,
+# Auto-computed prompt version hash - changes when the prompt text changes,
 # which invalidates stale cache entries keyed on the old version.
 VENDOR_CLASSIFY_PROMPT_VERSION = _hashlib.sha256(
     VENDOR_CLASSIFY_SINGLE_PASS.encode()

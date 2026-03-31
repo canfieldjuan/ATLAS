@@ -36,6 +36,19 @@ def _sorted_vendors(*names: str | None) -> list[str]:
     ))
 
 
+def _slug(value: str | None) -> str:
+    text = (value or "").strip().lower()
+    if not text:
+        return "unknown"
+    chars = []
+    for ch in text:
+        chars.append(ch if ch.isalnum() else "_")
+    slug = "".join(chars).strip("_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug or "unknown"
+
+
 # ---------------------------------------------------------------------------
 # Evidence hashing
 # ---------------------------------------------------------------------------
@@ -108,6 +121,53 @@ def _vendor_profile_summary(
         "typical_company_size": profile.get("typical_company_size"),
         "typical_industries": (profile.get("typical_industries") or [])[:5],
     }
+
+
+def _copy_reference_ids(refs: dict[str, Any] | None) -> dict[str, list[str]]:
+    refs = refs or {}
+    metric_ids = [
+        str(item).strip()
+        for item in (refs.get("metric_ids") or [])
+        if str(item).strip()
+    ]
+    witness_ids = [
+        str(item).strip()
+        for item in (refs.get("witness_ids") or [])
+        if str(item).strip()
+    ]
+    return {
+        "metric_ids": list(dict.fromkeys(metric_ids)),
+        "witness_ids": list(dict.fromkeys(witness_ids)),
+    }
+
+
+def _merge_reference_ids(*refs_groups: dict[str, Any] | None) -> dict[str, list[str]]:
+    metric_ids: list[str] = []
+    witness_ids: list[str] = []
+    for refs in refs_groups:
+        copied = _copy_reference_ids(refs)
+        metric_ids.extend(copied["metric_ids"])
+        witness_ids.extend(copied["witness_ids"])
+    return {
+        "metric_ids": list(dict.fromkeys(metric_ids)),
+        "witness_ids": list(dict.fromkeys(witness_ids)),
+    }
+
+
+def _append_citation_entry(
+    registry: list[dict[str, Any]],
+    *,
+    sid: str,
+    label: str,
+    refs: dict[str, Any] | None = None,
+) -> None:
+    if not sid or not label:
+        return
+    registry.append({
+        "_sid": sid,
+        "label": label,
+        "reference_ids": _copy_reference_ids(refs),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +295,176 @@ def build_resource_asymmetry_packet(
         "vendor_a_profile": _vendor_profile_summary(vendor_a, product_profiles),
         "vendor_b_profile": _vendor_profile_summary(vendor_b, product_profiles),
     }
+
+
+def attach_cross_vendor_citation_registry(
+    packet: dict[str, Any],
+    *,
+    analysis_type: str,
+    vendors: list[str],
+    category: str | None,
+    vendor_reference_lookup: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Attach packet-level citation ids that map to underlying vendor refs."""
+    vendor_reference_lookup = vendor_reference_lookup or {}
+    sorted_vendors = _sorted_vendors(*vendors)
+    combined_refs = _merge_reference_ids(
+        *(vendor_reference_lookup.get(vendor) for vendor in sorted_vendors)
+    )
+    registry: list[dict[str, Any]] = []
+
+    if analysis_type == "pairwise_battle":
+        winner = ((packet.get("locked_direction") or {}).get("winner") or "").strip()
+        loser = ((packet.get("locked_direction") or {}).get("loser") or "").strip()
+        edge = packet.get("displacement_edge") or {}
+        edge_sid = (
+            f"xv:pairwise:edge:{_slug(loser)}_to_{_slug(winner)}"
+            if winner and loser else
+            f"xv:pairwise:edge:{_slug(sorted_vendors[0] if sorted_vendors else '')}"
+        )
+        _append_citation_entry(
+            registry,
+            sid=edge_sid,
+            label=(
+                f"{loser}->{winner} displacement edge: mention_count={edge.get('mention_count') or 0}, "
+                f"signal_strength={edge.get('signal_strength') or 'unknown'}, "
+                f"primary_driver={edge.get('primary_driver') or 'unknown'}, "
+                f"velocity_7d={edge.get('velocity_7d') or 0}"
+            ),
+            refs=combined_refs,
+        )
+    elif analysis_type == "category_council":
+        ecosystem = packet.get("ecosystem_evidence") or {}
+        _append_citation_entry(
+            registry,
+            sid=f"xv:category:{_slug(category)}:ecosystem",
+            label=(
+                f"{category} ecosystem: displacement_intensity={ecosystem.get('displacement_intensity')}, "
+                f"market_structure={ecosystem.get('market_structure') or 'unknown'}, "
+                f"dominant_archetype={ecosystem.get('dominant_archetype') or 'unknown'}"
+            ),
+            refs=combined_refs,
+        )
+    elif analysis_type == "resource_asymmetry":
+        pressure = packet.get("pressure_scores") or {}
+        resources = packet.get("resource_indicators") or {}
+        _append_citation_entry(
+            registry,
+            sid=f"xv:asymmetry:{_slug(sorted_vendors[0] if sorted_vendors else '')}_{_slug(sorted_vendors[1] if len(sorted_vendors) > 1 else '')}:summary",
+            label=(
+                f"resource asymmetry summary: vendor_a_urgency={pressure.get('vendor_a_urgency') or 0}, "
+                f"vendor_b_urgency={pressure.get('vendor_b_urgency') or 0}, "
+                f"vendor_a_reviews={resources.get('vendor_a_reviews') or 0}, "
+                f"vendor_b_reviews={resources.get('vendor_b_reviews') or 0}, "
+                f"divergence_score={packet.get('divergence_score') or 0}"
+            ),
+            refs=combined_refs,
+        )
+
+    for vendor_key in ("vendor_a_pool", "vendor_b_pool", "vendor_a_profile", "vendor_b_profile"):
+        item = packet.get(vendor_key) or {}
+        vendor = str(item.get("vendor") or "").strip()
+        if not vendor:
+            if vendor_key.startswith("vendor_a"):
+                vendor = sorted_vendors[0] if sorted_vendors else ""
+            elif len(sorted_vendors) > 1:
+                vendor = sorted_vendors[1]
+        refs = vendor_reference_lookup.get(vendor) or {}
+        if vendor_key.endswith("_pool"):
+            _append_citation_entry(
+                registry,
+                sid=f"xv:vendor:{_slug(vendor)}:pool",
+                label=(
+                    f"{vendor} pool summary: total_reviews={item.get('total_reviews') or 0}, "
+                    f"avg_urgency={item.get('avg_urgency') or 0}, "
+                    f"churn_density={item.get('churn_density') or 0}, "
+                    f"price_complaint_rate={item.get('price_complaint_rate') or 0}"
+                ),
+                refs=refs,
+            )
+        else:
+            _append_citation_entry(
+                registry,
+                sid=f"xv:vendor:{_slug(vendor)}:profile",
+                label=(
+                    f"{vendor} profile: category={item.get('category') or 'unknown'}, "
+                    f"typical_company_size={item.get('typical_company_size') or 'unknown'}"
+                ),
+                refs=refs,
+            )
+
+    for idx, summary in enumerate(packet.get("vendor_summaries") or []):
+        vendor = str(summary.get("vendor") or "").strip()
+        refs = vendor_reference_lookup.get(vendor) or {}
+        _append_citation_entry(
+            registry,
+            sid=f"xv:category:{_slug(category)}:vendor_summary:{idx}:{_slug(vendor)}",
+            label=(
+                f"{vendor} vendor summary: total_reviews={summary.get('total_reviews') or 0}, "
+                f"avg_urgency={summary.get('avg_urgency') or 0}, "
+                f"churn_density={summary.get('churn_density') or 0}, "
+                f"price_complaint_rate={summary.get('price_complaint_rate') or 0}"
+            ),
+            refs=refs,
+        )
+
+    for idx, flow in enumerate(packet.get("displacement_flows") or []):
+        from_vendor = str(flow.get("from_vendor") or "").strip()
+        to_vendor = str(flow.get("to_vendor") or "").strip()
+        refs = _merge_reference_ids(
+            vendor_reference_lookup.get(from_vendor),
+            vendor_reference_lookup.get(to_vendor),
+        )
+        _append_citation_entry(
+            registry,
+            sid=f"xv:flow:{idx}:{_slug(from_vendor)}_to_{_slug(to_vendor)}",
+            label=(
+                f"displacement_flows: {from_vendor}->{to_vendor}, "
+                f"mention_count={flow.get('mention_count') or 0}, "
+                f"primary_driver={flow.get('primary_driver') or 'unknown'}"
+            ),
+            refs=refs,
+        )
+
+    packet["citation_registry"] = registry
+    return packet
+
+
+def materialize_cross_vendor_reference_ids(
+    synthesis: dict[str, Any],
+    packet: dict[str, Any],
+) -> dict[str, Any]:
+    """Map cited packet ids to underlying metric/witness reference ids."""
+    registry = packet.get("citation_registry") or []
+    registry_map: dict[str, dict[str, Any]] = {}
+    for item in registry:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("_sid") or "").strip()
+        if sid:
+            registry_map[sid] = item
+
+    citations = synthesis.get("citations") or []
+    if not isinstance(citations, list):
+        citations = []
+    normalized_citations = []
+    metric_ids: list[str] = []
+    witness_ids: list[str] = []
+    for sid in citations:
+        sid_text = str(sid).strip()
+        if not sid_text or sid_text not in registry_map:
+            continue
+        normalized_citations.append(sid_text)
+        refs = _copy_reference_ids(registry_map[sid_text].get("reference_ids"))
+        metric_ids.extend(refs["metric_ids"])
+        witness_ids.extend(refs["witness_ids"])
+
+    synthesis["citations"] = list(dict.fromkeys(normalized_citations))
+    synthesis["reference_ids"] = {
+        "metric_ids": sorted(set(metric_ids)),
+        "witness_ids": sorted(set(witness_ids)),
+    }
+    return synthesis
 
 
 # ---------------------------------------------------------------------------
