@@ -175,7 +175,7 @@ def _normalize_citation_text(value: str) -> str:
     text = (value or "").strip().lower()
     if not text:
         return ""
-    text = text.replace("→", "->")
+    text = text.replace("\u2192", "->")
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return " ".join(text.split())
 
