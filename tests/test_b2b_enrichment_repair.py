@@ -740,6 +740,39 @@ def test_strategic_adjudication_keeps_real_churn_community_discussion_competitor
     assert "competitor_without_displacement_framing" in reasons
 
 
+def test_strategic_adjudication_skips_low_signal_insider_account_competitor_noise():
+    row = {
+        "summary": "Need some advice, 5 YOE and went through a layoff",
+        "review_text": "I have software development experience and am considering career options after a layoff.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "insider_account",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
 @pytest.mark.asyncio
 async def test_repair_single_shadows_with_adjudication_markers_when_no_llm_targets(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))

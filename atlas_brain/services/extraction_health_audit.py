@@ -85,7 +85,7 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
   )
   AND NOT (
-    content_type = 'community_discussion'
+    content_type IN ('community_discussion', 'insider_account')
     AND NOT (
       COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
       OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
