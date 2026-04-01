@@ -1292,6 +1292,40 @@ def test_strategic_adjudication_keeps_real_timeline_churn_gap():
     assert "timeline_language_without_timing_anchor" in reasons
 
 
+def test_strategic_adjudication_keeps_notice_period_timeline_gap():
+    row = {
+        "summary": "Cancel before renewal",
+        "review_text": "We have to give 30 days notice before renewal or the contract auto renews.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "review",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": "",
+        },
+        "specific_complaints": ["contract auto renews"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "timeline_language_without_timing_anchor" in reasons
+
+
 def test_strategic_adjudication_skips_contract_renewal_without_explicit_timing_cue():
     row = {
         "summary": "Auto-renew complaint",
@@ -1316,6 +1350,43 @@ def test_strategic_adjudication_skips_contract_renewal_without_explicit_timing_c
         },
         "specific_complaints": ["automatically renewed the contract"],
         "pricing_phrases": ["refused to refund us"],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "timeline_language_without_timing_anchor" not in reasons
+
+
+def test_strategic_adjudication_skips_generic_task_deadline_reviews():
+    row = {
+        "summary": "Project tracking with better deadlines",
+        "review_text": (
+            "It helps us manage project deadlines and plugin costs, but this is still just "
+            "our day-to-day work tracking system."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "review",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": "",
+        },
+        "specific_complaints": ["plugin costs keep going up"],
+        "pricing_phrases": ["plugin costs keep going up"],
         "feature_gaps": [],
         "competitors_mentioned": [],
         "evidence_spans": [],

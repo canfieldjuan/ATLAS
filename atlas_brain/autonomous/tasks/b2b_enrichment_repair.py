@@ -106,15 +106,19 @@ _AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS = (
     "contact", "contacts", "prospect", "prospects", "software", "saas",
 )
 _TIMELINE_HARD_PATTERNS = (
-    "renewal", "contract end", "contract expires", "deadline",
+    "contract end", "contract ends", "contract expires", "expiration date",
+    "renewal date", "notice period", "before renewal", "before the contract ends",
+    "before the contract expires", "term ends", "term expires",
 )
 _TIMELINE_SOFT_PATTERNS = (
-    "next quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days",
+    "next quarter", "this quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days",
+    "next month", "this month", "end of month", "month end", "end of quarter",
+    "quarter end", "a few days", "few days", "a few weeks", "few weeks",
 )
 _TIMELINE_CONTEXT_PATTERNS = (
     "renewal", "contract", "evaluating", "evaluation", "considering",
     "switch", "switched", "migrating", "migration", "replatform",
-    "cancel", "deadline", "go live", "go-live", "cutover",
+    "cancel", "deadline", "notice", "go live", "go-live", "cutover",
 )
 _PRICING_CONTEXT_PATTERNS = (
     "pricing", "price", "priced", "cost", "costly", "expensive", "cheaper",
@@ -222,10 +226,9 @@ def _has_timeline_trigger(
         return True
     if base_enrichment._contains_any(review_blob, _TIMELINE_HARD_PATTERNS):
         return True
-    return (
-        base_enrichment._contains_any(review_blob, _TIMELINE_SOFT_PATTERNS)
-        and base_enrichment._contains_any(review_blob, _TIMELINE_CONTEXT_PATTERNS)
-    )
+    if not base_enrichment._contains_any(review_blob, _TIMELINE_SOFT_PATTERNS):
+        return False
+    return structured_churn or base_enrichment._contains_any(review_blob, _TIMELINE_CONTEXT_PATTERNS)
 
 
 def _has_pricing_trigger(

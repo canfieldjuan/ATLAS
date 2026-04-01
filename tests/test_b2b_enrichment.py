@@ -693,6 +693,252 @@ def test_apply_structural_repair_promotes_only_unknown_fields():
     assert "contract_context.contract_value_signal" in applied
 
 
+def test_derive_decision_timeline_uses_raw_text_when_commercial_context_exists():
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+        },
+        "timeline": {"contract_end": None, "evaluation_deadline": None},
+        "event_mentions": [],
+        "pricing_phrases": ["pricing pressure"],
+        "specific_complaints": ["We need to decide next quarter"],
+        "competitors_mentioned": [],
+    }
+    row = {
+        "summary": "Renewal decision coming soon",
+        "review_text": "Pricing pressure means we need to decide next quarter whether to switch.",
+        "pros": "",
+        "cons": "",
+    }
+
+    assert b2b_enrichment._derive_decision_timeline(result, row) == "within_quarter"
+
+
+def test_derive_decision_timeline_ignores_generic_deadline_without_commercial_context():
+    result = {
+        "churn_signals": {},
+        "timeline": {"contract_end": None, "evaluation_deadline": None},
+        "event_mentions": [],
+        "pricing_phrases": [],
+        "specific_complaints": [],
+        "competitors_mentioned": [],
+    }
+    row = {
+        "summary": "Helpful for daily work",
+        "review_text": "This helps me track tasks and deadlines every week for my team.",
+        "pros": "",
+        "cons": "",
+    }
+
+    assert b2b_enrichment._derive_decision_timeline(result, row) == "unknown"
+
+
+def test_derive_decision_timeline_ignores_soft_deadline_complaint_without_strong_commercial_signal():
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+        },
+        "timeline": {"contract_end": None, "evaluation_deadline": None},
+        "event_mentions": [],
+        "pricing_phrases": [],
+        "specific_complaints": ["The reminders can get annoying."],
+        "competitors_mentioned": [],
+    }
+    row = {
+        "summary": "Helpful but noisy reminders",
+        "review_text": "It reminds us about deadlines and action items all the time, which can get annoying.",
+        "pros": "",
+        "cons": "",
+        "source": "software_advice",
+    }
+
+    assert b2b_enrichment._derive_decision_timeline(result, row) == "unknown"
+
+
+def test_derive_decision_timeline_ignores_ambiguous_noisy_source_without_vendor_context(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "reddit,quora,twitter",
+    )
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+        },
+        "timeline": {"contract_end": None, "evaluation_deadline": None},
+        "event_mentions": [],
+        "pricing_phrases": [],
+        "specific_complaints": ["The zipper design is weak."],
+        "competitors_mentioned": [],
+    }
+    row = {
+        "vendor_name": "Copper",
+        "product_name": "Copper",
+        "summary": "Thinking about replacing my Copper Spur tent next quarter",
+        "review_text": "I am considering other tent options next quarter because the zipper design is weak.",
+        "pros": "",
+        "cons": "",
+        "source": "reddit",
+        "content_type": "community_discussion",
+    }
+
+    assert b2b_enrichment._derive_decision_timeline(result, row) == "unknown"
+
+
+def test_compute_derived_fields_promotes_contract_notice_into_evaluation_deadline(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 7.5
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return True
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "summary": "Cancel before renewal",
+        "review_text": (
+            "We need to give 30 days notice before renewal or they auto renew the contract. "
+            "Support refused to help us cancel."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "Operations Manager",
+        "reviewer_company": "Acme Corp",
+        "raw_metadata": {"source_weight": 0.8},
+        "content_type": "review",
+        "rating": 1.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": False,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": None,
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {
+            "role_level": "manager",
+            "decision_maker": False,
+            "company_name": "Acme Corp",
+        },
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": ["Support refused to help us cancel."],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["timeline"]["evaluation_deadline"] == "30 days"
+    assert derived["timeline"]["decision_timeline"] == "within_quarter"
+    assert any(span["time_anchor"] == "30 days" for span in derived["evidence_spans"])
+
+
+def test_compute_derived_fields_promotes_event_timeframe_into_contract_end(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 7.1
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "summary": "Renewal planning",
+        "review_text": "We are evaluating alternatives ahead of renewal.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "raw_metadata": {"source_weight": 0.8},
+        "content_type": "review",
+        "rating": 2.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": None,
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {},
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [{"event": "renewal", "timeframe": "next quarter"}],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["timeline"]["contract_end"] == "next quarter"
+    assert derived["timeline"]["decision_timeline"] == "within_quarter"
+
+
 @pytest.mark.asyncio
 async def test_enrich_rows_counts_quarantined(monkeypatch):
     async def _fake_enrich_single(pool, row, max_attempts, local_only, max_tokens, truncate_length):

@@ -1032,7 +1032,200 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
     return comps
 
 
-def _derive_decision_timeline(result: dict) -> str:
+_TIMELINE_IMMEDIATE_PATTERNS = ("asap", "immediately", "right away", "this week", "today", "urgent")
+_TIMELINE_QUARTER_PATTERNS = ("next quarter", "this quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days")
+_TIMELINE_YEAR_PATTERNS = ("this year", "next year", "12 months", "end of year", "2026", "2027")
+_TIMELINE_DECISION_PATTERNS = (
+    "decide", "decision", "renewal", "contract", "evaluate", "evaluation",
+    "considering", "switch", "switching", "migration", "migrate",
+    "deadline", "cutover", "go live", "go-live",
+)
+_TIMELINE_EXPLICIT_ANCHOR_PHRASES = (
+    "end of quarter", "quarter end", "end of month", "month end",
+    "end of year", "next quarter", "this quarter", "next month", "this month",
+    "this week", "next week", "a few weeks", "few weeks", "a few days", "few days",
+    "30 days", "60 days", "90 days", "12 months", "next year", "this year",
+    "asap", "immediately", "right away", "today", "tomorrow",
+)
+_TIMELINE_RELATIVE_ANCHOR_RE = re.compile(
+    r"\b(?:\d+\s*-\s*\d+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few|few)"
+    r"(?:\s+to\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))?"
+    r"\s+(?:business\s+days?|days?|weeks?|months?)\b",
+    re.IGNORECASE,
+)
+_TIMELINE_MONTH_DAY_RE = re.compile(
+    r"\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|"
+    r"aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?"
+    r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b",
+    re.IGNORECASE,
+)
+_TIMELINE_SLASH_DATE_RE = re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b")
+_TIMELINE_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_TIMELINE_CONTRACT_END_PATTERNS = (
+    "contract end", "contract ends", "contract expires", "expiration date",
+    "expiry date", "renewal date", "renewal window", "term ends", "term expires",
+    "auto renew", "auto-renew", "automatic renewal",
+)
+_TIMELINE_DECISION_DEADLINE_PATTERNS = (
+    "notice", "notice period", "before renewal", "before the contract ends",
+    "before the contract expires", "deadline", "decide", "decision", "evaluating",
+    "evaluation", "considering", "switch", "switching", "migrate", "migration",
+    "cutover", "go live", "go-live", "cancel by",
+)
+_TIMELINE_AMBIGUOUS_VENDOR_TOKENS = {"copper", "close"}
+_TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS = (
+    "crm", "sales", "pipeline", "lead", "leads", "deal", "deals", "account",
+    "contact", "contacts", "prospect", "prospects", "software", "saas",
+)
+
+
+def _normalize_timeline_anchor(anchor: Any) -> str | None:
+    text = re.sub(r"\s+", " ", str(anchor or "")).strip(" \t\r\n'\".,;:()[]{}")
+    return text.lower() if text else None
+
+
+def _extract_concrete_timeline_anchor(text: Any) -> str | None:
+    raw_text = str(text or "")
+    if not raw_text.strip():
+        return None
+    for pattern in (_TIMELINE_MONTH_DAY_RE, _TIMELINE_SLASH_DATE_RE, _TIMELINE_ISO_DATE_RE):
+        match = pattern.search(raw_text)
+        if match:
+            return _normalize_timeline_anchor(match.group(0))
+    lowered = raw_text.lower()
+    for phrase in _TIMELINE_EXPLICIT_ANCHOR_PHRASES:
+        index = lowered.find(phrase)
+        if index >= 0:
+            return _normalize_timeline_anchor(raw_text[index:index + len(phrase)])
+    match = _TIMELINE_RELATIVE_ANCHOR_RE.search(raw_text)
+    if match:
+        return _normalize_timeline_anchor(match.group(0))
+    return None
+
+
+def _has_timeline_commercial_signal(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> bool:
+    churn = result.get("churn_signals") or {}
+    review_norm = ""
+    review_blob = ""
+    source = ""
+    if source_row is not None:
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        )
+        source = str(source_row.get("source") or "").strip().lower()
+        review_norm = _normalize_compare_text(review_blob)
+
+    structured_churn = any((
+        bool(churn.get("intent_to_leave")),
+        bool(churn.get("actively_evaluating")),
+        bool(churn.get("migration_in_progress")),
+        bool(churn.get("contract_renewal_mentioned")),
+    ))
+    strong_signal = any((
+        structured_churn,
+        bool(result.get("competitors_mentioned")),
+        bool(result.get("pricing_phrases")),
+        _has_strong_commercial_context(review_norm),
+    ))
+    soft_signal = any((
+        bool(result.get("specific_complaints")),
+        bool(result.get("event_mentions")),
+    ))
+    if source_row is not None:
+        noisy_sources = {
+            item.strip().lower()
+            for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
+            if item.strip()
+        }
+        if source in noisy_sources:
+            vendor_norm = _normalize_compare_text(source_row.get("vendor_name"))
+            product_norm = _normalize_compare_text(source_row.get("product_name"))
+            product_hit = (
+                bool(source_row.get("product_name"))
+                and product_norm != vendor_norm
+                and _text_mentions_name(review_norm, source_row.get("product_name"))
+            )
+            vendor_hit = (
+                bool(source_row.get("vendor_name"))
+                and _text_mentions_name(review_norm, source_row.get("vendor_name"))
+            )
+            if vendor_norm in _TIMELINE_AMBIGUOUS_VENDOR_TOKENS and vendor_hit:
+                vendor_hit = _contains_any(review_blob, _TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS)
+            vendor_reference = product_hit or vendor_hit
+            if not vendor_reference and not structured_churn:
+                return False
+
+    return any((
+        strong_signal,
+        soft_signal and _has_commercial_context(review_norm),
+    ))
+
+
+def _derive_concrete_timeline_fields(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None]:
+    churn = result.get("churn_signals") or {}
+    timeline = result.get("timeline") or {}
+    contract_end = _normalize_timeline_anchor(timeline.get("contract_end"))
+    evaluation_deadline = _normalize_timeline_anchor(timeline.get("evaluation_deadline"))
+    if contract_end and evaluation_deadline:
+        return contract_end, evaluation_deadline
+
+    candidates: list[tuple[str, str]] = []
+    for event in result.get("event_mentions") or []:
+        if not isinstance(event, dict):
+            continue
+        anchor = _extract_concrete_timeline_anchor(event.get("timeframe"))
+        if not anchor:
+            continue
+        context = " ".join(
+            str(event.get(key) or "")
+            for key in ("event", "detail", "timeframe")
+        )
+        candidates.append((anchor, context.lower()))
+
+    if source_row is not None and _has_timeline_commercial_signal(result, source_row):
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        )
+        anchor = _extract_concrete_timeline_anchor(review_blob)
+        if anchor:
+            candidates.append((anchor, review_blob.lower()))
+
+    for anchor, context in candidates:
+        if not evaluation_deadline and (
+            _contains_any(context, _TIMELINE_DECISION_DEADLINE_PATTERNS)
+            or " before " in context
+        ):
+            evaluation_deadline = anchor
+            continue
+        if not contract_end and (
+            _contains_any(context, _TIMELINE_CONTRACT_END_PATTERNS)
+            or bool(churn.get("contract_renewal_mentioned"))
+        ):
+            contract_end = anchor
+            continue
+        if not evaluation_deadline and (
+            bool(churn.get("actively_evaluating"))
+            or bool(churn.get("migration_in_progress"))
+            or bool(churn.get("intent_to_leave"))
+        ):
+            evaluation_deadline = anchor
+            continue
+
+    return contract_end, evaluation_deadline
+
+
+def _derive_decision_timeline(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> str:
     churn = result.get("churn_signals") or {}
     timeline = result.get("timeline") or {}
     event_mentions = result.get("event_mentions") or []
@@ -1045,12 +1238,26 @@ def _derive_decision_timeline(result: dict) -> str:
         if isinstance(event, dict):
             parts.append(str(event.get("timeframe") or ""))
     text = " ".join(parts).lower()
-    if _contains_any(text, ("asap", "immediately", "right away", "this week", "today", "urgent")):
+    if _contains_any(text, _TIMELINE_IMMEDIATE_PATTERNS):
         return "immediate"
-    if _contains_any(text, ("next quarter", "this quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days")):
+    if _contains_any(text, _TIMELINE_QUARTER_PATTERNS):
         return "within_quarter"
-    if _contains_any(text, ("this year", "next year", "12 months", "end of year", "2026", "2027")):
+    if _contains_any(text, _TIMELINE_YEAR_PATTERNS):
         return "within_year"
+
+    if source_row is not None:
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        ).lower()
+        has_commercial_signal = _has_timeline_commercial_signal(result, source_row)
+        if has_commercial_signal and _contains_any(review_blob, _TIMELINE_DECISION_PATTERNS):
+            if _contains_any(review_blob, _TIMELINE_IMMEDIATE_PATTERNS):
+                return "immediate"
+            if _contains_any(review_blob, _TIMELINE_QUARTER_PATTERNS):
+                return "within_quarter"
+            if _contains_any(review_blob, _TIMELINE_YEAR_PATTERNS):
+                return "within_year"
     return "unknown"
 
 
@@ -1258,7 +1465,12 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     if not isinstance(timeline, dict):
         timeline = {}
         result["timeline"] = timeline
-    timeline["decision_timeline"] = _derive_decision_timeline(result)
+    contract_end, evaluation_deadline = _derive_concrete_timeline_fields(result, source_row)
+    if contract_end and not str(timeline.get("contract_end") or "").strip():
+        timeline["contract_end"] = contract_end
+    if evaluation_deadline and not str(timeline.get("evaluation_deadline") or "").strip():
+        timeline["evaluation_deadline"] = evaluation_deadline
+    timeline["decision_timeline"] = _derive_decision_timeline(result, source_row)
 
     cc = result.get("contract_context")
     if not isinstance(cc, dict):
@@ -1519,6 +1731,9 @@ def _empty_exact_cache_usage() -> dict[str, int]:
         "generated": 0,
         "tier1_generated_calls": 0,
         "tier2_generated_calls": 0,
+        "witness_rows": 0,
+        "witness_count": 0,
+        "secondary_write_hits": 0,
     }
 
 
@@ -1535,8 +1750,27 @@ def _accumulate_exact_cache_usage(
         "generated",
         "tier1_generated_calls",
         "tier2_generated_calls",
+        "witness_rows",
+        "witness_count",
+        "secondary_write_hits",
     ):
         totals[key] = int(totals.get(key, 0) or 0) + int(usage.get(key, 0) or 0)
+
+
+def _witness_metrics(result: dict[str, Any] | None) -> tuple[int, int]:
+    if not isinstance(result, dict):
+        return 0, 0
+    spans = result.get("evidence_spans")
+    if not isinstance(spans, list):
+        return 0, 0
+    witness_count = 0
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        if not str(span.get("text") or "").strip():
+            continue
+        witness_count += 1
+    return (1 if witness_count > 0 else 0), witness_count
 
 
 async def _enrich_rows(
@@ -1913,6 +2147,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if rounds == 0:
         return {"_skip_synthesis": "No B2B reviews to enrich"}
 
+    secondary_write_breakdown = {
+        "company_backfills": int(cache_usage.get("secondary_write_hits", 0) or 0),
+        "orphaned_requeued": int(orphaned or 0),
+        "exhausted_marked_failed": int(exhausted or 0),
+        "version_upgrade_requeued": int(requeued or 0),
+    }
+    secondary_write_hits = sum(secondary_write_breakdown.values())
     result = {
         "enriched": total_enriched,
         "quarantined": total_quarantined,
@@ -1922,6 +2163,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "rounds": rounds,
         "orphaned_requeued": orphaned,
         "exhausted_marked_failed": exhausted,
+        "witness_rows": int(cache_usage.get("witness_rows", 0) or 0),
+        "witness_count": int(cache_usage.get("witness_count", 0) or 0),
+        "reviews_processed": total_enriched + total_quarantined + total_failed + total_no_signal,
+        "secondary_write_hits": secondary_write_hits,
+        "secondary_write_breakdown": secondary_write_breakdown,
         "_skip_synthesis": "B2B enrichment complete",
     }
     if requeued:
@@ -1939,7 +2185,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         warning_count=total_quarantined,
         error_message=f"{total_failed} failed, {total_quarantined} quarantined" if total_failed else None,
     )
-    if total_failed > 0 or total_quarantined > 0:
+    if total_failed > 0 or total_quarantined > 0 or secondary_write_hits > 0:
+        if total_failed > 0:
+            reason_code = "enrichment_failures"
+        elif total_quarantined > 0:
+            reason_code = "enrichment_quarantines"
+        else:
+            reason_code = "enrichment_secondary_writes"
         await emit_event(
             pool, stage="extraction", event_type="enrichment_run_summary",
             entity_type="pipeline", entity_id="enrichment",
@@ -1947,9 +2199,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             severity="warning" if total_failed > 0 else "info",
             actionable=total_failed > 5,
             run_id=run_id,
-            reason_code="enrichment_failures" if total_failed > 0 else "enrichment_quarantines",
-            detail={"enriched": total_enriched, "failed": total_failed,
-                    "quarantined": total_quarantined, "no_signal": total_no_signal},
+            reason_code=reason_code,
+            detail={
+                "enriched": total_enriched,
+                "failed": total_failed,
+                "quarantined": total_quarantined,
+                "no_signal": total_no_signal,
+                "processed": total_processed,
+                "witness_rows": int(cache_usage.get("witness_rows", 0) or 0),
+                "witness_count": int(cache_usage.get("witness_count", 0) or 0),
+                "exact_cache_hits": int(cache_usage.get("exact_cache_hits", 0) or 0),
+                "generated": int(cache_usage.get("generated", 0) or 0),
+                "secondary_write_hits": secondary_write_hits,
+                "secondary_write_breakdown": secondary_write_breakdown,
+            },
         )
 
     return result
@@ -2138,6 +2401,36 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                     run_id=run_id,
                 )
                 return _finish("quarantined")
+            elif finalize_error == "validation_failed":
+                logger.warning(
+                    "Enrichment validation failed for %s -- quarantining",
+                    review_id,
+                )
+                await pool.execute(
+                    """
+                    UPDATE b2b_reviews
+                    SET enrichment_status = 'quarantined',
+                        enrichment_attempts = enrichment_attempts + 1,
+                        low_fidelity = true,
+                        low_fidelity_reasons = $2::jsonb
+                    WHERE id = $1
+                    """,
+                    review_id,
+                    json.dumps(["enrichment_validation_failed"]),
+                )
+                from ..visibility import record_quarantine
+                await record_quarantine(
+                    pool,
+                    review_id=str(review_id),
+                    vendor_name=row.get("vendor_name"),
+                    source=row.get("source"),
+                    reason_code="enrichment_validation_failed",
+                    severity="warning",
+                    actionable=True,
+                    summary=f"Validation failed for {row.get('vendor_name')} review",
+                    run_id=run_id,
+                )
+                return _finish("quarantined")
 
         if result:
             # Extract sentiment_trajectory subfields for indexed columns
@@ -2145,6 +2438,9 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             st_direction = st.get("direction") if isinstance(st, dict) else None
             st_tenure = st.get("tenure") if isinstance(st, dict) else None
             st_turning = st.get("turning_point") if isinstance(st, dict) else None
+            witness_rows, witness_count = _witness_metrics(result)
+            cache_usage["witness_rows"] += witness_rows
+            cache_usage["witness_count"] += witness_count
             low_fidelity_reasons = (
                 _detect_low_fidelity_reasons(row, result)
                 if cfg.enrichment_low_fidelity_enabled
@@ -2228,6 +2524,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                         _extracted_company_norm,
                         review_id,
                     )
+                    cache_usage["secondary_write_hits"] += 1
             except Exception:
                 logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
 
