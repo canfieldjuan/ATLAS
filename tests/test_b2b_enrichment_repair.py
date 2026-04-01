@@ -773,6 +773,72 @@ def test_strategic_adjudication_skips_low_signal_insider_account_competitor_nois
     assert "competitor_without_displacement_framing" not in reasons
 
 
+def test_strategic_adjudication_skips_generic_timeline_discussion_noise():
+    row = {
+        "summary": "I want to send a push to customers who bought in the last 30 days.",
+        "review_text": "I want to send a push to customers who bought in the last 30 days but have not opened the app in 2 weeks.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "community_discussion",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": ["retention tools are built for engineers"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "timeline_language_without_timing_anchor" not in reasons
+
+
+def test_strategic_adjudication_keeps_real_timeline_churn_gap():
+    row = {
+        "summary": "We are switching next quarter if renewal pricing does not change.",
+        "review_text": "We are evaluating alternatives and switching next quarter if renewal pricing does not change.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "community_discussion",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": True,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": True,
+        },
+        "specific_complaints": ["renewal pricing"],
+        "pricing_phrases": ["renewal pricing"],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "timeline_language_without_timing_anchor" in reasons
+
+
 @pytest.mark.asyncio
 async def test_repair_single_shadows_with_adjudication_markers_when_no_llm_targets(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))

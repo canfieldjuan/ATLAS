@@ -130,7 +130,28 @@ _TIMELINE_WITHOUT_ANCHOR = """
 (
   (
     COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-    OR review_text ~* '(renewal|contract end|contract expires|deadline|next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+    OR review_text ~* '(renewal|contract end|contract expires|deadline)'
+    OR (
+      review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+      AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
+    )
+  )
+  AND NOT (
+    content_type IN ('community_discussion', 'insider_account')
+    AND NOT (
+      COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+    )
+    AND COALESCE(
+      CASE
+        WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+        ELSE NULLIF(reviewer_title, '')
+      END,
+      NULLIF(reviewer_company, ''),
+      NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+    ) IS NULL
   )
   AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? ((@.time_anchor != null && @.time_anchor != "") || @.flags[*] == "deadline")')
 )
@@ -291,10 +312,12 @@ async def summarize_extraction_health(
             0
           ) AS span_count
         FROM b2b_reviews
+        WHERE {_ENRICHED_SCOPE}
+          AND COALESCE(enriched_at, imported_at) >= CURRENT_DATE - ($1::int - 1)
         GROUP BY source
-        HAVING COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE}) > 0
+        HAVING COUNT(*) > 0
         ORDER BY
-          COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE}) DESC,
+          COUNT(*) DESC,
           COALESCE(
             SUM(
               CASE
@@ -308,8 +331,9 @@ async def summarize_extraction_health(
             0
           ) DESC,
           source ASC
-        LIMIT $1
+        LIMIT $2
         """,
+        days,
         top_n,
     )
 

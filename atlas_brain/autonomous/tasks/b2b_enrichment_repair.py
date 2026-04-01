@@ -42,6 +42,17 @@ _DISPLACEMENT_COMPETITOR_PATTERNS = (
     "evaluating", "looking at", "considering", "shortlisting", "shortlisted",
     "poc with", "proof of concept with",
 )
+_TIMELINE_HARD_PATTERNS = (
+    "renewal", "contract end", "contract expires", "deadline",
+)
+_TIMELINE_SOFT_PATTERNS = (
+    "next quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days",
+)
+_TIMELINE_CONTEXT_PATTERNS = (
+    "renewal", "contract", "evaluating", "evaluation", "considering",
+    "switch", "switched", "migrating", "migration", "replatform",
+    "cancel", "deadline", "go live", "go-live", "cutover",
+)
 _HARD_GAP_SQL = """
 (
   (enrichment->'evidence_spans' IS NULL OR jsonb_typeof(enrichment->'evidence_spans') != 'array'
@@ -109,6 +120,17 @@ def _has_strong_competitor_signal(competitors: list[dict[str, Any]]) -> bool:
 def _is_synthetic_reviewer_title(value: Any) -> bool:
     title = str(value or "").strip().lower()
     return title.startswith("repeat churn signal")
+
+
+def _has_timeline_trigger(review_blob: str, *, structured_churn: bool) -> bool:
+    if structured_churn:
+        return True
+    if base_enrichment._contains_any(review_blob, _TIMELINE_HARD_PATTERNS):
+        return True
+    return (
+        base_enrichment._contains_any(review_blob, _TIMELINE_SOFT_PATTERNS)
+        and base_enrichment._contains_any(review_blob, _TIMELINE_CONTEXT_PATTERNS)
+    )
 
 
 def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
@@ -209,13 +231,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         reasons.append("competitor_without_displacement_framing")
     if named_company and not named_account_evidence:
         reasons.append("named_company_without_named_account_evidence")
-    if (
-        (
-            bool(churn.get("contract_renewal_mentioned"))
-            or base_enrichment._contains_any(review_blob, base_enrichment._REPAIR_TIMELINE_PATTERNS)
-        )
-        and not timing_anchor
-    ):
+    if _has_timeline_trigger(review_blob, structured_churn=structured_churn) and not timing_anchor and not discussion_noise:
         reasons.append("timeline_language_without_timing_anchor")
     if (
         base_enrichment._contains_any(
@@ -910,7 +926,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     OR (
                       COALESCE(jsonb_array_length(enrichment->'event_mentions'), 0) = 0
                       AND COALESCE(enrichment->'timeline'->>'decision_timeline', 'unknown') = 'unknown'
-                      AND review_text ~* '(renewal|contract end|contract expires|deadline|next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+                      AND (
+                        review_text ~* '(renewal|contract end|contract expires|deadline)'
+                        OR (
+                          review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+                          AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
+                        )
+                      )
                     )
                     OR (
                       enrichment_status = 'no_signal'
@@ -976,7 +998,28 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     OR (
                       (
                         COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                        OR review_text ~* '(renewal|contract end|contract expires|deadline|next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+                        OR review_text ~* '(renewal|contract end|contract expires|deadline)'
+                        OR (
+                          review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+                          AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
+                        )
+                      )
+                      AND NOT (
+                        content_type IN ('community_discussion', 'insider_account')
+                        AND NOT (
+                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                        )
+                        AND COALESCE(
+                          CASE
+                            WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+                            ELSE NULLIF(reviewer_title, '')
+                          END,
+                          NULLIF(reviewer_company, ''),
+                          NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+                        ) IS NULL
                       )
                       AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? ((@.time_anchor != null && @.time_anchor != "") || @.flags[*] == "deadline")')
                     )
