@@ -2314,6 +2314,24 @@ class B2BChurnConfig(BaseSettings):
         default=1536,
         description="Max output tokens for Tier 2 extraction",
     )
+    enrichment_tier2_strict_sources: str = Field(
+        default="gartner,peerspot",
+        description=(
+            "Comma-separated sources that require stronger Tier 1 evidence before Tier 2 classification fires"
+        ),
+    )
+    enrichment_tier2_strict_min_complaints: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Minimum Tier 1 complaint count that qualifies strict sources for Tier 2",
+    )
+    enrichment_tier2_strict_min_quotes: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Minimum Tier 1 quote count that helps qualify strict sources for Tier 2",
+    )
     enrichment_tier2_timeout_seconds: float = Field(
         default=60.0,
         ge=5.0,
@@ -2336,6 +2354,24 @@ class B2BChurnConfig(BaseSettings):
     account_resolution_backfill_min_confidence: str = Field(
         default="medium",
         description="Minimum confidence label to backfill reviewer_company (high/medium/low)",
+    )
+    account_resolution_eligible_statuses: list[str] = Field(
+        default=["enriched", "no_signal", "quarantined"],
+        description=(
+            "Review enrichment statuses eligible for deterministic account resolution"
+        ),
+    )
+    account_resolution_source_priority: list[str] = Field(
+        default=["g2", "gartner", "capterra", "software_advice", "trustpilot"],
+        description=(
+            "Preferred source order when draining deterministic account-resolution candidates"
+        ),
+    )
+    account_resolution_excluded_sources: list[str] = Field(
+        default=["capterra", "software_advice", "trustpilot", "trustradius"],
+        description=(
+            "Sources excluded from deterministic account resolution because they lack reliable identity signals"
+        ),
     )
     account_resolution_interval_seconds: int = Field(
         default=600,
@@ -2362,11 +2398,11 @@ class B2BChurnConfig(BaseSettings):
 
     enrichment_repair_enabled: bool = Field(
         default=False,
-        description="Enable structural repair pass for already-enriched B2B reviews",
+        description="Enable strategic adjudication pass for already-enriched B2B reviews",
     )
     enrichment_repair_interval_seconds: int = Field(
         default=900,
-        description="Repair polling interval for structurally weak enriched reviews",
+        description="Polling interval for weak or high-salience enriched reviews",
     )
     enrichment_repair_max_per_batch: int = Field(
         default=25,
@@ -2386,17 +2422,37 @@ class B2BChurnConfig(BaseSettings):
     )
     enrichment_repair_max_attempts: int = Field(
         default=2,
-        description="Max structural repair attempts per enriched review",
+        description="Max adjudication attempts per enriched review",
     )
     enrichment_repair_model: str = Field(
         default="",
-        description="Local vLLM model for structural repair pass",
+        description="Local vLLM model for strategic adjudication pass",
     )
     enrichment_repair_max_tokens: int = Field(
         default=512,
         ge=64,
         le=4096,
         description="Max completion tokens for the narrow field-repair extraction pass",
+    )
+    enrichment_repair_strict_discussion_sources: str = Field(
+        default="reddit",
+        description=(
+            "Comma-separated community discussion sources that require stronger commercial signal before repair"
+        ),
+    )
+    enrichment_repair_strict_discussion_content_types: list[str] = Field(
+        default=["community_discussion", "insider_account", "comment"],
+        description=(
+            "Content types subject to strict discussion-source repair gating"
+        ),
+    )
+    enrichment_repair_strict_discussion_skip_limit: int = Field(
+        default=500,
+        ge=1,
+        le=5000,
+        description=(
+            "Max low-signal strict-discussion reviews to terminally skip per repair run"
+        ),
     )
     enrichment_repair_min_urgency: int = Field(
         default=3,
@@ -2454,6 +2510,10 @@ class B2BChurnConfig(BaseSettings):
     intelligence_executive_sources: str = Field(
         default="g2,capterra,trustradius,gartner,peerspot",
         description="High-signal sources for executive-facing outputs (weekly_churn_feed, displacement, timeline)",
+    )
+    deprecated_review_sources: str = Field(
+        default="capterra,software_advice,trustpilot,trustradius",
+        description="Sources deprecated from churn intelligence, blogs, and related downstream B2B review selection",
     )
     intelligence_llm_backend: str = Field(
         default="vllm",
@@ -2675,6 +2735,32 @@ class B2BChurnConfig(BaseSettings):
         default=False,
         description="Enable exact-match Postgres caching for B2B/reporting LLM calls",
     )
+    anthropic_batch_enabled: bool = Field(
+        default=False,
+        description="Enable Anthropic Message Batches for eligible B2B workloads",
+    )
+    anthropic_batch_poll_interval_seconds: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=60.0,
+        description="Polling interval for Anthropic Message Batch reconciliation",
+    )
+    anthropic_batch_timeout_seconds: float = Field(
+        default=900.0,
+        ge=30.0,
+        le=86400.0,
+        description="Max time to wait for an Anthropic Message Batch before falling back",
+    )
+    scorecard_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow vendor scorecard narratives to use Anthropic Message Batches when available",
+    )
+    scorecard_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum uncached scorecard narratives required before using Anthropic batching",
+    )
 
     # Briefing gate (email capture for full report)
     vendor_briefing_gate_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for briefing gate landing page")
@@ -2882,6 +2968,8 @@ class B2BChurnConfig(BaseSettings):
         le=50,
         description="Max displacement flows included in a category-council packet",
     )
+
+    scorecard_narrative_concurrency: int = Field(default=6, description="Max concurrent LLM calls during scorecard narrative generation")
 
     battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
@@ -3092,6 +3180,10 @@ class B2BScrapeConfig(BaseSettings):
             "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
         ),
         description="Sources allowed for automated scrape intake (comma-separated)",
+    )
+    deprecated_sources: str = Field(
+        default="capterra,software_advice,trustpilot,trustradius",
+        description="Sources deprecated from automated scrape intake and target planning",
     )
     source_fit_filter_enabled: bool = Field(
         default=True,
@@ -3328,12 +3420,27 @@ class B2BCampaignConfig(BaseSettings):
     schedule_cron: str = Field(default="0 22 * * *", description="Campaign generation schedule (daily 10 PM)")
     dedup_days: int = Field(default=7, ge=1, description="Days before re-targeting same company")
     retention_days: int = Field(default=90, ge=1, description="Days to retain expired/sent campaigns before cleanup")
+    concurrency: int = Field(default=8, description="Max concurrent LLM calls during campaign generation")
     max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
     llm_timeout_seconds: float = Field(
         default=120.0,
         ge=5.0,
         le=300.0,
         description="Timeout for a single campaign LLM generation call",
+    )
+    anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow campaign generation to use Anthropic Message Batches when eligible",
+    )
+    anthropic_batch_detached_enabled: bool = Field(
+        default=False,
+        description="Submit campaign batches for later reconciliation instead of waiting inline for completion",
+    )
+    anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum uncached campaign items required before using Anthropic batching",
     )
     word_limits: dict[str, dict[str, list[int]]] = Field(
         default_factory=lambda: {

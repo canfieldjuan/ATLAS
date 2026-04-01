@@ -34,6 +34,7 @@ _BUILTIN_TASKS = [
     ("weather_traffic_alerts", "run", "weather_traffic_alerts"),
     ("news_intelligence", "run", "news_intelligence"),
     ("b2b_campaign_generation", "run", "b2b_campaign_generation"),
+    ("b2b_campaign_generation", "reconcile_batches", "b2b_campaign_batch_reconciliation"),
     ("campaign_sequence_progression", "run", "campaign_sequence_progression"),
     ("campaign_send", "run", "campaign_send"),
     ("campaign_analytics_refresh", "run", "campaign_analytics_refresh"),

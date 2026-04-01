@@ -9,6 +9,7 @@ opportunities, groups by company, and generates multi-channel campaigns.
 Returns _skip_synthesis.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ from ...services.vendor_target_selection import dedupe_vendor_target_rows
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ..visibility import emit_event, record_attempt
+from ._execution_progress import task_run_id as _task_run_id
 from ._b2b_specificity import (
     campaign_proof_terms_from_audit,
     merge_specificity_contexts,
@@ -560,6 +562,62 @@ def _dedupe_texts(values: list[str], max_items: int) -> list[str]:
         if len(deduped) >= max_items:
             break
     return deduped
+
+
+_CAMPAIGN_PAIN_SEVERITY_RANK = {
+    "critical": 5,
+    "high": 4,
+    "primary": 4,
+    "medium": 3,
+    "secondary": 3,
+    "low": 2,
+    "minor": 2,
+    "mentioned": 1,
+    "": 0,
+}
+
+
+def _campaign_stable_row_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("review_id") or ""),
+            json.dumps(row, sort_keys=True, separators=(",", ":"), default=str),
+        ),
+    )
+
+
+def _campaign_sorted_count_rows(
+    counts: dict[str, int],
+    *,
+    field_name: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    return [
+        {field_name: key, "count": value}
+        for key, value in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], str(item[0]).lower(), str(item[0])),
+        )[:limit]
+    ]
+
+
+def _campaign_sorted_count_keys(counts: dict[str, int], *, limit: int) -> list[str]:
+    return [
+        key
+        for key, _value in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], str(item[0]).lower(), str(item[0])),
+        )[:limit]
+    ]
+
+
+def _campaign_merge_pain_severity(existing: str, incoming: str) -> str:
+    current = str(existing or "").strip().lower()
+    candidate = str(incoming or "").strip().lower()
+    if _CAMPAIGN_PAIN_SEVERITY_RANK.get(candidate, 0) >= _CAMPAIGN_PAIN_SEVERITY_RANK.get(current, 0):
+        return candidate or current
+    return current
 
 
 def _briefing_text_list(
@@ -1162,6 +1220,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         min_score=cfg.min_opportunity_score,
         limit=cfg.max_campaigns_per_run,
         target_mode=cfg.target_mode,
+        run_id=_task_run_id(task),
     )
 
     # Send notification
@@ -1286,6 +1345,7 @@ async def generate_campaigns(
     force: bool = False,
     ignore_recent_dedup: bool = False,
     ignore_briefing_gate: bool = False,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Core generation logic, shared by autonomous task and manual API trigger.
 
@@ -1307,18 +1367,21 @@ async def generate_campaigns(
             pool, min_score, limit, vendor_filter, company_filter,
             bypass_briefing_gate=bypass_briefing_gate,
             bypass_recent_dedup=bypass_recent_dedup,
+            run_id=run_id,
         )
     elif mode == "challenger_intel":
         return await _generate_challenger_campaigns(
             pool, min_score, limit, vendor_filter, company_filter,
             bypass_briefing_gate=bypass_briefing_gate,
             bypass_recent_dedup=bypass_recent_dedup,
+            run_id=run_id,
         )
 
     # Default: churning_company (original behavior)
     return await _generate_churning_company_campaigns(
         pool, min_score, limit, vendor_filter, company_filter,
         bypass_recent_dedup=bypass_recent_dedup,
+        run_id=run_id,
     )
 
 
@@ -1463,6 +1526,7 @@ async def _generate_churning_company_campaigns(
     vendor_filter: str | None,
     company_filter: str | None,
     bypass_recent_dedup: bool = False,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Original generation path: outreach to the churning company."""
     cfg = settings.b2b_campaign
@@ -1552,6 +1616,7 @@ async def _generate_churning_company_campaigns(
     batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     generated = 0
     failed = 0
+    deferred = 0
     skipped_unqualified = 0
     generated_without_partner = 0
     sequences_created = 0
@@ -1562,14 +1627,21 @@ async def _generate_churning_company_campaigns(
     partner_index = await _fetch_affiliate_partners(pool)
 
     personas_skipped = 0
+    batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
 
+    # --- Pre-qualification pass (sequential, fast) ---
+    qualified_units: list[dict[str, Any]] = []
     for company_name, opps in companies_to_process:
         best = max(opps, key=lambda o: o["opportunity_score"])
         prepared = await _prepare_churning_company_context(
-            pool,
-            best=best,
-            opps=opps,
-            partner_index=partner_index,
+            pool, best=best, opps=opps, partner_index=partner_index,
         )
         base_context = prepared["base_context"]
         qualification = prepared["qualification"]
@@ -1579,204 +1651,399 @@ async def _generate_churning_company_campaigns(
             skipped_unqualified += 1
             for reason in qualification["missing_checks"]:
                 qualification_summary[reason] = qualification_summary.get(reason, 0) + 1
-            logger.info(
-                "Skipping churning-company campaign for %s; qualification failed: %s",
-                company_name,
-                ", ".join(qualification["missing_checks"]) or "unknown",
-            )
             continue
         qualified_companies += 1
-
         partner = prepared["partner"]
         partner_id: str | None = None
         if partner:
             base_context["selling"] = _build_selling_context(
-                sender_name=cfg.default_sender_name,
-                sender_title=cfg.default_sender_title,
+                sender_name=cfg.default_sender_name, sender_title=cfg.default_sender_title,
                 sender_company=cfg.default_sender_company,
-                product_name=partner["product_name"],
-                affiliate_url=partner["affiliate_url"],
-                primary_blog_post=primary_blog_post,
-                blog_posts=ordered_blog_posts,
+                product_name=partner["product_name"], affiliate_url=partner["affiliate_url"],
+                primary_blog_post=primary_blog_post, blog_posts=ordered_blog_posts,
             )
             partner_id = partner["id"]
         else:
             generated_without_partner += 1
-            logger.info(
-                "No partner match for %s; generating with generic selling context",
-                company_name,
-            )
             base_context["selling"] = _build_selling_context(
-                sender_name=cfg.default_sender_name,
-                sender_title=cfg.default_sender_title,
+                sender_name=cfg.default_sender_name, sender_title=cfg.default_sender_title,
                 sender_company=cfg.default_sender_company,
-                primary_blog_post=primary_blog_post,
-                blog_posts=ordered_blog_posts,
+                primary_blog_post=primary_blog_post, blog_posts=ordered_blog_posts,
             )
-
-        # Generate per-persona sequences
         for persona in cfg.personas:
             persona_context = _build_persona_context(base_context, persona)
             if persona_context is None:
-                # Skip rule: no relevant pain categories for this persona
                 personas_skipped += 1
-                logger.debug(
-                    "Skipping persona %s for %s (no relevant pain categories)",
-                    persona, company_name,
-                )
                 continue
+            qualified_units.append({
+                "company_name": company_name, "opps": opps, "best": best,
+                "persona": persona, "persona_context": persona_context,
+                "persona_batch_id": f"{batch_id}_{persona}", "partner_id": partner_id,
+            })
 
-            persona_batch_id = f"{batch_id}_{persona}"
-
-            # Channel chaining: track cold email output for follow-up context
-            cold_email_content: dict[str, str] | None = None
-
-            for channel in cfg.channels:
-                payload = {
-                    **persona_context,
+    phase_one_entries: list[dict[str, Any]] = []
+    phase_one_channels = [channel for channel in cfg.channels if channel != "email_followup"]
+    for unit in qualified_units:
+        for channel in phase_one_channels:
+            payload = {
+                **unit["persona_context"],
+                "channel": channel,
+                "target_mode": "churning_company",
+            }
+            artifact_id = _campaign_artifact_key(
+                company_name=unit["company_name"],
+                batch_id=unit["persona_batch_id"],
+                channel=channel,
+            )
+            phase_one_entries.append(
+                {
+                    "custom_id": artifact_id,
+                    "artifact_id": artifact_id,
+                    "campaign_batch_id": unit["persona_batch_id"],
+                    "phase": "cold",
+                    "payload": payload,
                     "channel": channel,
-                    "target_mode": "churning_company",
+                    "company_name": unit["company_name"],
+                    "persona": unit["persona"],
+                    "persona_batch_id": unit["persona_batch_id"],
+                    "persona_context": unit["persona_context"],
+                    "best": unit["best"],
+                    "review_ids": [o["review_id"] for o in unit["opps"] if o.get("review_id")][:20] or None,
+                    "partner_id": unit["partner_id"],
+                    "max_tokens": cfg.max_tokens,
+                    "temperature": cfg.temperature,
+                    "trace_metadata": _campaign_trace_metadata(
+                        payload,
+                        run_id=run_id,
+                        stage_id="b2b_campaign_generation.content",
+                    ),
                 }
-                artifact_id = _campaign_artifact_key(
-                    company_name=company_name,
-                    batch_id=persona_batch_id,
-                    channel=channel,
+            )
+
+    phase_one_results, phase_one_batch = await _run_campaign_batch(
+        llm,
+        skill.content,
+        phase_one_entries,
+        run_id=run_id,
+    )
+    _merge_batch_metrics(batch_metrics, phase_one_batch)
+
+    cold_email_by_unit: dict[tuple[str, str], dict[str, str]] = {}
+    for entry in phase_one_entries:
+        company_name = entry["company_name"]
+        persona = entry["persona"]
+        channel = entry["channel"]
+        payload = entry["payload"]
+        artifact_id = entry["artifact_id"]
+        content = phase_one_results.get(entry["custom_id"])
+        if _is_deferred_campaign_content(content):
+            await record_attempt(
+                pool,
+                artifact_type="campaign",
+                artifact_id=artifact_id,
+                attempt_no=1,
+                stage="generation",
+                status="queued",
+            )
+            deferred += 1
+            continue
+        if content:
+            metadata = _campaign_storage_metadata(payload)
+            generation_audit = (
+                payload.get("_generation_audit")
+                if isinstance(payload.get("_generation_audit"), dict)
+                else {}
+            )
+            specificity = (
+                generation_audit.get("specificity")
+                if isinstance(generation_audit.get("specificity"), dict)
+                else {}
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_campaigns (
+                        company_name, vendor_name, product_category,
+                        opportunity_score, urgency_score, pain_categories,
+                        competitors_considering, seat_count, contract_end,
+                        decision_timeline, buying_stage, role_type,
+                        key_quotes, source_review_ids,
+                        channel, subject, body, cta,
+                        status, batch_id, llm_model,
+                        partner_id, industry, target_mode, metadata,
+                        score_components
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18,
+                        $19, $20, $21, $22, $23, $24, $25::jsonb,
+                        $26::jsonb
+                    )
+                    """,
+                    company_name,
+                    entry["best"]["vendor_name"],
+                    entry["best"].get("product_category"),
+                    entry["best"]["opportunity_score"],
+                    entry["best"].get("urgency"),
+                    json.dumps(entry["persona_context"].get("pain_categories", [])),
+                    json.dumps(entry["persona_context"].get("competitors_considering", [])),
+                    entry["best"].get("seat_count"),
+                    entry["best"].get("contract_end"),
+                    entry["best"].get("decision_timeline"),
+                    entry["best"].get("buying_stage"),
+                    entry["persona_context"].get("role_type"),
+                    json.dumps(entry["persona_context"].get("key_quotes", [])),
+                    entry["review_ids"],
+                    channel,
+                    content.get("subject", ""),
+                    content.get("body", ""),
+                    content.get("cta", ""),
+                    "draft",
+                    entry["persona_batch_id"],
+                    llm_model_name,
+                    _uuid.UUID(entry["partner_id"]) if entry["partner_id"] else None,
+                    entry["persona_context"].get("industry"),
+                    "churning_company",
+                    json.dumps(metadata, default=str),
+                    json.dumps(entry["best"].get("score_components")),
+                )
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="succeeded",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                )
+                generated += 1
+                if channel == "email_cold":
+                    cold_email_by_unit[(company_name, persona)] = {
+                        "subject": content.get("subject", ""),
+                        "body": content.get("body", ""),
+                    }
+            except Exception:
+                logger.exception("Failed to store campaign for %s/%s/%s", company_name, persona, channel)
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="storage",
+                    status="failed",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    blocking_issues=list(specificity.get("blocking_issues") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                    failure_step="storage",
+                    error_message="campaign_storage_failed",
+                )
+                failed += 1
+        else:
+            await _record_campaign_generation_failure(
+                pool,
+                artifact_id=artifact_id,
+                company_name=company_name,
+                channel=channel,
+                generation_audit=payload.get("_generation_audit"),
+            )
+            failed += 1
+
+    if settings.campaign_sequence.enabled:
+        for unit in qualified_units:
+            cold = cold_email_by_unit.get((unit["company_name"], unit["persona"]))
+            if not cold:
+                continue
+            try:
+                seq_id = await _create_sequence_for_cold_email(
+                    pool,
+                    company_name=unit["company_name"],
+                    batch_id=unit["persona_batch_id"],
+                    partner_id=unit["partner_id"],
+                    context=unit["persona_context"],
+                    cold_email_subject=cold.get("subject", ""),
+                    cold_email_body=cold.get("body", ""),
+                )
+                if seq_id:
+                    sequences_created += 1
+            except Exception as exc:
+                logger.warning(
+                    "Failed to create sequence for %s/%s: %s",
+                    unit["company_name"],
+                    unit["persona"],
+                    exc,
                 )
 
-                # Inject cold email context for follow-up
-                if channel == "email_followup" and cold_email_content:
-                    payload["cold_email_context"] = cold_email_content
+    followup_entries: list[dict[str, Any]] = []
+    if "email_followup" in cfg.channels:
+        for unit in qualified_units:
+            cold_context = cold_email_by_unit.get((unit["company_name"], unit["persona"]))
+            if not cold_context:
+                continue
+            payload = {
+                **unit["persona_context"],
+                "channel": "email_followup",
+                "target_mode": "churning_company",
+                "cold_email_context": cold_context,
+            }
+            artifact_id = _campaign_artifact_key(
+                company_name=unit["company_name"],
+                batch_id=unit["persona_batch_id"],
+                channel="email_followup",
+            )
+            followup_entries.append(
+                {
+                    "custom_id": artifact_id,
+                    "artifact_id": artifact_id,
+                    "campaign_batch_id": unit["persona_batch_id"],
+                    "phase": "followup",
+                    "payload": payload,
+                    "channel": "email_followup",
+                    "company_name": unit["company_name"],
+                    "persona": unit["persona"],
+                    "persona_batch_id": unit["persona_batch_id"],
+                    "persona_context": unit["persona_context"],
+                    "best": unit["best"],
+                    "review_ids": [o["review_id"] for o in unit["opps"] if o.get("review_id")][:20] or None,
+                    "partner_id": unit["partner_id"],
+                    "max_tokens": cfg.max_tokens,
+                    "temperature": cfg.temperature,
+                    "trace_metadata": _campaign_trace_metadata(
+                        payload,
+                        run_id=run_id,
+                        stage_id="b2b_campaign_generation.content",
+                    ),
+                }
+            )
 
-                content = await _generate_content(
-                    llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
+    followup_results, phase_two_batch = await _run_campaign_batch(
+        llm,
+        skill.content,
+        followup_entries,
+        run_id=run_id,
+    )
+    _merge_batch_metrics(batch_metrics, phase_two_batch)
+
+    for entry in followup_entries:
+        company_name = entry["company_name"]
+        persona = entry["persona"]
+        payload = entry["payload"]
+        artifact_id = entry["artifact_id"]
+        content = followup_results.get(entry["custom_id"])
+        if _is_deferred_campaign_content(content):
+            await record_attempt(
+                pool,
+                artifact_type="campaign",
+                artifact_id=artifact_id,
+                attempt_no=1,
+                stage="generation",
+                status="queued",
+            )
+            deferred += 1
+            continue
+        if content:
+            metadata = _campaign_storage_metadata(payload)
+            generation_audit = (
+                payload.get("_generation_audit")
+                if isinstance(payload.get("_generation_audit"), dict)
+                else {}
+            )
+            specificity = (
+                generation_audit.get("specificity")
+                if isinstance(generation_audit.get("specificity"), dict)
+                else {}
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_campaigns (
+                        company_name, vendor_name, product_category,
+                        opportunity_score, urgency_score, pain_categories,
+                        competitors_considering, seat_count, contract_end,
+                        decision_timeline, buying_stage, role_type,
+                        key_quotes, source_review_ids,
+                        channel, subject, body, cta,
+                        status, batch_id, llm_model,
+                        partner_id, industry, target_mode, metadata,
+                        score_components
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18,
+                        $19, $20, $21, $22, $23, $24, $25::jsonb,
+                        $26::jsonb
+                    )
+                    """,
+                    company_name,
+                    entry["best"]["vendor_name"],
+                    entry["best"].get("product_category"),
+                    entry["best"]["opportunity_score"],
+                    entry["best"].get("urgency"),
+                    json.dumps(entry["persona_context"].get("pain_categories", [])),
+                    json.dumps(entry["persona_context"].get("competitors_considering", [])),
+                    entry["best"].get("seat_count"),
+                    entry["best"].get("contract_end"),
+                    entry["best"].get("decision_timeline"),
+                    entry["best"].get("buying_stage"),
+                    entry["persona_context"].get("role_type"),
+                    json.dumps(entry["persona_context"].get("key_quotes", [])),
+                    entry["review_ids"],
+                    "email_followup",
+                    content.get("subject", ""),
+                    content.get("body", ""),
+                    content.get("cta", ""),
+                    "draft",
+                    entry["persona_batch_id"],
+                    llm_model_name,
+                    _uuid.UUID(entry["partner_id"]) if entry["partner_id"] else None,
+                    entry["persona_context"].get("industry"),
+                    "churning_company",
+                    json.dumps(metadata, default=str),
+                    json.dumps(entry["best"].get("score_components")),
                 )
-
-                if content:
-                    # Capture cold email output for chaining
-                    if channel == "email_cold":
-                        cold_email_content = {
-                            "subject": content.get("subject", ""),
-                            "body": content.get("body", ""),
-                        }
-                    metadata = _campaign_storage_metadata(payload)
-                    generation_audit = (
-                        payload.get("_generation_audit")
-                        if isinstance(payload.get("_generation_audit"), dict)
-                        else {}
-                    )
-                    specificity = (
-                        generation_audit.get("specificity")
-                        if isinstance(generation_audit.get("specificity"), dict)
-                        else {}
-                    )
-
-                    try:
-                        review_ids = [o["review_id"] for o in opps if o.get("review_id")][:20]
-                        await pool.execute(
-                            """
-                            INSERT INTO b2b_campaigns (
-                                company_name, vendor_name, product_category,
-                                opportunity_score, urgency_score, pain_categories,
-                                competitors_considering, seat_count, contract_end,
-                                decision_timeline, buying_stage, role_type,
-                                key_quotes, source_review_ids,
-                                channel, subject, body, cta,
-                                status, batch_id, llm_model,
-                                partner_id, industry, target_mode, metadata,
-                                score_components
-                            ) VALUES (
-                                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                                $11, $12, $13, $14, $15, $16, $17, $18,
-                                $19, $20, $21, $22, $23, $24, $25::jsonb,
-                                $26::jsonb
-                            )
-                            """,
-                            company_name,
-                            best["vendor_name"],
-                            best.get("product_category"),
-                            best["opportunity_score"],
-                            best.get("urgency"),
-                            json.dumps(persona_context.get("pain_categories", [])),
-                            json.dumps(persona_context.get("competitors_considering", [])),
-                            best.get("seat_count"),
-                            best.get("contract_end"),
-                            best.get("decision_timeline"),
-                            best.get("buying_stage"),
-                            persona_context.get("role_type"),
-                            json.dumps(persona_context.get("key_quotes", [])),
-                            review_ids or None,
-                            channel,
-                            content.get("subject", ""),
-                            content.get("body", ""),
-                            content.get("cta", ""),
-                            "draft",
-                            persona_batch_id,
-                            llm_model_name,
-                            _uuid.UUID(partner_id) if partner_id else None,
-                            persona_context.get("industry"),
-                            "churning_company",
-                            json.dumps(metadata, default=str),
-                            json.dumps(best.get("score_components")),
-                        )
-                        await record_attempt(
-                            pool,
-                            artifact_type="campaign",
-                            artifact_id=artifact_id,
-                            attempt_no=1,
-                            stage="generation",
-                            status="succeeded",
-                            blocker_count=len(specificity.get("blocking_issues") or []),
-                            warning_count=len(specificity.get("warnings") or []),
-                            warnings=list(specificity.get("warnings") or []),
-                        )
-                        generated += 1
-                    except Exception:
-                        logger.exception(
-                            "Failed to store campaign for %s/%s/%s", company_name, persona, channel
-                        )
-                        await record_attempt(
-                            pool,
-                            artifact_type="campaign",
-                            artifact_id=artifact_id,
-                            attempt_no=1,
-                            stage="storage",
-                            status="failed",
-                            blocker_count=len(specificity.get("blocking_issues") or []),
-                            warning_count=len(specificity.get("warnings") or []),
-                            blocking_issues=list(specificity.get("blocking_issues") or []),
-                            warnings=list(specificity.get("warnings") or []),
-                            failure_step="storage",
-                            error_message="campaign_storage_failed",
-                        )
-                        failed += 1
-                else:
-                    await _record_campaign_generation_failure(
-                        pool,
-                        artifact_id=artifact_id,
-                        company_name=company_name,
-                        channel=channel,
-                        generation_audit=payload.get("_generation_audit"),
-                    )
-                    failed += 1
-
-            # Create campaign sequence for the cold email (if sequences enabled)
-            if cold_email_content and settings.campaign_sequence.enabled:
-                try:
-                    seq_id = await _create_sequence_for_cold_email(
-                        pool,
-                        company_name=company_name,
-                        batch_id=persona_batch_id,
-                        partner_id=partner_id,
-                        context=persona_context,
-                        cold_email_subject=cold_email_content.get("subject", ""),
-                        cold_email_body=cold_email_content.get("body", ""),
-                    )
-                    if seq_id:
-                        sequences_created += 1
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to create sequence for %s/%s: %s", company_name, persona, exc
-                    )
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="succeeded",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                )
+                generated += 1
+            except Exception:
+                logger.exception(
+                    "Failed to store campaign for %s/%s/%s",
+                    company_name,
+                    persona,
+                    "email_followup",
+                )
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="storage",
+                    status="failed",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    blocking_issues=list(specificity.get("blocking_issues") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                    failure_step="storage",
+                    error_message="campaign_storage_failed",
+                )
+                failed += 1
+        else:
+            await _record_campaign_generation_failure(
+                pool,
+                artifact_id=artifact_id,
+                company_name=company_name,
+                channel="email_followup",
+                generation_audit=payload.get("_generation_audit"),
+            )
+            failed += 1
 
     logger.info(
         "Campaign generation (churning_company): %d generated, %d failed, %d generated without partner, "
@@ -1793,6 +2060,7 @@ async def _generate_churning_company_campaigns(
         "skipped_unqualified": skipped_unqualified,
         "skipped_no_partner": 0,
         "generated_without_partner": generated_without_partner,
+        "deferred": deferred,
         "personas_skipped": personas_skipped,
         "sequences_created": sequences_created,
         "companies": qualified_companies,
@@ -1801,6 +2069,12 @@ async def _generate_churning_company_campaigns(
         "batch_id": batch_id,
         "target_mode": "churning_company",
         "opportunity_source": opportunity_source,
+        "anthropic_batch_jobs": batch_metrics["jobs"],
+        "anthropic_batch_items_submitted": batch_metrics["submitted_items"],
+        "anthropic_batch_cache_prefiltered": batch_metrics["cache_prefiltered_items"],
+        "anthropic_batch_fallback_single_call": batch_metrics["fallback_single_call_items"],
+        "anthropic_batch_completed_items": batch_metrics["completed_items"],
+        "anthropic_batch_failed_items": batch_metrics["failed_items"],
     }
 
 
@@ -1838,13 +2112,14 @@ async def _fetch_vendor_targets(pool, vendor_name: str | None = None) -> list[di
 
 def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, Any]:
     """Aggregate churn signals into a vendor-scoped intelligence summary."""
-    total = len(signals)
-    high_urgency = sum(1 for s in signals if _safe_float(s.get("urgency"), 0) >= 8)
-    medium_urgency = sum(1 for s in signals if 5 <= _safe_float(s.get("urgency"), 0) < 8)
+    ordered_signals = _campaign_stable_row_order(signals)
+    total = len(ordered_signals)
+    high_urgency = sum(1 for s in ordered_signals if _safe_float(s.get("urgency"), 0) >= 8)
+    medium_urgency = sum(1 for s in ordered_signals if 5 <= _safe_float(s.get("urgency"), 0) < 8)
 
     # Pain distribution
     pain_counts: dict[str, int] = {}
-    for s in signals:
+    for s in ordered_signals:
         pain = _parse_json_field(s.get("pain_json"))
         for p in pain:
             if isinstance(p, dict) and p.get("category"):
@@ -1852,7 +2127,7 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
 
     # Competitor distribution (who they're losing to)
     comp_counts: dict[str, int] = {}
-    for s in signals:
+    for s in ordered_signals:
         comps = s.get("competitors", [])
         for c in comps:
             if isinstance(c, dict) and c.get("name"):
@@ -1861,7 +2136,7 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
 
     # Feature gaps
     gap_counts: dict[str, int] = {}
-    for s in signals:
+    for s in ordered_signals:
         gaps = _parse_json_field(s.get("feature_gaps"))
         for g in gaps:
             label = g if isinstance(g, str) else (g.get("feature", "") if isinstance(g, dict) else "")
@@ -1870,7 +2145,7 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
 
     # Quotable phrases from enrichment
     quote_list: list[str] = []
-    for s in signals:
+    for s in ordered_signals:
         phrases = _parse_json_field(s.get("quotable_phrases"))
         for phrase in phrases:
             text = phrase if isinstance(phrase, str) else (
@@ -1889,17 +2164,17 @@ def _build_vendor_context(vendor_name: str, signals: list[dict]) -> dict[str, An
             "total_signals": total,
             "high_urgency_count": high_urgency,
             "medium_urgency_count": medium_urgency,
-            "pain_distribution": sorted(
-                [{"category": k, "count": v} for k, v in pain_counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )[:10],
-            "competitor_distribution": sorted(
-                [{"name": k, "count": v} for k, v in comp_counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )[:10],
-            "feature_gaps": sorted(
-                gap_counts.keys(), key=lambda k: gap_counts[k], reverse=True,
-            )[:10],
+            "pain_distribution": _campaign_sorted_count_rows(
+                pain_counts,
+                field_name="category",
+                limit=10,
+            ),
+            "competitor_distribution": _campaign_sorted_count_rows(
+                comp_counts,
+                field_name="name",
+                limit=10,
+            ),
+            "feature_gaps": _campaign_sorted_count_keys(gap_counts, limit=10),
             "timeline_signals": timeline_count,
             "trend_vs_last_month": None,  # overridden by caller with _compute_vendor_trend()
         },
@@ -1991,6 +2266,7 @@ async def _generate_vendor_campaigns(
     company_filter: str | None = None,
     bypass_briefing_gate: bool = False,
     bypass_recent_dedup: bool = False,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Generate campaigns targeting vendor CS/Product leaders with churn intelligence."""
     cfg = settings.b2b_campaign
@@ -2028,7 +2304,18 @@ async def _generate_vendor_campaigns(
     generated = 0
     failed = 0
     skipped = 0
+    deferred = 0
+    deferred = 0
     sequences_created = 0
+    batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
+    phase_one_entries: list[dict[str, Any]] = []
 
     for target in targets[:limit]:
         vendor_name = target["company_name"]
@@ -2182,175 +2469,365 @@ async def _generate_vendor_campaigns(
         )
         # Gate URL for vendor-specific report (instead of generic booking page)
         vendor_gate_url = build_gate_url(vendor_name)
-
-        cold_email_content: dict[str, str] | None = None
-        for channel in ["email_cold", "email_followup"]:
-            payload = {
-                **vendor_ctx,
-                "contact_name": _sanitize_contact_name(target.get("contact_name")),
-                "contact_role": target.get("contact_role"),
-                "tier": target.get("tier", "report"),
-                "selling": _build_selling_context(
-                    sender_name=cfg.default_sender_name,
-                    sender_title=cfg.default_sender_title,
-                    sender_company=cfg.default_sender_company,
-                    booking_url=vendor_gate_url,
-                    blog_posts=vendor_blog_urls,
-                ),
-                "channel": channel,
-                "target_mode": "vendor_retention",
-            }
-            artifact_id = _campaign_artifact_key(
-                company_name=vendor_name,
-                batch_id=batch_id,
-                channel=channel,
-            )
-            if channel == "email_followup" and cold_email_content:
-                payload["cold_email_context"] = cold_email_content
-
-            content = await _generate_content(
-                llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
-            )
-
-            if content:
-                if channel == "email_cold":
-                    cold_email_content = {
-                        "subject": content.get("subject", ""),
-                        "body": content.get("body", ""),
-                    }
-                metadata = _campaign_storage_metadata(payload)
-                generation_audit = (
-                    payload.get("_generation_audit")
-                    if isinstance(payload.get("_generation_audit"), dict)
-                    else {}
-                )
-                specificity = (
-                    generation_audit.get("specificity")
-                    if isinstance(generation_audit.get("specificity"), dict)
-                    else {}
-                )
-                try:
-                    await pool.execute(
-                        """
-                        INSERT INTO b2b_campaigns (
-                            company_name, vendor_name, product_category,
-                            opportunity_score, urgency_score, pain_categories,
-                            competitors_considering, seat_count, contract_end,
-                            decision_timeline, buying_stage, role_type,
-                            key_quotes, source_review_ids,
-                            channel, subject, body, cta,
-                            status, batch_id, llm_model, industry, target_mode, metadata,
-                            recipient_email, score_components
-                        ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                            $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23, $24::jsonb,
-                            $25, $26::jsonb
-                        )
-                        """,
-                        vendor_name,  # company_name = the vendor we're targeting
-                        vendor_name,  # vendor_name = same (they're the vendor)
-                        best.get("product_category"),
-                        best["opportunity_score"],
-                        best.get("urgency"),
-                        json.dumps(vendor_ctx["signal_summary"]["pain_distribution"]),
-                        json.dumps(vendor_ctx["signal_summary"]["competitor_distribution"]),
-                        best.get("seat_count"),
-                        best.get("contract_end"),
-                        best.get("decision_timeline"),
-                        best.get("buying_stage"),
-                        _map_role_type(target.get("contact_role")),
-                        json.dumps(vendor_ctx.get("key_quotes", [])),
-                        review_ids[:20] or None,
-                        channel,
-                        content.get("subject", ""),
-                        content.get("body", ""),
-                        content.get("cta", ""),
-                        "draft",
-                        batch_id,
-                        llm_model_name,
-                        best.get("industry"),
-                        "vendor_retention",
-                        json.dumps(metadata, default=str),
-                        target.get("contact_email"),
-                        json.dumps(best.get("score_components")),
-                    )
-                    await record_attempt(
-                        pool,
-                        artifact_type="campaign",
-                        artifact_id=artifact_id,
-                        attempt_no=1,
-                        stage="generation",
-                        status="succeeded",
-                        blocker_count=len(specificity.get("blocking_issues") or []),
-                        warning_count=len(specificity.get("warnings") or []),
-                        warnings=list(specificity.get("warnings") or []),
-                    )
-                    generated += 1
-                except Exception:
-                    logger.exception("Failed to store vendor campaign for %s/%s", vendor_name, channel)
-                    await record_attempt(
-                        pool,
-                        artifact_type="campaign",
-                        artifact_id=artifact_id,
-                        attempt_no=1,
-                        stage="storage",
-                        status="failed",
-                        blocker_count=len(specificity.get("blocking_issues") or []),
-                        warning_count=len(specificity.get("warnings") or []),
-                        blocking_issues=list(specificity.get("blocking_issues") or []),
-                        warnings=list(specificity.get("warnings") or []),
-                        failure_step="storage",
-                        error_message="campaign_storage_failed",
-                    )
-                    failed += 1
-            else:
-                await _record_campaign_generation_failure(
-                    pool,
-                    artifact_id=artifact_id,
-                    company_name=vendor_name,
-                    channel=channel,
-                    generation_audit=payload.get("_generation_audit"),
-                )
-                failed += 1
-
-        # Create campaign sequence for the cold email (if sequences enabled)
-        if cold_email_content and settings.campaign_sequence.enabled:
-            try:
-                seq_context = {
+        selling_context = _build_selling_context(
+            sender_name=cfg.default_sender_name,
+            sender_title=cfg.default_sender_title,
+            sender_company=cfg.default_sender_company,
+            booking_url=vendor_gate_url,
+            blog_posts=vendor_blog_urls,
+        )
+        cold_payload = {
+            **vendor_ctx,
+            "contact_name": _sanitize_contact_name(target.get("contact_name")),
+            "contact_role": target.get("contact_role"),
+            "tier": target.get("tier", "report"),
+            "selling": selling_context,
+            "channel": "email_cold",
+            "target_mode": "vendor_retention",
+        }
+        cold_artifact_id = _campaign_artifact_key(
+            company_name=vendor_name,
+            batch_id=batch_id,
+            channel="email_cold",
+        )
+        phase_one_entries.append(
+            {
+                "custom_id": cold_artifact_id,
+                "artifact_id": cold_artifact_id,
+                "campaign_batch_id": batch_id,
+                "phase": "cold",
+                "payload": cold_payload,
+                "channel": "email_cold",
+                "company_name": vendor_name,
+                "best": best,
+                "vendor_ctx": vendor_ctx,
+                "review_ids": review_ids[:20] or None,
+                "target": target,
+                "followup_payload": {
+                    **vendor_ctx,
+                    "contact_name": _sanitize_contact_name(target.get("contact_name")),
+                    "contact_role": target.get("contact_role"),
+                    "tier": target.get("tier", "report"),
+                    "selling": selling_context,
+                    "channel": "email_followup",
+                    "target_mode": "vendor_retention",
+                },
+                "sequence_context": {
                     **vendor_ctx,
                     "contact_name": _sanitize_contact_name(target.get("contact_name")),
                     "contact_role": target.get("contact_role"),
                     "tier": target.get("tier", "report"),
                     "recipient_type": "vendor_retention",
-                    "selling": _build_selling_context(
-                        sender_name=cfg.default_sender_name,
-                        sender_title=cfg.default_sender_title,
-                        sender_company=cfg.default_sender_company,
-                        booking_url=vendor_gate_url,
-                        blog_posts=vendor_blog_urls,
-                    ),
-                }
-                seq_id = await _create_sequence_for_cold_email(
+                    "selling": selling_context,
+                },
+                "max_tokens": cfg.max_tokens,
+                "temperature": cfg.temperature,
+                "trace_metadata": _campaign_trace_metadata(
+                    cold_payload,
+                    run_id=run_id,
+                    stage_id="b2b_campaign_generation.content",
+                ),
+            }
+        )
+
+    phase_one_results, phase_one_batch = await _run_campaign_batch(
+        llm,
+        skill.content,
+        phase_one_entries,
+        run_id=run_id,
+    )
+    _merge_batch_metrics(batch_metrics, phase_one_batch)
+
+    followup_entries: list[dict[str, Any]] = []
+    for entry in phase_one_entries:
+        vendor_name = entry["company_name"]
+        payload = entry["payload"]
+        artifact_id = entry["artifact_id"]
+        content = phase_one_results.get(entry["custom_id"])
+        if _is_deferred_campaign_content(content):
+            await record_attempt(
+                pool,
+                artifact_type="campaign",
+                artifact_id=artifact_id,
+                attempt_no=1,
+                stage="generation",
+                status="queued",
+            )
+            deferred += 1
+            continue
+        if content:
+            metadata = _campaign_storage_metadata(payload)
+            generation_audit = (
+                payload.get("_generation_audit")
+                if isinstance(payload.get("_generation_audit"), dict)
+                else {}
+            )
+            specificity = (
+                generation_audit.get("specificity")
+                if isinstance(generation_audit.get("specificity"), dict)
+                else {}
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_campaigns (
+                        company_name, vendor_name, product_category,
+                        opportunity_score, urgency_score, pain_categories,
+                        competitors_considering, seat_count, contract_end,
+                        decision_timeline, buying_stage, role_type,
+                        key_quotes, source_review_ids,
+                        channel, subject, body, cta,
+                        status, batch_id, llm_model, industry, target_mode, metadata,
+                        recipient_email, score_components
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18,
+                        $19, $20, $21, $22, $23, $24::jsonb,
+                        $25, $26::jsonb
+                    )
+                    """,
+                    vendor_name,
+                    vendor_name,
+                    entry["best"].get("product_category"),
+                    entry["best"]["opportunity_score"],
+                    entry["best"].get("urgency"),
+                    json.dumps(entry["vendor_ctx"]["signal_summary"]["pain_distribution"]),
+                    json.dumps(entry["vendor_ctx"]["signal_summary"]["competitor_distribution"]),
+                    entry["best"].get("seat_count"),
+                    entry["best"].get("contract_end"),
+                    entry["best"].get("decision_timeline"),
+                    entry["best"].get("buying_stage"),
+                    _map_role_type(entry["target"].get("contact_role")),
+                    json.dumps(entry["vendor_ctx"].get("key_quotes", [])),
+                    entry["review_ids"],
+                    "email_cold",
+                    content.get("subject", ""),
+                    content.get("body", ""),
+                    content.get("cta", ""),
+                    "draft",
+                    batch_id,
+                    llm_model_name,
+                    entry["best"].get("industry"),
+                    "vendor_retention",
+                    json.dumps(metadata, default=str),
+                    entry["target"].get("contact_email"),
+                    json.dumps(entry["best"].get("score_components")),
+                )
+                await record_attempt(
                     pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="succeeded",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                )
+                generated += 1
+                cold_email_content = {
+                    "subject": content.get("subject", ""),
+                    "body": content.get("body", ""),
+                }
+                if settings.campaign_sequence.enabled:
+                    try:
+                        seq_id = await _create_sequence_for_cold_email(
+                            pool,
+                            company_name=vendor_name,
+                            batch_id=batch_id,
+                            partner_id=None,
+                            context=entry["sequence_context"],
+                            cold_email_subject=cold_email_content.get("subject", ""),
+                            cold_email_body=cold_email_content.get("body", ""),
+                        )
+                        if seq_id:
+                            sequences_created += 1
+                            contact_email = entry["target"].get("contact_email")
+                            if contact_email:
+                                await pool.execute(
+                                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                                    contact_email,
+                                    seq_id,
+                                )
+                    except Exception as exc:
+                        logger.warning("Failed to create vendor sequence for %s: %s", vendor_name, exc)
+
+                followup_payload = dict(entry["followup_payload"])
+                followup_payload["cold_email_context"] = cold_email_content
+                followup_artifact_id = _campaign_artifact_key(
                     company_name=vendor_name,
                     batch_id=batch_id,
-                    partner_id=None,
-                    context=seq_context,
-                    cold_email_subject=cold_email_content.get("subject", ""),
-                    cold_email_body=cold_email_content.get("body", ""),
+                    channel="email_followup",
                 )
-                if seq_id:
-                    sequences_created += 1
-                    # Set recipient from target contact_email (more reliable than CRM lookup)
-                    contact_email = target.get("contact_email")
-                    if contact_email:
-                        await pool.execute(
-                            "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                            contact_email, seq_id,
-                        )
-            except Exception as exc:
-                logger.warning("Failed to create vendor sequence for %s: %s", vendor_name, exc)
+                followup_entries.append(
+                    {
+                        "custom_id": followup_artifact_id,
+                        "artifact_id": followup_artifact_id,
+                        "campaign_batch_id": batch_id,
+                        "phase": "followup",
+                        "payload": followup_payload,
+                        "channel": "email_followup",
+                        "company_name": vendor_name,
+                        "best": entry["best"],
+                        "vendor_ctx": entry["vendor_ctx"],
+                        "review_ids": entry["review_ids"],
+                        "target": entry["target"],
+                        "max_tokens": cfg.max_tokens,
+                        "temperature": cfg.temperature,
+                        "trace_metadata": _campaign_trace_metadata(
+                            followup_payload,
+                            run_id=run_id,
+                            stage_id="b2b_campaign_generation.content",
+                        ),
+                    }
+                )
+            except Exception:
+                logger.exception("Failed to store vendor campaign for %s/%s", vendor_name, "email_cold")
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="storage",
+                    status="failed",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    blocking_issues=list(specificity.get("blocking_issues") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                    failure_step="storage",
+                    error_message="campaign_storage_failed",
+                )
+                failed += 1
+        else:
+            await _record_campaign_generation_failure(
+                pool,
+                artifact_id=artifact_id,
+                company_name=vendor_name,
+                channel="email_cold",
+                generation_audit=payload.get("_generation_audit"),
+            )
+            failed += 1
+
+    followup_results, phase_two_batch = await _run_campaign_batch(
+        llm,
+        skill.content,
+        followup_entries,
+        run_id=run_id,
+    )
+    _merge_batch_metrics(batch_metrics, phase_two_batch)
+
+    for entry in followup_entries:
+        vendor_name = entry["company_name"]
+        payload = entry["payload"]
+        artifact_id = entry["artifact_id"]
+        content = followup_results.get(entry["custom_id"])
+        if _is_deferred_campaign_content(content):
+            await record_attempt(
+                pool,
+                artifact_type="campaign",
+                artifact_id=artifact_id,
+                attempt_no=1,
+                stage="generation",
+                status="queued",
+            )
+            deferred += 1
+            continue
+        if content:
+            metadata = _campaign_storage_metadata(payload)
+            generation_audit = (
+                payload.get("_generation_audit")
+                if isinstance(payload.get("_generation_audit"), dict)
+                else {}
+            )
+            specificity = (
+                generation_audit.get("specificity")
+                if isinstance(generation_audit.get("specificity"), dict)
+                else {}
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_campaigns (
+                        company_name, vendor_name, product_category,
+                        opportunity_score, urgency_score, pain_categories,
+                        competitors_considering, seat_count, contract_end,
+                        decision_timeline, buying_stage, role_type,
+                        key_quotes, source_review_ids,
+                        channel, subject, body, cta,
+                        status, batch_id, llm_model, industry, target_mode, metadata,
+                        recipient_email, score_components
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18,
+                        $19, $20, $21, $22, $23, $24::jsonb,
+                        $25, $26::jsonb
+                    )
+                    """,
+                    vendor_name,
+                    vendor_name,
+                    entry["best"].get("product_category"),
+                    entry["best"]["opportunity_score"],
+                    entry["best"].get("urgency"),
+                    json.dumps(entry["vendor_ctx"]["signal_summary"]["pain_distribution"]),
+                    json.dumps(entry["vendor_ctx"]["signal_summary"]["competitor_distribution"]),
+                    entry["best"].get("seat_count"),
+                    entry["best"].get("contract_end"),
+                    entry["best"].get("decision_timeline"),
+                    entry["best"].get("buying_stage"),
+                    _map_role_type(entry["target"].get("contact_role")),
+                    json.dumps(entry["vendor_ctx"].get("key_quotes", [])),
+                    entry["review_ids"],
+                    "email_followup",
+                    content.get("subject", ""),
+                    content.get("body", ""),
+                    content.get("cta", ""),
+                    "draft",
+                    batch_id,
+                    llm_model_name,
+                    entry["best"].get("industry"),
+                    "vendor_retention",
+                    json.dumps(metadata, default=str),
+                    entry["target"].get("contact_email"),
+                    json.dumps(entry["best"].get("score_components")),
+                )
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="succeeded",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                )
+                generated += 1
+            except Exception:
+                logger.exception("Failed to store vendor campaign for %s/%s", vendor_name, "email_followup")
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="storage",
+                    status="failed",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    blocking_issues=list(specificity.get("blocking_issues") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                    failure_step="storage",
+                    error_message="campaign_storage_failed",
+                )
+                failed += 1
+        else:
+            await _record_campaign_generation_failure(
+                pool,
+                artifact_id=artifact_id,
+                company_name=vendor_name,
+                channel="email_followup",
+                generation_audit=payload.get("_generation_audit"),
+            )
+            failed += 1
 
     logger.info(
         "Campaign generation (vendor_retention): %d generated, %d failed, %d skipped, %d sequences from %d targets",
@@ -2360,11 +2837,18 @@ async def _generate_vendor_campaigns(
     return {
         "generated": generated,
         "failed": failed,
+        "deferred": deferred,
         "skipped": skipped,
         "sequences_created": sequences_created,
         "companies": len(targets) - skipped,
         "batch_id": batch_id,
         "target_mode": "vendor_retention",
+        "anthropic_batch_jobs": batch_metrics["jobs"],
+        "anthropic_batch_items_submitted": batch_metrics["submitted_items"],
+        "anthropic_batch_cache_prefiltered": batch_metrics["cache_prefiltered_items"],
+        "anthropic_batch_fallback_single_call": batch_metrics["fallback_single_call_items"],
+        "anthropic_batch_completed_items": batch_metrics["completed_items"],
+        "anthropic_batch_failed_items": batch_metrics["failed_items"],
     }
 
 
@@ -2406,19 +2890,21 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
 
     # Buying stage distribution
     by_stage: dict[str, int] = {}
-    for s in signals:
+    ordered_signals = _campaign_stable_row_order(signals)
+
+    for s in ordered_signals:
         stage = s.get("buying_stage") or "unknown"
         by_stage[stage] = by_stage.get(stage, 0) + 1
 
     # Role distribution
     role_counts: dict[str, int] = {}
-    for s in signals:
+    for s in ordered_signals:
         role = s.get("role_type") or "unknown"
         role_counts[role] = role_counts.get(role, 0) + 1
 
     # Pain categories driving the switch (from incumbent)
     pain_counts: dict[str, int] = {}
-    for s in signals:
+    for s in ordered_signals:
         pain = _parse_json_field(s.get("pain_json"))
         for p in pain:
             if isinstance(p, dict) and p.get("category"):
@@ -2426,19 +2912,19 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
 
     # Incumbents losing customers
     incumbent_counts: dict[str, int] = {}
-    for s in signals:
+    for s in ordered_signals:
         vendor = s.get("vendor_name", "")
         if vendor:
             incumbent_counts[vendor] = incumbent_counts.get(vendor, 0) + 1
 
     # Seat count buckets
-    large = sum(1 for s in signals if (s.get("seat_count") or 0) >= 500)
-    mid = sum(1 for s in signals if 100 <= (s.get("seat_count") or 0) < 500)
-    small = sum(1 for s in signals if 0 < (s.get("seat_count") or 0) < 100)
+    large = sum(1 for s in ordered_signals if (s.get("seat_count") or 0) >= 500)
+    mid = sum(1 for s in ordered_signals if 100 <= (s.get("seat_count") or 0) < 500)
+    small = sum(1 for s in ordered_signals if 0 < (s.get("seat_count") or 0) < 100)
 
     # Feature mentions (positive mentions of challenger from competitor context)
     feature_mentions: list[str] = []
-    for s in signals:
+    for s in ordered_signals:
         comps = s.get("competitors", [])
         for c in comps:
             if isinstance(c, dict) and c.get("name", "").lower() == challenger_name.lower():
@@ -2448,7 +2934,7 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
 
     # Quotable phrases from enrichment
     quote_list: list[str] = []
-    for s in signals:
+    for s in ordered_signals:
         phrases = _parse_json_field(s.get("quotable_phrases"))
         for phrase in phrases:
             text = phrase if isinstance(phrase, str) else (
@@ -2467,18 +2953,21 @@ def _build_challenger_context(challenger_name: str, signals: list[dict]) -> dict
                 "evaluation": by_stage.get("evaluation", 0),
                 "renewal_decision": by_stage.get("renewal_decision", 0),
             },
-            "role_distribution": sorted(
-                [{"role": k, "count": v} for k, v in role_counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )[:5],
-            "pain_driving_switch": sorted(
-                [{"category": k, "count": v} for k, v in pain_counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )[:10],
-            "incumbents_losing": sorted(
-                [{"name": k, "count": v} for k, v in incumbent_counts.items()],
-                key=lambda x: x["count"], reverse=True,
-            )[:10],
+            "role_distribution": _campaign_sorted_count_rows(
+                role_counts,
+                field_name="role",
+                limit=5,
+            ),
+            "pain_driving_switch": _campaign_sorted_count_rows(
+                pain_counts,
+                field_name="category",
+                limit=10,
+            ),
+            "incumbents_losing": _campaign_sorted_count_rows(
+                incumbent_counts,
+                field_name="name",
+                limit=10,
+            ),
             "seat_count_signals": {
                 "large_500plus": large,
                 "mid_100_499": mid,
@@ -2497,6 +2986,7 @@ async def _generate_challenger_campaigns(
     company_filter: str | None = None,
     bypass_briefing_gate: bool = False,
     bypass_recent_dedup: bool = False,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Generate campaigns targeting challenger Sales/Competitive Intel leaders."""
     cfg = settings.b2b_campaign
@@ -2535,6 +3025,15 @@ async def _generate_challenger_campaigns(
     failed = 0
     skipped = 0
     sequences_created = 0
+    batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
+    phase_one_entries: list[dict[str, Any]] = []
 
     for target in targets[:limit]:
         challenger_name = target["company_name"]
@@ -2664,174 +3163,365 @@ async def _generate_challenger_campaigns(
         )
         # Gate URL for challenger-specific report
         challenger_gate_url = build_gate_url(challenger_name)
-
-        cold_email_content: dict[str, str] | None = None
-        for channel in ["email_cold", "email_followup"]:
-            payload = {
-                **challenger_ctx,
-                "contact_name": _sanitize_contact_name(target.get("contact_name")),
-                "contact_role": target.get("contact_role"),
-                "tier": target.get("tier", "report"),
-                "selling": _build_selling_context(
-                    sender_name=cfg.default_sender_name,
-                    sender_title=cfg.default_sender_title,
-                    sender_company=cfg.default_sender_company,
-                    booking_url=challenger_gate_url,
-                    blog_posts=challenger_blog_urls,
-                ),
-                "channel": channel,
-                "target_mode": "challenger_intel",
-            }
-            artifact_id = _campaign_artifact_key(
-                company_name=challenger_name,
-                batch_id=batch_id,
-                channel=channel,
-            )
-            if channel == "email_followup" and cold_email_content:
-                payload["cold_email_context"] = cold_email_content
-
-            content = await _generate_content(
-                llm, skill.content, payload, cfg.max_tokens, cfg.temperature,
-            )
-
-            if content:
-                if channel == "email_cold":
-                    cold_email_content = {
-                        "subject": content.get("subject", ""),
-                        "body": content.get("body", ""),
-                    }
-                metadata = _campaign_storage_metadata(payload)
-                generation_audit = (
-                    payload.get("_generation_audit")
-                    if isinstance(payload.get("_generation_audit"), dict)
-                    else {}
-                )
-                specificity = (
-                    generation_audit.get("specificity")
-                    if isinstance(generation_audit.get("specificity"), dict)
-                    else {}
-                )
-                try:
-                    await pool.execute(
-                        """
-                        INSERT INTO b2b_campaigns (
-                            company_name, vendor_name, product_category,
-                            opportunity_score, urgency_score, pain_categories,
-                            competitors_considering, seat_count, contract_end,
-                            decision_timeline, buying_stage, role_type,
-                            key_quotes, source_review_ids,
-                            channel, subject, body, cta,
-                            status, batch_id, llm_model, industry, target_mode, metadata,
-                            recipient_email, score_components
-                        ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                            $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20, $21, $22, $23, $24::jsonb,
-                            $25, $26::jsonb
-                        )
-                        """,
-                        challenger_name,  # company_name = the challenger we're targeting
-                        best["vendor_name"],  # vendor_name = the incumbent losing
-                        best.get("product_category"),
-                        best["opportunity_score"],
-                        best.get("urgency"),
-                        json.dumps(challenger_ctx["signal_summary"]["pain_driving_switch"]),
-                        json.dumps(challenger_ctx["signal_summary"]["incumbents_losing"]),
-                        best.get("seat_count"),
-                        best.get("contract_end"),
-                        best.get("decision_timeline"),
-                        best.get("buying_stage"),
-                        _map_role_type(target.get("contact_role")),
-                        json.dumps(challenger_ctx.get("key_quotes", [])),
-                        review_ids[:20] or None,
-                        channel,
-                        content.get("subject", ""),
-                        content.get("body", ""),
-                        content.get("cta", ""),
-                        "draft",
-                        batch_id,
-                        llm_model_name,
-                        best.get("industry"),
-                        "challenger_intel",
-                        json.dumps(metadata, default=str),
-                        target.get("contact_email"),
-                        json.dumps(best.get("score_components")),
-                    )
-                    await record_attempt(
-                        pool,
-                        artifact_type="campaign",
-                        artifact_id=artifact_id,
-                        attempt_no=1,
-                        stage="generation",
-                        status="succeeded",
-                        blocker_count=len(specificity.get("blocking_issues") or []),
-                        warning_count=len(specificity.get("warnings") or []),
-                        warnings=list(specificity.get("warnings") or []),
-                    )
-                    generated += 1
-                except Exception:
-                    logger.exception("Failed to store challenger campaign for %s/%s", challenger_name, channel)
-                    await record_attempt(
-                        pool,
-                        artifact_type="campaign",
-                        artifact_id=artifact_id,
-                        attempt_no=1,
-                        stage="storage",
-                        status="failed",
-                        blocker_count=len(specificity.get("blocking_issues") or []),
-                        warning_count=len(specificity.get("warnings") or []),
-                        blocking_issues=list(specificity.get("blocking_issues") or []),
-                        warnings=list(specificity.get("warnings") or []),
-                        failure_step="storage",
-                        error_message="campaign_storage_failed",
-                    )
-                    failed += 1
-            else:
-                await _record_campaign_generation_failure(
-                    pool,
-                    artifact_id=artifact_id,
-                    company_name=challenger_name,
-                    channel=channel,
-                    generation_audit=payload.get("_generation_audit"),
-                )
-                failed += 1
-
-        # Create campaign sequence for the cold email (if sequences enabled)
-        if cold_email_content and settings.campaign_sequence.enabled:
-            try:
-                seq_context = {
+        selling_context = _build_selling_context(
+            sender_name=cfg.default_sender_name,
+            sender_title=cfg.default_sender_title,
+            sender_company=cfg.default_sender_company,
+            booking_url=challenger_gate_url,
+            blog_posts=challenger_blog_urls,
+        )
+        cold_payload = {
+            **challenger_ctx,
+            "contact_name": _sanitize_contact_name(target.get("contact_name")),
+            "contact_role": target.get("contact_role"),
+            "tier": target.get("tier", "report"),
+            "selling": selling_context,
+            "channel": "email_cold",
+            "target_mode": "challenger_intel",
+        }
+        cold_artifact_id = _campaign_artifact_key(
+            company_name=challenger_name,
+            batch_id=batch_id,
+            channel="email_cold",
+        )
+        phase_one_entries.append(
+            {
+                "custom_id": cold_artifact_id,
+                "artifact_id": cold_artifact_id,
+                "campaign_batch_id": batch_id,
+                "phase": "cold",
+                "payload": cold_payload,
+                "channel": "email_cold",
+                "company_name": challenger_name,
+                "best": best,
+                "challenger_ctx": challenger_ctx,
+                "review_ids": review_ids[:20] or None,
+                "target": target,
+                "followup_payload": {
+                    **challenger_ctx,
+                    "contact_name": _sanitize_contact_name(target.get("contact_name")),
+                    "contact_role": target.get("contact_role"),
+                    "tier": target.get("tier", "report"),
+                    "selling": selling_context,
+                    "channel": "email_followup",
+                    "target_mode": "challenger_intel",
+                },
+                "sequence_context": {
                     **challenger_ctx,
                     "contact_name": _sanitize_contact_name(target.get("contact_name")),
                     "contact_role": target.get("contact_role"),
                     "tier": target.get("tier", "report"),
                     "recipient_type": "challenger_intel",
-                    "selling": _build_selling_context(
-                        sender_name=cfg.default_sender_name,
-                        sender_title=cfg.default_sender_title,
-                        sender_company=cfg.default_sender_company,
-                        booking_url=challenger_gate_url,
-                        blog_posts=challenger_blog_urls,
-                    ),
-                }
-                seq_id = await _create_sequence_for_cold_email(
+                    "selling": selling_context,
+                },
+                "max_tokens": cfg.max_tokens,
+                "temperature": cfg.temperature,
+                "trace_metadata": _campaign_trace_metadata(
+                    cold_payload,
+                    run_id=run_id,
+                    stage_id="b2b_campaign_generation.content",
+                ),
+            }
+        )
+
+    phase_one_results, phase_one_batch = await _run_campaign_batch(
+        llm,
+        skill.content,
+        phase_one_entries,
+        run_id=run_id,
+    )
+    _merge_batch_metrics(batch_metrics, phase_one_batch)
+
+    followup_entries: list[dict[str, Any]] = []
+    for entry in phase_one_entries:
+        challenger_name = entry["company_name"]
+        payload = entry["payload"]
+        artifact_id = entry["artifact_id"]
+        content = phase_one_results.get(entry["custom_id"])
+        if _is_deferred_campaign_content(content):
+            await record_attempt(
+                pool,
+                artifact_type="campaign",
+                artifact_id=artifact_id,
+                attempt_no=1,
+                stage="generation",
+                status="queued",
+            )
+            deferred += 1
+            continue
+        if content:
+            metadata = _campaign_storage_metadata(payload)
+            generation_audit = (
+                payload.get("_generation_audit")
+                if isinstance(payload.get("_generation_audit"), dict)
+                else {}
+            )
+            specificity = (
+                generation_audit.get("specificity")
+                if isinstance(generation_audit.get("specificity"), dict)
+                else {}
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_campaigns (
+                        company_name, vendor_name, product_category,
+                        opportunity_score, urgency_score, pain_categories,
+                        competitors_considering, seat_count, contract_end,
+                        decision_timeline, buying_stage, role_type,
+                        key_quotes, source_review_ids,
+                        channel, subject, body, cta,
+                        status, batch_id, llm_model, industry, target_mode, metadata,
+                        recipient_email, score_components
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18,
+                        $19, $20, $21, $22, $23, $24::jsonb,
+                        $25, $26::jsonb
+                    )
+                    """,
+                    challenger_name,
+                    entry["best"]["vendor_name"],
+                    entry["best"].get("product_category"),
+                    entry["best"]["opportunity_score"],
+                    entry["best"].get("urgency"),
+                    json.dumps(entry["challenger_ctx"]["signal_summary"]["pain_driving_switch"]),
+                    json.dumps(entry["challenger_ctx"]["signal_summary"]["incumbents_losing"]),
+                    entry["best"].get("seat_count"),
+                    entry["best"].get("contract_end"),
+                    entry["best"].get("decision_timeline"),
+                    entry["best"].get("buying_stage"),
+                    _map_role_type(entry["target"].get("contact_role")),
+                    json.dumps(entry["challenger_ctx"].get("key_quotes", [])),
+                    entry["review_ids"],
+                    "email_cold",
+                    content.get("subject", ""),
+                    content.get("body", ""),
+                    content.get("cta", ""),
+                    "draft",
+                    batch_id,
+                    llm_model_name,
+                    entry["best"].get("industry"),
+                    "challenger_intel",
+                    json.dumps(metadata, default=str),
+                    entry["target"].get("contact_email"),
+                    json.dumps(entry["best"].get("score_components")),
+                )
+                await record_attempt(
                     pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="succeeded",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                )
+                generated += 1
+                cold_email_content = {
+                    "subject": content.get("subject", ""),
+                    "body": content.get("body", ""),
+                }
+                if settings.campaign_sequence.enabled:
+                    try:
+                        seq_id = await _create_sequence_for_cold_email(
+                            pool,
+                            company_name=challenger_name,
+                            batch_id=batch_id,
+                            partner_id=None,
+                            context=entry["sequence_context"],
+                            cold_email_subject=cold_email_content.get("subject", ""),
+                            cold_email_body=cold_email_content.get("body", ""),
+                        )
+                        if seq_id:
+                            sequences_created += 1
+                            contact_email = entry["target"].get("contact_email")
+                            if contact_email:
+                                await pool.execute(
+                                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                                    contact_email,
+                                    seq_id,
+                                )
+                    except Exception as exc:
+                        logger.warning("Failed to create challenger sequence for %s: %s", challenger_name, exc)
+
+                followup_payload = dict(entry["followup_payload"])
+                followup_payload["cold_email_context"] = cold_email_content
+                followup_artifact_id = _campaign_artifact_key(
                     company_name=challenger_name,
                     batch_id=batch_id,
-                    partner_id=None,
-                    context=seq_context,
-                    cold_email_subject=cold_email_content.get("subject", ""),
-                    cold_email_body=cold_email_content.get("body", ""),
+                    channel="email_followup",
                 )
-                if seq_id:
-                    sequences_created += 1
-                    contact_email = target.get("contact_email")
-                    if contact_email:
-                        await pool.execute(
-                            "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
-                            contact_email, seq_id,
-                        )
-            except Exception as exc:
-                logger.warning("Failed to create challenger sequence for %s: %s", challenger_name, exc)
+                followup_entries.append(
+                    {
+                        "custom_id": followup_artifact_id,
+                        "artifact_id": followup_artifact_id,
+                        "campaign_batch_id": batch_id,
+                        "phase": "followup",
+                        "payload": followup_payload,
+                        "channel": "email_followup",
+                        "company_name": challenger_name,
+                        "best": entry["best"],
+                        "challenger_ctx": entry["challenger_ctx"],
+                        "review_ids": entry["review_ids"],
+                        "target": entry["target"],
+                        "max_tokens": cfg.max_tokens,
+                        "temperature": cfg.temperature,
+                        "trace_metadata": _campaign_trace_metadata(
+                            followup_payload,
+                            run_id=run_id,
+                            stage_id="b2b_campaign_generation.content",
+                        ),
+                    }
+                )
+            except Exception:
+                logger.exception("Failed to store challenger campaign for %s/%s", challenger_name, "email_cold")
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="storage",
+                    status="failed",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    blocking_issues=list(specificity.get("blocking_issues") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                    failure_step="storage",
+                    error_message="campaign_storage_failed",
+                )
+                failed += 1
+        else:
+            await _record_campaign_generation_failure(
+                pool,
+                artifact_id=artifact_id,
+                company_name=challenger_name,
+                channel="email_cold",
+                generation_audit=payload.get("_generation_audit"),
+            )
+            failed += 1
+
+    followup_results, phase_two_batch = await _run_campaign_batch(
+        llm,
+        skill.content,
+        followup_entries,
+        run_id=run_id,
+    )
+    _merge_batch_metrics(batch_metrics, phase_two_batch)
+
+    for entry in followup_entries:
+        challenger_name = entry["company_name"]
+        payload = entry["payload"]
+        artifact_id = entry["artifact_id"]
+        content = followup_results.get(entry["custom_id"])
+        if _is_deferred_campaign_content(content):
+            await record_attempt(
+                pool,
+                artifact_type="campaign",
+                artifact_id=artifact_id,
+                attempt_no=1,
+                stage="generation",
+                status="queued",
+            )
+            deferred += 1
+            continue
+        if content:
+            metadata = _campaign_storage_metadata(payload)
+            generation_audit = (
+                payload.get("_generation_audit")
+                if isinstance(payload.get("_generation_audit"), dict)
+                else {}
+            )
+            specificity = (
+                generation_audit.get("specificity")
+                if isinstance(generation_audit.get("specificity"), dict)
+                else {}
+            )
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_campaigns (
+                        company_name, vendor_name, product_category,
+                        opportunity_score, urgency_score, pain_categories,
+                        competitors_considering, seat_count, contract_end,
+                        decision_timeline, buying_stage, role_type,
+                        key_quotes, source_review_ids,
+                        channel, subject, body, cta,
+                        status, batch_id, llm_model, industry, target_mode, metadata,
+                        recipient_email, score_components
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11, $12, $13, $14, $15, $16, $17, $18,
+                        $19, $20, $21, $22, $23, $24::jsonb,
+                        $25, $26::jsonb
+                    )
+                    """,
+                    challenger_name,
+                    entry["best"]["vendor_name"],
+                    entry["best"].get("product_category"),
+                    entry["best"]["opportunity_score"],
+                    entry["best"].get("urgency"),
+                    json.dumps(entry["challenger_ctx"]["signal_summary"]["pain_driving_switch"]),
+                    json.dumps(entry["challenger_ctx"]["signal_summary"]["incumbents_losing"]),
+                    entry["best"].get("seat_count"),
+                    entry["best"].get("contract_end"),
+                    entry["best"].get("decision_timeline"),
+                    entry["best"].get("buying_stage"),
+                    _map_role_type(entry["target"].get("contact_role")),
+                    json.dumps(entry["challenger_ctx"].get("key_quotes", [])),
+                    entry["review_ids"],
+                    "email_followup",
+                    content.get("subject", ""),
+                    content.get("body", ""),
+                    content.get("cta", ""),
+                    "draft",
+                    batch_id,
+                    llm_model_name,
+                    entry["best"].get("industry"),
+                    "challenger_intel",
+                    json.dumps(metadata, default=str),
+                    entry["target"].get("contact_email"),
+                    json.dumps(entry["best"].get("score_components")),
+                )
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="succeeded",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                )
+                generated += 1
+            except Exception:
+                logger.exception("Failed to store challenger campaign for %s/%s", challenger_name, "email_followup")
+                await record_attempt(
+                    pool,
+                    artifact_type="campaign",
+                    artifact_id=artifact_id,
+                    attempt_no=1,
+                    stage="storage",
+                    status="failed",
+                    blocker_count=len(specificity.get("blocking_issues") or []),
+                    warning_count=len(specificity.get("warnings") or []),
+                    blocking_issues=list(specificity.get("blocking_issues") or []),
+                    warnings=list(specificity.get("warnings") or []),
+                    failure_step="storage",
+                    error_message="campaign_storage_failed",
+                )
+                failed += 1
+        else:
+            await _record_campaign_generation_failure(
+                pool,
+                artifact_id=artifact_id,
+                company_name=challenger_name,
+                channel="email_followup",
+                generation_audit=payload.get("_generation_audit"),
+            )
+            failed += 1
 
     logger.info(
         "Campaign generation (challenger_intel): %d generated, %d failed, %d skipped, %d sequences from %d targets",
@@ -2841,11 +3531,18 @@ async def _generate_challenger_campaigns(
     return {
         "generated": generated,
         "failed": failed,
+        "deferred": deferred,
         "skipped": skipped,
         "sequences_created": sequences_created,
         "companies": len(targets) - skipped,
         "batch_id": batch_id,
         "target_mode": "challenger_intel",
+        "anthropic_batch_jobs": batch_metrics["jobs"],
+        "anthropic_batch_items_submitted": batch_metrics["submitted_items"],
+        "anthropic_batch_cache_prefiltered": batch_metrics["cache_prefiltered_items"],
+        "anthropic_batch_fallback_single_call": batch_metrics["fallback_single_call_items"],
+        "anthropic_batch_completed_items": batch_metrics["completed_items"],
+        "anthropic_batch_failed_items": batch_metrics["failed_items"],
     }
 
 
@@ -3249,18 +3946,25 @@ def _build_churning_company_anchor_context(
 
 def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
     """Build rich context dict for LLM from grouped opportunities."""
+    ordered_opps = _campaign_stable_row_order(all_opps)
     pain_cats: dict[str, str] = {}
     competitors_considering: list[dict] = []
     key_quotes: list[str] = []
     all_feature_gaps: list[str] = []
     all_integrations: list[str] = []
 
-    for opp in all_opps:
+    for opp in ordered_opps:
         # Pain categories
         pain = _parse_json_field(opp.get("pain_json"))
         for p in pain:
             if isinstance(p, dict) and p.get("category"):
-                pain_cats[p["category"]] = p.get("severity", "mentioned")
+                category = str(p.get("category") or "").strip()
+                if not category:
+                    continue
+                pain_cats[category] = _campaign_merge_pain_severity(
+                    pain_cats.get(category, ""),
+                    str(p.get("severity") or "mentioned"),
+                )
 
         # Competitors
         comps = opp.get("competitors", [])
@@ -3297,7 +4001,8 @@ def _build_company_context(best: dict, all_opps: list[dict]) -> dict[str, Any]:
         "churning_from": best["vendor_name"],
         "category": best.get("product_category", ""),
         "pain_categories": [
-            {"category": k, "severity": v} for k, v in pain_cats.items()
+            {"category": key, "severity": pain_cats[key]}
+            for key in sorted(pain_cats, key=lambda item: item.lower())
         ],
         "competitors_considering": competitors_considering[:5],
         "urgency": best.get("urgency", 0),
@@ -3479,68 +4184,94 @@ async def _call_llm(
     user_content: str,
     max_tokens: int,
     temperature: float,
+    *,
+    trace_span_name: str | None = None,
+    trace_metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """Low-level LLM call. Returns raw text or None."""
+    import asyncio
+    import time
+
+    from ...pipelines.llm import _trace_cache_metrics, trace_llm_call
     from ...services.protocols import Message
 
     messages = [
         Message(role="system", content=system_prompt),
         Message(role="user", content=user_content),
     ]
+    t0 = time.monotonic()
 
     try:
-        if hasattr(llm, "chat_async"):
-            text = (await llm.chat_async(
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                llm.chat,
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-            )).strip()
-        else:
-            import asyncio
-            result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    llm.chat,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                ),
-                timeout=float(settings.b2b_campaign.llm_timeout_seconds),
-            )
-            text = result.get("response", "").strip()
+            ),
+            timeout=float(settings.b2b_campaign.llm_timeout_seconds),
+        )
+        text = str(result.get("response", "") or "").strip()
+        usage = result.get("usage", {})
+        trace_meta = result.get("_trace_meta", {})
+        cached_tokens, cache_write_tokens, billable_input_tokens = _trace_cache_metrics(
+            usage if isinstance(usage, dict) else {},
+            trace_meta if isinstance(trace_meta, dict) else {},
+        )
+        trace_llm_call(
+            span_name=trace_span_name or "task.b2b_campaign_generation",
+            input_tokens=int((usage or {}).get("input_tokens") or 0),
+            output_tokens=int((usage or {}).get("output_tokens") or 0),
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+            billable_input_tokens=billable_input_tokens,
+            model=str(getattr(llm, "model", "") or getattr(llm, "model_id", "") or ""),
+            provider=str(getattr(llm, "name", "") or ""),
+            duration_ms=(time.monotonic() - t0) * 1000,
+            metadata=trace_metadata or {},
+            input_data={
+                "messages": [
+                    {"role": message.role, "content": message.content[:500]}
+                    for message in messages
+                ]
+            },
+            output_data={"response": text[:2000]} if text else None,
+            api_endpoint=(trace_meta or {}).get("api_endpoint"),
+            provider_request_id=(trace_meta or {}).get("provider_request_id"),
+            ttft_ms=(trace_meta or {}).get("ttft_ms"),
+            inference_time_ms=(trace_meta or {}).get("inference_time_ms"),
+            queue_time_ms=(trace_meta or {}).get("queue_time_ms"),
+        )
         return text or None
-    except Exception:
+    except Exception as exc:
+        trace_llm_call(
+            span_name=trace_span_name or "task.b2b_campaign_generation",
+            model=str(getattr(llm, "model", "") or getattr(llm, "model_id", "") or ""),
+            provider=str(getattr(llm, "name", "") or ""),
+            duration_ms=(time.monotonic() - t0) * 1000,
+            status="failed",
+            metadata=trace_metadata or {},
+            input_data={
+                "messages": [
+                    {"role": message.role, "content": message.content[:500]}
+                    for message in messages
+                ]
+            },
+            error_message=str(exc)[:500],
+            error_type=type(exc).__name__,
+        )
         logger.exception("Campaign generation LLM call failed")
         return None
 
 
-async def _generate_content(
-    llm,
-    system_prompt: str,
+def _prepare_campaign_request_payload(
     payload: dict[str, Any],
-    max_tokens: int,
-    temperature: float,
-) -> dict[str, Any] | None:
-    """Call LLM, validate output, retry once if word count exceeded."""
-    from ...pipelines.llm import clean_llm_output
-    from ...services.b2b.cache_runner import (
-        lookup_b2b_exact_stage_text,
-        prepare_b2b_exact_stage_request,
-        store_b2b_exact_stage_text,
-    )
-    from ...services.b2b.llm_exact_cache import llm_identity
-
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Mutate payload with specificity context and return the first-pass request body."""
     request_payload = payload
     working_payload = dict(payload)
-    channel = payload.get("channel", "")
-    tier = payload.get("tier", "")
-    target_mode = payload.get("target_mode")
-    last_wc = 0
-    last_min = 0
-    last_max = 0
-    retry_reasons: list[str] = []
+    channel = str(payload.get("channel") or "")
     specificity_context = _campaign_specificity_context(request_payload)
-    provider_name, model_name = llm_identity(llm)
-    cache_namespace = "b2b_campaign_generation.content"
     if specificity_context:
         request_payload["_campaign_specificity_context"] = specificity_context
         proof_terms = _campaign_specificity_terms(
@@ -3554,6 +4285,962 @@ async def _generate_content(
         if proof_terms:
             request_payload["campaign_proof_terms"] = proof_terms
             working_payload["campaign_proof_terms"] = proof_terms
+    return working_payload, specificity_context
+
+
+def _campaign_trace_metadata(
+    payload: dict[str, Any],
+    *,
+    run_id: str | None,
+    stage_id: str,
+) -> dict[str, Any]:
+    vendor_name = (
+        str(payload.get("vendor_name") or "").strip()
+        or str(payload.get("challenger_name") or "").strip()
+        or str(payload.get("company") or "").strip()
+        or str(payload.get("churning_from") or "").strip()
+    )
+    metadata: dict[str, Any] = {
+        "stage_id": stage_id,
+        "workflow": "b2b_campaign_generation",
+        "channel": str(payload.get("channel") or ""),
+        "target_mode": str(payload.get("target_mode") or ""),
+        "tier": str(payload.get("tier") or ""),
+    }
+    if vendor_name:
+        metadata["vendor_name"] = vendor_name
+    if run_id:
+        metadata["run_id"] = run_id
+    return metadata
+
+
+def _merge_batch_metrics(
+    target: dict[str, int],
+    delta: dict[str, int | str],
+) -> None:
+    for key in (
+        "jobs",
+        "submitted_items",
+        "cache_prefiltered_items",
+        "fallback_single_call_items",
+        "completed_items",
+        "failed_items",
+    ):
+        target[key] = int(target.get(key, 0)) + int(delta.get(key, 0) or 0)
+
+
+def _is_deferred_campaign_content(content: dict[str, Any] | None) -> bool:
+    return isinstance(content, dict) and bool(content.get("_deferred"))
+
+
+def _json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except Exception:
+        return value
+
+
+def _campaign_batch_request_metadata(entry: dict[str, Any]) -> dict[str, Any]:
+    payload = entry.get("payload") or {}
+    metadata: dict[str, Any] = {
+        "channel": payload.get("channel"),
+        "target_mode": payload.get("target_mode"),
+        "tier": payload.get("tier"),
+        "replay_handler": "campaign_generation",
+        "replay_entry": _json_safe(entry),
+    }
+    return metadata
+
+
+async def _run_campaign_batch(
+    llm,
+    system_prompt: str,
+    entries: list[dict[str, Any]],
+    *,
+    run_id: str | None,
+) -> tuple[dict[str, dict[str, Any] | None], dict[str, int | str]]:
+    """Run the first campaign attempt through Anthropic batching when eligible."""
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        submit_anthropic_message_batch,
+        run_anthropic_message_batch,
+    )
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+    )
+    from ...services.b2b.llm_exact_cache import llm_identity
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.protocols import Message
+    import inspect
+
+    async def _invoke_generate_content(
+        entry: dict[str, Any],
+        *,
+        first_attempt_text: str | None = None,
+    ) -> dict[str, Any] | None:
+        params = inspect.signature(_generate_content).parameters
+        supports_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in params.values()
+        )
+        kwargs: dict[str, Any] = {}
+        if first_attempt_text is not None and ("first_attempt_text" in params or supports_kwargs):
+            kwargs["first_attempt_text"] = first_attempt_text
+        if "trace_span_name" in params or supports_kwargs:
+            kwargs["trace_span_name"] = "task.b2b_campaign_generation"
+        if "trace_metadata" in params or supports_kwargs:
+            kwargs["trace_metadata"] = entry["trace_metadata"]
+        return await _generate_content(
+            llm,
+            system_prompt,
+            entry["payload"],
+            entry["max_tokens"],
+            entry["temperature"],
+            **kwargs,
+        )
+
+    if not entries:
+        return {}, {
+            "jobs": 0,
+            "submitted_items": 0,
+            "cache_prefiltered_items": 0,
+            "fallback_single_call_items": 0,
+            "completed_items": 0,
+            "failed_items": 0,
+        }
+
+    if not (
+        settings.b2b_churn.anthropic_batch_enabled
+        and settings.b2b_campaign.anthropic_batch_enabled
+        and isinstance(llm, AnthropicLLM)
+    ):
+        results: dict[str, dict[str, Any] | None] = {}
+        for entry in entries:
+            results[entry["custom_id"]] = await _invoke_generate_content(entry)
+        return results, {
+            "jobs": 0,
+            "submitted_items": 0,
+            "cache_prefiltered_items": 0,
+            "fallback_single_call_items": 0,
+            "completed_items": 0,
+            "failed_items": 0,
+        }
+
+    provider_name, model_name = llm_identity(llm)
+    batch_items: list[AnthropicBatchItem] = []
+    for entry in entries:
+        payload = entry["payload"]
+        working_payload, _ = _prepare_campaign_request_payload(payload)
+        user_content = json.dumps(working_payload, separators=(",", ":"), default=str)
+        request = prepare_b2b_exact_stage_request(
+            "b2b_campaign_generation.content",
+            provider=provider_name,
+            model=model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=entry["max_tokens"],
+            temperature=entry["temperature"],
+        )
+        cached = await lookup_b2b_exact_stage_text(request)
+        cached_response_text = str(cached["response_text"]) if cached is not None else None
+        cached_usage = dict(cached.get("usage") or {}) if cached is not None else {}
+        batch_items.append(
+            AnthropicBatchItem(
+                custom_id=entry["custom_id"],
+                artifact_type="campaign",
+                artifact_id=entry["artifact_id"],
+                vendor_name=entry["trace_metadata"].get("vendor_name"),
+                messages=[
+                    Message(role="system", content=system_prompt),
+                    Message(role="user", content=user_content),
+                ],
+                max_tokens=entry["max_tokens"],
+                temperature=entry["temperature"],
+                trace_span_name="task.b2b_campaign_generation",
+                trace_metadata=entry["trace_metadata"],
+                request_metadata=_campaign_batch_request_metadata(entry),
+                cached_response_text=cached_response_text,
+                cached_usage=cached_usage,
+            )
+        )
+
+    if settings.b2b_campaign.anthropic_batch_detached_enabled:
+        execution = await submit_anthropic_message_batch(
+            llm=llm,
+            stage_id="b2b_campaign_generation.content",
+            task_name="b2b_campaign_generation",
+            items=batch_items,
+            run_id=run_id,
+            min_batch_size=int(settings.b2b_campaign.anthropic_batch_min_items),
+            batch_metadata={"phase_channels": sorted({str(entry["channel"]) for entry in entries})},
+        )
+        if execution.provider_batch_id:
+            results: dict[str, dict[str, Any] | None] = {}
+            for entry in entries:
+                results[entry["custom_id"]] = {"_deferred": True}
+            return results, {
+                "jobs": 1,
+                "submitted_items": execution.submitted_items,
+                "cache_prefiltered_items": execution.cache_prefiltered_items,
+                "fallback_single_call_items": execution.fallback_single_call_items,
+                "completed_items": execution.completed_items,
+                "failed_items": execution.failed_items,
+            }
+        results: dict[str, dict[str, Any] | None] = {}
+        for entry in entries:
+            outcome = execution.results_by_custom_id.get(entry["custom_id"])
+            if outcome is not None and outcome.response_text is not None:
+                results[entry["custom_id"]] = await _invoke_generate_content(
+                    entry,
+                    first_attempt_text=outcome.response_text,
+                )
+                continue
+            content = await _invoke_generate_content(entry)
+            results[entry["custom_id"]] = content
+            if outcome is not None and outcome.fallback_required:
+                await mark_batch_fallback_result(
+                    batch_id=execution.local_batch_id,
+                    custom_id=entry["custom_id"],
+                    succeeded=content is not None,
+                    error_text=outcome.error_text if content is None else None,
+                    response_text=json.dumps(content, separators=(",", ":"), default=str) if content else None,
+                )
+        return results, {
+            "jobs": 0,
+            "submitted_items": execution.submitted_items,
+            "cache_prefiltered_items": execution.cache_prefiltered_items,
+            "fallback_single_call_items": execution.fallback_single_call_items,
+            "completed_items": execution.completed_items,
+            "failed_items": execution.failed_items,
+        }
+
+    execution = await run_anthropic_message_batch(
+        llm=llm,
+        stage_id="b2b_campaign_generation.content",
+        task_name="b2b_campaign_generation",
+        items=batch_items,
+        run_id=run_id,
+        min_batch_size=int(settings.b2b_campaign.anthropic_batch_min_items),
+        batch_metadata={"phase_channels": sorted({str(entry["channel"]) for entry in entries})},
+    )
+
+    results: dict[str, dict[str, Any] | None] = {}
+    for entry in entries:
+        outcome = execution.results_by_custom_id.get(entry["custom_id"])
+        if outcome is None:
+            content = await _invoke_generate_content(entry)
+            results[entry["custom_id"]] = content
+            await mark_batch_fallback_result(
+                batch_id=execution.local_batch_id,
+                custom_id=entry["custom_id"],
+                succeeded=content is not None,
+                error_text="missing_batch_outcome" if content is None else None,
+            )
+            continue
+
+        if outcome.response_text is not None:
+            results[entry["custom_id"]] = await _invoke_generate_content(
+                entry,
+                first_attempt_text=outcome.response_text,
+            )
+            continue
+
+        content = await _invoke_generate_content(entry)
+        results[entry["custom_id"]] = content
+        await mark_batch_fallback_result(
+            batch_id=execution.local_batch_id,
+            custom_id=entry["custom_id"],
+            succeeded=content is not None,
+            error_text=outcome.error_text if content is None else None,
+        )
+
+    return results, {
+        "jobs": 1 if execution.provider_batch_id else 0,
+        "submitted_items": execution.submitted_items,
+        "cache_prefiltered_items": execution.cache_prefiltered_items,
+        "fallback_single_call_items": execution.fallback_single_call_items,
+        "completed_items": execution.completed_items,
+        "failed_items": execution.failed_items,
+    }
+
+
+def _normalized_batch_item_metadata(row: Any) -> dict[str, Any]:
+    metadata = row.get("request_metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            metadata = {}
+    return metadata if isinstance(metadata, dict) else {}
+
+
+async def _mark_campaign_batch_item_applied(
+    pool,
+    *,
+    item_id: str,
+    applied_status: str,
+    error: str | None = None,
+) -> None:
+    patch = {
+        "applied_at": datetime.now(timezone.utc).isoformat(),
+        "applied_status": applied_status,
+    }
+    if error:
+        patch["applied_error"] = error[:500]
+    await pool.execute(
+        """
+        UPDATE anthropic_message_batch_items
+        SET request_metadata = COALESCE(request_metadata, '{}'::jsonb) || $2::jsonb
+        WHERE id = $1::uuid
+        """,
+        item_id,
+        json.dumps(patch, default=str),
+    )
+
+
+def _campaign_generation_specificity(payload: dict[str, Any]) -> dict[str, Any]:
+    generation_audit = (
+        payload.get("_generation_audit")
+        if isinstance(payload.get("_generation_audit"), dict)
+        else {}
+    )
+    specificity = (
+        generation_audit.get("specificity")
+        if isinstance(generation_audit.get("specificity"), dict)
+        else {}
+    )
+    return specificity
+
+
+async def _resolve_campaign_batch_item_content(
+    row: Any,
+    *,
+    llm,
+    system_prompt: str,
+    entry: dict[str, Any],
+) -> dict[str, Any] | None:
+    payload = entry.get("payload") or {}
+    trace_metadata = entry.get("trace_metadata")
+    if not isinstance(trace_metadata, dict):
+        trace_metadata = _campaign_trace_metadata(
+            payload,
+            run_id=str((payload.get("run_id") or "")).strip() or None,
+            stage_id="b2b_campaign_generation.content",
+        )
+    status = str(row.get("status") or "")
+    response_text = str(row.get("response_text") or "") or None
+    if status in {"batch_succeeded", "cache_hit"} and response_text:
+        return await _generate_content(
+            llm,
+            system_prompt,
+            payload,
+            int(entry.get("max_tokens") or settings.b2b_campaign.max_tokens),
+            float(entry.get("temperature") or settings.b2b_campaign.temperature),
+            first_attempt_text=response_text,
+            trace_span_name="task.b2b_campaign_generation",
+            trace_metadata=trace_metadata,
+        )
+    if status == "fallback_pending":
+        content = await _generate_content(
+            llm,
+            system_prompt,
+            payload,
+            int(entry.get("max_tokens") or settings.b2b_campaign.max_tokens),
+            float(entry.get("temperature") or settings.b2b_campaign.temperature),
+            trace_span_name="task.b2b_campaign_generation",
+            trace_metadata=trace_metadata,
+        )
+        from ...services.b2b.anthropic_batch import mark_batch_fallback_result
+
+        await mark_batch_fallback_result(
+            batch_id=str(row.get("batch_id")),
+            custom_id=str(row.get("custom_id")),
+            succeeded=content is not None,
+            error_text=None if content is not None else str(row.get("error_text") or "") or "single_call_failed",
+            response_text=json.dumps(content, separators=(",", ":"), default=str) if content else None,
+        )
+        return content
+    if status == "fallback_succeeded" and response_text:
+        try:
+            parsed = json.loads(response_text)
+            if isinstance(parsed, dict) and parsed.get("body"):
+                payload["_generation_audit"] = payload.get("_generation_audit") or {"status": "succeeded", "attempts": 1}
+                return parsed
+        except Exception:
+            pass
+    return None
+
+
+async def _store_churning_replayed_campaign(
+    pool,
+    *,
+    entry: dict[str, Any],
+    content: dict[str, Any],
+    llm_model_name: str,
+) -> dict[str, Any] | None:
+    payload = entry["payload"]
+    company_name = entry["company_name"]
+    artifact_id = entry["artifact_id"]
+    metadata = _campaign_storage_metadata(payload)
+    specificity = _campaign_generation_specificity(payload)
+    if str(payload.get("channel") or "") == "email_followup":
+        await pool.execute(
+            """
+            INSERT INTO b2b_campaigns (
+                company_name, vendor_name, product_category,
+                opportunity_score, urgency_score, pain_categories,
+                competitors_considering, seat_count, contract_end,
+                decision_timeline, buying_stage, role_type,
+                key_quotes, source_review_ids,
+                channel, subject, body, cta,
+                status, batch_id, llm_model,
+                partner_id, industry, target_mode, metadata,
+                score_components
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                $11, $12, $13, $14, $15, $16, $17, $18,
+                $19, $20, $21, $22, $23, $24, $25::jsonb,
+                $26::jsonb
+            )
+            """,
+            company_name,
+            entry["best"]["vendor_name"],
+            entry["best"].get("product_category"),
+            entry["best"]["opportunity_score"],
+            entry["best"].get("urgency"),
+            json.dumps(entry["persona_context"].get("pain_categories", [])),
+            json.dumps(entry["persona_context"].get("competitors_considering", [])),
+            entry["best"].get("seat_count"),
+            entry["best"].get("contract_end"),
+            entry["best"].get("decision_timeline"),
+            entry["best"].get("buying_stage"),
+            entry["persona_context"].get("role_type"),
+            json.dumps(entry["persona_context"].get("key_quotes", [])),
+            entry["review_ids"],
+            "email_followup",
+            content.get("subject", ""),
+            content.get("body", ""),
+            content.get("cta", ""),
+            "draft",
+            entry["campaign_batch_id"],
+            llm_model_name,
+            _uuid.UUID(entry["partner_id"]) if entry.get("partner_id") else None,
+            entry["persona_context"].get("industry"),
+            "churning_company",
+            json.dumps(metadata, default=str),
+            json.dumps(entry["best"].get("score_components")),
+        )
+        await record_attempt(pool, artifact_type="campaign", artifact_id=artifact_id, attempt_no=1, stage="generation", status="succeeded", blocker_count=len(specificity.get("blocking_issues") or []), warning_count=len(specificity.get("warnings") or []), warnings=list(specificity.get("warnings") or []))
+        return None
+
+    await pool.execute(
+        """
+        INSERT INTO b2b_campaigns (
+            company_name, vendor_name, product_category,
+            opportunity_score, urgency_score, pain_categories,
+            competitors_considering, seat_count, contract_end,
+            decision_timeline, buying_stage, role_type,
+            key_quotes, source_review_ids,
+            channel, subject, body, cta,
+            status, batch_id, llm_model,
+            partner_id, industry, target_mode, metadata,
+            score_components
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18,
+            $19, $20, $21, $22, $23, $24, $25::jsonb,
+            $26::jsonb
+        )
+        """,
+        company_name,
+        entry["best"]["vendor_name"],
+        entry["best"].get("product_category"),
+        entry["best"]["opportunity_score"],
+        entry["best"].get("urgency"),
+        json.dumps(entry["persona_context"].get("pain_categories", [])),
+        json.dumps(entry["persona_context"].get("competitors_considering", [])),
+        entry["best"].get("seat_count"),
+        entry["best"].get("contract_end"),
+        entry["best"].get("decision_timeline"),
+        entry["best"].get("buying_stage"),
+        entry["persona_context"].get("role_type"),
+        json.dumps(entry["persona_context"].get("key_quotes", [])),
+        entry["review_ids"],
+        str(payload.get("channel") or "email_cold"),
+        content.get("subject", ""),
+        content.get("body", ""),
+        content.get("cta", ""),
+        "draft",
+        entry["campaign_batch_id"],
+        llm_model_name,
+        _uuid.UUID(entry["partner_id"]) if entry.get("partner_id") else None,
+        entry["persona_context"].get("industry"),
+        "churning_company",
+        json.dumps(metadata, default=str),
+        json.dumps(entry["best"].get("score_components")),
+    )
+    await record_attempt(pool, artifact_type="campaign", artifact_id=artifact_id, attempt_no=1, stage="generation", status="succeeded", blocker_count=len(specificity.get("blocking_issues") or []), warning_count=len(specificity.get("warnings") or []), warnings=list(specificity.get("warnings") or []))
+    if settings.campaign_sequence.enabled:
+        try:
+            await _create_sequence_for_cold_email(
+                pool,
+                company_name=company_name,
+                batch_id=entry["campaign_batch_id"],
+                partner_id=entry.get("partner_id"),
+                context=entry["persona_context"],
+                cold_email_subject=content.get("subject", ""),
+                cold_email_body=content.get("body", ""),
+            )
+        except Exception as exc:
+            logger.warning("Failed to create sequence for replayed campaign %s/%s: %s", company_name, entry.get("persona"), exc)
+    followup_payload = {
+        **entry["persona_context"],
+        "channel": "email_followup",
+        "target_mode": "churning_company",
+        "cold_email_context": {
+            "subject": content.get("subject", ""),
+            "body": content.get("body", ""),
+        },
+    }
+    return {
+        "custom_id": _campaign_artifact_key(company_name=company_name, batch_id=entry["campaign_batch_id"], channel="email_followup"),
+        "artifact_id": _campaign_artifact_key(company_name=company_name, batch_id=entry["campaign_batch_id"], channel="email_followup"),
+        "campaign_batch_id": entry["campaign_batch_id"],
+        "phase": "followup",
+        "payload": followup_payload,
+        "channel": "email_followup",
+        "company_name": company_name,
+        "persona": entry.get("persona"),
+        "persona_batch_id": entry["campaign_batch_id"],
+        "persona_context": entry["persona_context"],
+        "best": entry["best"],
+        "review_ids": entry["review_ids"],
+        "partner_id": entry.get("partner_id"),
+        "max_tokens": entry.get("max_tokens") or settings.b2b_campaign.max_tokens,
+        "temperature": entry.get("temperature") or settings.b2b_campaign.temperature,
+        "trace_metadata": _campaign_trace_metadata(
+            followup_payload,
+            run_id=str((entry.get("trace_metadata") or {}).get("run_id") or "").strip() or None,
+            stage_id="b2b_campaign_generation.content",
+        ),
+    }
+
+
+async def _store_vendor_retention_replayed_campaign(
+    pool,
+    *,
+    entry: dict[str, Any],
+    content: dict[str, Any],
+    llm_model_name: str,
+) -> dict[str, Any] | None:
+    payload = entry["payload"]
+    vendor_name = entry["company_name"]
+    artifact_id = entry["artifact_id"]
+    metadata = _campaign_storage_metadata(payload)
+    specificity = _campaign_generation_specificity(payload)
+    channel = str(payload.get("channel") or "email_cold")
+    await pool.execute(
+        """
+        INSERT INTO b2b_campaigns (
+            company_name, vendor_name, product_category,
+            opportunity_score, urgency_score, pain_categories,
+            competitors_considering, seat_count, contract_end,
+            decision_timeline, buying_stage, role_type,
+            key_quotes, source_review_ids,
+            channel, subject, body, cta,
+            status, batch_id, llm_model, industry, target_mode, metadata,
+            recipient_email, score_components
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18,
+            $19, $20, $21, $22, $23, $24::jsonb,
+            $25, $26::jsonb
+        )
+        """,
+        vendor_name,
+        vendor_name,
+        entry["best"].get("product_category"),
+        entry["best"]["opportunity_score"],
+        entry["best"].get("urgency"),
+        json.dumps(entry["vendor_ctx"]["signal_summary"]["pain_distribution"]),
+        json.dumps(entry["vendor_ctx"]["signal_summary"]["competitor_distribution"]),
+        entry["best"].get("seat_count"),
+        entry["best"].get("contract_end"),
+        entry["best"].get("decision_timeline"),
+        entry["best"].get("buying_stage"),
+        _map_role_type(entry["target"].get("contact_role")),
+        json.dumps(entry["vendor_ctx"].get("key_quotes", [])),
+        entry["review_ids"],
+        channel,
+        content.get("subject", ""),
+        content.get("body", ""),
+        content.get("cta", ""),
+        "draft",
+        entry["campaign_batch_id"],
+        llm_model_name,
+        entry["best"].get("industry"),
+        "vendor_retention",
+        json.dumps(metadata, default=str),
+        entry["target"].get("contact_email"),
+        json.dumps(entry["best"].get("score_components")),
+    )
+    await record_attempt(pool, artifact_type="campaign", artifact_id=artifact_id, attempt_no=1, stage="generation", status="succeeded", blocker_count=len(specificity.get("blocking_issues") or []), warning_count=len(specificity.get("warnings") or []), warnings=list(specificity.get("warnings") or []))
+    if channel == "email_followup":
+        return None
+    if settings.campaign_sequence.enabled:
+        try:
+            seq_id = await _create_sequence_for_cold_email(
+                pool,
+                company_name=vendor_name,
+                batch_id=entry["campaign_batch_id"],
+                partner_id=None,
+                context=entry["sequence_context"],
+                cold_email_subject=content.get("subject", ""),
+                cold_email_body=content.get("body", ""),
+            )
+            if seq_id and entry["target"].get("contact_email"):
+                await pool.execute(
+                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                    entry["target"].get("contact_email"),
+                    seq_id,
+                )
+        except Exception as exc:
+            logger.warning("Failed to create replayed vendor sequence for %s: %s", vendor_name, exc)
+    followup_payload = dict(entry["followup_payload"])
+    followup_payload["cold_email_context"] = {"subject": content.get("subject", ""), "body": content.get("body", "")}
+    return {
+        "custom_id": _campaign_artifact_key(company_name=vendor_name, batch_id=entry["campaign_batch_id"], channel="email_followup"),
+        "artifact_id": _campaign_artifact_key(company_name=vendor_name, batch_id=entry["campaign_batch_id"], channel="email_followup"),
+        "campaign_batch_id": entry["campaign_batch_id"],
+        "phase": "followup",
+        "payload": followup_payload,
+        "channel": "email_followup",
+        "company_name": vendor_name,
+        "best": entry["best"],
+        "vendor_ctx": entry["vendor_ctx"],
+        "review_ids": entry["review_ids"],
+        "target": entry["target"],
+        "max_tokens": entry.get("max_tokens") or settings.b2b_campaign.max_tokens,
+        "temperature": entry.get("temperature") or settings.b2b_campaign.temperature,
+        "trace_metadata": _campaign_trace_metadata(
+            followup_payload,
+            run_id=str((entry.get("trace_metadata") or {}).get("run_id") or "").strip() or None,
+            stage_id="b2b_campaign_generation.content",
+        ),
+    }
+
+
+async def _store_challenger_replayed_campaign(
+    pool,
+    *,
+    entry: dict[str, Any],
+    content: dict[str, Any],
+    llm_model_name: str,
+) -> dict[str, Any] | None:
+    payload = entry["payload"]
+    challenger_name = entry["company_name"]
+    artifact_id = entry["artifact_id"]
+    metadata = _campaign_storage_metadata(payload)
+    specificity = _campaign_generation_specificity(payload)
+    channel = str(payload.get("channel") or "email_cold")
+    await pool.execute(
+        """
+        INSERT INTO b2b_campaigns (
+            company_name, vendor_name, product_category,
+            opportunity_score, urgency_score, pain_categories,
+            competitors_considering, seat_count, contract_end,
+            decision_timeline, buying_stage, role_type,
+            key_quotes, source_review_ids,
+            channel, subject, body, cta,
+            status, batch_id, llm_model, industry, target_mode, metadata,
+            recipient_email, score_components
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18,
+            $19, $20, $21, $22, $23, $24::jsonb,
+            $25, $26::jsonb
+        )
+        """,
+        challenger_name,
+        entry["best"]["vendor_name"],
+        entry["best"].get("product_category"),
+        entry["best"]["opportunity_score"],
+        entry["best"].get("urgency"),
+        json.dumps(entry["challenger_ctx"]["signal_summary"]["pain_driving_switch"]),
+        json.dumps(entry["challenger_ctx"]["signal_summary"]["incumbents_losing"]),
+        entry["best"].get("seat_count"),
+        entry["best"].get("contract_end"),
+        entry["best"].get("decision_timeline"),
+        entry["best"].get("buying_stage"),
+        _map_role_type(entry["target"].get("contact_role")),
+        json.dumps(entry["challenger_ctx"].get("key_quotes", [])),
+        entry["review_ids"],
+        channel,
+        content.get("subject", ""),
+        content.get("body", ""),
+        content.get("cta", ""),
+        "draft",
+        entry["campaign_batch_id"],
+        llm_model_name,
+        entry["best"].get("industry"),
+        "challenger_intel",
+        json.dumps(metadata, default=str),
+        entry["target"].get("contact_email"),
+        json.dumps(entry["best"].get("score_components")),
+    )
+    await record_attempt(pool, artifact_type="campaign", artifact_id=artifact_id, attempt_no=1, stage="generation", status="succeeded", blocker_count=len(specificity.get("blocking_issues") or []), warning_count=len(specificity.get("warnings") or []), warnings=list(specificity.get("warnings") or []))
+    if channel == "email_followup":
+        return None
+    if settings.campaign_sequence.enabled:
+        try:
+            seq_id = await _create_sequence_for_cold_email(
+                pool,
+                company_name=challenger_name,
+                batch_id=entry["campaign_batch_id"],
+                partner_id=None,
+                context=entry["sequence_context"],
+                cold_email_subject=content.get("subject", ""),
+                cold_email_body=content.get("body", ""),
+            )
+            if seq_id and entry["target"].get("contact_email"):
+                await pool.execute(
+                    "UPDATE campaign_sequences SET recipient_email = $1 WHERE id = $2",
+                    entry["target"].get("contact_email"),
+                    seq_id,
+                )
+        except Exception as exc:
+            logger.warning("Failed to create replayed challenger sequence for %s: %s", challenger_name, exc)
+    followup_payload = dict(entry["followup_payload"])
+    followup_payload["cold_email_context"] = {"subject": content.get("subject", ""), "body": content.get("body", "")}
+    return {
+        "custom_id": _campaign_artifact_key(company_name=challenger_name, batch_id=entry["campaign_batch_id"], channel="email_followup"),
+        "artifact_id": _campaign_artifact_key(company_name=challenger_name, batch_id=entry["campaign_batch_id"], channel="email_followup"),
+        "campaign_batch_id": entry["campaign_batch_id"],
+        "phase": "followup",
+        "payload": followup_payload,
+        "channel": "email_followup",
+        "company_name": challenger_name,
+        "best": entry["best"],
+        "challenger_ctx": entry["challenger_ctx"],
+        "review_ids": entry["review_ids"],
+        "target": entry["target"],
+        "max_tokens": entry.get("max_tokens") or settings.b2b_campaign.max_tokens,
+        "temperature": entry.get("temperature") or settings.b2b_campaign.temperature,
+        "trace_metadata": _campaign_trace_metadata(
+            followup_payload,
+            run_id=str((entry.get("trace_metadata") or {}).get("run_id") or "").strip() or None,
+            stage_id="b2b_campaign_generation.content",
+        ),
+    }
+
+
+async def _store_replayed_campaign_entry(
+    pool,
+    *,
+    entry: dict[str, Any],
+    content: dict[str, Any],
+    llm_model_name: str,
+) -> dict[str, Any] | None:
+    target_mode = str(((entry.get("payload") or {}).get("target_mode")) or "")
+    if target_mode == "churning_company":
+        return await _store_churning_replayed_campaign(pool, entry=entry, content=content, llm_model_name=llm_model_name)
+    if target_mode == "vendor_retention":
+        return await _store_vendor_retention_replayed_campaign(pool, entry=entry, content=content, llm_model_name=llm_model_name)
+    if target_mode == "challenger_intel":
+        return await _store_challenger_replayed_campaign(pool, entry=entry, content=content, llm_model_name=llm_model_name)
+    raise ValueError(f"Unsupported campaign replay target mode: {target_mode}")
+
+
+async def reconcile_batches(task: ScheduledTask) -> dict[str, Any]:
+    cfg = settings.b2b_campaign
+    if not cfg.enabled or not cfg.anthropic_batch_detached_enabled:
+        return {"_skip_synthesis": "Detached campaign batch reconciliation disabled"}
+
+    pool = get_db_pool()
+    if not pool.is_initialized:
+        return {"_skip_synthesis": "DB not ready"}
+
+    from ...services.llm_router import get_llm
+    from ...services.skill_registry import get_skill_registry
+    from ...services.b2b.anthropic_batch import reconcile_anthropic_message_batch
+
+    llm = get_llm("campaign")
+    skill = get_skill_registry().get("digest/b2b_campaign_generation")
+    if llm is None or skill is None:
+        return {"reconciled_batches": 0, "applied_items": 0, "submitted_followups": 0, "error": "campaign_llm_or_skill_missing"}
+    llm_model_name = getattr(llm, "model_id", None) or getattr(llm, "model", "unknown")
+
+    batch_rows = await pool.fetch(
+        """
+        SELECT DISTINCT b.id, b.run_id, b.status
+        FROM anthropic_message_batches b
+        JOIN anthropic_message_batch_items i ON i.batch_id = b.id
+        WHERE b.task_name = 'b2b_campaign_generation'
+          AND b.provider_batch_id IS NOT NULL
+          AND COALESCE(i.request_metadata->>'replay_handler', '') = 'campaign_generation'
+          AND COALESCE(i.request_metadata->>'applied_at', '') = ''
+        ORDER BY b.created_at ASC
+        LIMIT 25
+        """
+    )
+
+    reconciled_batches = 0
+    applied_items = 0
+    submitted_followups = 0
+    failed_items = 0
+
+    for batch_row in batch_rows:
+        execution = await reconcile_anthropic_message_batch(
+            llm=llm,
+            local_batch_id=str(batch_row["id"]),
+            pool=pool,
+        )
+        reconciled_batches += 1
+
+        item_rows = await pool.fetch(
+            """
+            SELECT *
+            FROM anthropic_message_batch_items
+            WHERE batch_id = $1::uuid
+            ORDER BY created_at ASC
+            """,
+            batch_row["id"],
+        )
+
+        followup_entries: list[dict[str, Any]] = []
+        for item_row in item_rows:
+            metadata = _normalized_batch_item_metadata(item_row)
+            if metadata.get("replay_handler") != "campaign_generation":
+                continue
+            if metadata.get("applied_at"):
+                continue
+            entry = metadata.get("replay_entry")
+            if not isinstance(entry, dict):
+                await _mark_campaign_batch_item_applied(
+                    pool,
+                    item_id=str(item_row["id"]),
+                    applied_status="failed",
+                    error="missing_replay_entry",
+                )
+                failed_items += 1
+                continue
+
+            status = str(item_row.get("status") or "")
+            if status == "pending":
+                continue
+
+            content = await _resolve_campaign_batch_item_content(
+                item_row,
+                llm=llm,
+                system_prompt=skill.content,
+                entry=entry,
+            )
+            if content is None:
+                if status in {"batch_errored", "batch_expired", "batch_canceled", "fallback_failed"}:
+                    await _record_campaign_generation_failure(
+                        pool,
+                        artifact_id=str(entry.get("artifact_id") or item_row.get("artifact_id") or ""),
+                        company_name=str(entry.get("company_name") or ""),
+                        channel=str(((entry.get("payload") or {}).get("channel")) or ""),
+                        generation_audit={
+                            "status": "failed",
+                            "failure_reason": status,
+                        },
+                    )
+                await _mark_campaign_batch_item_applied(
+                    pool,
+                    item_id=str(item_row["id"]),
+                    applied_status="failed",
+                    error=status or "no_content",
+                )
+                failed_items += 1
+                continue
+
+            try:
+                next_entry = await _store_replayed_campaign_entry(
+                    pool,
+                    entry=entry,
+                    content=content,
+                    llm_model_name=llm_model_name,
+                )
+                await _mark_campaign_batch_item_applied(
+                    pool,
+                    item_id=str(item_row["id"]),
+                    applied_status="succeeded",
+                )
+                applied_items += 1
+                if next_entry is not None:
+                    followup_entries.append(next_entry)
+            except Exception as exc:
+                logger.exception("Failed to apply replayed campaign batch item %s", item_row.get("custom_id"))
+                await _mark_campaign_batch_item_applied(
+                    pool,
+                    item_id=str(item_row["id"]),
+                    applied_status="failed",
+                    error=str(exc),
+                )
+                failed_items += 1
+
+        if followup_entries:
+            _, followup_metrics = await _run_campaign_batch(
+                llm,
+                skill.content,
+                followup_entries,
+                run_id=str(batch_row.get("run_id") or "") or None,
+            )
+            submitted_followups += int(followup_metrics.get("submitted_items") or 0)
+
+    return {
+        "_skip_synthesis": "Campaign batch reconciliation complete",
+        "reconciled_batches": reconciled_batches,
+        "applied_items": applied_items,
+        "submitted_followups": submitted_followups,
+        "failed_items": failed_items,
+    }
+
+
+async def _generate_content(
+    llm,
+    system_prompt: str,
+    payload: dict[str, Any],
+    max_tokens: int,
+    temperature: float,
+    *,
+    first_attempt_text: str | None = None,
+    trace_span_name: str | None = None,
+    trace_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Call LLM, validate output, retry once if word count exceeded."""
+    import inspect
+
+    from ...pipelines.llm import clean_llm_output
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
+    )
+    from ...services.b2b.llm_exact_cache import llm_identity
+
+    request_payload = payload
+    channel = payload.get("channel", "")
+    tier = payload.get("tier", "")
+    target_mode = payload.get("target_mode")
+    last_wc = 0
+    last_min = 0
+    last_max = 0
+    retry_reasons: list[str] = []
+    working_payload, specificity_context = _prepare_campaign_request_payload(request_payload)
+    provider_name, model_name = llm_identity(llm)
+    cache_namespace = "b2b_campaign_generation.content"
+    call_llm_params = inspect.signature(_call_llm).parameters
+    call_llm_supports_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in call_llm_params.values()
+    )
 
     for attempt in range(2):
         user_content = json.dumps(working_payload, separators=(",", ":"), default=str)
@@ -3592,8 +5279,22 @@ async def _generate_content(
         )
         cached = await lookup_b2b_exact_stage_text(request)
         text = cached["response_text"] if cached is not None else None
+        if text is None and attempt == 0 and first_attempt_text is not None:
+            text = first_attempt_text
         if text is None:
-            text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
+            call_kwargs: dict[str, Any] = {}
+            if "trace_span_name" in call_llm_params or call_llm_supports_kwargs:
+                call_kwargs["trace_span_name"] = trace_span_name
+            if "trace_metadata" in call_llm_params or call_llm_supports_kwargs:
+                call_kwargs["trace_metadata"] = trace_metadata
+            text = await _call_llm(
+                llm,
+                system_prompt,
+                user_content,
+                max_tokens,
+                temperature,
+                **call_kwargs,
+            )
         if not text:
             request_payload["_generation_audit"] = {
                 "status": "failed",
