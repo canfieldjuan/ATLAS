@@ -97,6 +97,27 @@ _MONEY_WITHOUT_PRICING_SPAN = """
     source = 'reddit'
     AND NOT {vendor_reference}
   )
+  AND NOT (
+    content_type IN ('community_discussion', 'insider_account')
+    AND NOT (
+      COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+    )
+    AND COALESCE(
+      CASE
+        WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+        ELSE NULLIF(reviewer_title, '')
+      END,
+      NULLIF(reviewer_company, ''),
+      NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+    ) IS NULL
+    AND NOT jsonb_path_exists(
+      COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+      '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+    )
+  )
   AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "pricing_backlash")')
 )
 """.format(

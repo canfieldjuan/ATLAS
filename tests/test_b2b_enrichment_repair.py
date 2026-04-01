@@ -658,6 +658,41 @@ def test_strategic_adjudication_keeps_real_pricing_gap():
     assert "money_without_pricing_span" in reasons
 
 
+def test_strategic_adjudication_skips_low_signal_vendor_money_discussion_noise():
+    row = {
+        "summary": "How Amazon Really Makes Its Money",
+        "review_text": "Amazon Web Services is investing $15 billion in a new data center campus in Indiana.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "community_discussion",
+        "reviewer_title": "Repeat Churn Signal (Score: 8.8)",
+        "vendor_name": "Amazon Web Services",
+        "product_name": "Amazon Web Services",
+        "source": "reddit",
+    }
+    result = {
+        "salience_flags": ["explicit_dollar"],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "reviewer_context": {"company_name": ""},
+        "pricing_phrases": [],
+        "specific_complaints": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "money_without_pricing_span" not in reasons
+
+
 def test_strategic_adjudication_skips_neutral_competitor_comparisons_without_pressure():
     row = {
         "summary": "Should I use Azure DevOps or stick to GitHub?",

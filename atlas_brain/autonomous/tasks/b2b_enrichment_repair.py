@@ -1121,7 +1121,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                           OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
                           OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
                         )
-                        AND NOT review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+                        AND COALESCE(
+                          CASE
+                            WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+                            ELSE NULLIF(reviewer_title, '')
+                          END,
+                          NULLIF(reviewer_company, ''),
+                          NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+                        ) IS NULL
+                        AND NOT jsonb_path_exists(
+                          COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+                          '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+                        )
                       )
                       AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "pricing_backlash")')
                     )
