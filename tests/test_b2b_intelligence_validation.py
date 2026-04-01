@@ -1152,6 +1152,33 @@ class TestBattleCardSalesCopyValidation:
         warnings = _validate_battle_card_sales_copy(card, generated)
         assert not any("unsupported numeric claims" in w for w in warnings)
 
+    def test_allows_numeric_claims_from_witness_anchor_examples(self):
+        card = _sample_battle_card() | {
+            "anchor_examples": {
+                "common_pattern": [
+                    {
+                        "excerpt_text": "It went from $9 a month to the last suggested price of $29.",
+                    }
+                ]
+            }
+        }
+        generated = {
+            "talk_track": {
+                "opening": "Buyers are reacting to pricing jumps from 9 to 29 in current review evidence.",
+                "mid_call_pivot": "Use the pricing change as a live benchmark on fit and value.",
+                "closing": "Close with a working session before renewal.",
+            }
+        }
+        warnings = _validate_battle_card_sales_copy(card, generated)
+        assert not any("unsupported numeric claims" in w for w in warnings)
+
+    def test_ignores_single_digit_hyphenated_ui_tokens(self):
+        generated = {
+            "executive_summary": "Worth testing where buyers expect a 1-click export experience and keep running into workflow friction."
+        }
+        warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
+        assert not any("unsupported numeric claims" in w for w in warnings)
+
     def test_rejects_stale_years(self):
         generated = {"landmine_questions": ["Should these app features still require plugins in 2024?"]}
         warnings = _validate_battle_card_sales_copy(_sample_battle_card(), generated)
@@ -1312,6 +1339,64 @@ class TestBattleCardSalesCopySanitization:
         warnings = _validate_battle_card_sales_copy(card, sanitized)
         assert not warnings
         assert "a Emerging vulnerability" not in sanitized["executive_summary"]
+
+    def test_repairs_duplicate_why_they_stay_neutralizer(self):
+        card = _sample_battle_card()
+        duplicate = (
+            "Emphasize predictable operations, easier adoption, and lower day-to-day friction "
+            "while keeping the renewal conversation focused on fit and value."
+        )
+        generated = {
+            "why_they_stay": {
+                "summary": "The incumbent still holds on where teams feel the current setup is familiar and good enough.",
+                "strengths": [
+                    {
+                        "area": "Features",
+                        "evidence": "Customers still cite features as a reason to stay.",
+                        "how_to_neutralize": duplicate,
+                    }
+                ],
+            },
+            "objection_handlers": [
+                {
+                    "objection": "The incumbent is still good enough on Features.",
+                    "acknowledge": "It makes sense that teams stay for Features.",
+                    "pivot": duplicate,
+                    "proof_point": "24 price increase mentions across 1156 reviews.",
+                }
+            ],
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not any("duplicates content already present" in w for w in warnings)
+        assert (
+            sanitized["why_they_stay"]["strengths"][0]["how_to_neutralize"]
+            != sanitized["objection_handlers"][0]["pivot"]
+        )
+
+    def test_repairs_duplicate_recommended_play_timing(self):
+        card = _sample_battle_card()
+        duplicate_timing = "Best tested during active evaluation windows, renewal review, or planning cycles."
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Best tested on finance teams with a pricing benchmark.",
+                    "target_segment": "Finance teams",
+                    "key_message": "Lead with pricing clarity.",
+                    "timing": duplicate_timing,
+                },
+                {
+                    "play": "Best tested on operations teams with a value benchmark.",
+                    "target_segment": "Operations teams",
+                    "key_message": "Lead with simpler fit and value language.",
+                    "timing": duplicate_timing,
+                },
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not any("duplicates content already present" in w for w in warnings)
+        assert sanitized["recommended_plays"][0]["timing"] != sanitized["recommended_plays"][1]["timing"]
 
     def test_sanitizes_customer_quote_to_exact_source_text(self):
         card = _sample_battle_card()
@@ -2538,6 +2623,44 @@ class TestDeterministicBattleCardBuild:
         )
 
         assert len(cards) == 3
+
+    def test_build_deterministic_battle_cards_allows_account_pressure_override(self):
+        cards = _build_deterministic_battle_cards(
+            vendor_scores=[
+                {
+                    "vendor_name": "Salesforce",
+                    "product_category": "CRM",
+                    "total_reviews": 1122,
+                    "churn_intent": 70,
+                    "avg_urgency": 2.1,
+                },
+            ],
+            pain_lookup={},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            quote_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            sentiment_lookup={},
+            dm_lookup={"Salesforce": 0.036},
+            company_lookup={},
+            product_profile_lookup={},
+            competitive_disp=[],
+            competitor_reasons=[],
+            account_intel_lookup={
+                "Salesforce": {
+                    "summary": {
+                        "high_intent_count": 3,
+                        "active_eval_signal_count": 2,
+                        "total_accounts": 3,
+                    },
+                    "accounts": [],
+                }
+            },
+        )
+
+        assert len(cards) == 1
+        assert cards[0]["vendor"] == "Salesforce"
 
     def test_build_deterministic_battle_cards_promote_segment_and_timing_summaries(self):
         vendor_scores = [

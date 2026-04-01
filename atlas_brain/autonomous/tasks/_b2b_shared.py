@@ -615,6 +615,34 @@ def _battle_card_add_wrapper_claim(claims: set[str], wrapper: Any) -> None:
     _battle_card_add_claim(claims, wrapper.get("value"))
 
 
+def _battle_card_add_text_numeric_claims(claims: set[str], text: Any) -> None:
+    """Add normalized numeric tokens pulled from witness-backed text."""
+    excerpt = str(text or "")
+    if not excerpt:
+        return
+    for token in re.findall(r"\$?\d[\d,]*(?:\.\d+)?%?", excerpt):
+        normalized = _battle_card_normalize_numeric_token(token.lstrip("$"))
+        if normalized:
+            claims.add(normalized)
+
+
+def _battle_card_add_witness_numeric_claims(claims: set[str], witness_blob: Any) -> None:
+    """Import numeric claims from raw witness/anchor payloads."""
+    if isinstance(witness_blob, dict):
+        if "excerpt_text" in witness_blob or "quote" in witness_blob:
+            _battle_card_add_text_numeric_claims(claims, witness_blob.get("excerpt_text"))
+            _battle_card_add_text_numeric_claims(claims, witness_blob.get("quote"))
+            return
+        for value in witness_blob.values():
+            _battle_card_add_witness_numeric_claims(claims, value)
+        return
+    if isinstance(witness_blob, list):
+        for item in witness_blob:
+            _battle_card_add_witness_numeric_claims(claims, item)
+        return
+    return
+
+
 def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
     """Build the set of numeric claims supported by deterministic card input."""
     claims: set[str] = set()
@@ -679,6 +707,8 @@ def _battle_card_allowed_claims(card: dict[str, Any]) -> set[str]:
         if isinstance(category, dict):
             _battle_card_add_claim(claims, category.get("vendor_count"))
             _battle_card_add_claim(claims, category.get("displacement_flow_count"))
+    _battle_card_add_witness_numeric_claims(claims, card.get("anchor_examples"))
+    _battle_card_add_witness_numeric_claims(claims, card.get("witness_highlights"))
     return claims
 
 
@@ -1413,6 +1443,8 @@ def _battle_card_structured_proof_text(card: dict[str, Any]) -> str:
 def _battle_card_safe_play_text(card: dict[str, Any], path: str) -> str:
     """Return grounded fallback text for recommended plays and talk tracks."""
     weakness = _battle_card_primary_weakness(card)
+    index_match = re.search(r"\[(\d+)\]", path)
+    index = int(index_match.group(1)) if index_match else 0
     if path.endswith(".target_segment"):
         if weakness == "pricing":
             return "Support, finance, and operations teams already feeling pricing pressure."
@@ -1426,7 +1458,12 @@ def _battle_card_safe_play_text(card: dict[str, Any], path: str) -> str:
             return "Lead with more responsive support operations and clearer accountability."
         return "Lead with a simpler path to better fit, lower friction, and clearer value."
     if path.endswith(".timing"):
-        return "Best tested during active evaluation windows, renewal review, or planning cycles."
+        timing_variants = [
+            "Best tested during active evaluation windows, renewal review, or planning cycles.",
+            "Best timed to renewal planning, budget review, or any fresh fit-and-value checkpoint.",
+            "Use this when buyers are reassessing fit, budgets, or switching timing ahead of the next renewal motion.",
+        ]
+        return timing_variants[index % len(timing_variants)]
     if path.endswith(".play"):
         prefix = "Best tested on" if _battle_card_segment_evidence_is_thin(card) else "Target"
         if weakness == "pricing":
@@ -1580,6 +1617,30 @@ def _battle_card_safe_text(card: dict[str, Any], path: str) -> str:
     """Return grounded replacement text for numeric-sensitive paths."""
     if path == "executive_summary":
         return _battle_card_safe_summary(card)
+    if path.startswith("objection_handlers[") and path.endswith(".pivot"):
+        weakness = _battle_card_primary_weakness(card)
+        return (
+            f"The better question is whether {weakness} is creating enough drag to justify a cleaner alternative before renewal."
+        )
+    if path.startswith("why_they_stay.strengths["):
+        index_match = re.search(r"\[(\d+)\]", path)
+        index = int(index_match.group(1)) if index_match else 0
+        neutralize_variants = [
+            "Acknowledge the familiar setup, then redirect to the renewal risks already showing up in current evaluation motion.",
+            "Reframe the conversation around operational predictability, simpler administration, and less day-to-day friction.",
+            "Keep the focus on reducing switching risk, spend surprises, and the manual work buyers are already flagging.",
+        ]
+        evidence_variants = [
+            "Customers still cite familiar workflows as a reason to stay.",
+            "Some teams still value the incumbent because the current setup feels established and good enough.",
+            "Retention signals show the incumbent still gets credit for familiarity and continuity.",
+        ]
+        if path.endswith(".how_to_neutralize"):
+            return neutralize_variants[index % len(neutralize_variants)]
+        if path.endswith(".evidence"):
+            return evidence_variants[index % len(evidence_variants)]
+        if path.endswith(".summary"):
+            return "The incumbent still holds on where familiarity and continuity outweigh switching effort."
     if path.endswith(".evidence"):
         return "Supported by recurring customer complaints and churn-oriented review evidence."
     if path.endswith(".proof_point"):
@@ -10700,6 +10761,11 @@ def _build_deterministic_battle_cards(
         avg_urgency = round(m["avg_urgency"], 1)
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
+        acct_intel = (account_intel_lookup or {}).get(vendor, {})
+        acct_summary = acct_intel.get("summary") or {} if isinstance(acct_intel, dict) else {}
+        acct_high_intent = int(acct_summary.get("high_intent_count") or 0)
+        acct_active_eval = int(acct_summary.get("active_eval_signal_count") or 0)
+        account_pressure_override = acct_high_intent >= 3 or acct_active_eval >= 2
 
         # Resolve reasoning state once per vendor
         reasoning_state = _get_battle_card_reasoning_state(
@@ -10713,7 +10779,12 @@ def _build_deterministic_battle_cards(
         _density_gate = 10 if _has_reasoning else 15
         _urgency_gate = 2.5 if _has_reasoning else 3.0
         _dm_gate = 0.2 if _has_reasoning else 0.3
-        if churn_density < _density_gate and avg_urgency < _urgency_gate and dm_rate < _dm_gate:
+        if (
+            churn_density < _density_gate
+            and avg_urgency < _urgency_gate
+            and dm_rate < _dm_gate
+            and not account_pressure_override
+        ):
             continue
 
         # Confidence label
@@ -10933,7 +11004,6 @@ def _build_deterministic_battle_cards(
 
         # -- Section 5: High-intent companies --
         # Priority: canonical account intelligence > evidence vault > churning_companies
-        acct_intel = (account_intel_lookup or {}).get(vendor, {})
         canonical_accounts = (acct_intel.get("accounts") or []) if isinstance(acct_intel, dict) else []
         hi_companies = _normalize_canonical_accounts_for_battle_card(
             canonical_accounts,
