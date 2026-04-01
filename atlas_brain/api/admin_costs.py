@@ -156,6 +156,22 @@ def _pool_or_503():
     return pool
 
 
+async def _safe_fetchrow(pool, query: str, *args):
+    try:
+        return await pool.fetchrow(query, *args)
+    except Exception:
+        logger.exception("admin_costs.fetchrow_failed")
+        return None
+
+
+async def _safe_fetch(pool, query: str, *args):
+    try:
+        return await pool.fetch(query, *args)
+    except Exception:
+        logger.exception("admin_costs.fetch_failed")
+        return []
+
+
 @router.get("/summary")
 async def cost_summary(days: int = Query(default=30, ge=1, le=365)):
     """High-level cost summary for the dashboard header cards."""
@@ -586,6 +602,257 @@ async def recent_calls(
         })
     return {
         "calls": calls,
+    }
+
+
+@router.get("/cache-health")
+async def cache_health(days: int = Query(default=30, ge=1, le=365)):
+    """Atlas cache health across exact, provider, semantic, and reuse layers."""
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    exact_strategies = tuple(
+        strategy for strategy in iter_core_b2b_cache_strategies() if strategy.mode == "exact"
+    )
+
+    exact_summary_row = await _safe_fetchrow(
+        pool,
+        """SELECT
+             COUNT(*) AS total_rows,
+             COALESCE(SUM(hit_count), 0) AS total_hits,
+             COUNT(*) FILTER (WHERE created_at >= $1) AS writes_in_window,
+             COUNT(*) FILTER (WHERE last_hit_at >= $1 AND hit_count > 0) AS rows_hit_in_window
+           FROM b2b_llm_exact_cache""",
+        since,
+    ) or {}
+
+    exact_stage_rows = await _safe_fetch(
+        pool,
+        """SELECT
+             namespace,
+             COUNT(*) AS rows,
+             COALESCE(SUM(hit_count), 0) AS total_hits,
+             COUNT(*) FILTER (WHERE created_at >= $1) AS writes_in_window,
+             COUNT(*) FILTER (WHERE last_hit_at >= $1 AND hit_count > 0) AS rows_hit_in_window,
+             MAX(created_at) AS last_write_at,
+             MAX(last_hit_at) AS last_hit_at,
+             COUNT(DISTINCT provider) AS provider_count,
+             COUNT(DISTINCT model) AS model_count
+           FROM b2b_llm_exact_cache
+           GROUP BY namespace""",
+        since,
+    )
+    exact_stage_map = {str(row["namespace"]): row for row in exact_stage_rows}
+
+    prompt_cache_row = await _safe_fetchrow(
+        pool,
+        """SELECT
+             COUNT(*) AS total_calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
+             COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+             COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens
+           FROM llm_usage
+           WHERE created_at >= $1""",
+        since,
+    ) or {}
+    prompt_cache_spans = await _safe_fetch(
+        pool,
+        """SELECT
+             span_name,
+             COUNT(*) AS calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
+             COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens
+           FROM llm_usage
+           WHERE created_at >= $1
+             AND (cached_tokens > 0 OR cache_write_tokens > 0)
+           GROUP BY span_name
+           ORDER BY (COALESCE(SUM(cached_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0)) DESC,
+                    COUNT(*) DESC
+           LIMIT 8""",
+        since,
+    )
+
+    semantic_summary_row = await _safe_fetchrow(
+        pool,
+        """SELECT
+             COUNT(*) FILTER (WHERE invalidated_at IS NULL) AS active_entries,
+             COUNT(*) FILTER (WHERE invalidated_at IS NOT NULL) AS invalidated_entries,
+             COUNT(*) FILTER (
+               WHERE invalidated_at IS NULL AND last_validated_at >= $1
+             ) AS recent_validations
+           FROM reasoning_semantic_cache""",
+        since,
+    ) or {}
+    semantic_class_rows = await _safe_fetch(
+        pool,
+        """SELECT
+             pattern_class,
+             COUNT(*) FILTER (WHERE invalidated_at IS NULL) AS active_entries,
+             COUNT(*) FILTER (
+               WHERE invalidated_at IS NULL AND last_validated_at >= $1
+             ) AS recent_validations
+           FROM reasoning_semantic_cache
+           GROUP BY pattern_class
+           ORDER BY COUNT(*) FILTER (WHERE invalidated_at IS NULL) DESC, pattern_class
+           LIMIT 8""",
+        since,
+    )
+
+    vendor_packet_row = await _safe_fetchrow(
+        pool,
+        """SELECT
+             COUNT(*) AS total_rows,
+             COUNT(*) FILTER (WHERE created_at >= $1) AS writes_in_window,
+             COUNT(DISTINCT vendor_name) AS unique_vendors,
+             COUNT(DISTINCT evidence_hash) AS unique_hashes
+           FROM b2b_vendor_reasoning_packets""",
+        since,
+    ) or {}
+    cross_vendor_row = await _safe_fetchrow(
+        pool,
+        """SELECT
+             COUNT(*) AS total_rows,
+             COUNT(*) FILTER (WHERE cached IS TRUE) AS cached_rows,
+             COUNT(*) FILTER (WHERE cached IS TRUE AND created_at >= $1) AS cached_rows_in_window
+           FROM b2b_cross_vendor_conclusions""",
+        since,
+    ) or {}
+
+    task_rows = await _safe_fetch(
+        pool,
+        """SELECT
+             t.name,
+             e.result_text,
+             e.metadata
+           FROM task_executions e
+           JOIN scheduled_tasks t ON t.id = e.task_id
+           WHERE e.started_at >= $1
+             AND e.status = 'completed'
+             AND t.name = ANY($2::text[])
+           ORDER BY e.started_at DESC""",
+        since,
+        ["b2b_battle_cards", "b2b_churn_reports", "b2b_reasoning_synthesis"],
+    )
+    task_rollups: dict[str, dict[str, int | str]] = {
+        "b2b_battle_cards": {
+            "task_name": "b2b_battle_cards",
+            "executions": 0,
+            "exact_cache_hits": 0,
+            "semantic_cache_hits": 0,
+            "evidence_hash_reuse": 0,
+            "generated": 0,
+        },
+        "b2b_churn_reports": {
+            "task_name": "b2b_churn_reports",
+            "executions": 0,
+            "exact_cache_hits": 0,
+            "semantic_cache_hits": 0,
+            "evidence_hash_reuse": 0,
+            "generated": 0,
+        },
+        "b2b_reasoning_synthesis": {
+            "task_name": "b2b_reasoning_synthesis",
+            "executions": 0,
+            "exact_cache_hits": 0,
+            "semantic_cache_hits": 0,
+            "evidence_hash_reuse": 0,
+            "generated": 0,
+        },
+    }
+    for row in task_rows:
+        task_name = str(row["name"])
+        bucket = task_rollups.get(task_name)
+        if bucket is None:
+            continue
+        bucket["executions"] = _safe_int(bucket["executions"]) + 1
+        metadata = _normalize_metadata(row["metadata"])
+        payload = _parse_task_result_payload(row["result_text"])
+        if task_name == "b2b_battle_cards":
+            bucket["semantic_cache_hits"] = _safe_int(bucket["semantic_cache_hits"]) + _safe_int(metadata.get("cache_hits"))
+            bucket["generated"] = _safe_int(bucket["generated"]) + _safe_int(metadata.get("cards_llm_updated"))
+        elif task_name == "b2b_churn_reports":
+            bucket["exact_cache_hits"] = _safe_int(bucket["exact_cache_hits"]) + _safe_int(payload.get("scorecard_cache_hits"))
+            bucket["evidence_hash_reuse"] = _safe_int(bucket["evidence_hash_reuse"]) + _safe_int(payload.get("scorecard_reasoning_reused"))
+            bucket["generated"] = _safe_int(bucket["generated"]) + _safe_int(payload.get("scorecard_llm_generated"))
+        elif task_name == "b2b_reasoning_synthesis":
+            bucket["evidence_hash_reuse"] = _safe_int(bucket["evidence_hash_reuse"]) + _safe_int(payload.get("vendors_skipped"))
+            bucket["generated"] = _safe_int(bucket["generated"]) + _safe_int(payload.get("vendors_reasoned")) + _safe_int(payload.get("cross_vendor_succeeded"))
+
+    exact_stage_payload = []
+    for strategy in exact_strategies:
+        row = exact_stage_map.get(str(strategy.namespace or ""))
+        exact_stage_payload.append({
+            "stage_id": strategy.stage_id,
+            "namespace": strategy.namespace,
+            "file_path": strategy.file_path,
+            "rationale": strategy.rationale,
+            "rows": _safe_int(row["rows"]) if row else 0,
+            "total_hits": _safe_int(row["total_hits"]) if row else 0,
+            "writes_in_window": _safe_int(row["writes_in_window"]) if row else 0,
+            "rows_hit_in_window": _safe_int(row["rows_hit_in_window"]) if row else 0,
+            "provider_count": _safe_int(row["provider_count"]) if row else 0,
+            "model_count": _safe_int(row["model_count"]) if row else 0,
+            "last_write_at": row["last_write_at"].isoformat() if row and row["last_write_at"] else None,
+            "last_hit_at": row["last_hit_at"].isoformat() if row and row["last_hit_at"] else None,
+        })
+
+    return {
+        "period_days": days,
+        "exact_cache": {
+            "enabled": bool(settings.b2b_churn.llm_exact_cache_enabled),
+            "total_rows": _safe_int(exact_summary_row.get("total_rows")),
+            "total_hits": _safe_int(exact_summary_row.get("total_hits")),
+            "writes_in_window": _safe_int(exact_summary_row.get("writes_in_window")),
+            "rows_hit_in_window": _safe_int(exact_summary_row.get("rows_hit_in_window")),
+            "stages": exact_stage_payload,
+        },
+        "provider_prompt_cache": {
+            "total_calls": _safe_int(prompt_cache_row.get("total_calls")),
+            "cache_hit_calls": _safe_int(prompt_cache_row.get("cache_hit_calls")),
+            "cache_write_calls": _safe_int(prompt_cache_row.get("cache_write_calls")),
+            "cached_tokens": _safe_int(prompt_cache_row.get("cached_tokens")),
+            "cache_write_tokens": _safe_int(prompt_cache_row.get("cache_write_tokens")),
+            "billable_input_tokens": _safe_int(prompt_cache_row.get("billable_input_tokens")),
+            "top_spans": [
+                {
+                    "span_name": row["span_name"],
+                    "calls": _safe_int(row["calls"]),
+                    "cache_hit_calls": _safe_int(row["cache_hit_calls"]),
+                    "cache_write_calls": _safe_int(row["cache_write_calls"]),
+                    "cached_tokens": _safe_int(row["cached_tokens"]),
+                    "cache_write_tokens": _safe_int(row["cache_write_tokens"]),
+                }
+                for row in prompt_cache_spans
+            ],
+        },
+        "semantic_cache": {
+            "active_entries": _safe_int(semantic_summary_row.get("active_entries")),
+            "invalidated_entries": _safe_int(semantic_summary_row.get("invalidated_entries")),
+            "recent_validations": _safe_int(semantic_summary_row.get("recent_validations")),
+            "pattern_classes": [
+                {
+                    "pattern_class": row["pattern_class"],
+                    "active_entries": _safe_int(row["active_entries"]),
+                    "recent_validations": _safe_int(row["recent_validations"]),
+                }
+                for row in semantic_class_rows
+            ],
+        },
+        "evidence_hash_reuse": {
+            "vendor_packet_rows": _safe_int(vendor_packet_row.get("total_rows")),
+            "vendor_packet_writes_in_window": _safe_int(vendor_packet_row.get("writes_in_window")),
+            "unique_vendors": _safe_int(vendor_packet_row.get("unique_vendors")),
+            "unique_hashes": _safe_int(vendor_packet_row.get("unique_hashes")),
+            "cross_vendor_rows": _safe_int(cross_vendor_row.get("total_rows")),
+            "cross_vendor_cached_rows": _safe_int(cross_vendor_row.get("cached_rows")),
+            "cross_vendor_cached_rows_in_window": _safe_int(cross_vendor_row.get("cached_rows_in_window")),
+        },
+        "task_reuse": {
+            "tasks": list(task_rollups.values()),
+        },
     }
 
 
