@@ -2598,6 +2598,20 @@ function CostsTab() {
       sortValue: (row) => row.applied_status || '',
     },
     {
+      key: 'replay_contract_state',
+      header: 'Replay',
+      render: (row) => (
+        <div className="space-y-1">
+          <StatusBadge status={row.replay_contract_state || 'missing'} />
+          <p className="text-[11px] text-slate-500">
+            {row.replay_contract_version != null ? `v${row.replay_contract_version}` : 'legacy/unset'}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.replay_contract_state}:${row.replay_contract_version ?? -1}`,
+    },
+    {
       key: 'cost_usd',
       header: 'Cost',
       render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,

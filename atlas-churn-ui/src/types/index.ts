@@ -1144,6 +1144,8 @@ export interface AdminCostRunBatchJob {
 }
 
 export interface AdminCostRunBatchItem {
+  replay_contract_version: number | null
+  replay_contract_state: string
   id: string
   batch_id: string
   custom_id: string

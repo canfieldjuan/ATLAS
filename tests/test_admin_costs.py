@@ -628,8 +628,11 @@ def test_cost_run_detail_correlates_execution_usage_attempts_and_events(monkeypa
     assert body["batch_items"][0]["status"] == "batch_succeeded"
     assert body["batch_items"][0]["request_metadata"]["channel"] == "email"
     assert body["batch_items"][0]["replay_handler"] == "campaign_generation"
+    assert body["batch_items"][0]["replay_contract_state"] == "missing"
+    assert body["batch_items"][0]["replay_contract_version"] is None
     assert body["batch_items"][0]["applied_status"] == "succeeded"
     assert body["batch_items"][1]["cache_prefiltered"] is True
+    assert body["batch_items"][1]["replay_contract_state"] == "missing"
     assert body["batch_items"][1]["applied_status"] is None
     assert body["calls"][0]["title"] == "task.b2b_blog_post_generation"
     assert body["artifact_attempts"][0]["artifact_type"] == "enrichment"

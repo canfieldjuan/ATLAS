@@ -17,10 +17,11 @@ import psutil
 from fastapi import APIRouter, HTTPException, Query
 
 from ..config import settings
-from ..autonomous.tasks.b2b_enrichment_repair import (
-    _STRICT_DISCUSSION_SKIP_MARKER,
-    _strict_discussion_keep_sql,
-    _strict_discussion_lists,
+from ..services.b2b.enrichment_repair_policy import (
+    ACTIVE_REPAIR_POOL_SQL_TEMPLATE,
+    STRICT_DISCUSSION_SKIP_MARKER,
+    strict_discussion_keep_sql,
+    strict_discussion_lists,
 )
 from ..services.b2b.cache_strategy import iter_core_b2b_cache_strategies
 from ..storage.database import get_db_pool
@@ -32,29 +33,6 @@ router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
 
 def _campaign_batch_stale_minutes() -> int:
     return int(getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30) or 30)
-
-_ACTIVE_REPAIR_POOL_SQL = """
-(
-  enrichment_status IN ('enriched', 'no_signal')
-  AND COALESCE(low_fidelity, false) = false
-  AND enrichment IS NOT NULL
-  AND enrichment_repair_attempts < {max_attempts}
-  AND (
-    enrichment_repair_status IS NULL
-    OR enrichment_repair_status = 'failed'
-    OR enrichment_repair_status = 'promoted'
-    OR (
-      enrichment_repair_status = 'shadowed'
-      AND enrichment_status = 'quarantined'
-      AND jsonb_path_exists(
-        COALESCE(enrichment_repair_applied_fields, '[]'::jsonb),
-        '$[*] ? (@ like_regex "^adjudication:")'
-      )
-    )
-  )
-)
-"""
-
 
 def _recent_metadata_value(metadata: dict, key: str) -> str | None:
     value = metadata.get(key)
@@ -78,6 +56,58 @@ def _normalize_metadata(metadata: object) -> dict:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _replay_contract_meta(metadata: dict[str, Any]) -> tuple[int | None, str]:
+    replay_entry = metadata.get("replay_entry")
+    if replay_entry is None:
+        return None, "missing"
+    if not isinstance(replay_entry, dict):
+        return None, "invalid"
+    version = replay_entry.get("contract_version")
+    if version is None:
+        return None, "legacy"
+    try:
+        return int(version), "versioned"
+    except (TypeError, ValueError):
+        return None, "invalid"
+
+
+def _serialize_run_batch_item(row: Any) -> dict[str, Any]:
+    metadata = _normalize_metadata(row["request_metadata"])
+    replay_version, replay_state = _replay_contract_meta(metadata)
+    return {
+        "replay_contract_version": replay_version,
+        "replay_contract_state": replay_state,
+        "id": str(row["id"]),
+        "batch_id": str(row["batch_id"]),
+        "custom_id": str(row["custom_id"]),
+        "stage_id": str(row["stage_id"]),
+        "task_name": str(row["task_name"]),
+        "provider_batch_id": row["provider_batch_id"],
+        "artifact_type": str(row["artifact_type"]),
+        "artifact_id": str(row["artifact_id"]),
+        "vendor_name": str(row["vendor_name"]) if row["vendor_name"] else None,
+        "status": str(row["status"]),
+        "cache_prefiltered": bool(row["cache_prefiltered"]),
+        "fallback_single_call": bool(row["fallback_single_call"]),
+        "input_tokens": _safe_int(row["input_tokens"]),
+        "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
+        "cached_tokens": _safe_int(row["cached_tokens"]),
+        "cache_write_tokens": _safe_int(row["cache_write_tokens"]),
+        "output_tokens": _safe_int(row["output_tokens"]),
+        "total_tokens": _safe_int(row["total_tokens"]),
+        "cost_usd": round(_safe_float(row["cost_usd"]), 6),
+        "provider_request_id": row["provider_request_id"],
+        "error_text": row["error_text"],
+        "request_metadata": metadata,
+        "replay_handler": str(metadata.get("replay_handler") or "") or None,
+        "applied_at": str(metadata.get("applied_at") or "") or None,
+        "applied_status": str(metadata.get("applied_status") or "") or None,
+        "applied_error": str(metadata.get("applied_error") or "") or None,
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+    }
 
 
 def _humanize_identifier(value: str | None) -> str:
@@ -596,10 +626,10 @@ async def b2b_efficiency(
     """B2B-specific efficiency rollups for extraction, repair, and reasoning."""
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    strict_discussion_sources, strict_discussion_content_types = _strict_discussion_lists(
+    strict_discussion_sources, strict_discussion_content_types = strict_discussion_lists(
         settings.b2b_churn
     )
-    active_repair_pool = _ACTIVE_REPAIR_POOL_SQL.format(
+    active_repair_pool = ACTIVE_REPAIR_POOL_SQL_TEMPLATE.format(
         max_attempts=int(settings.b2b_churn.enrichment_repair_max_attempts)
     )
 
@@ -736,7 +766,7 @@ async def b2b_efficiency(
             WHERE lower(source) = ANY($3::text[])
               AND lower(COALESCE(content_type, '')) = ANY($4::text[])
               AND {active_repair_pool}
-              AND {_strict_discussion_keep_sql()}
+              AND {strict_discussion_keep_sql()}
           ) AS strict_discussion_candidates_kept_rows
         FROM b2b_reviews
         WHERE COALESCE(enriched_at, imported_at) >= $1
@@ -744,7 +774,7 @@ async def b2b_efficiency(
         HAVING COUNT(*) FILTER (WHERE enrichment_status = 'enriched') > 0
         """,
         since,
-        _STRICT_DISCUSSION_SKIP_MARKER,
+        STRICT_DISCUSSION_SKIP_MARKER,
         strict_discussion_sources,
         strict_discussion_content_types,
     )
@@ -1945,41 +1975,7 @@ async def cost_run_detail(
             }
             for row in batch_rows
         ],
-        "batch_items": [
-            (
-                lambda metadata: {
-                "id": str(row["id"]),
-                "batch_id": str(row["batch_id"]),
-                "custom_id": str(row["custom_id"]),
-                "stage_id": str(row["stage_id"]),
-                "task_name": str(row["task_name"]),
-                "provider_batch_id": row["provider_batch_id"],
-                "artifact_type": str(row["artifact_type"]),
-                "artifact_id": str(row["artifact_id"]),
-                "vendor_name": str(row["vendor_name"]) if row["vendor_name"] else None,
-                "status": str(row["status"]),
-                "cache_prefiltered": bool(row["cache_prefiltered"]),
-                "fallback_single_call": bool(row["fallback_single_call"]),
-                "input_tokens": _safe_int(row["input_tokens"]),
-                "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
-                "cached_tokens": _safe_int(row["cached_tokens"]),
-                "cache_write_tokens": _safe_int(row["cache_write_tokens"]),
-                "output_tokens": _safe_int(row["output_tokens"]),
-                "total_tokens": _safe_int(row["total_tokens"]),
-                "cost_usd": round(_safe_float(row["cost_usd"]), 6),
-                "provider_request_id": row["provider_request_id"],
-                "error_text": row["error_text"],
-                "request_metadata": metadata,
-                "replay_handler": str(metadata.get("replay_handler") or "") or None,
-                "applied_at": str(metadata.get("applied_at") or "") or None,
-                "applied_status": str(metadata.get("applied_status") or "") or None,
-                "applied_error": str(metadata.get("applied_error") or "") or None,
-                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-                "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
-            }
-            )(_normalize_metadata(row["request_metadata"]))
-            for row in batch_item_rows
-        ],
+        "batch_items": [_serialize_run_batch_item(row) for row in batch_item_rows],
         "calls": calls,
         "artifact_attempts": [
             {
