@@ -989,6 +989,23 @@ export interface AdminCostTaskReuseRow {
   generated: number
 }
 
+export interface AdminTaskHealthRow {
+  id: string
+  name: string
+  task_type: string
+  schedule_type: string
+  cron_expression: string | null
+  interval_seconds: number | null
+  enabled: boolean
+  last_run_at: string | null
+  next_run_at: string | null
+  last_status: string | null
+  last_duration_ms: number | null
+  last_error: string | null
+  recent_failure_rate: number
+  recent_runs: number
+}
+
 export interface AdminCostCacheHealth {
   period_days: number
   top_n: number

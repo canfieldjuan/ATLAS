@@ -43,6 +43,7 @@ import type {
   AdminCostRecentCall,
   AdminCostCacheHealth,
   AdminCostRunDetail,
+  AdminTaskHealthRow,
   DedupDecision,
   PipelineReviewAction,
 } from '../types'
@@ -56,6 +57,7 @@ const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
+const AUTONOMOUS_BASE = `${API_BASE}/api/v1/autonomous`
 const CACHE_BUSTER_PARAM = '_ts'
 
 function maybeFallbackApiPath(url: string): string | null {
@@ -804,6 +806,10 @@ export async function fetchAdminCostCacheHealth(days = 30, top_n = 8) {
   return get<AdminCostCacheHealth>(ADMIN_COSTS_BASE, '/cache-health', { days, top_n })
 }
 
+export async function fetchAdminTaskHealth(days = 30) {
+  return get<{ tasks: AdminTaskHealthRow[] }>(ADMIN_COSTS_BASE, '/task-health', { days })
+}
+
 export async function fetchAdminCostRun(
   run_id: string,
   params?: {
@@ -817,5 +823,13 @@ export async function fetchAdminCostRun(
     ADMIN_COSTS_BASE,
     `/runs/${encodeURIComponent(run_id)}`,
     params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function runAutonomousTask(taskId: string, body?: Record<string, unknown>) {
+  return post<{ execution_id: string | null; status: string; message: string; already_running?: boolean }>(
+    AUTONOMOUS_BASE,
+    `/${encodeURIComponent(taskId)}/run`,
+    body,
   )
 }

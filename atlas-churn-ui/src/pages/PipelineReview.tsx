@@ -49,6 +49,7 @@ import type {
   AdminCostRunDetail,
   AdminCostRunBatchJob,
   AdminCostRunBatchItem,
+  AdminTaskHealthRow,
 } from '../types'
 import {
   fetchVisibilitySummary,
@@ -66,6 +67,8 @@ import {
   fetchAdminCostRecent,
   fetchAdminCostCacheHealth,
   fetchAdminCostRun,
+  fetchAdminTaskHealth,
+  runAutonomousTask,
 } from '../api/client'
 
 type TabKey = 'queue' | 'failures' | 'quality' | 'audit' | 'costs'
@@ -74,6 +77,7 @@ const EXTRACTION_HEALTH_TOP_N = 12
 const COST_VENDOR_LIMIT = 100
 const B2B_EFFICIENCY_TOP_N = 25
 const B2B_EFFICIENCY_RUN_LIMIT = 25
+const RECON_TASK_NAME = 'b2b_campaign_batch_reconciliation'
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -177,6 +181,12 @@ function formatAgeMinutes(value: number | null | undefined): string {
   if (minutes >= 60 * 24) return `${(minutes / (60 * 24)).toFixed(1)}d`
   if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h`
   return `${Math.round(minutes)}m`
+}
+
+function formatFailureRate(value: number | null | undefined): string {
+  const rate = Number(value ?? 0)
+  if (!Number.isFinite(rate)) return '--'
+  return `${Math.round(rate * 100)}%`
 }
 
 function truncateLabel(value: string | null | undefined, max = 38): string {
@@ -1460,6 +1470,9 @@ function CostsTab() {
   const [cacheFilter, setCacheFilter] = useState('')
   const [runIdInput, setRunIdInput] = useState('')
   const [activeRunId, setActiveRunId] = useState('')
+  const [reconcileTriggering, setReconcileTriggering] = useState(false)
+  const [reconcileMessage, setReconcileMessage] = useState<string | null>(null)
+  const [reconcileError, setReconcileError] = useState<string | null>(null)
 
   const {
     data,
@@ -1546,6 +1559,19 @@ function CostsTab() {
     [days, cacheTopN],
   )
   const {
+    data: taskHealthRows,
+    loading: taskHealthLoading,
+    error: taskHealthError,
+    refresh: refreshTaskHealth,
+    refreshing: taskHealthRefreshing,
+  } = useApiData<AdminTaskHealthRow[]>(
+    async () => {
+      const response = await fetchAdminTaskHealth(Number(days))
+      return response.tasks
+    },
+    [days],
+  )
+  const {
     data: runDetail,
     loading: runDetailLoading,
     error: runDetailError,
@@ -1566,10 +1592,11 @@ function CostsTab() {
   const sourceEfficiency = b2bEfficiency?.source_efficiency ?? []
   const recentPipelineRuns = b2bEfficiency?.recent_runs ?? []
   const recentCalls = data?.recent ?? []
-  const unifiedError = error || vendorsError || b2bEfficiencyError || cacheHealthError
-  const unifiedLoading = loading || vendorsLoading || b2bEfficiencyLoading || cacheHealthLoading
+  const unifiedError = error || vendorsError || b2bEfficiencyError || cacheHealthError || taskHealthError
+  const unifiedLoading = loading || vendorsLoading || b2bEfficiencyLoading || cacheHealthLoading || taskHealthLoading
   const unifiedRefreshing =
-    refreshing || vendorsRefreshing || b2bEfficiencyRefreshing || cacheHealthRefreshing
+    refreshing || vendorsRefreshing || b2bEfficiencyRefreshing || cacheHealthRefreshing || taskHealthRefreshing
+  const reconcilerTask = (taskHealthRows ?? []).find((row) => row.name === RECON_TASK_NAME) ?? null
   const providerOptions = Array.from(
     new Set(
       [...operations.map((row) => row.provider), ...recentCalls.map((row) => row.provider || '')]
@@ -1857,6 +1884,27 @@ function CostsTab() {
       sortValue: (row) => row.provider_batch_id,
     },
   ]
+
+  async function handleRunReconciler() {
+    if (!reconcilerTask) {
+      setReconcileError('Reconciliation task not found')
+      setReconcileMessage(null)
+      return
+    }
+    setReconcileTriggering(true)
+    setReconcileError(null)
+    setReconcileMessage(null)
+    try {
+      const result = await runAutonomousTask(reconcilerTask.id)
+      setReconcileMessage(result.message || `Triggered ${RECON_TASK_NAME}`)
+      refreshTaskHealth()
+      refreshCacheHealth()
+    } catch (err) {
+      setReconcileError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setReconcileTriggering(false)
+    }
+  }
 
   const semanticColumns: Column<AdminCostSemanticPatternClass>[] = [
     {
@@ -2651,6 +2699,7 @@ function CostsTab() {
             refreshVendors()
             refreshB2bEfficiency()
             refreshCacheHealth()
+            refreshTaskHealth()
             if (activeRunId) refreshRunDetail()
           }}
           disabled={unifiedRefreshing || runDetailRefreshing}
@@ -2778,6 +2827,75 @@ function CostsTab() {
           </div>
 
           <div className="space-y-4">
+            <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+                <div>
+                  <h3 className="text-sm font-medium text-white">Reconciler Task</h3>
+                  <p className="text-xs text-slate-500">
+                    Scheduler heartbeat and manual trigger for detached campaign batch reconciliation.
+                  </p>
+                </div>
+                <button
+                  onClick={handleRunReconciler}
+                  disabled={!reconcilerTask || reconcileTriggering}
+                  className="inline-flex items-center gap-1.5 rounded border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <RefreshCw className={clsx('h-3 w-3', reconcileTriggering && 'animate-spin')} />
+                  {reconcileTriggering ? 'Triggering...' : 'Run Reconciler Now'}
+                </button>
+              </div>
+              <div className="grid gap-4 p-4 md:grid-cols-4">
+                <StatCard
+                  label="Task"
+                  value={reconcilerTask ? RECON_TASK_NAME : 'Missing'}
+                  sub={reconcilerTask ? (reconcilerTask.enabled ? 'Enabled' : 'Disabled') : 'No scheduled task row'}
+                  icon={<Workflow className="h-4 w-4" />}
+                  skeleton={taskHealthLoading}
+                />
+                <StatCard
+                  label="Last Run"
+                  value={reconcilerTask?.last_run_at ? formatTs(reconcilerTask.last_run_at) : '--'}
+                  sub={reconcilerTask?.last_status || 'Never ran'}
+                  icon={<Clock className="h-4 w-4" />}
+                  skeleton={taskHealthLoading}
+                />
+                <StatCard
+                  label="Next Run"
+                  value={reconcilerTask?.next_run_at ? formatTs(reconcilerTask.next_run_at) : '--'}
+                  sub={reconcilerTask?.schedule_type || '--'}
+                  icon={<CalendarClock className="h-4 w-4" />}
+                  skeleton={taskHealthLoading}
+                />
+                <StatCard
+                  label="Recent Failure Rate"
+                  value={formatFailureRate(reconcilerTask?.recent_failure_rate)}
+                  sub={`${formatNumber(reconcilerTask?.recent_runs)} recent runs`}
+                  icon={<AlertTriangle className="h-4 w-4" />}
+                  skeleton={taskHealthLoading}
+                />
+              </div>
+              {reconcilerTask ? (
+                <div className="border-t border-slate-700/50 px-4 py-3 text-xs text-slate-400">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span>Status: <span className="text-slate-200">{reconcilerTask.last_status || 'never_ran'}</span></span>
+                    {reconcilerTask.interval_seconds ? (
+                      <span>Interval: <span className="text-slate-200">{formatAgeMinutes(reconcilerTask.interval_seconds / 60)}</span></span>
+                    ) : null}
+                    {reconcilerTask.last_duration_ms != null ? (
+                      <span>Last Duration: <span className="text-slate-200">{formatNumber(reconcilerTask.last_duration_ms)} ms</span></span>
+                    ) : null}
+                  </div>
+                  {reconcilerTask.last_error ? (
+                    <p className="mt-2 truncate text-rose-300">{reconcilerTask.last_error}</p>
+                  ) : null}
+                  {reconcileMessage ? <p className="mt-2 text-cyan-300">{reconcileMessage}</p> : null}
+                  {reconcileError ? <p className="mt-2 text-rose-300">{reconcileError}</p> : null}
+                </div>
+              ) : reconcileError ? (
+                <div className="border-t border-slate-700/50 px-4 py-3 text-xs text-rose-300">{reconcileError}</div>
+              ) : null}
+            </div>
+
             <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
               <div className="border-b border-slate-700/50 px-4 py-3">
                 <h3 className="text-sm font-medium text-white">Recent Task Reuse</h3>
