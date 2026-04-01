@@ -160,6 +160,40 @@ def _merge_reference_ids(*refs_groups: dict[str, Any] | None) -> dict[str, list[
     }
 
 
+async def _fetch_pairwise_reference_fallbacks(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[tuple[str, ...], dict[str, list[str]]]:
+    """Build pairwise witness refs from persisted displacement-edge provenance."""
+    fallbacks: dict[tuple[str, ...], dict[str, list[str]]] = {}
+    rows = await pool.fetch(
+        """
+        SELECT from_vendor, to_vendor, sample_review_ids,
+               computed_date, created_at
+        FROM b2b_displacement_edges
+        WHERE computed_date <= $1
+          AND computed_date > $1::date - make_interval(days => $2)
+        ORDER BY from_vendor, to_vendor, computed_date DESC, created_at DESC
+        """,
+        as_of,
+        analysis_window_days,
+    )
+    for row in rows:
+        key = tuple(_sorted_vendors(row.get("from_vendor"), row.get("to_vendor")))
+        if len(key) < 2 or key in fallbacks:
+            continue
+        witness_ids = [
+            str(review_id).strip()
+            for review_id in (row.get("sample_review_ids") or [])
+            if str(review_id).strip()
+        ]
+        if witness_ids:
+            fallbacks[key] = {"witness_ids": list(dict.fromkeys(witness_ids))}
+    return fallbacks
+
+
 def _append_citation_entry(
     registry: list[dict[str, Any]],
     *,
@@ -720,6 +754,16 @@ async def load_cross_vendor_synthesis_lookup(
     if as_of is None:
         as_of = date.today()
 
+    try:
+        pairwise_reference_fallbacks = await _fetch_pairwise_reference_fallbacks(
+            pool,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
+    except Exception:
+        pairwise_reference_fallbacks = {}
+        logger.debug("Pairwise reference fallback load failed", exc_info=True)
+
     rows = await pool.fetch(
         """
         SELECT analysis_type, vendors, category, synthesis,
@@ -794,6 +838,10 @@ async def load_cross_vendor_synthesis_lookup(
         reference_ids = raw.get("reference_ids")
         if isinstance(reference_ids, dict) and reference_ids:
             entry["reference_ids"] = _copy_reference_ids(reference_ids)
+        elif atype == "pairwise_battle" and len(vendors) >= 2:
+            fallback_refs = pairwise_reference_fallbacks.get(tuple(sorted(vendors)))
+            if fallback_refs:
+                entry["reference_ids"] = _copy_reference_ids(fallback_refs)
 
         if atype == "pairwise_battle" and len(vendors) >= 2:
             key = tuple(sorted(vendors))
@@ -861,6 +909,24 @@ async def load_best_cross_vendor_lookup(
         primary=synthesis_lookup,
         fallback=legacy_lookup,
     )
+    try:
+        pairwise_reference_fallbacks = await _fetch_pairwise_reference_fallbacks(
+            pool,
+            as_of=as_of or date.today(),
+            analysis_window_days=analysis_window_days,
+        )
+    except Exception:
+        pairwise_reference_fallbacks = {}
+        logger.debug("Merged pairwise reference fallback load failed", exc_info=True)
+    if pairwise_reference_fallbacks:
+        for key, entry in (merged.get("battles") or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            if isinstance(entry.get("reference_ids"), dict) and entry.get("reference_ids"):
+                continue
+            fallback_refs = pairwise_reference_fallbacks.get(tuple(sorted(key)))
+            if fallback_refs:
+                entry["reference_ids"] = _copy_reference_ids(fallback_refs)
     return merged
 
 

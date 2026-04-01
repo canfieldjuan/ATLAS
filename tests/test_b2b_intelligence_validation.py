@@ -3243,6 +3243,20 @@ class TestVendorFeedNoCompanyRequired:
         assert feed[0]["named_accounts"] == []
         assert feed[0]["churn_pressure_score"] > 0
 
+    def test_uses_secondary_signal_fallback_when_primary_gate_yields_no_candidates(self):
+        """Secondary signal fallback prevents scoped quiet slices from going empty."""
+        vendors = [
+            _make_vendor_score("Salesforce", total_reviews=1122, churn_intent=70, avg_urgency=2.1),
+            _make_vendor_score("Shopify", total_reviews=1013, churn_intent=60, avg_urgency=2.6),
+        ]
+        lookups = _empty_lookups(
+            dm_lookup={"Salesforce": 0.045, "Shopify": 0.078},
+            price_lookup={"Salesforce": 0.182, "Shopify": 0.313},
+        )
+        feed = _build_deterministic_vendor_feed(vendors, **lookups)
+        assert [row["vendor"] for row in feed] == ["Shopify", "Salesforce"]
+        assert all(row.get("selection_mode") == "secondary_signal" for row in feed)
+
 
 class TestVendorExecutiveSummary:
     @patch("atlas_brain.autonomous.tasks._b2b_shared.settings")

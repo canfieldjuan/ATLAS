@@ -531,6 +531,7 @@ class TestBuildChallengerBrief:
                 "primary_driver": "pricing",
                 "key_quote": None,
                 "source_distribution": {"reddit": 3},
+                "sample_review_ids": ["review-1", "review-2"],
             },
             battle_card=None,
             accounts_in_motion=None,
@@ -543,10 +544,42 @@ class TestBuildChallengerBrief:
         assert brief["head_to_head"]["winner"] == "Discord"
         assert brief["head_to_head"]["loser"] == "Slack"
         assert "Discord displacing Slack" in brief["head_to_head"]["conclusion"]
+        assert brief["head_to_head"]["reference_ids"]["witness_ids"] == ["review-1", "review-2"]
         assert brief["sales_playbook"]["discovery_questions"]
         assert brief["sales_playbook"]["landmine_questions"]
         assert brief["sales_playbook"]["objection_handlers"]
         assert brief["sales_playbook"]["talk_track"]["opening"]
+
+    def test_cross_vendor_battle_without_refs_uses_displacement_review_ids(self):
+        brief = _build_challenger_brief(
+            incumbent="Salesforce",
+            challenger="HubSpot",
+            displacement_detail={
+                "total_mentions": 20,
+                "signal_strength": "strong",
+                "confidence_score": 0.7,
+                "primary_driver": "pricing",
+                "key_quote": "Pricing pressure is forcing a re-evaluation.",
+                "source_distribution": {"reddit": 10, "trustpilot": 5},
+                "sample_review_ids": ["review-a", "review-b"],
+            },
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            cross_vendor_battle={
+                "winner": "HubSpot",
+                "loser": "Salesforce",
+                "conclusion": "HubSpot is gaining share against Salesforce with a strong signal strength.",
+                "durability": "durable",
+                "key_insights": [{"insight": "Pricing pressure is driving switches", "evidence": "pricing"}],
+                "confidence": 0.82,
+            },
+            max_target_accounts=10,
+        )
+        assert brief["head_to_head"]["winner"] == "HubSpot"
+        assert brief["head_to_head"]["reference_ids"]["witness_ids"] == ["review-a", "review-b"]
 
     def test_evidence_vault_fallback_populates_weaknesses_and_quotes(self):
         """Vault fills incumbent evidence when battle card is absent."""

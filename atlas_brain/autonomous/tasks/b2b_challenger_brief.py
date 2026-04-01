@@ -173,8 +173,9 @@ async def _fetch_displacement_detail(
     """Aggregate displacement edge detail for a specific pair."""
     rows = await pool.fetch(
         """
-        SELECT mention_count, signal_strength, confidence_score,
+        SELECT id, mention_count, signal_strength, confidence_score,
                primary_driver, key_quote, source_distribution,
+               sample_review_ids,
                computed_date
         FROM b2b_displacement_edges
         WHERE LOWER(from_vendor) = LOWER($1)
@@ -194,6 +195,7 @@ async def _fetch_displacement_detail(
             "primary_driver": None,
             "key_quote": None,
             "source_distribution": {},
+            "sample_review_ids": [],
         }
 
     total_mentions = sum(r["mention_count"] for r in rows)
@@ -207,6 +209,7 @@ async def _fetch_displacement_detail(
 
     # Merge source distributions
     merged_sources: dict[str, int] = {}
+    sample_review_ids: list[str] = []
     for r in rows:
         sd = r["source_distribution"]
         if isinstance(sd, str):
@@ -217,6 +220,10 @@ async def _fetch_displacement_detail(
         if isinstance(sd, dict):
             for src, count in sd.items():
                 merged_sources[src] = merged_sources.get(src, 0) + (int(count) if count else 0)
+        for review_id in (r.get("sample_review_ids") or []):
+            review_id_text = str(review_id or "").strip()
+            if review_id_text and review_id_text not in sample_review_ids:
+                sample_review_ids.append(review_id_text)
 
     return {
         "total_mentions": total_mentions,
@@ -225,7 +232,24 @@ async def _fetch_displacement_detail(
         "primary_driver": primary_driver,
         "key_quote": key_quote,
         "source_distribution": merged_sources,
+        "sample_review_ids": sample_review_ids,
     }
+
+
+def _reference_ids_from_displacement_detail(
+    displacement_detail: dict[str, Any] | None,
+) -> dict[str, list[str]]:
+    """Build fallback witness refs from displacement-edge provenance."""
+    if not isinstance(displacement_detail, dict):
+        return {}
+    witness_ids = [
+        str(review_id).strip()
+        for review_id in (displacement_detail.get("sample_review_ids") or [])
+        if str(review_id).strip()
+    ]
+    if not witness_ids:
+        return {}
+    return {"witness_ids": list(dict.fromkeys(witness_ids))}
 
 
 async def _fetch_product_profile(pool, vendor: str) -> dict | None:
@@ -1586,6 +1610,13 @@ def _build_challenger_brief(
             "key_insights": insights,
             "synthesized": True,
         }
+    if not (
+        isinstance(head_to_head.get("reference_ids"), dict)
+        and head_to_head.get("reference_ids")
+    ):
+        fallback_reference_ids = _reference_ids_from_displacement_detail(displacement_detail)
+        if fallback_reference_ids:
+            head_to_head["reference_ids"] = fallback_reference_ids
 
     category_council: dict[str, Any] = {}
     if accounts_in_motion and isinstance(accounts_in_motion.get("category_council"), dict):

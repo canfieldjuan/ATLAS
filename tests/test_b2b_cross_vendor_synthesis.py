@@ -397,6 +397,46 @@ async def test_load_cross_vendor_synthesis_lookup_prefers_older_row_with_referen
     assert entry["reference_ids"]["witness_ids"] == ["witness:aws_gcp:1"]
 
 
+@pytest.mark.asyncio
+async def test_load_cross_vendor_synthesis_lookup_backfills_pairwise_refs_from_displacement_edges():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(side_effect=[
+        [
+            {
+                "from_vendor": "Salesforce",
+                "to_vendor": "HubSpot",
+                "sample_review_ids": ["review-1", "review-2", "review-2"],
+                "computed_date": date(2026, 3, 30),
+                "created_at": "2026-03-31T03:00:31Z",
+            },
+        ],
+        [
+            {
+                "analysis_type": "pairwise_battle",
+                "vendors": ["HubSpot", "Salesforce"],
+                "category": None,
+                "synthesis": {
+                    "winner": "HubSpot",
+                    "loser": "Salesforce",
+                    "conclusion": "HubSpot is gaining share against Salesforce.",
+                    "confidence": 0.81,
+                },
+                "as_of_date": date(2026, 3, 30),
+                "created_at": "2026-03-31T04:26:40Z",
+            },
+        ],
+    ])
+
+    lookup = await load_cross_vendor_synthesis_lookup(
+        pool,
+        as_of=date(2026, 3, 31),
+        analysis_window_days=30,
+    )
+
+    entry = lookup["battles"][("HubSpot", "Salesforce")]
+    assert entry["reference_ids"]["witness_ids"] == ["review-1", "review-2"]
+
+
 # ---------------------------------------------------------------------------
 # Evidence hash tests
 # ---------------------------------------------------------------------------

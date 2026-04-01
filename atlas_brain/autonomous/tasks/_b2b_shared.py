@@ -19,6 +19,7 @@ from ...services.apollo_company_overrides import fetch_company_override_map
 from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import (
     parse_source_allowlist,
+    filter_deprecated_sources,
     display_name as _source_display_name,
     VERIFIED_SOURCES,
 )
@@ -460,12 +461,18 @@ def _build_llm_trace_metadata(
 
 def _intelligence_source_allowlist() -> list[str]:
     """Return the configured intelligence source allowlist for SQL ANY() binding."""
-    return parse_source_allowlist(settings.b2b_churn.intelligence_source_allowlist)
+    return filter_deprecated_sources(
+        parse_source_allowlist(settings.b2b_churn.intelligence_source_allowlist),
+        settings.b2b_churn.deprecated_review_sources,
+    )
 
 
 def _executive_source_list() -> list[str]:
     """Return curated executive sources for headline-facing queries."""
-    return parse_source_allowlist(settings.b2b_churn.intelligence_executive_sources)
+    return filter_deprecated_sources(
+        parse_source_allowlist(settings.b2b_churn.intelligence_executive_sources),
+        settings.b2b_churn.deprecated_review_sources,
+    )
 
 
 def _eligible_review_filters(*, window_param: int | None = 1, source_param: int = 2, alias: str = "") -> str:
@@ -564,7 +571,20 @@ def _battle_card_headline_paths(path: str) -> bool:
 
 def _battle_card_numeric_tokens(text: str) -> set[str]:
     """Extract numeric tokens from narrative sections for validation."""
-    return set(re.findall(r"\b\d[\d,]*(?:\.\d+)?%?", text or ""))
+    tokens: set[str] = set()
+    for match in re.finditer(r"\b\d[\d,]*(?:\.\d+)?%?", text or ""):
+        token = match.group(0)
+        start, end = match.span()
+        next_char = text[end] if end < len(text or "") else ""
+        next_next = text[end + 1] if end + 1 < len(text or "") else ""
+        normalized = token.replace(",", "").rstrip("%")
+        # Ignore UI-style singleton compounds like "1-click" that are not
+        # economic or corpus-level claims. Multi-digit timeline claims such as
+        # "12-month" still flow through validation.
+        if len(normalized) == 1 and next_char == "-" and next_next.isalpha():
+            continue
+        tokens.add(token)
+    return tokens
 
 
 def _battle_card_normalize_numeric_token(token: str) -> str:
@@ -2474,14 +2494,10 @@ def _fallback_scorecard_expert_take(scorecard: dict[str, Any]) -> str:
                 f"Buyers considering {vendor} should pressure-test {top_pain} because "
                 f"recent buyer feedback shows a {trend} churn pattern."
             )
-    best = _best_cross_vendor_comparison(scorecard)
-    if best and best.get("opponent"):
-        opponent = str(best.get("opponent") or "").strip()
-        advantage = str(best.get("resource_advantage") or "").strip()
-        if advantage:
-            base += f" Relative to {opponent}, the market comparison points to {advantage}."
-        else:
-            base += f" Relative to {opponent}, buyers appear to be weighing competitive differences more directly."
+    # Cross-vendor comparison context is available in the separate
+    # cross_vendor_comparisons field on the scorecard.  Appending it to the
+    # expert_take prose leaked internal LLM labels (e.g. "Neither - Resource
+    # Parity") into buyer-facing copy, so we no longer interpolate it here.
     return _trim_words(base, _synthesis_expert_take_max_words())
 
 
@@ -4375,7 +4391,7 @@ async def _fetch_buyer_profile_provenance(
             source,
             count(*) AS cnt,
             count(*) FILTER (
-                WHERE (enrichment->'buyer_authority'->>'decision_maker')::boolean IS TRUE
+                WHERE (enrichment->'reviewer_context'->>'decision_maker')::boolean IS TRUE
             ) AS dm_cnt,
             avg((enrichment->>'urgency_score')::numeric) AS avg_urg,
             array_agg(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST)
@@ -4683,22 +4699,33 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
     filters = _eligible_review_filters(window_param=1, source_param=3)
     rows = await pool.fetch(
         f"""
-        WITH ranked_quotes AS (
-            SELECT vendor_name, id AS review_id, phrase.value AS quote,
+        WITH review_best AS (
+            SELECT DISTINCT ON (vendor_name, id)
+                vendor_name, id AS review_id, phrase.value AS quote,
                 (enrichment->>'urgency_score')::numeric AS urgency,
                 source, reviewed_at, rating, rating_max,
                 reviewer_company, reviewer_title, company_size_raw,
                 COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
-                ROW_NUMBER() OVER (
-                    PARTITION BY vendor_name
-                    ORDER BY (enrichment->>'urgency_score')::numeric DESC
-                ) AS rn
+                enrichment->'churn_signals' AS churn_signals,
+                enrichment->'salience_flags' AS salience_flags
             FROM b2b_reviews
             CROSS JOIN LATERAL jsonb_array_elements_text(
                 COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
             ) AS phrase(value)
             WHERE {filters}
               AND (enrichment->>'urgency_score')::numeric >= $2
+            ORDER BY vendor_name, id, length(phrase.value) DESC
+        ),
+        ranked_quotes AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY vendor_name
+                    ORDER BY
+                        CASE WHEN (churn_signals->>'intent_to_leave')::boolean IS TRUE THEN 0 ELSE 1 END,
+                        jsonb_array_length(COALESCE(salience_flags, '[]'::jsonb)) DESC,
+                        urgency DESC
+                ) AS rn
+            FROM review_best
         )
         SELECT vendor_name,
             jsonb_agg(
@@ -4714,7 +4741,7 @@ async def _fetch_quotable_evidence(pool, window_days: int, *, min_urgency: float
                     'title', reviewer_title,
                     'company_size', company_size_raw,
                     'industry', industry
-                ) ORDER BY urgency DESC
+                ) ORDER BY rn
             ) AS quotes
         FROM ranked_quotes WHERE rn <= 15
         GROUP BY vendor_name
@@ -5217,9 +5244,9 @@ def _competitive_disp_from_dynamics(
     rows: list[dict[str, Any]] = []
     for vendor, flows in (displacement_lookup or {}).items():
         for flow in flows:
-            competitor = str(
+            competitor = _canonicalize_competitor(str(
                 flow.get("to_vendor") or flow.get("competitor") or "",
-            ).strip()
+            ).strip())
             if not competitor:
                 continue
             flow_summary = flow.get("flow_summary") or {}
@@ -9446,6 +9473,7 @@ def _build_deterministic_vendor_feed(
                 m["category_reviews"] = reviews
 
     candidates: list[dict[str, Any]] = []
+    fallback_candidates: list[dict[str, Any]] = []
     for vendor, m in merged.items():
         total_reviews = m["total_reviews"]
         churn_intent = m["churn_intent"]
@@ -9454,9 +9482,22 @@ def _build_deterministic_vendor_feed(
         category = m["category"]
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))
+        # Load reasoning once per vendor
+        _rc = _get_vendor_reasoning(vendor, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
+        reasoning_confidence = float(_rc.get("confidence", 0) or 0)
 
-        # Filter: include if meaningful signal
-        if churn_density < 15 and avg_urgency < 6 and dm_rate < 0.3:
+        passes_primary_gate = not (
+            churn_density < 15 and avg_urgency < 6 and dm_rate < 0.3
+        )
+        passes_secondary_signal = (
+            reasoning_confidence >= 0.75
+            or price_rate >= 0.18
+            or dm_rate >= 0.08
+            or churn_density >= 5.0
+        )
+        if not passes_primary_gate and not (
+            total_reviews >= 50 and passes_secondary_signal
+        ):
             continue
 
         # Confidence label
@@ -9466,11 +9507,9 @@ def _build_deterministic_vendor_feed(
             confidence = "medium"
         else:
             confidence = "low"
-        # Load reasoning once per vendor
-        _rc = _get_vendor_reasoning(vendor, synthesis_views=synthesis_views, reasoning_lookup=reasoning_lookup)
 
         # Boost confidence when reasoning provides corroborating evidence
-        if _rc.get("confidence", 0) >= 0.8 and confidence == "medium":
+        if reasoning_confidence >= 0.8 and confidence == "medium":
             confidence = "high"
 
         # Displacement mention total for this vendor
@@ -9491,7 +9530,15 @@ def _build_deterministic_vendor_feed(
         # Pain breakdown (top 3)
         pains = pain_lookup.get(vendor, [])
         top_pain = pains[0]["category"] if pains else "unknown"
-        pain_breakdown = [{"category": p["category"], "count": p["count"]} for p in pains[:3]]
+        total_pain = sum(int(p.get("count") or 0) for p in pains)
+        pain_breakdown = [
+            {
+                "category": p["category"],
+                "count": p["count"],
+                "pct": round(int(p.get("count") or 0) / max(total_pain, 1), 3),
+            }
+            for p in pains[:3]
+        ]
 
         # Feature gaps (top 3)
         gaps = feature_gap_lookup.get(vendor, [])
@@ -9605,7 +9652,7 @@ def _build_deterministic_vendor_feed(
         }
         if _rc:
             entry["archetype"] = _rc.get("archetype", "")
-            entry["archetype_confidence"] = _rc.get("confidence", 0)
+            entry["archetype_confidence"] = reasoning_confidence
             entry["archetype_risk_level"] = _rc.get("risk_level", "")
             entry["reasoning_mode"] = _rc.get("mode", "")
             # Synthesis-native fields when available
@@ -9614,7 +9661,11 @@ def _build_deterministic_vendor_feed(
                 summary = _rc.get("executive_summary", "")
                 if summary:
                     entry["reasoning_summary"] = summary
-        candidates.append(entry)
+        if passes_primary_gate:
+            candidates.append(entry)
+        else:
+            entry["selection_mode"] = "secondary_signal"
+            fallback_candidates.append(entry)
 
     # Reasoning-weighted sort: vendors with high-confidence archetypes get a boost
     def _sort_key(x: dict) -> tuple:
@@ -9624,6 +9675,9 @@ def _build_deterministic_vendor_feed(
         reasoning_boost = min(conf * 5, 5.0) if has_arch else 0
         return (-(score + reasoning_boost),)
     candidates.sort(key=_sort_key)
+    if not candidates and fallback_candidates:
+        fallback_candidates.sort(key=_sort_key)
+        return fallback_candidates[:limit]
     return candidates[:limit]
 
 
@@ -9944,6 +9998,7 @@ def _build_deterministic_vendor_scorecards(
     contract_value_lookup: dict[str, list[dict]] | None = None,
     turning_point_lookup: dict[str, list[dict]] | None = None,
     tenure_lookup: dict[str, list[dict]] | None = None,
+    evidence_vault_lookup: dict[str, dict[str, Any]] | None = None,
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Build vendor deep-dive scorecards from aggregated numeric data.
@@ -10020,7 +10075,22 @@ def _build_deterministic_vendor_scorecards(
         recommend_yes = m["recommend_yes"]
         recommend_no = m["recommend_no"]
         recommend_total = m.get("recommend_total", 0)
-        recommend_ratio = round(((recommend_yes - recommend_no) / recommend_total) * 100, 1) if recommend_total else 0.0
+        if recommend_total:
+            recommend_ratio = round(((recommend_yes - recommend_no) / recommend_total) * 100, 1)
+        else:
+            # Fall back to evidence vault metric_snapshot when signal table
+            # lacks recommend columns (the common path for reports).
+            vault = (evidence_vault_lookup or {}).get(vendor) or {}
+            ms = vault.get("metric_snapshot") or {}
+            vault_yes = int(ms.get("recommend_yes") or 0)
+            vault_no = int(ms.get("recommend_no") or 0)
+            vault_total = vault_yes + vault_no
+            if vault_total:
+                recommend_yes = vault_yes
+                recommend_no = vault_no
+                recommend_ratio = round(((vault_yes - vault_no) / vault_total) * 100, 1)
+            else:
+                recommend_ratio = 0.0
 
         if total_reviews >= 50:
             confidence = "high"
@@ -10049,7 +10119,15 @@ def _build_deterministic_vendor_scorecards(
         # Pain breakdown (top 5)
         pains = pain_lookup.get(vendor, [])
         top_pain = pains[0]["category"] if pains else "unknown"
-        pain_breakdown = [{"category": p["category"], "count": p["count"]} for p in pains[:5]]
+        total_pain = sum(int(p.get("count") or 0) for p in pains)
+        pain_breakdown = [
+            {
+                "category": p["category"],
+                "count": p["count"],
+                "pct": round(int(p.get("count") or 0) / max(total_pain, 1), 3),
+            }
+            for p in pains[:5]
+        ]
 
         # Competitor overlap (top 5)
         comp_entries = competitor_lookup.get(vendor, [])
