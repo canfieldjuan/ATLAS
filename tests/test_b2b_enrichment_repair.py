@@ -606,6 +606,56 @@ def test_build_repair_payload_includes_strategic_targets():
     assert "money_without_pricing_span" in payload["strategic_adjudication_reasons"]
 
 
+def test_strategic_adjudication_skips_low_signal_money_discussion_noise():
+    row = {
+        "summary": "General reddit thread",
+        "review_text": "I found a cheaper airport close to downtown and the ticket was $100 less.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "community_discussion",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": ["explicit_dollar"],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {},
+        "pricing_phrases": [],
+        "specific_complaints": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "money_without_pricing_span" not in reasons
+
+
+def test_strategic_adjudication_keeps_real_pricing_gap():
+    row = {
+        "summary": "Renewal pricing issue",
+        "review_text": "At renewal we were quoted $29 per seat and started evaluating alternatives.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "community_discussion",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": ["explicit_dollar"],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"actively_evaluating": True, "contract_renewal_mentioned": True},
+        "pricing_phrases": [],
+        "specific_complaints": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "money_without_pricing_span" in reasons
+
+
 def test_strategic_adjudication_skips_neutral_competitor_comparisons_without_pressure():
     row = {
         "summary": "Should I use Azure DevOps or stick to GitHub?",

@@ -63,6 +63,23 @@ _HARD_GAP = f"""(
 _MONEY_WITHOUT_PRICING_SPAN = """
 (
   ({money_signal})
+  AND (
+    COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+    OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+    OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+    OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+    OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+  )
+  AND NOT (
+    content_type IN ('community_discussion', 'insider_account')
+    AND NOT (
+      COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+    )
+    AND NOT review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+  )
   AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "pricing_backlash")')
 )
 """.format(

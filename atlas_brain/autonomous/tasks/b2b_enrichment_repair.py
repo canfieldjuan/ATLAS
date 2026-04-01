@@ -53,6 +53,12 @@ _TIMELINE_CONTEXT_PATTERNS = (
     "switch", "switched", "migrating", "migration", "replatform",
     "cancel", "deadline", "go live", "go-live", "cutover",
 )
+_PRICING_CONTEXT_PATTERNS = (
+    "pricing", "price", "priced", "cost", "costly", "expensive", "cheaper",
+    "budget", "billing", "invoice", "refund", "overcharg", "renewal",
+    "per seat", "per user", "subscription", "license", "licensed",
+    "plan", "plan tier", "seat", "user",
+)
 _HARD_GAP_SQL = """
 (
   (enrichment->'evidence_spans' IS NULL OR jsonb_typeof(enrichment->'evidence_spans') != 'array'
@@ -133,6 +139,19 @@ def _has_timeline_trigger(review_blob: str, *, structured_churn: bool) -> bool:
     )
 
 
+def _has_pricing_trigger(
+    review_blob: str,
+    *,
+    structured_churn: bool,
+    pricing_signal: bool,
+) -> bool:
+    if not pricing_signal:
+        return False
+    if structured_churn:
+        return True
+    return base_enrichment._contains_any(review_blob, _PRICING_CONTEXT_PATTERNS)
+
+
 def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
     review_blob = base_enrichment._repair_text_blob(source_row)
     if not review_blob.strip():
@@ -168,6 +187,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         or bool(result.get("feature_gaps"))
         or base_enrichment._contains_any(review_blob, _COMPETITOR_PRESSURE_PATTERNS)
     )
+    pricing_signal = bool(base_enrichment._REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
 
     pricing_span = any(str(span.get("signal_type") or "").strip().lower() == "pricing_backlash" for span in spans)
     strong_competitor_signal = _has_strong_competitor_signal(competitors)
@@ -218,8 +238,13 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
 
     reasons: list[str] = []
     if (
-        (base_enrichment._REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
+        _has_pricing_trigger(
+            review_blob,
+            structured_churn=structured_churn,
+            pricing_signal=pricing_signal,
+        )
         and not pricing_span
+        and not discussion_noise
     ):
         reasons.append("money_without_pricing_span")
     if (
@@ -915,8 +940,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     OR (
                       COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') NOT IN ('pricing', 'contract_lock_in')
                       AND (
-                        review_text ~* '\\$\\s?\\d'
-                        OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
+                        (
+                          review_text ~* '\\$\\s?\\d'
+                          OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
+                        )
+                        AND (
+                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                          OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+                        )
                       )
                     )
                     OR (
@@ -943,7 +977,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       AND review_text ~* '(cancel|cancellation|billing|invoice|charged|refund|automatic renewal|auto renew|switched to|moved to|considering|evaluating|replaced with)'
                     )
                     OR (
-                      (review_text ~* '\\$\\s?\\d' OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar')
+                      (
+                        review_text ~* '\\$\\s?\\d'
+                        OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
+                      )
+                      AND (
+                        COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                        OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                        OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                        OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                        OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+                      )
+                      AND NOT (
+                        content_type IN ('community_discussion', 'insider_account')
+                        AND NOT (
+                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                        )
+                        AND NOT review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+                      )
                       AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "pricing_backlash")')
                     )
                     OR (
