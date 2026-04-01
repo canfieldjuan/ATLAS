@@ -134,10 +134,7 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
     OR (
       review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-      AND (
-        {competitors_len} > 0
-        OR review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'
-      )
+      AND {competitors_len} > 0
     )
     OR jsonb_path_exists(
       COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),

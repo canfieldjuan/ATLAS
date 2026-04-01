@@ -182,7 +182,7 @@ def _has_competitor_trigger(
     soft = base_enrichment._contains_any(review_blob, _DISPLACEMENT_SOFT_PATTERNS)
     if not soft:
         return False
-    return bool(competitors) or base_enrichment._contains_any(review_blob, _DISPLACEMENT_CONTEXT_PATTERNS)
+    return bool(competitors)
 
 
 def _has_vendor_literal_reference(source_row: dict[str, Any], review_blob: str) -> bool:
@@ -1050,13 +1050,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                     OR (
                       COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) = 0
-                      AND (
-                        review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
-                        OR (
-                          review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-                          AND review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'
-                        )
-                      )
+                      AND review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
                     )
                     OR (
                       COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) = 0
@@ -1141,10 +1135,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
                         OR (
                           review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-                          AND (
-                            COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
-                            OR review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'
-                          )
+                          AND COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
                         )
                         OR jsonb_path_exists(
                           COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),

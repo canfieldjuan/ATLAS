@@ -367,7 +367,7 @@ async def test_run_claim_query_requires_pressure_signal(monkeypatch):
     assert "review_text ~* '(cancel|cancellation|billing dispute|refund denied" in query
     assert "review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'" in query
     assert "review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'" in query
-    assert "review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'" in query
+    assert "COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0" in query
 
 
 @pytest.mark.asyncio
@@ -798,7 +798,9 @@ def test_strategic_adjudication_keeps_soft_evaluation_with_displacement_context(
         "replacement_mode": "none",
         "timeline": {"decision_timeline": "unknown"},
         "churn_signals": {"actively_evaluating": True, "contract_renewal_mentioned": True},
-        "competitors_mentioned": [],
+        "competitors_mentioned": [
+            {"name": "HubSpot", "evidence_type": "neutral_mention", "displacement_confidence": "low"}
+        ],
         "specific_complaints": [],
         "pricing_phrases": [],
         "feature_gaps": [],
@@ -808,6 +810,33 @@ def test_strategic_adjudication_keeps_soft_evaluation_with_displacement_context(
     reasons = repair_mod._strategic_adjudication_reasons(result, row)
 
     assert "competitor_without_displacement_framing" in reasons
+
+
+def test_strategic_adjudication_skips_soft_evaluation_without_named_alternative():
+    row = {
+        "summary": "CRM evaluation at renewal",
+        "review_text": "We are evaluating alternative CRM platforms at renewal because Salesforce is too expensive.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"actively_evaluating": True, "contract_renewal_mentioned": True},
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
 
 
 def test_strategic_adjudication_skips_reddit_vendor_ambiguity_noise():
