@@ -29,7 +29,9 @@ logger = logging.getLogger("atlas.api.admin_costs")
 
 router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
 
-_STALE_BATCH_THRESHOLD_MINUTES = 30
+
+def _campaign_batch_stale_minutes() -> int:
+    return int(getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30) or 30)
 
 _ACTIVE_REPAIR_POOL_SQL = """
 (
@@ -1186,7 +1188,8 @@ async def cache_health(
         since,
         top_n,
     )
-    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STALE_BATCH_THRESHOLD_MINUTES)
+    stale_threshold_minutes = _campaign_batch_stale_minutes()
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_threshold_minutes)
     stale_batch_rows = await _safe_fetch(
         pool,
         """SELECT
@@ -1434,7 +1437,7 @@ async def cache_health(
         },
         "anthropic_batching": {
             "enabled": bool(settings.b2b_churn.anthropic_batch_enabled),
-            "stale_job_threshold_minutes": _STALE_BATCH_THRESHOLD_MINUTES,
+            "stale_job_threshold_minutes": stale_threshold_minutes,
             "total_jobs": _safe_int(batch_summary_row.get("total_jobs")),
             "submitted_jobs": _safe_int(batch_summary_row.get("submitted_jobs")),
             "total_items": _safe_int(batch_summary_row.get("total_items")),

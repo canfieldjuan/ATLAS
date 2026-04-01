@@ -3436,6 +3436,12 @@ class B2BCampaignConfig(BaseSettings):
         default=False,
         description="Submit campaign batches for later reconciliation instead of waiting inline for completion",
     )
+    anthropic_batch_stale_minutes: int = Field(
+        default=30,
+        ge=5,
+        le=1440,
+        description="Minutes before a detached campaign batch job or claim is considered stale",
+    )
     anthropic_batch_min_items: int = Field(
         default=2,
         ge=1,

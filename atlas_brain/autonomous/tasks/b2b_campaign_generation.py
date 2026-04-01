@@ -5167,6 +5167,7 @@ async def reconcile_batches(task: ScheduledTask) -> dict[str, Any]:
                 pool,
                 item_id=str(item_row["id"]),
                 claimer=claimer,
+                stale_after_minutes=int(getattr(cfg, "anthropic_batch_stale_minutes", 30) or 30),
             )
             if not claimed:
                 continue

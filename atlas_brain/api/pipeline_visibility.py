@@ -22,7 +22,6 @@ from ..storage.database import get_db_pool
 logger = logging.getLogger("atlas.api.pipeline_visibility")
 router = APIRouter(prefix="/pipeline/visibility", tags=["pipeline-visibility"])
 
-_DETACHED_BATCH_STALE_MINUTES = 30
 _RECON_TASK_NAME = "b2b_campaign_batch_reconciliation"
 _MANAGED_HEALTH_REASON_CODES = {
     "detached_batch_stale",
@@ -55,6 +54,10 @@ def _serialize_row(row) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _campaign_batch_stale_minutes() -> int:
+    return int(getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30) or 30)
 
 
 def _managed_health_key(
@@ -166,8 +169,9 @@ async def _emit_managed_health_issue(
 
 def _reconciliation_task_stale_seconds(task_row: dict[str, Any]) -> int:
     interval_seconds = int(task_row.get("interval_seconds") or 0)
+    stale_minutes = _campaign_batch_stale_minutes()
     if interval_seconds > 0:
-        return max(interval_seconds * 3, _DETACHED_BATCH_STALE_MINUTES * 60)
+        return max(interval_seconds * 3, stale_minutes * 60)
     return 6 * 60 * 60
 
 
@@ -177,6 +181,7 @@ async def _sync_detached_batch_health(pool) -> None:
         return
 
     active_keys: set[tuple[str, str, str, str, str]] = set()
+    stale_minutes_threshold = _campaign_batch_stale_minutes()
 
     stale_batches = await pool.fetch(
         """
@@ -198,7 +203,7 @@ async def _sync_detached_batch_health(pool) -> None:
         ORDER BY COALESCE(submitted_at, created_at) ASC
         LIMIT 25
         """,
-        _DETACHED_BATCH_STALE_MINUTES,
+        stale_minutes_threshold,
     )
     stale_claims = await pool.fetch(
         """
@@ -220,7 +225,7 @@ async def _sync_detached_batch_health(pool) -> None:
         ORDER BY NULLIF(i.request_metadata->>'applying_at', '')::timestamptz ASC
         LIMIT 25
         """,
-        _DETACHED_BATCH_STALE_MINUTES,
+        stale_minutes_threshold,
     )
     for row in stale_batches:
         batch_id = str(row["id"])
@@ -236,7 +241,7 @@ async def _sync_detached_batch_health(pool) -> None:
         stale_minutes = max(
             0,
             int((datetime.now(timezone.utc) - stale_since).total_seconds() // 60),
-        ) if stale_since else _DETACHED_BATCH_STALE_MINUTES
+        ) if stale_since else stale_minutes_threshold
         await _emit_managed_health_issue(
             pool,
             stage="task_execution",
@@ -271,7 +276,7 @@ async def _sync_detached_batch_health(pool) -> None:
         stale_minutes = max(
             0,
             int((datetime.now(timezone.utc) - applying_at).total_seconds() // 60),
-        ) if applying_at else _DETACHED_BATCH_STALE_MINUTES
+        ) if applying_at else stale_minutes_threshold
         await _emit_managed_health_issue(
             pool,
             stage="task_execution",
