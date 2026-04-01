@@ -131,13 +131,13 @@ class _FakePool:
                     "execution_id": "run-enrich-1",
                     "task_name": "b2b_enrichment",
                     "started_at": datetime(2026, 3, 31, 21, 55, tzinfo=timezone.utc),
-                    "result_text": '{"reviews_processed": 10, "witness_rows": 3, "witness_count": 15, "secondary_write_hits": 1, "exact_cache_hits": 2, "generated": 8}',
+                    "result_text": '{"reviews_processed": 10, "witness_rows": 3, "witness_count": 15, "secondary_write_hits": 1, "strict_discussion_candidates_kept": 4, "strict_discussion_candidates_dropped": 0, "low_signal_discussion_skipped": 0, "exact_cache_hits": 2, "generated": 8}',
                 },
                 {
                     "execution_id": "run-repair-1",
                     "task_name": "b2b_enrichment_repair",
                     "started_at": datetime(2026, 3, 31, 22, 5, tzinfo=timezone.utc),
-                    "result_text": '{"reviews_processed": 5, "witness_rows": 2, "witness_count": 8, "secondary_write_hits": 1, "exact_cache_hits": 1, "generated": 4}',
+                    "result_text": '{"reviews_processed": 5, "witness_rows": 2, "witness_count": 8, "secondary_write_hits": 1, "strict_discussion_candidates_kept": 2, "strict_discussion_candidates_dropped": 3, "low_signal_discussion_skipped": 3, "exact_cache_hits": 1, "generated": 4}',
                 },
                 {
                     "execution_id": "run-reason-1",
@@ -221,6 +221,8 @@ class _FakePool:
                     "repair_promoted_rows": 10,
                     "rows_with_spans": 90,
                     "span_count": 180,
+                    "low_signal_discussion_skipped_rows": 12,
+                    "strict_discussion_candidates_kept_rows": 18,
                 },
                 {
                     "source": "g2",
@@ -229,6 +231,8 @@ class _FakePool:
                     "repair_promoted_rows": 2,
                     "rows_with_spans": 35,
                     "span_count": 70,
+                    "low_signal_discussion_skipped_rows": 0,
+                    "strict_discussion_candidates_kept_rows": 0,
                 },
             ]
         if "FROM artifact_attempts" in query and "WHERE run_id = $1" in query:
@@ -360,6 +364,9 @@ class _FakePool:
                         "channel": "email",
                         "target_mode": "vendor_retention",
                         "tier": "report",
+                        "replay_handler": "campaign_generation",
+                        "applied_at": "2026-03-31T22:01:30+00:00",
+                        "applied_status": "succeeded",
                     },
                     "created_at": datetime(2026, 3, 31, 22, 0, tzinfo=timezone.utc),
                     "completed_at": datetime(2026, 3, 31, 22, 1, tzinfo=timezone.utc),
@@ -390,6 +397,7 @@ class _FakePool:
                         "channel": "email",
                         "target_mode": "vendor_retention",
                         "tier": "report",
+                        "replay_handler": "campaign_generation",
                     },
                     "created_at": datetime(2026, 3, 31, 22, 0, tzinfo=timezone.utc),
                     "completed_at": datetime(2026, 3, 31, 22, 0, tzinfo=timezone.utc),
@@ -581,7 +589,10 @@ def test_cost_run_detail_correlates_execution_usage_attempts_and_events(monkeypa
     assert body["batch_jobs"][0]["stage_id"] == "b2b_campaign_generation.content"
     assert body["batch_items"][0]["status"] == "batch_succeeded"
     assert body["batch_items"][0]["request_metadata"]["channel"] == "email"
+    assert body["batch_items"][0]["replay_handler"] == "campaign_generation"
+    assert body["batch_items"][0]["applied_status"] == "succeeded"
     assert body["batch_items"][1]["cache_prefiltered"] is True
+    assert body["batch_items"][1]["applied_status"] is None
     assert body["calls"][0]["title"] == "task.b2b_blog_post_generation"
     assert body["artifact_attempts"][0]["artifact_type"] == "enrichment"
     assert body["visibility_events"][0]["event_type"] == "enrichment_run_summary"
@@ -626,11 +637,15 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     assert source_rows["reddit"]["witness_yield_rate"] == pytest.approx(1.8)
     assert source_rows["reddit"]["repair_trigger_rate"] == pytest.approx(0.2)
     assert source_rows["reddit"]["cost_per_witness_usd"] == pytest.approx(0.000833, rel=1e-3)
+    assert source_rows["reddit"]["strict_discussion_candidates_kept_rows"] == 18
+    assert source_rows["reddit"]["low_signal_discussion_skipped_rows"] == 12
     assert source_rows["g2"]["total_cost_usd"] == pytest.approx(0.08)
 
     run_rows = {row["run_id"]: row for row in body["recent_runs"]}
     assert run_rows["run-enrich-1"]["task_name"] == "b2b_enrichment"
     assert run_rows["run-enrich-1"]["total_cost_usd"] == 0.1
     assert run_rows["run-enrich-1"]["witness_count"] == 15
+    assert run_rows["run-enrich-1"]["strict_discussion_candidates_kept"] == 4
     assert run_rows["run-repair-1"]["secondary_write_hits"] == 1
+    assert run_rows["run-repair-1"]["strict_discussion_candidates_dropped"] == 3
     assert run_rows["run-reason-1"]["reasoning_cost_usd"] == 0.2

@@ -692,6 +692,8 @@ export interface ExtractionHealthSnapshot {
   named_company_without_named_account_evidence: number
   timeline_language_without_timing_anchor: number
   workflow_language_without_replacement_mode: number
+  low_signal_discussion_skipped_rows: number
+  strict_discussion_candidates_kept_rows: number
 }
 
 export interface ExtractionHealthDailyRow {
@@ -732,6 +734,8 @@ export interface ExtractionHealthSourceRow {
   witness_yield_rate: number
   repair_trigger_rate: number
   repair_promoted_rate: number
+  low_signal_discussion_skipped_rows: number
+  strict_discussion_candidates_kept_rows: number
 }
 
 export interface ExtractionHealthRunRow {
@@ -743,6 +747,9 @@ export interface ExtractionHealthRunRow {
   witness_count: number
   witness_yield_rate: number
   secondary_write_hits: number
+  strict_discussion_candidates_kept: number
+  strict_discussion_candidates_dropped: number
+  low_signal_discussion_skipped: number
   exact_cache_hits: number
   generated: number
 }
@@ -835,6 +842,8 @@ export interface AdminCostSourceEfficiencyRow {
   witness_yield_rate: number
   repair_trigger_rate: number
   repair_promoted_rate: number
+  strict_discussion_candidates_kept_rows: number
+  low_signal_discussion_skipped_rows: number
   cost_per_witness_usd: number | null
 }
 
@@ -850,6 +859,9 @@ export interface AdminCostB2bRunRow {
   witness_yield_rate: number
   cost_per_witness_usd: number | null
   secondary_write_hits: number
+  strict_discussion_candidates_kept: number
+  strict_discussion_candidates_dropped: number
+  low_signal_discussion_skipped: number
   exact_cache_hits: number
   generated: number
   extraction_cost_usd: number
@@ -1099,6 +1111,10 @@ export interface AdminCostRunBatchItem {
   provider_request_id: string | null
   error_text: string | null
   request_metadata: Record<string, unknown>
+  replay_handler: string | null
+  applied_at: string | null
+  applied_status: string | null
+  applied_error: string | null
   created_at: string | null
   completed_at: string | null
 }

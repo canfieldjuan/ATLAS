@@ -17,12 +17,39 @@ import psutil
 from fastapi import APIRouter, HTTPException, Query
 
 from ..config import settings
+from ..autonomous.tasks.b2b_enrichment_repair import (
+    _STRICT_DISCUSSION_SKIP_MARKER,
+    _strict_discussion_keep_sql,
+    _strict_discussion_lists,
+)
 from ..services.b2b.cache_strategy import iter_core_b2b_cache_strategies
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.admin_costs")
 
 router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
+
+_ACTIVE_REPAIR_POOL_SQL = """
+(
+  enrichment_status IN ('enriched', 'no_signal')
+  AND COALESCE(low_fidelity, false) = false
+  AND enrichment IS NOT NULL
+  AND enrichment_repair_attempts < {max_attempts}
+  AND (
+    enrichment_repair_status IS NULL
+    OR enrichment_repair_status = 'failed'
+    OR enrichment_repair_status = 'promoted'
+    OR (
+      enrichment_repair_status = 'shadowed'
+      AND enrichment_status = 'quarantined'
+      AND jsonb_path_exists(
+        COALESCE(enrichment_repair_applied_fields, '[]'::jsonb),
+        '$[*] ? (@ like_regex "^adjudication:")'
+      )
+    )
+  )
+)
+"""
 
 
 def _recent_metadata_value(metadata: dict, key: str) -> str | None:
@@ -565,6 +592,12 @@ async def b2b_efficiency(
     """B2B-specific efficiency rollups for extraction, repair, and reasoning."""
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    strict_discussion_sources, strict_discussion_content_types = _strict_discussion_lists(
+        settings.b2b_churn
+    )
+    active_repair_pool = _ACTIVE_REPAIR_POOL_SQL.format(
+        max_attempts=int(settings.b2b_churn.enrichment_repair_max_attempts)
+    )
 
     usage_rows = await _safe_fetch(
         pool,
@@ -642,6 +675,8 @@ async def b2b_efficiency(
                     "repair_trigger_rate": 0.0,
                     "repair_promoted_rate": 0.0,
                     "cost_per_witness_usd": None,
+                    "strict_discussion_candidates_kept_rows": 0,
+                    "low_signal_discussion_skipped_rows": 0,
                 },
             )
             source_bucket[f"{pass_name}_cost_usd"] += cost_usd
@@ -666,7 +701,7 @@ async def b2b_efficiency(
 
     source_quality_rows = await _safe_fetch(
         pool,
-        """
+        f"""
         SELECT
           source,
           COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched_rows,
@@ -689,13 +724,25 @@ async def b2b_efficiency(
               END
             ),
             0
-          ) AS span_count
+          ) AS span_count,
+          COUNT(*) FILTER (
+            WHERE COALESCE(enrichment_repair_applied_fields, '[]'::jsonb) ? $2
+          ) AS low_signal_discussion_skipped_rows,
+          COUNT(*) FILTER (
+            WHERE lower(source) = ANY($3::text[])
+              AND lower(COALESCE(content_type, '')) = ANY($4::text[])
+              AND {active_repair_pool}
+              AND {_strict_discussion_keep_sql()}
+          ) AS strict_discussion_candidates_kept_rows
         FROM b2b_reviews
         WHERE COALESCE(enriched_at, imported_at) >= $1
         GROUP BY source
         HAVING COUNT(*) FILTER (WHERE enrichment_status = 'enriched') > 0
         """,
         since,
+        _STRICT_DISCUSSION_SKIP_MARKER,
+        strict_discussion_sources,
+        strict_discussion_content_types,
     )
     for row in source_quality_rows:
         source_name = str(row.get("source") or "").strip().lower()
@@ -717,6 +764,8 @@ async def b2b_efficiency(
                 "repair_trigger_rate": 0.0,
                 "repair_promoted_rate": 0.0,
                 "cost_per_witness_usd": None,
+                "strict_discussion_candidates_kept_rows": 0,
+                "low_signal_discussion_skipped_rows": 0,
             },
         )
         enriched_rows = _safe_int(row.get("enriched_rows"))
@@ -728,6 +777,8 @@ async def b2b_efficiency(
         bucket["repair_promoted_rows"] = repair_promoted_rows
         bucket["rows_with_spans"] = _safe_int(row.get("rows_with_spans"))
         bucket["span_count"] = span_count
+        bucket["strict_discussion_candidates_kept_rows"] = _safe_int(row.get("strict_discussion_candidates_kept_rows"))
+        bucket["low_signal_discussion_skipped_rows"] = _safe_int(row.get("low_signal_discussion_skipped_rows"))
         bucket["witness_yield_rate"] = (
             round(span_count / enriched_rows, 4) if enriched_rows > 0 else 0.0
         )
@@ -818,6 +869,9 @@ async def b2b_efficiency(
                     else None
                 ),
                 "secondary_write_hits": _safe_int(payload.get("secondary_write_hits")),
+                "strict_discussion_candidates_kept": _safe_int(payload.get("strict_discussion_candidates_kept")),
+                "strict_discussion_candidates_dropped": _safe_int(payload.get("strict_discussion_candidates_dropped")),
+                "low_signal_discussion_skipped": _safe_int(payload.get("low_signal_discussion_skipped")),
                 "exact_cache_hits": _safe_int(payload.get("exact_cache_hits")),
                 "generated": _safe_int(payload.get("generated")),
                 "extraction_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("extraction_cost_usd")), 6),
@@ -1778,7 +1832,8 @@ async def cost_run_detail(
             for row in batch_rows
         ],
         "batch_items": [
-            {
+            (
+                lambda metadata: {
                 "id": str(row["id"]),
                 "batch_id": str(row["batch_id"]),
                 "custom_id": str(row["custom_id"]),
@@ -1800,10 +1855,15 @@ async def cost_run_detail(
                 "cost_usd": round(_safe_float(row["cost_usd"]), 6),
                 "provider_request_id": row["provider_request_id"],
                 "error_text": row["error_text"],
-                "request_metadata": _normalize_metadata(row["request_metadata"]),
+                "request_metadata": metadata,
+                "replay_handler": str(metadata.get("replay_handler") or "") or None,
+                "applied_at": str(metadata.get("applied_at") or "") or None,
+                "applied_status": str(metadata.get("applied_status") or "") or None,
+                "applied_error": str(metadata.get("applied_error") or "") or None,
                 "created_at": row["created_at"].isoformat() if row["created_at"] else None,
                 "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
             }
+            )(_normalize_metadata(row["request_metadata"]))
             for row in batch_item_rows
         ],
         "calls": calls,

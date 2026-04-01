@@ -907,6 +907,20 @@ function QualityTab() {
       sortable: true,
       sortValue: (r) => r.repair_promoted_rate,
     },
+    {
+      key: 'strict_discussion_candidates_kept_rows',
+      header: 'Gate Kept',
+      render: (r) => <span className="text-xs text-cyan-300">{formatNumber(r.strict_discussion_candidates_kept_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.strict_discussion_candidates_kept_rows,
+    },
+    {
+      key: 'low_signal_discussion_skipped_rows',
+      header: 'Gate Skipped',
+      render: (r) => <span className="text-xs text-amber-300">{formatNumber(r.low_signal_discussion_skipped_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.low_signal_discussion_skipped_rows,
+    },
   ]
 
   const runColumns: Column<ExtractionHealthRunRow>[] = [
@@ -949,6 +963,20 @@ function QualityTab() {
       render: (r) => <span className="text-xs text-amber-300">{formatNumber(r.secondary_write_hits)}</span>,
       sortable: true,
       sortValue: (r) => r.secondary_write_hits,
+    },
+    {
+      key: 'strict_discussion_candidates_kept',
+      header: 'Gate Kept',
+      render: (r) => <span className="text-xs text-cyan-300">{formatNumber(r.strict_discussion_candidates_kept)}</span>,
+      sortable: true,
+      sortValue: (r) => r.strict_discussion_candidates_kept,
+    },
+    {
+      key: 'strict_discussion_candidates_dropped',
+      header: 'Gate Dropped',
+      render: (r) => <span className="text-xs text-amber-300">{formatNumber(r.strict_discussion_candidates_dropped)}</span>,
+      sortable: true,
+      sortValue: (r) => r.strict_discussion_candidates_dropped,
     },
     {
       key: 'exact_cache_hits',
@@ -1144,6 +1172,12 @@ function QualityTab() {
             icon={<Workflow className="h-4 w-4" />}
             skeleton={extractionHealthLoading}
           />
+          <StatCard
+            label="Low-Signal Skipped"
+            value={snapshot?.low_signal_discussion_skipped_rows ?? 0}
+            icon={<Shield className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
@@ -1184,7 +1218,7 @@ function QualityTab() {
           <div className="border border-slate-700/50 rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-700/50">
               <h3 className="text-sm font-medium text-white">Top Sources</h3>
-              <p className="text-xs text-slate-500">Witness yield and repair pressure by review source</p>
+              <p className="text-xs text-slate-500">Witness yield, repair pressure, and strict-gate suppression by review source</p>
             </div>
             {loading ? (
               <DataTable columns={sourceColumns} data={[]} skeletonRows={6} />
@@ -1200,7 +1234,7 @@ function QualityTab() {
           <div className="border border-slate-700/50 rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-700/50">
               <h3 className="text-sm font-medium text-white">Recent Enrichment Runs</h3>
-              <p className="text-xs text-slate-500">Per-run witness yield and secondary-write activity</p>
+              <p className="text-xs text-slate-500">Per-run witness yield, strict-gate keep/drop counts, and secondary-write activity</p>
             </div>
             {loading ? (
               <DataTable columns={runColumns} data={[]} skeletonRows={6} />
@@ -1999,6 +2033,20 @@ function CostsTab() {
       sortable: true,
       sortValue: (row) => row.cost_per_witness_usd ?? -1,
     },
+    {
+      key: 'strict_discussion_candidates_kept_rows',
+      header: 'Gate Kept',
+      render: (row) => <span className="text-xs text-cyan-300">{formatNumber(row.strict_discussion_candidates_kept_rows)}</span>,
+      sortable: true,
+      sortValue: (row) => row.strict_discussion_candidates_kept_rows,
+    },
+    {
+      key: 'low_signal_discussion_skipped_rows',
+      header: 'Gate Skipped',
+      render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.low_signal_discussion_skipped_rows)}</span>,
+      sortable: true,
+      sortValue: (row) => row.low_signal_discussion_skipped_rows,
+    },
   ]
 
   const b2bRunColumns: Column<AdminCostB2bRunRow>[] = [
@@ -2061,6 +2109,20 @@ function CostsTab() {
       render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.secondary_write_hits)}</span>,
       sortable: true,
       sortValue: (row) => row.secondary_write_hits,
+    },
+    {
+      key: 'strict_discussion_candidates_kept',
+      header: 'Gate Kept',
+      render: (row) => <span className="text-xs text-cyan-300">{formatNumber(row.strict_discussion_candidates_kept)}</span>,
+      sortable: true,
+      sortValue: (row) => row.strict_discussion_candidates_kept,
+    },
+    {
+      key: 'strict_discussion_candidates_dropped',
+      header: 'Gate Dropped',
+      render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.strict_discussion_candidates_dropped)}</span>,
+      sortable: true,
+      sortValue: (row) => row.strict_discussion_candidates_dropped,
     },
   ]
 
@@ -2337,12 +2399,32 @@ function CostsTab() {
       key: 'path',
       header: 'Path',
       render: (row) => (
-        <span className="text-xs text-slate-300">
-          {row.cache_prefiltered ? 'Prefiltered' : row.fallback_single_call ? 'Fallback' : 'Batch'}
-        </span>
+        <div className="space-y-1">
+          <span className="block text-xs text-slate-300">
+            {row.cache_prefiltered ? 'Prefiltered' : row.fallback_single_call ? 'Fallback' : 'Batch'}
+          </span>
+          {row.replay_handler ? (
+            <span className="block text-[11px] text-slate-500">{row.replay_handler}</span>
+          ) : null}
+        </div>
       ),
       sortable: true,
       sortValue: (row) => (row.cache_prefiltered ? 2 : row.fallback_single_call ? 1 : 0),
+    },
+    {
+      key: 'applied_status',
+      header: 'Applied',
+      render: (row) =>
+        row.applied_status ? (
+          <div className="space-y-1">
+            <StatusBadge status={row.applied_status} />
+            {row.applied_at ? <p className="text-[11px] text-slate-500">{formatTs(row.applied_at)}</p> : null}
+          </div>
+        ) : (
+          <span className="text-xs text-slate-500">Pending</span>
+        ),
+      sortable: true,
+      sortValue: (row) => row.applied_status || '',
     },
     {
       key: 'cost_usd',
@@ -2386,6 +2468,7 @@ function CostsTab() {
         <div className="max-w-[180px]">
           <p className="truncate text-xs text-slate-400">{truncateLabel(row.provider_request_id || row.provider_batch_id || row.custom_id, 28)}</p>
           {row.error_text ? <p className="truncate text-[11px] text-rose-300">{truncateLabel(row.error_text, 40)}</p> : null}
+          {!row.error_text && row.applied_error ? <p className="truncate text-[11px] text-amber-300">{truncateLabel(row.applied_error, 40)}</p> : null}
         </div>
       ),
       sortable: true,
@@ -2964,7 +3047,7 @@ function CostsTab() {
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-700/50">
             <h2 className="text-sm font-medium text-white">B2B Cost By Source</h2>
-            <p className="text-xs text-slate-500">Spend, witness yield, and repair pressure by source. Window-only rollup; provider/model filters do not change this section.</p>
+            <p className="text-xs text-slate-500">Spend, witness yield, repair pressure, and strict-gate suppression by source. Window-only rollup; provider/model filters do not change this section.</p>
           </div>
           {b2bEfficiencyLoading ? (
             <DataTable columns={sourceEfficiencyColumns} data={[]} skeletonRows={6} />
@@ -2981,7 +3064,7 @@ function CostsTab() {
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-700/50">
           <h2 className="text-sm font-medium text-white">Recent Pipeline Run Efficiency</h2>
-          <p className="text-xs text-slate-500">Per-run cost, witness yield, and secondary-write activity. Window-only rollup; provider/model filters do not change this section.</p>
+          <p className="text-xs text-slate-500">Per-run cost, witness yield, strict-gate keep/drop counts, and secondary-write activity. Window-only rollup; provider/model filters do not change this section.</p>
         </div>
         {b2bEfficiencyLoading ? (
           <DataTable columns={b2bRunColumns} data={[]} skeletonRows={6} />
