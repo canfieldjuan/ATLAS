@@ -4341,15 +4341,142 @@ def _json_safe(value: Any) -> Any:
         return value
 
 
+_CAMPAIGN_BATCH_REPLAY_CONTRACT_VERSION = 1
+
+
+def _safe_replay_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_replay_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_campaign_batch_replay_entry(entry: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(entry, dict):
+        return None
+    payload = entry.get("payload")
+    best = entry.get("best")
+    review_ids = entry.get("review_ids")
+    if not isinstance(payload, dict) or not isinstance(best, dict) or not isinstance(review_ids, list):
+        return None
+
+    artifact_id = str(entry.get("artifact_id") or "").strip()
+    campaign_batch_id = str(entry.get("campaign_batch_id") or "").strip()
+    company_name = str(entry.get("company_name") or "").strip()
+    target_mode = str(payload.get("target_mode") or "").strip()
+    if not artifact_id or not campaign_batch_id or not company_name or not target_mode:
+        return None
+
+    replay_entry: dict[str, Any] = {
+        "artifact_id": artifact_id,
+        "campaign_batch_id": campaign_batch_id,
+        "company_name": company_name,
+        "payload": _json_safe(payload),
+        "best": _json_safe(best),
+        "review_ids": _json_safe(review_ids),
+    }
+
+    if target_mode == "churning_company":
+        persona_context = entry.get("persona_context")
+        if not isinstance(persona_context, dict):
+            return None
+        replay_entry["persona_context"] = _json_safe(persona_context)
+        persona = str(entry.get("persona") or "").strip()
+        if persona:
+            replay_entry["persona"] = persona
+        partner_id = str(entry.get("partner_id") or "").strip()
+        if partner_id:
+            replay_entry["partner_id"] = partner_id
+    elif target_mode == "vendor_retention":
+        vendor_ctx = entry.get("vendor_ctx")
+        target = entry.get("target")
+        followup_payload = entry.get("followup_payload")
+        sequence_context = entry.get("sequence_context")
+        if not all(isinstance(value, dict) for value in (vendor_ctx, target, followup_payload, sequence_context)):
+            return None
+        replay_entry["vendor_ctx"] = _json_safe(vendor_ctx)
+        replay_entry["target"] = _json_safe(target)
+        replay_entry["followup_payload"] = _json_safe(followup_payload)
+        replay_entry["sequence_context"] = _json_safe(sequence_context)
+    elif target_mode == "challenger_intel":
+        challenger_ctx = entry.get("challenger_ctx")
+        target = entry.get("target")
+        followup_payload = entry.get("followup_payload")
+        sequence_context = entry.get("sequence_context")
+        if not all(isinstance(value, dict) for value in (challenger_ctx, target, followup_payload, sequence_context)):
+            return None
+        replay_entry["challenger_ctx"] = _json_safe(challenger_ctx)
+        replay_entry["target"] = _json_safe(target)
+        replay_entry["followup_payload"] = _json_safe(followup_payload)
+        replay_entry["sequence_context"] = _json_safe(sequence_context)
+    else:
+        return None
+
+    return replay_entry
+
+
+def _normalize_campaign_batch_replay_entry(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    raw = metadata.get("replay_entry")
+    if not isinstance(raw, dict):
+        return None
+
+    candidate = raw
+    if _safe_replay_int(raw.get("contract_version")) == _CAMPAIGN_BATCH_REPLAY_CONTRACT_VERSION:
+        nested = raw.get("entry")
+        if not isinstance(nested, dict):
+            return None
+        candidate = nested
+
+    replay_entry = _build_campaign_batch_replay_entry(candidate)
+    if replay_entry is None:
+        return None
+
+    max_tokens = _safe_replay_int(metadata.get("_max_tokens"))
+    if max_tokens is None:
+        max_tokens = _safe_replay_int(candidate.get("max_tokens"))
+    if max_tokens is not None:
+        replay_entry["max_tokens"] = max_tokens
+
+    temperature = _safe_replay_float(metadata.get("_temperature"))
+    if temperature is None:
+        temperature = _safe_replay_float(candidate.get("temperature"))
+    if temperature is not None:
+        replay_entry["temperature"] = temperature
+
+    trace_metadata = metadata.get("_trace_metadata")
+    if not isinstance(trace_metadata, dict):
+        trace_metadata = candidate.get("trace_metadata")
+    if isinstance(trace_metadata, dict) and trace_metadata:
+        replay_entry["trace_metadata"] = _json_safe(trace_metadata)
+
+    return replay_entry
+
+
 def _campaign_batch_request_metadata(entry: dict[str, Any]) -> dict[str, Any]:
     payload = entry.get("payload") or {}
+    replay_entry = _build_campaign_batch_replay_entry(entry)
     metadata: dict[str, Any] = {
         "channel": payload.get("channel"),
         "target_mode": payload.get("target_mode"),
         "tier": payload.get("tier"),
         "replay_handler": "campaign_generation",
-        "replay_entry": _json_safe(entry),
     }
+    if replay_entry is not None:
+        metadata["replay_entry"] = {
+            "contract_version": _CAMPAIGN_BATCH_REPLAY_CONTRACT_VERSION,
+            "entry": replay_entry,
+        }
     return metadata
 
 
@@ -5149,13 +5276,13 @@ async def reconcile_batches(task: ScheduledTask) -> dict[str, Any]:
                 continue
             if metadata.get("applied_at"):
                 continue
-            entry = metadata.get("replay_entry")
+            entry = _normalize_campaign_batch_replay_entry(metadata)
             if not isinstance(entry, dict):
                 await _mark_campaign_batch_item_applied(
                     pool,
                     item_id=str(item_row["id"]),
                     applied_status="failed",
-                    error="missing_replay_entry",
+                    error="invalid_replay_entry",
                 )
                 failed_items += 1
                 continue

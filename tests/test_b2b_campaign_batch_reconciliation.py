@@ -11,6 +11,91 @@ class _FakeSkillRegistry:
         return SimpleNamespace(content=f"skill:{name}")
 
 
+def test_campaign_batch_request_metadata_uses_versioned_minimal_replay_contract():
+    entry = {
+        "custom_id": "campaign:salesforce:email",
+        "artifact_id": "artifact-1",
+        "campaign_batch_id": "batch-1",
+        "company_name": "Salesforce",
+        "payload": {"channel": "email_cold", "target_mode": "vendor_retention", "tier": "report"},
+        "best": {"vendor_name": "Salesforce", "opportunity_score": 91},
+        "review_ids": ["r1", "r2"],
+        "vendor_ctx": {"signal_summary": {"pain_distribution": [], "competitor_distribution": []}},
+        "target": {"contact_email": "owner@example.com"},
+        "followup_payload": {"channel": "email_followup", "target_mode": "vendor_retention"},
+        "sequence_context": {"recipient_name": "Pat"},
+        "trace_metadata": {"vendor_name": "Salesforce", "run_id": "run-1"},
+        "max_tokens": 1600,
+        "temperature": 0.2,
+    }
+
+    metadata = mod._campaign_batch_request_metadata(entry)
+
+    assert metadata["replay_handler"] == "campaign_generation"
+    assert metadata["channel"] == "email_cold"
+    replay = metadata["replay_entry"]
+    assert replay["contract_version"] == 1
+    stored = replay["entry"]
+    assert stored["artifact_id"] == "artifact-1"
+    assert stored["company_name"] == "Salesforce"
+    assert stored["payload"]["target_mode"] == "vendor_retention"
+    assert stored["review_ids"] == ["r1", "r2"]
+    assert stored["target"]["contact_email"] == "owner@example.com"
+    assert "custom_id" not in stored
+    assert "trace_metadata" not in stored
+    assert "max_tokens" not in stored
+    assert "temperature" not in stored
+
+
+def test_normalize_campaign_batch_replay_entry_accepts_legacy_blob_and_hydrates_runtime_fields():
+    metadata = {
+        "replay_entry": {
+            "artifact_id": "artifact-1",
+            "campaign_batch_id": "batch-1",
+            "company_name": "Acme",
+            "payload": {"channel": "email_cold", "target_mode": "churning_company"},
+            "best": {"vendor_name": "HubSpot", "opportunity_score": 88},
+            "review_ids": ["r1"],
+            "persona_context": {"pain_categories": [], "competitors_considering": []},
+            "partner_id": "00000000-0000-0000-0000-000000000123",
+            "persona": "ops",
+            "trace_metadata": {"run_id": "legacy-run"},
+            "max_tokens": 1400,
+            "temperature": 0.15,
+        },
+        "_max_tokens": 1700,
+        "_temperature": 0.3,
+        "_trace_metadata": {"run_id": "meta-run", "vendor_name": "HubSpot"},
+    }
+
+    normalized = mod._normalize_campaign_batch_replay_entry(metadata)
+
+    assert normalized is not None
+    assert normalized["artifact_id"] == "artifact-1"
+    assert normalized["company_name"] == "Acme"
+    assert normalized["partner_id"] == "00000000-0000-0000-0000-000000000123"
+    assert normalized["max_tokens"] == 1700
+    assert normalized["temperature"] == 0.3
+    assert normalized["trace_metadata"]["run_id"] == "meta-run"
+
+
+def test_normalize_campaign_batch_replay_entry_rejects_invalid_contract():
+    metadata = {
+        "replay_entry": {
+            "contract_version": 1,
+            "entry": {
+                "artifact_id": "artifact-1",
+                "campaign_batch_id": "batch-1",
+                "company_name": "Acme",
+                "payload": {"channel": "email_cold", "target_mode": "vendor_retention"},
+                "review_ids": ["r1"],
+            },
+        }
+    }
+
+    assert mod._normalize_campaign_batch_replay_entry(metadata) is None
+
+
 @pytest.mark.asyncio
 async def test_reconcile_batches_applies_items_and_submits_followups(monkeypatch):
     pool = MagicMock()
@@ -30,7 +115,14 @@ async def test_reconcile_batches_applies_items_and_submits_followups(monkeypatch
                     "replay_entry": {
                         "artifact_id": "artifact-1",
                         "company_name": "Acme",
+                        "campaign_batch_id": "batch-1",
                         "payload": {"channel": "email_cold", "target_mode": "vendor_retention"},
+                        "best": {"vendor_name": "HubSpot", "opportunity_score": 88},
+                        "review_ids": ["r1"],
+                        "vendor_ctx": {"signal_summary": {"pain_distribution": [], "competitor_distribution": []}},
+                        "target": {"contact_email": "owner@example.com"},
+                        "followup_payload": {"channel": "email_followup", "target_mode": "vendor_retention"},
+                        "sequence_context": {"recipient_name": "Pat"},
                     },
                 },
             }],
@@ -85,7 +177,14 @@ async def test_reconcile_batches_records_failed_items(monkeypatch):
                     "replay_entry": {
                         "artifact_id": "artifact-1",
                         "company_name": "Acme",
+                        "campaign_batch_id": "batch-1",
                         "payload": {"channel": "email_cold", "target_mode": "vendor_retention"},
+                        "best": {"vendor_name": "HubSpot", "opportunity_score": 88},
+                        "review_ids": ["r1"],
+                        "vendor_ctx": {"signal_summary": {"pain_distribution": [], "competitor_distribution": []}},
+                        "target": {"contact_email": "owner@example.com"},
+                        "followup_payload": {"channel": "email_followup", "target_mode": "vendor_retention"},
+                        "sequence_context": {"recipient_name": "Pat"},
                     },
                 },
             }],
@@ -133,7 +232,14 @@ async def test_reconcile_batches_skips_items_claimed_elsewhere(monkeypatch):
                     "replay_entry": {
                         "artifact_id": "artifact-1",
                         "company_name": "Acme",
+                        "campaign_batch_id": "batch-1",
                         "payload": {"channel": "email_cold", "target_mode": "vendor_retention"},
+                        "best": {"vendor_name": "HubSpot", "opportunity_score": 88},
+                        "review_ids": ["r1"],
+                        "vendor_ctx": {"signal_summary": {"pain_distribution": [], "competitor_distribution": []}},
+                        "target": {"contact_email": "owner@example.com"},
+                        "followup_payload": {"channel": "email_followup", "target_mode": "vendor_retention"},
+                        "sequence_context": {"recipient_name": "Pat"},
                     },
                 },
             }],
