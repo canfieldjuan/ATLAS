@@ -35,6 +35,17 @@ _COMPETITOR_PRESSURE_PATTERNS = (
     "overcharged", "not worth", "switch", "switched to", "moved to", "replaced with",
     "evaluating", "considering", "alternative", "frustrated", "pain", "issue", "problem",
 )
+_HARD_GAP_SQL = """
+(
+  (enrichment->'evidence_spans' IS NULL OR jsonb_typeof(enrichment->'evidence_spans') != 'array'
+    OR CASE WHEN jsonb_typeof(enrichment->'evidence_spans') = 'array' THEN jsonb_array_length(enrichment->'evidence_spans') ELSE 0 END = 0)
+  OR COALESCE(enrichment->>'replacement_mode', '') = ''
+  OR COALESCE(enrichment->>'operating_model_shift', '') = ''
+  OR COALESCE(enrichment->>'productivity_delta_claim', '') = ''
+  OR COALESCE(enrichment->>'org_pressure_type', '') = ''
+  OR COALESCE(enrichment->>'evidence_map_hash', '') = ''
+)
+"""
 
 
 def _normalize_test_vendors(raw: Any) -> list[str]:
@@ -207,14 +218,6 @@ def _shadow_quarantine_reasons(row: dict[str, Any]) -> list[str]:
     if source in {"stackoverflow", "github"}:
         return ["repair_shadowed_technical_source"]
     return []
-
-
-def _empty_repair_result(status: str) -> dict[str, int | str]:
-    return {
-        "status": status,
-        "exact_cache_hits": 0,
-        "generated": 0,
-    }
 
 
 async def _persist_shadow_result(
@@ -509,6 +512,36 @@ async def _demote_stale_no_signal_rows(pool, *, limit: int) -> int:
     return demoted
 
 
+async def _quarantine_shadowed_hard_gap_rows(pool, *, limit: int) -> int:
+    result = await pool.execute(
+        f"""
+        WITH target AS (
+            SELECT id
+            FROM b2b_reviews
+            WHERE enrichment_status = 'enriched'
+              AND enrichment_repair_status = 'shadowed'
+              AND {_HARD_GAP_SQL}
+            ORDER BY enriched_at DESC NULLS LAST, imported_at DESC NULLS LAST, id
+            LIMIT $1
+        )
+        UPDATE b2b_reviews AS r
+        SET enrichment_status = 'quarantined',
+            enrichment_repaired_at = $2,
+            enrichment_repair_applied_fields =
+              COALESCE(r.enrichment_repair_applied_fields, '[]'::jsonb)
+              || '["status:quarantined_hard_gap_shadow"]'::jsonb
+        FROM target
+        WHERE r.id = target.id
+        """,
+        limit,
+        datetime.now(timezone.utc),
+    )
+    try:
+        return int(str(result).split()[-1])
+    except (TypeError, ValueError, IndexError):
+        return 0
+
+
 async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
     result = await pool.execute(
         """
@@ -702,6 +735,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         pool,
         limit=max_batch,
     )
+    shadowed_hard_gap_quarantined = await _quarantine_shadowed_hard_gap_rows(
+        pool,
+        limit=max_batch,
+    )
 
     promoted = 0
     shadowed = 0
@@ -818,7 +855,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       AND lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'none'
                     )
                   )
-                ORDER BY enriched_at DESC NULLS LAST, id
+                ORDER BY
+                  CASE
+                    WHEN enrichment_repair_status IS NULL THEN 0
+                    WHEN enrichment_repair_status = 'failed' THEN 1
+                    WHEN enrichment_repair_status = 'promoted' THEN 2
+                    WHEN enrichment_repair_status = 'shadowed' THEN 3
+                    ELSE 4
+                  END,
+                  CASE
+                    WHEN enrichment_status = 'enriched' THEN 0
+                    WHEN enrichment_status = 'no_signal' THEN 1
+                    ELSE 2
+                  END,
+                  enriched_at DESC NULLS LAST,
+                  imported_at DESC NULLS LAST,
+                  id
                 LIMIT $2
                 FOR UPDATE SKIP LOCKED
             )
@@ -854,7 +906,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         rounds += 1
         await asyncio.sleep(1)
 
-    if rounds == 0 and stale_no_signal_demoted == 0:
+    if rounds == 0 and stale_no_signal_demoted == 0 and shadowed_hard_gap_quarantined == 0:
         return {"_skip_synthesis": "No enriched reviews need repair"}
     return {
         "promoted": promoted,
@@ -864,6 +916,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "generated": generated,
         "rounds": rounds,
         "stale_no_signal_demoted": stale_no_signal_demoted,
+        "shadowed_hard_gap_quarantined": shadowed_hard_gap_quarantined,
         "orphaned_recovered": orphaned,
         "scoped_vendors": scoped_vendors,
         "_skip_synthesis": "B2B enrichment repair complete",

@@ -382,6 +382,23 @@ async def test_demote_stale_no_signal_rows_marks_generic_empty_rows(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_quarantine_shadowed_hard_gap_rows_marks_shadowed_enriched_rows():
+    pool = SimpleNamespace(
+        execute=AsyncMock(return_value="UPDATE 5"),
+    )
+
+    quarantined = await repair_mod._quarantine_shadowed_hard_gap_rows(pool, limit=25)
+
+    assert quarantined == 5
+    query = pool.execute.await_args.args[0]
+    assert "enrichment_status = 'quarantined'" in query
+    assert "enrichment_repair_status = 'shadowed'" in query
+    assert "status:quarantined_hard_gap_shadow" in query
+    assert pool.execute.await_args.args[1] == 25
+    assert pool.execute.await_args.args[2] is not None
+
+
+@pytest.mark.asyncio
 async def test_run_returns_demotion_result_when_no_repair_rows(monkeypatch):
     pool = SimpleNamespace(
         is_initialized=True,
@@ -408,11 +425,17 @@ async def test_run_returns_demotion_result_when_no_repair_rows(monkeypatch):
         "_demote_stale_no_signal_rows",
         AsyncMock(return_value=3),
     )
+    monkeypatch.setattr(
+        repair_mod,
+        "_quarantine_shadowed_hard_gap_rows",
+        AsyncMock(return_value=4),
+    )
 
     result = await repair_mod.run(_task())
 
     assert result["_skip_synthesis"] == "B2B enrichment repair complete"
     assert result["stale_no_signal_demoted"] == 3
+    assert result["shadowed_hard_gap_quarantined"] == 4
     assert result["rounds"] == 0
 
 
@@ -595,6 +618,8 @@ async def test_run_query_includes_strategic_adjudication_conditions(monkeypatch)
     assert "enrichment_repair_status = 'shadowed'" in query
     assert "enrichment_repair_status = 'promoted'" in query
     assert 'like_regex "^adjudication:"' in query
+    assert "WHEN enrichment_repair_status IS NULL THEN 0" in query
+    assert "WHEN enrichment_status = 'enriched' THEN 0" in query
 
 
 @pytest.mark.asyncio
