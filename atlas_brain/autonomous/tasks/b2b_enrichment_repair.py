@@ -95,6 +95,17 @@ def _has_hard_gap_payload(result: dict[str, Any] | None) -> bool:
     )
 
 
+def _has_strong_competitor_signal(competitors: list[dict[str, Any]]) -> bool:
+    return any(
+        str(comp.get("evidence_type") or "").strip().lower() in {"explicit_switch", "active_evaluation"}
+        or str(comp.get("displacement_confidence") or "").strip().lower() in {"high", "medium"}
+        or str(comp.get("reason_category") or "").strip()
+        or str(comp.get("reason_detail") or "").strip()
+        or str(comp.get("reason") or "").strip()
+        for comp in competitors
+    )
+
+
 def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
     review_blob = base_enrichment._repair_text_blob(source_row)
     if not review_blob.strip():
@@ -109,16 +120,21 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
     churn = base_enrichment._coerce_json_dict(result.get("churn_signals"))
     reviewer = base_enrichment._coerce_json_dict(result.get("reviewer_context"))
     timeline = base_enrichment._coerce_json_dict(result.get("timeline"))
+    content_type = str(source_row.get("content_type") or "").strip().lower()
+    reviewer_title = str(source_row.get("reviewer_title") or "").strip()
     competitors = [
         comp for comp in (result.get("competitors_mentioned") or [])
         if isinstance(comp, dict) and str(comp.get("name") or "").strip()
     ]
     replacement_mode = str(result.get("replacement_mode") or "").strip().lower()
-    pressure_signal = (
+    structured_churn = (
         bool(churn.get("intent_to_leave"))
         or bool(churn.get("actively_evaluating"))
         or bool(churn.get("migration_in_progress"))
         or bool(churn.get("contract_renewal_mentioned"))
+    )
+    pressure_signal = (
+        structured_churn
         or bool(result.get("specific_complaints"))
         or bool(result.get("pricing_phrases"))
         or bool(result.get("feature_gaps"))
@@ -126,14 +142,8 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
     )
 
     pricing_span = any(str(span.get("signal_type") or "").strip().lower() == "pricing_backlash" for span in spans)
-    displacement_framed = any(
-        str(comp.get("evidence_type") or "").strip().lower() in {"explicit_switch", "active_evaluation"}
-        or str(comp.get("displacement_confidence") or "").strip().lower() in {"high", "medium"}
-        or str(comp.get("reason_category") or "").strip()
-        or str(comp.get("reason_detail") or "").strip()
-        or str(comp.get("reason") or "").strip()
-        for comp in competitors
-    ) or any(
+    strong_competitor_signal = _has_strong_competitor_signal(competitors)
+    displacement_framed = strong_competitor_signal or any(
         str(span.get("signal_type") or "").strip().lower() == "competitor_pressure"
         or str(span.get("competitor") or "").strip()
         for span in spans
@@ -141,6 +151,13 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
     named_company = (
         str(source_row.get("reviewer_company") or "").strip()
         or str(reviewer.get("company_name") or "").strip()
+    )
+    discussion_noise = (
+        content_type == "community_discussion"
+        and not structured_churn
+        and not reviewer_title
+        and not named_company
+        and not strong_competitor_signal
     )
     named_account_evidence = bool(named_company) and (
         "named_account" in salience_flags
@@ -181,6 +198,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         pressure_signal
         and (base_enrichment._contains_any(review_blob, _DISPLACEMENT_COMPETITOR_PATTERNS) or competitors)
         and not displacement_framed
+        and not discussion_noise
     ):
         reasons.append("competitor_without_displacement_framing")
     if named_company and not named_account_evidence:
@@ -334,7 +352,12 @@ async def _repair_single(
     baseline = base_enrichment._coerce_json_dict(row.get("enrichment"))
     strategic_reasons = _strategic_adjudication_reasons(baseline, row) if baseline else []
     target_fields = _repair_target_fields(baseline, row) if baseline else []
-    usage = {"exact_cache_hits": 0, "generated": 0}
+    usage = {
+        "exact_cache_hits": 0,
+        "generated": 0,
+        "witness_rows": 0,
+        "witness_count": 0,
+    }
 
     def _finish(status: str) -> str:
         if usage_out is not None:
@@ -413,6 +436,12 @@ async def _repair_single(
     if applied_fields:
         promoted = base_enrichment._compute_derived_fields(promoted, row)
     if applied_fields and base_enrichment._validate_enrichment(promoted, row):
+        _, baseline_witness_count = base_enrichment._witness_metrics(baseline)
+        promoted_witness_rows, promoted_witness_count = base_enrichment._witness_metrics(promoted)
+        witness_count_delta = max(promoted_witness_count - baseline_witness_count, 0)
+        if witness_count_delta > 0:
+            usage["witness_rows"] += 1 if promoted_witness_rows > 0 else 0
+            usage["witness_count"] += witness_count_delta
         unresolved_strategic_reasons = _strategic_adjudication_reasons(promoted, row)
         low_fidelity_reasons = (
             base_enrichment._detect_low_fidelity_reasons(row, promoted)
@@ -494,7 +523,12 @@ async def _repair_rows(
 
     async def _bounded(row: dict[str, Any]) -> dict[str, int | str]:
         async with sem:
-            usage = {"exact_cache_hits": 0, "generated": 0}
+            usage = {
+                "exact_cache_hits": 0,
+                "generated": 0,
+                "witness_rows": 0,
+                "witness_count": 0,
+            }
             kwargs: dict[str, Any] = {"usage_out": usage}
             if supports_run_id:
                 kwargs["run_id"] = run_id
@@ -505,7 +539,15 @@ async def _repair_rows(
             }
 
     results = await asyncio.gather(*[_bounded(row) for row in rows], return_exceptions=True)
-    counts = {"promoted": 0, "shadowed": 0, "failed": 0, "exact_cache_hits": 0, "generated": 0}
+    counts = {
+        "promoted": 0,
+        "shadowed": 0,
+        "failed": 0,
+        "exact_cache_hits": 0,
+        "generated": 0,
+        "witness_rows": 0,
+        "witness_count": 0,
+    }
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
             logger.error("Unexpected repair error for %s: %s", row["id"], result, exc_info=result)
@@ -515,6 +557,8 @@ async def _repair_rows(
         counts[status] = counts.get(status, 0) + 1
         counts["exact_cache_hits"] += int(result.get("exact_cache_hits", 0) or 0)
         counts["generated"] += int(result.get("generated", 0) or 0)
+        counts["witness_rows"] += int(result.get("witness_rows", 0) or 0)
+        counts["witness_count"] += int(result.get("witness_count", 0) or 0)
     return counts
 
 
@@ -802,6 +846,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     failed = 0
     exact_cache_hits = 0
     generated = 0
+    witness_rows = 0
+    witness_count = 0
     rounds = 0
     while rounds < max_rounds:
         trusted_sources = list(base_enrichment._trusted_repair_sources())
@@ -888,6 +934,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
                       )
                       AND NOT (
+                        content_type = 'community_discussion'
+                        AND NOT (
+                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                        )
+                        AND COALESCE(NULLIF(reviewer_title, ''), NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NULL
+                        AND NOT jsonb_path_exists(
+                          COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+                          '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+                        )
+                      )
+                      AND NOT (
                         jsonb_path_exists(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb), '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium")')
                         OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
                         OR lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'competitor_switch'
@@ -961,21 +1021,34 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         failed += result.get("failed", 0)
         exact_cache_hits += result.get("exact_cache_hits", 0)
         generated += result.get("generated", 0)
+        witness_rows += result.get("witness_rows", 0)
+        witness_count += result.get("witness_count", 0)
         rounds += 1
         await asyncio.sleep(1)
 
     if rounds == 0 and stale_no_signal_demoted == 0 and shadowed_hard_gap_quarantined == 0:
         return {"_skip_synthesis": "No enriched reviews need repair"}
+    secondary_write_breakdown = {
+        "stale_no_signal_demoted": int(stale_no_signal_demoted or 0),
+        "shadowed_hard_gap_quarantined": int(shadowed_hard_gap_quarantined or 0),
+        "orphaned_recovered": int(orphaned or 0),
+    }
+    secondary_write_hits = sum(secondary_write_breakdown.values())
     result = {
         "promoted": promoted,
         "shadowed": shadowed,
         "failed": failed,
         "exact_cache_hits": exact_cache_hits,
         "generated": generated,
+        "witness_rows": witness_rows,
+        "witness_count": witness_count,
+        "reviews_processed": promoted + shadowed + failed,
         "rounds": rounds,
         "stale_no_signal_demoted": stale_no_signal_demoted,
         "shadowed_hard_gap_quarantined": shadowed_hard_gap_quarantined,
         "orphaned_recovered": orphaned,
+        "secondary_write_hits": secondary_write_hits,
+        "secondary_write_breakdown": secondary_write_breakdown,
         "scoped_vendors": scoped_vendors,
         "_skip_synthesis": "B2B enrichment repair complete",
     }
@@ -1021,6 +1094,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if shadowed_hard_gap_quarantined > 0
             else "enrichment_repair_shadowed"
             if shadowed > 0
+            else "enrichment_repair_secondary_writes"
+            if secondary_write_hits > 0
             else "enrichment_repair_completed"
         ),
         detail={
@@ -1029,10 +1104,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "failed": failed,
             "exact_cache_hits": exact_cache_hits,
             "generated": generated,
+            "witness_rows": witness_rows,
+            "witness_count": witness_count,
+            "reviews_processed": promoted + shadowed + failed,
             "rounds": rounds,
             "stale_no_signal_demoted": stale_no_signal_demoted,
             "shadowed_hard_gap_quarantined": shadowed_hard_gap_quarantined,
             "orphaned_recovered": orphaned,
+            "secondary_write_hits": secondary_write_hits,
+            "secondary_write_breakdown": secondary_write_breakdown,
             "scoped_vendors": scoped_vendors,
         },
         update_review_state=False,

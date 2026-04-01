@@ -669,6 +669,77 @@ def test_strategic_adjudication_skips_roundup_style_comparisons_without_named_di
     assert "competitor_without_displacement_framing" not in reasons
 
 
+def test_strategic_adjudication_skips_low_signal_community_discussion_competitor_noise():
+    row = {
+        "summary": "HubSpot vs. Salesforce vs. Pipedrive: Which CRM is Best for Small Teams?",
+        "review_text": "I have been engaging in the CRM community for a while and am comparing options for small teams.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "community_discussion",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": ["can get expensive as you scale"],
+        "pricing_phrases": ["pricey plans"],
+        "feature_gaps": [],
+        "competitors_mentioned": [
+            {"name": "HubSpot", "evidence_type": "implied_preference", "displacement_confidence": "low"},
+            {"name": "Pipedrive", "evidence_type": "neutral_mention", "displacement_confidence": "low"},
+        ],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_keeps_real_churn_community_discussion_competitor_gap():
+    row = {
+        "summary": "We are considering HubSpot because Copper is not worth the money.",
+        "review_text": "We are considering HubSpot because Copper is not worth the money and renewal is coming up.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "community_discussion",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": True,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": True,
+        },
+        "specific_complaints": ["not worth the money"],
+        "pricing_phrases": ["not worth the money"],
+        "feature_gaps": [],
+        "competitors_mentioned": [
+            {"name": "HubSpot", "evidence_type": "neutral_mention", "displacement_confidence": "low"}
+        ],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" in reasons
+
+
 @pytest.mark.asyncio
 async def test_repair_single_shadows_with_adjudication_markers_when_no_llm_targets(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import json
 from typing import Any
 
 _ENRICHED_SCOPE = "enrichment_status = 'enriched'"
@@ -83,6 +85,20 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
   )
   AND NOT (
+    content_type = 'community_discussion'
+    AND NOT (
+      COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+    )
+    AND COALESCE(NULLIF(reviewer_title, ''), NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NULL
+    AND NOT jsonb_path_exists(
+      COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+      '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+    )
+  )
+  AND NOT (
     jsonb_path_exists(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb), '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium")')
     OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
     OR lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'competitor_switch'
@@ -126,6 +142,34 @@ _STRATEGIC_CANDIDATE = f"""(
   OR {_WORKFLOW_WITHOUT_REPLACEMENT}
 )"""
 _TREND_DAY = "DATE(COALESCE(enriched_at, imported_at))"
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_result_payload(result_text: Any) -> dict[str, Any]:
+    text = str(result_text or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        try:
+            parsed = ast.literal_eval(text)
+        except Exception:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 async def summarize_extraction_health(
