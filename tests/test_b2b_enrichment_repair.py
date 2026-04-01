@@ -839,6 +839,70 @@ def test_strategic_adjudication_skips_soft_evaluation_without_named_alternative(
     assert "competitor_without_displacement_framing" not in reasons
 
 
+def test_strategic_adjudication_skips_positive_switch_without_named_competitor():
+    row = {
+        "summary": "Very good onboarding experience",
+        "review_text": "We switched to Klaviyo a few weeks ago and already notice amazing results for a price that is only a portion of what we used to pay with our previous solution.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": [],
+        "pricing_phrases": ["price that is only a portion of what we used to pay"],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_keeps_negative_switch_without_named_competitor():
+    row = {
+        "summary": "Migration due to failure",
+        "review_text": "We switched to another provider because the platform kept failing and support was a nightmare.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": False,
+            "migration_in_progress": True,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": ["platform kept failing", "support was a nightmare"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" in reasons
+
+
 def test_strategic_adjudication_skips_reddit_vendor_ambiguity_noise():
     row = {
         "vendor_name": "Copper",

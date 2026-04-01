@@ -241,11 +241,14 @@ def _has_competitor_trigger(
     *,
     competitors: list[dict[str, Any]],
     strong_competitor_signal: bool,
+    has_nonpricing_pressure: bool = False,
 ) -> bool:
     if strong_competitor_signal:
         return True
     if base_enrichment._contains_any(review_blob, _DISPLACEMENT_HARD_PATTERNS):
-        return True
+        if competitors:
+            return True
+        return has_nonpricing_pressure
     soft = base_enrichment._contains_any(review_blob, _DISPLACEMENT_SOFT_PATTERNS)
     if not soft:
         return False
@@ -359,6 +362,20 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         or bool(result.get("feature_gaps"))
         or base_enrichment._contains_any(review_blob, _COMPETITOR_PRESSURE_PATTERNS)
     )
+    nonpricing_pressure_signal = (
+        structured_churn
+        or bool(result.get("specific_complaints"))
+        or bool(result.get("feature_gaps"))
+        or base_enrichment._contains_any(
+            review_blob,
+            (
+                "cancel", "cancellation", "refund", "billing dispute", "renewal",
+                "overcharged", "not worth", "frustrated", "pain", "issue", "problem",
+                "failed", "failure", "broken", "terrible", "nightmare", "outgrew",
+                "doesn't work", "doesnt work",
+            ),
+        )
+    )
     pricing_signal = bool(base_enrichment._REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
 
     pricing_span = any(str(span.get("signal_type") or "").strip().lower() == "pricing_backlash" for span in spans)
@@ -433,6 +450,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
             review_blob,
             competitors=competitors,
             strong_competitor_signal=strong_competitor_signal,
+            has_nonpricing_pressure=nonpricing_pressure_signal,
         )
         and not displacement_framed
         and not discussion_noise

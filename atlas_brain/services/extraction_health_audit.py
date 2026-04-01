@@ -158,7 +158,18 @@ _MONEY_WITHOUT_PRICING_SPAN = """
 _COMPETITOR_WITHOUT_DISPLACEMENT = """
 (
   (
-    review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
+    (
+      review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
+      AND (
+        COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+        OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+        OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+        OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+        OR {specific_complaints_len} > 0
+        OR {feature_gaps_len} > 0
+        OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|overcharg|not worth|frustrated|pain|issue|problem|failed|failure|broken|terrible|nightmare|outgrew|doesn''t work|doesnt work)'
+      )
+    )
     OR (
       review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
       AND {valid_competitor_object}
