@@ -5065,7 +5065,7 @@ async def reconcile_batches(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "DB not ready"}
 
     from ...services.llm_router import get_llm
-    from ...services.skill_registry import get_skill_registry
+    from ...skills import get_skill_registry
     from ...services.b2b.anthropic_batch import reconcile_anthropic_message_batch
 
     llm = get_llm("campaign")
