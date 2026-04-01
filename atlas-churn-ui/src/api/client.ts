@@ -38,7 +38,11 @@ import type {
   SynthesisValidationResult,
   AdminCostSummary,
   AdminCostOperation,
+  AdminCostVendor,
+  AdminCostB2bEfficiency,
   AdminCostRecentCall,
+  AdminCostCacheHealth,
+  AdminCostRunDetail,
   DedupDecision,
   PipelineReviewAction,
 } from '../types'
@@ -756,6 +760,29 @@ export async function fetchAdminCostByOperation(params?: {
   )
 }
 
+export async function fetchAdminCostByVendor(params?: {
+  days?: number
+  limit?: number
+}) {
+  return get<{ period_days: number; vendors: AdminCostVendor[] }>(
+    ADMIN_COSTS_BASE,
+    '/by-vendor',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function fetchAdminCostB2bEfficiency(params?: {
+  days?: number
+  top_n?: number
+  run_limit?: number
+}) {
+  return get<AdminCostB2bEfficiency>(
+    ADMIN_COSTS_BASE,
+    '/b2b-efficiency',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
 export async function fetchAdminCostRecent(params?: {
   limit?: number
   days?: number
@@ -769,6 +796,26 @@ export async function fetchAdminCostRecent(params?: {
   return get<{ calls: AdminCostRecentCall[] }>(
     ADMIN_COSTS_BASE,
     '/recent',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function fetchAdminCostCacheHealth(days = 30, top_n = 8) {
+  return get<AdminCostCacheHealth>(ADMIN_COSTS_BASE, '/cache-health', { days, top_n })
+}
+
+export async function fetchAdminCostRun(
+  run_id: string,
+  params?: {
+    call_limit?: number
+    event_limit?: number
+    attempt_limit?: number
+    batch_item_limit?: number
+  },
+) {
+  return get<AdminCostRunDetail>(
+    ADMIN_COSTS_BASE,
+    `/runs/${encodeURIComponent(run_id)}`,
     params as Record<string, string | number | boolean>,
   )
 }

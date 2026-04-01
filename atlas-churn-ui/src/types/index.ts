@@ -669,6 +669,14 @@ export interface EnrichmentQuarantine {
 
 export interface ExtractionHealthSnapshot {
   enriched_rows: number
+  rows_with_spans: number
+  span_count: number
+  witness_yield_rate: number
+  repair_triggered_rows: number
+  repair_promoted_rows: number
+  repair_trigger_rate: number
+  repair_promoted_rate: number
+  secondary_write_hits_window: number
   hard_gap_rows: number
   phrase_arrays_without_spans: number
   blank_replacement_mode: number
@@ -688,6 +696,12 @@ export interface ExtractionHealthSnapshot {
 
 export interface ExtractionHealthDailyRow {
   day: string
+  enriched_rows: number
+  rows_with_spans: number
+  span_count: number
+  repair_triggered_rows: number
+  witness_yield_rate: number
+  repair_trigger_rate: number
   hard_gap_rows: number
   phrase_arrays_without_spans: number
   blank_replacement_mode: number
@@ -708,12 +722,39 @@ export interface ExtractionHealthVendorRow {
   enriched_rows: number
 }
 
+export interface ExtractionHealthSourceRow {
+  source: string
+  enriched_rows: number
+  repair_triggered_rows: number
+  repair_promoted_rows: number
+  rows_with_spans: number
+  span_count: number
+  witness_yield_rate: number
+  repair_trigger_rate: number
+  repair_promoted_rate: number
+}
+
+export interface ExtractionHealthRunRow {
+  run_id: string
+  task_name: string
+  started_at: string | null
+  reviews_processed: number
+  witness_rows: number
+  witness_count: number
+  witness_yield_rate: number
+  secondary_write_hits: number
+  exact_cache_hits: number
+  generated: number
+}
+
 export interface ExtractionHealthAudit {
   days: number
   top_n: number
   current_snapshot: ExtractionHealthSnapshot
   daily_trend: ExtractionHealthDailyRow[]
   top_vendors: ExtractionHealthVendorRow[]
+  top_sources: ExtractionHealthSourceRow[]
+  recent_runs: ExtractionHealthRunRow[]
 }
 
 export interface AdminCostSummary {
@@ -753,6 +794,84 @@ export interface AdminCostOperation {
   latest_created_at: string | null
 }
 
+export interface AdminCostVendor {
+  vendor_name: string
+  cost_usd: number
+  input_tokens: number
+  billable_input_tokens: number
+  cached_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+  total_tokens: number
+  calls: number
+  cache_hit_calls: number
+  cache_write_calls: number
+  avg_duration_ms: number
+}
+
+export interface AdminCostVendorPassRow {
+  vendor_name: string
+  extraction_cost_usd: number
+  repair_cost_usd: number
+  reasoning_cost_usd: number
+  extraction_calls: number
+  repair_calls: number
+  reasoning_calls: number
+  total_cost_usd: number
+}
+
+export interface AdminCostSourceEfficiencyRow {
+  source: string
+  extraction_cost_usd: number
+  repair_cost_usd: number
+  extraction_calls: number
+  repair_calls: number
+  total_cost_usd: number
+  enriched_rows: number
+  repair_triggered_rows: number
+  repair_promoted_rows: number
+  rows_with_spans: number
+  span_count: number
+  witness_yield_rate: number
+  repair_trigger_rate: number
+  repair_promoted_rate: number
+  cost_per_witness_usd: number | null
+}
+
+export interface AdminCostB2bRunRow {
+  run_id: string
+  task_name: string
+  started_at: string | null
+  total_cost_usd: number
+  calls: number
+  reviews_processed: number
+  witness_rows: number
+  witness_count: number
+  witness_yield_rate: number
+  cost_per_witness_usd: number | null
+  secondary_write_hits: number
+  exact_cache_hits: number
+  generated: number
+  extraction_cost_usd: number
+  repair_cost_usd: number
+  reasoning_cost_usd: number
+}
+
+export interface AdminCostB2bEfficiency {
+  period_days: number
+  top_n: number
+  run_limit: number
+  summary: {
+    measured_runs: number
+    tracked_cost_usd: number
+    tracked_witness_count: number
+    cost_per_witness_usd: number | null
+  }
+  vendor_passes: AdminCostVendorPassRow[]
+  source_efficiency: AdminCostSourceEfficiencyRow[]
+  recent_runs: AdminCostB2bRunRow[]
+}
+
 export interface AdminCostRecentCall {
   id: string
   span_name: string
@@ -780,6 +899,221 @@ export interface AdminCostRecentCall {
   provider_request_id: string | null
   metadata: Record<string, unknown>
   created_at: string | null
+}
+
+export interface AdminCostExactCacheStage {
+  stage_id: string
+  namespace: string | null
+  file_path: string
+  rationale: string
+  rows: number
+  total_hits: number
+  writes_in_window: number
+  rows_hit_in_window: number
+  provider_count: number
+  model_count: number
+  last_write_at: string | null
+  last_hit_at: string | null
+}
+
+export interface AdminCostPromptCacheSpan {
+  span_name: string
+  calls: number
+  cache_hit_calls: number
+  cache_write_calls: number
+  cached_tokens: number
+  cache_write_tokens: number
+}
+
+export interface AdminCostBatchStage {
+  stage_id: string
+  task_name: string
+  total_jobs: number
+  submitted_jobs: number
+  total_items: number
+  submitted_items: number
+  cache_prefiltered_items: number
+  fallback_single_call_items: number
+  completed_items: number
+  failed_items: number
+  estimated_sequential_cost_usd: number
+  estimated_batch_cost_usd: number
+  estimated_savings_usd: number
+  last_submitted_at: string | null
+  last_completed_at: string | null
+}
+
+export interface AdminCostSemanticPatternClass {
+  pattern_class: string
+  active_entries: number
+  recent_validations: number
+}
+
+export interface AdminCostTaskReuseRow {
+  task_name: string
+  executions: number
+  reused: number
+  exact_cache_hits: number
+  semantic_cache_hits: number
+  evidence_hash_reuse: number
+  generated: number
+}
+
+export interface AdminCostCacheHealth {
+  period_days: number
+  top_n: number
+  exact_cache: {
+    enabled: boolean
+    total_rows: number
+    total_hits: number
+    writes_in_window: number
+    rows_hit_in_window: number
+    stages: AdminCostExactCacheStage[]
+  }
+  provider_prompt_cache: {
+    total_calls: number
+    cache_hit_calls: number
+    cache_write_calls: number
+    cached_tokens: number
+      cache_write_tokens: number
+      billable_input_tokens: number
+      top_spans: AdminCostPromptCacheSpan[]
+  }
+  anthropic_batching: {
+    enabled: boolean
+    total_jobs: number
+    submitted_jobs: number
+    total_items: number
+    submitted_items: number
+    cache_prefiltered_items: number
+    fallback_single_call_items: number
+    completed_items: number
+    failed_items: number
+    estimated_sequential_cost_usd: number
+    estimated_batch_cost_usd: number
+    estimated_savings_usd: number
+    stages: AdminCostBatchStage[]
+  }
+  semantic_cache: {
+    active_entries: number
+    invalidated_entries: number
+    recent_validations: number
+    pattern_classes: AdminCostSemanticPatternClass[]
+  }
+  evidence_hash_reuse: {
+    vendor_packet_rows: number
+    vendor_packet_writes_in_window: number
+    unique_vendors: number
+    unique_hashes: number
+    cross_vendor_rows: number
+    cross_vendor_cached_rows: number
+    cross_vendor_cached_rows_in_window: number
+  }
+  task_reuse: {
+    tasks: AdminCostTaskReuseRow[]
+  }
+}
+
+export interface AdminCostRunExecution {
+  id: string
+  task_id: string
+  task_name: string
+  status: string
+  started_at: string | null
+  completed_at: string | null
+  duration_ms: number | null
+  retry_count: number
+  result: Record<string, unknown>
+  result_text: string | null
+  error: string | null
+  metadata: Record<string, unknown>
+}
+
+export interface AdminCostRunSummary {
+  total_calls: number
+  total_cost_usd: number
+  total_input_tokens: number
+  total_billable_input_tokens: number
+  total_cached_tokens: number
+  total_cache_write_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  cache_hit_calls: number
+  cache_write_calls: number
+  first_call_at: string | null
+  last_call_at: string | null
+}
+
+export interface AdminCostRunBatchSummary {
+  total_jobs: number
+  submitted_jobs: number
+  submitted_items: number
+  cache_prefiltered_items: number
+  fallback_single_call_items: number
+  completed_items: number
+  failed_items: number
+  estimated_sequential_cost_usd: number
+  estimated_batch_cost_usd: number
+  estimated_savings_usd: number
+}
+
+export interface AdminCostRunBatchJob {
+  id: string
+  stage_id: string
+  task_name: string
+  status: string
+  provider_batch_id: string | null
+  total_items: number
+  submitted_items: number
+  cache_prefiltered_items: number
+  fallback_single_call_items: number
+  completed_items: number
+  failed_items: number
+  estimated_sequential_cost_usd: number
+  estimated_batch_cost_usd: number
+  estimated_savings_usd: number
+  submitted_at: string | null
+  completed_at: string | null
+}
+
+export interface AdminCostRunBatchItem {
+  id: string
+  batch_id: string
+  custom_id: string
+  stage_id: string
+  task_name: string
+  provider_batch_id: string | null
+  artifact_type: string
+  artifact_id: string
+  vendor_name: string | null
+  status: string
+  cache_prefiltered: boolean
+  fallback_single_call: boolean
+  input_tokens: number
+  billable_input_tokens: number
+  cached_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cost_usd: number
+  provider_request_id: string | null
+  error_text: string | null
+  request_metadata: Record<string, unknown>
+  created_at: string | null
+  completed_at: string | null
+}
+
+export interface AdminCostRunDetail {
+  run_id: string
+  task_execution: AdminCostRunExecution | null
+  llm_summary: AdminCostRunSummary
+  batching_summary: AdminCostRunBatchSummary
+  operations: AdminCostOperation[]
+  batch_jobs: AdminCostRunBatchJob[]
+  batch_items: AdminCostRunBatchItem[]
+  calls: AdminCostRecentCall[]
+  artifact_attempts: ArtifactAttempt[]
+  visibility_events: VisibilityEvent[]
 }
 
 export type TargetMode = 'vendor_retention' | 'challenger_intel'

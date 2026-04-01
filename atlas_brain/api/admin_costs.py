@@ -62,6 +62,13 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _parse_task_result_payload(result_text: str | None) -> dict[str, Any]:
     text = str(result_text or "").strip()
     if not text:
@@ -74,6 +81,56 @@ def _parse_task_result_payload(result_text: str | None) -> dict[str, Any]:
         except Exception:
             return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _b2b_vendor_name(row_vendor: Any, metadata: dict) -> str:
+    candidate = str(row_vendor or "").strip()
+    if candidate:
+        return candidate
+    nested = _recent_metadata_value(metadata, "vendor_name")
+    return str(nested or "").strip()
+
+
+def _b2b_source_name(metadata: dict) -> str:
+    for key in ("source", "source_name"):
+        value = _recent_metadata_value(metadata, key)
+        if value:
+            return value
+    return ""
+
+
+def _classify_b2b_pass(span_name: str, metadata: dict) -> str | None:
+    skill = str(metadata.get("skill") or "").strip().lower()
+    stage = str(metadata.get("stage") or "").strip().lower()
+    workflow = str(_recent_metadata_value(metadata, "workflow") or "").strip().lower()
+    source_name = str(_recent_metadata_value(metadata, "source_name") or "").strip().lower()
+
+    if span_name in {
+        "task.b2b_enrichment_repair.extraction",
+        "pipeline.digest/b2b_churn_repair_extraction",
+    }:
+        return "repair"
+    if skill == "digest/b2b_churn_repair_extraction" or stage == "repair_extraction":
+        return "repair"
+
+    if span_name in {"task.b2b_enrichment.tier1", "task.b2b_enrichment.tier2"}:
+        return "extraction"
+    if skill in {
+        "digest/b2b_churn_extraction_tier1",
+        "digest/b2b_churn_extraction_tier2",
+    }:
+        return "extraction"
+
+    if span_name.startswith("reasoning.stratified.") or span_name.startswith("reasoning.cross_vendor."):
+        return "reasoning"
+    if span_name in {"task.b2b_reasoning_synthesis", "task.b2b_reasoning_synthesis.cross_vendor"}:
+        return "reasoning"
+    if span_name == "reasoning.process" and source_name == "b2b_churn_intelligence":
+        return "reasoning"
+    if workflow in {"cross_vendor_reasoning"}:
+        return "reasoning"
+
+    return None
 
 
 def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | None]:
@@ -446,6 +503,358 @@ async def cost_by_operation(
     }
 
 
+@router.get("/by-vendor")
+async def cost_by_vendor(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Cost breakdown by B2B vendor name (from trace metadata)."""
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = await pool.fetch(
+        """SELECT
+             vendor_name,
+             COALESCE(SUM(cost_usd), 0)                AS cost,
+             COALESCE(SUM(input_tokens), 0)             AS input_tokens,
+             COALESCE(SUM(billable_input_tokens), 0)    AS billable_input_tokens,
+             COALESCE(SUM(cached_tokens), 0)            AS cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0)       AS cache_write_tokens,
+             COALESCE(SUM(output_tokens), 0)            AS output_tokens,
+             COALESCE(SUM(total_tokens), 0)             AS total_tokens,
+             COUNT(*)                                   AS calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0)  AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
+             COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0) AS avg_duration_ms
+           FROM llm_usage
+           WHERE created_at >= $1
+             AND vendor_name IS NOT NULL
+           GROUP BY vendor_name
+           ORDER BY cost DESC
+           LIMIT $2""",
+        since,
+        limit,
+    )
+    return {
+        "period_days": days,
+        "vendors": [
+            {
+                "vendor_name": r["vendor_name"],
+                "cost_usd": float(r["cost"]),
+                "input_tokens": int(r["input_tokens"]),
+                "billable_input_tokens": int(r["billable_input_tokens"]),
+                "cached_tokens": int(r["cached_tokens"]),
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "output_tokens": int(r["output_tokens"]),
+                "total_tokens": int(r["total_tokens"]),
+                "calls": int(r["calls"]),
+                "cache_hit_calls": int(r["cache_hit_calls"]),
+                "cache_write_calls": int(r["cache_write_calls"]),
+                "avg_duration_ms": round(float(r["avg_duration_ms"]), 1),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/b2b-efficiency")
+async def b2b_efficiency(
+    days: int = Query(default=30, ge=1, le=365),
+    top_n: int = Query(default=25, ge=1, le=100),
+    run_limit: int = Query(default=25, ge=1, le=100),
+):
+    """B2B-specific efficiency rollups for extraction, repair, and reasoning."""
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    usage_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+          span_name,
+          cost_usd,
+          vendor_name,
+          run_id,
+          metadata,
+          created_at
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND (
+            vendor_name IS NOT NULL
+            OR run_id IS NOT NULL
+            OR span_name LIKE 'reasoning.%'
+            OR span_name LIKE 'task.b2b_enrichment%'
+            OR span_name = 'pipeline.digest/b2b_churn_repair_extraction'
+            OR metadata::text ILIKE '%vendor_name%'
+            OR metadata::text ILIKE '%source%'
+          )
+        """,
+        since,
+    )
+
+    vendor_rollups: dict[str, dict[str, Any]] = {}
+    source_rollups: dict[str, dict[str, Any]] = {}
+    run_usage: dict[str, dict[str, Any]] = {}
+
+    for row in usage_rows:
+        metadata = _normalize_metadata(row.get("metadata"))
+        pass_name = _classify_b2b_pass(str(row.get("span_name") or ""), metadata)
+        if pass_name is None:
+            continue
+        cost_usd = _safe_float(row.get("cost_usd"))
+        vendor_name = _b2b_vendor_name(row.get("vendor_name"), metadata)
+        source_name = _b2b_source_name(metadata).lower()
+        run_id = str(row.get("run_id") or "").strip()
+
+        if vendor_name:
+            vendor_bucket = vendor_rollups.setdefault(
+                vendor_name,
+                {
+                    "vendor_name": vendor_name,
+                    "extraction_cost_usd": 0.0,
+                    "repair_cost_usd": 0.0,
+                    "reasoning_cost_usd": 0.0,
+                    "extraction_calls": 0,
+                    "repair_calls": 0,
+                    "reasoning_calls": 0,
+                    "total_cost_usd": 0.0,
+                },
+            )
+            vendor_bucket[f"{pass_name}_cost_usd"] += cost_usd
+            vendor_bucket[f"{pass_name}_calls"] += 1
+            vendor_bucket["total_cost_usd"] += cost_usd
+
+        if pass_name in {"extraction", "repair"} and source_name:
+            source_bucket = source_rollups.setdefault(
+                source_name,
+                {
+                    "source": source_name,
+                    "extraction_cost_usd": 0.0,
+                    "repair_cost_usd": 0.0,
+                    "extraction_calls": 0,
+                    "repair_calls": 0,
+                    "total_cost_usd": 0.0,
+                    "enriched_rows": 0,
+                    "repair_triggered_rows": 0,
+                    "repair_promoted_rows": 0,
+                    "rows_with_spans": 0,
+                    "span_count": 0,
+                    "witness_yield_rate": 0.0,
+                    "repair_trigger_rate": 0.0,
+                    "repair_promoted_rate": 0.0,
+                    "cost_per_witness_usd": None,
+                },
+            )
+            source_bucket[f"{pass_name}_cost_usd"] += cost_usd
+            source_bucket[f"{pass_name}_calls"] += 1
+            source_bucket["total_cost_usd"] += cost_usd
+
+        if run_id:
+            run_bucket = run_usage.setdefault(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "total_cost_usd": 0.0,
+                    "calls": 0,
+                    "extraction_cost_usd": 0.0,
+                    "repair_cost_usd": 0.0,
+                    "reasoning_cost_usd": 0.0,
+                },
+            )
+            run_bucket["total_cost_usd"] += cost_usd
+            run_bucket["calls"] += 1
+            run_bucket[f"{pass_name}_cost_usd"] += cost_usd
+
+    source_quality_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+          source,
+          COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched_rows,
+          COUNT(*) FILTER (WHERE enrichment_repair_attempts > 0) AS repair_triggered_rows,
+          COUNT(*) FILTER (WHERE enrichment_repair_status = 'promoted') AS repair_promoted_rows,
+          COUNT(*) FILTER (
+            WHERE enrichment_status = 'enriched'
+              AND enrichment->'evidence_spans' IS NOT NULL
+              AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+              AND jsonb_array_length(enrichment->'evidence_spans') > 0
+          ) AS rows_with_spans,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN enrichment_status = 'enriched'
+                  AND enrichment->'evidence_spans' IS NOT NULL
+                  AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+                THEN jsonb_array_length(enrichment->'evidence_spans')
+                ELSE 0
+              END
+            ),
+            0
+          ) AS span_count
+        FROM b2b_reviews
+        WHERE COALESCE(enriched_at, imported_at) >= $1
+        GROUP BY source
+        HAVING COUNT(*) FILTER (WHERE enrichment_status = 'enriched') > 0
+        """,
+        since,
+    )
+    for row in source_quality_rows:
+        source_name = str(row.get("source") or "").strip().lower()
+        bucket = source_rollups.setdefault(
+            source_name,
+            {
+                "source": source_name,
+                "extraction_cost_usd": 0.0,
+                "repair_cost_usd": 0.0,
+                "extraction_calls": 0,
+                "repair_calls": 0,
+                "total_cost_usd": 0.0,
+                "enriched_rows": 0,
+                "repair_triggered_rows": 0,
+                "repair_promoted_rows": 0,
+                "rows_with_spans": 0,
+                "span_count": 0,
+                "witness_yield_rate": 0.0,
+                "repair_trigger_rate": 0.0,
+                "repair_promoted_rate": 0.0,
+                "cost_per_witness_usd": None,
+            },
+        )
+        enriched_rows = _safe_int(row.get("enriched_rows"))
+        span_count = _safe_int(row.get("span_count"))
+        repair_triggered_rows = _safe_int(row.get("repair_triggered_rows"))
+        repair_promoted_rows = _safe_int(row.get("repair_promoted_rows"))
+        bucket["enriched_rows"] = enriched_rows
+        bucket["repair_triggered_rows"] = repair_triggered_rows
+        bucket["repair_promoted_rows"] = repair_promoted_rows
+        bucket["rows_with_spans"] = _safe_int(row.get("rows_with_spans"))
+        bucket["span_count"] = span_count
+        bucket["witness_yield_rate"] = (
+            round(span_count / enriched_rows, 4) if enriched_rows > 0 else 0.0
+        )
+        bucket["repair_trigger_rate"] = (
+            round(repair_triggered_rows / enriched_rows, 4)
+            if enriched_rows > 0
+            else 0.0
+        )
+        bucket["repair_promoted_rate"] = (
+            round(repair_promoted_rows / enriched_rows, 4)
+            if enriched_rows > 0
+            else 0.0
+        )
+        bucket["cost_per_witness_usd"] = (
+            round(float(bucket["total_cost_usd"]) / span_count, 6)
+            if span_count > 0 and float(bucket["total_cost_usd"]) > 0
+            else None
+        )
+
+    run_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+          e.id AS execution_id,
+          t.name AS task_name,
+          e.started_at,
+          e.result_text
+        FROM task_executions e
+        JOIN scheduled_tasks t ON t.id = e.task_id
+        WHERE e.started_at >= $1
+          AND e.status = 'completed'
+          AND t.name = ANY($2::text[])
+        ORDER BY e.started_at DESC
+        LIMIT $3
+        """,
+        since,
+        ["b2b_enrichment", "b2b_enrichment_repair", "b2b_reasoning_synthesis"],
+        run_limit,
+    )
+
+    recent_runs = []
+    summary_cost = 0.0
+    summary_witness_count = 0
+    summary_measured_runs = 0
+    for row in run_rows:
+        run_id = str(row.get("execution_id"))
+        payload = _parse_task_result_payload(row.get("result_text"))
+        task_name = str(row.get("task_name") or "")
+        reviews_processed = _safe_int(payload.get("reviews_processed"))
+        if reviews_processed == 0:
+            if task_name == "b2b_enrichment":
+                reviews_processed = sum(
+                    _safe_int(payload.get(key))
+                    for key in ("enriched", "quarantined", "failed", "no_signal")
+                )
+            elif task_name == "b2b_enrichment_repair":
+                reviews_processed = sum(
+                    _safe_int(payload.get(key))
+                    for key in ("promoted", "shadowed", "failed")
+                )
+            elif task_name == "b2b_reasoning_synthesis":
+                reviews_processed = _safe_int(payload.get("vendors_reasoned"))
+        witness_count = _safe_int(payload.get("witness_count"))
+        total_cost_usd = _safe_float(run_usage.get(run_id, {}).get("total_cost_usd"))
+        calls = _safe_int(run_usage.get(run_id, {}).get("calls"))
+        if witness_count > 0:
+            summary_cost += total_cost_usd
+            summary_witness_count += witness_count
+            summary_measured_runs += 1
+        recent_runs.append(
+            {
+                "run_id": run_id,
+                "task_name": task_name,
+                "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+                "total_cost_usd": round(total_cost_usd, 6),
+                "calls": calls,
+                "reviews_processed": reviews_processed,
+                "witness_rows": _safe_int(payload.get("witness_rows")),
+                "witness_count": witness_count,
+                "witness_yield_rate": (
+                    round(witness_count / reviews_processed, 4)
+                    if reviews_processed > 0
+                    else 0.0
+                ),
+                "cost_per_witness_usd": (
+                    round(total_cost_usd / witness_count, 6)
+                    if witness_count > 0 and total_cost_usd > 0
+                    else None
+                ),
+                "secondary_write_hits": _safe_int(payload.get("secondary_write_hits")),
+                "exact_cache_hits": _safe_int(payload.get("exact_cache_hits")),
+                "generated": _safe_int(payload.get("generated")),
+                "extraction_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("extraction_cost_usd")), 6),
+                "repair_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("repair_cost_usd")), 6),
+                "reasoning_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("reasoning_cost_usd")), 6),
+            }
+        )
+
+    vendor_passes = sorted(
+        vendor_rollups.values(),
+        key=lambda item: (-float(item["total_cost_usd"]), item["vendor_name"]),
+    )[:top_n]
+    source_efficiency = sorted(
+        source_rollups.values(),
+        key=lambda item: (-float(item["total_cost_usd"]), -int(item["enriched_rows"]), item["source"]),
+    )[:top_n]
+
+    return {
+        "period_days": days,
+        "top_n": top_n,
+        "run_limit": run_limit,
+        "summary": {
+            "measured_runs": summary_measured_runs,
+            "tracked_cost_usd": round(summary_cost, 6),
+            "tracked_witness_count": summary_witness_count,
+            "cost_per_witness_usd": (
+                round(summary_cost / summary_witness_count, 6)
+                if summary_witness_count > 0 and summary_cost > 0
+                else None
+            ),
+        },
+        "vendor_passes": vendor_passes,
+        "source_efficiency": source_efficiency,
+        "recent_runs": recent_runs,
+    }
+
+
 @router.get("/reasoning-activity")
 async def reasoning_activity(days: int = Query(default=30, ge=1, le=365)):
     """Per-pass breakdown of legacy stratified reasoning activity."""
@@ -606,7 +1015,10 @@ async def recent_calls(
 
 
 @router.get("/cache-health")
-async def cache_health(days: int = Query(default=30, ge=1, le=365)):
+async def cache_health(
+    days: int = Query(default=30, ge=1, le=365),
+    top_n: int = Query(default=8, ge=1, le=25),
+):
     """Atlas cache health across exact, provider, semantic, and reuse layers."""
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -671,8 +1083,52 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
            GROUP BY span_name
            ORDER BY (COALESCE(SUM(cached_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0)) DESC,
                     COUNT(*) DESC
-           LIMIT 8""",
+           LIMIT $2""",
         since,
+        top_n,
+    )
+
+    batch_summary_row = await _safe_fetchrow(
+        pool,
+        """SELECT
+             COUNT(*) AS total_jobs,
+             COUNT(*) FILTER (WHERE provider_batch_id IS NOT NULL) AS submitted_jobs,
+             COALESCE(SUM(total_items), 0) AS total_items,
+             COALESCE(SUM(submitted_items), 0) AS submitted_items,
+             COALESCE(SUM(cache_prefiltered_items), 0) AS cache_prefiltered_items,
+             COALESCE(SUM(fallback_single_call_items), 0) AS fallback_single_call_items,
+             COALESCE(SUM(completed_items), 0) AS completed_items,
+             COALESCE(SUM(failed_items), 0) AS failed_items,
+             COALESCE(SUM(estimated_sequential_cost_usd), 0) AS estimated_sequential_cost_usd,
+             COALESCE(SUM(estimated_batch_cost_usd), 0) AS estimated_batch_cost_usd
+           FROM anthropic_message_batches
+           WHERE created_at >= $1""",
+        since,
+    ) or {}
+    batch_stage_rows = await _safe_fetch(
+        pool,
+        """SELECT
+             stage_id,
+             task_name,
+             COUNT(*) AS total_jobs,
+             COUNT(*) FILTER (WHERE provider_batch_id IS NOT NULL) AS submitted_jobs,
+             COALESCE(SUM(total_items), 0) AS total_items,
+             COALESCE(SUM(submitted_items), 0) AS submitted_items,
+             COALESCE(SUM(cache_prefiltered_items), 0) AS cache_prefiltered_items,
+             COALESCE(SUM(fallback_single_call_items), 0) AS fallback_single_call_items,
+             COALESCE(SUM(completed_items), 0) AS completed_items,
+             COALESCE(SUM(failed_items), 0) AS failed_items,
+             COALESCE(SUM(estimated_sequential_cost_usd), 0) AS estimated_sequential_cost_usd,
+             COALESCE(SUM(estimated_batch_cost_usd), 0) AS estimated_batch_cost_usd,
+             MAX(submitted_at) AS last_submitted_at,
+             MAX(completed_at) AS last_completed_at
+           FROM anthropic_message_batches
+           WHERE created_at >= $1
+           GROUP BY stage_id, task_name
+           ORDER BY COALESCE(SUM(submitted_items), 0) DESC, stage_id
+           LIMIT $2""",
+        since,
+        top_n,
     )
 
     semantic_summary_row = await _safe_fetchrow(
@@ -697,8 +1153,9 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
            FROM reasoning_semantic_cache
            GROUP BY pattern_class
            ORDER BY COUNT(*) FILTER (WHERE invalidated_at IS NULL) DESC, pattern_class
-           LIMIT 8""",
+           LIMIT $2""",
         since,
+        top_n,
     )
 
     vendor_packet_row = await _safe_fetchrow(
@@ -734,12 +1191,19 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
              AND t.name = ANY($2::text[])
            ORDER BY e.started_at DESC""",
         since,
-        ["b2b_battle_cards", "b2b_churn_reports", "b2b_reasoning_synthesis"],
+        [
+            "b2b_battle_cards",
+            "b2b_churn_reports",
+            "b2b_reasoning_synthesis",
+            "b2b_enrichment",
+            "b2b_enrichment_repair",
+        ],
     )
     task_rollups: dict[str, dict[str, int | str]] = {
         "b2b_battle_cards": {
             "task_name": "b2b_battle_cards",
             "executions": 0,
+            "reused": 0,
             "exact_cache_hits": 0,
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
@@ -748,6 +1212,7 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
         "b2b_churn_reports": {
             "task_name": "b2b_churn_reports",
             "executions": 0,
+            "reused": 0,
             "exact_cache_hits": 0,
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
@@ -756,6 +1221,25 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
         "b2b_reasoning_synthesis": {
             "task_name": "b2b_reasoning_synthesis",
             "executions": 0,
+            "reused": 0,
+            "exact_cache_hits": 0,
+            "semantic_cache_hits": 0,
+            "evidence_hash_reuse": 0,
+            "generated": 0,
+        },
+        "b2b_enrichment": {
+            "task_name": "b2b_enrichment",
+            "executions": 0,
+            "reused": 0,
+            "exact_cache_hits": 0,
+            "semantic_cache_hits": 0,
+            "evidence_hash_reuse": 0,
+            "generated": 0,
+        },
+        "b2b_enrichment_repair": {
+            "task_name": "b2b_enrichment_repair",
+            "executions": 0,
+            "reused": 0,
             "exact_cache_hits": 0,
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
@@ -780,6 +1264,17 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
         elif task_name == "b2b_reasoning_synthesis":
             bucket["evidence_hash_reuse"] = _safe_int(bucket["evidence_hash_reuse"]) + _safe_int(payload.get("vendors_skipped"))
             bucket["generated"] = _safe_int(bucket["generated"]) + _safe_int(payload.get("vendors_reasoned")) + _safe_int(payload.get("cross_vendor_succeeded"))
+        elif task_name == "b2b_enrichment":
+            bucket["exact_cache_hits"] = _safe_int(bucket["exact_cache_hits"]) + _safe_int(payload.get("exact_cache_hits"))
+            bucket["generated"] = _safe_int(bucket["generated"]) + _safe_int(payload.get("generated"))
+        elif task_name == "b2b_enrichment_repair":
+            bucket["exact_cache_hits"] = _safe_int(bucket["exact_cache_hits"]) + _safe_int(payload.get("exact_cache_hits"))
+            bucket["generated"] = _safe_int(bucket["generated"]) + _safe_int(payload.get("generated"))
+        bucket["reused"] = (
+            _safe_int(bucket["exact_cache_hits"])
+            + _safe_int(bucket["semantic_cache_hits"])
+            + _safe_int(bucket["evidence_hash_reuse"])
+        )
 
     exact_stage_payload = []
     for strategy in exact_strategies:
@@ -801,6 +1296,7 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
 
     return {
         "period_days": days,
+        "top_n": top_n,
         "exact_cache": {
             "enabled": bool(settings.b2b_churn.llm_exact_cache_enabled),
             "total_rows": _safe_int(exact_summary_row.get("total_rows")),
@@ -828,6 +1324,66 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
                 for row in prompt_cache_spans
             ],
         },
+        "anthropic_batching": {
+            "enabled": bool(settings.b2b_churn.anthropic_batch_enabled),
+            "total_jobs": _safe_int(batch_summary_row.get("total_jobs")),
+            "submitted_jobs": _safe_int(batch_summary_row.get("submitted_jobs")),
+            "total_items": _safe_int(batch_summary_row.get("total_items")),
+            "submitted_items": _safe_int(batch_summary_row.get("submitted_items")),
+            "cache_prefiltered_items": _safe_int(batch_summary_row.get("cache_prefiltered_items")),
+            "fallback_single_call_items": _safe_int(batch_summary_row.get("fallback_single_call_items")),
+            "completed_items": _safe_int(batch_summary_row.get("completed_items")),
+            "failed_items": _safe_int(batch_summary_row.get("failed_items")),
+            "estimated_sequential_cost_usd": round(
+                _safe_float(batch_summary_row.get("estimated_sequential_cost_usd")),
+                6,
+            ),
+            "estimated_batch_cost_usd": round(
+                _safe_float(batch_summary_row.get("estimated_batch_cost_usd")),
+                6,
+            ),
+            "estimated_savings_usd": round(
+                max(
+                    0.0,
+                    _safe_float(batch_summary_row.get("estimated_sequential_cost_usd"))
+                    - _safe_float(batch_summary_row.get("estimated_batch_cost_usd")),
+                ),
+                6,
+            ),
+            "stages": [
+                {
+                    "stage_id": str(row["stage_id"]),
+                    "task_name": str(row["task_name"]),
+                    "total_jobs": _safe_int(row["total_jobs"]),
+                    "submitted_jobs": _safe_int(row["submitted_jobs"]),
+                    "total_items": _safe_int(row["total_items"]),
+                    "submitted_items": _safe_int(row["submitted_items"]),
+                    "cache_prefiltered_items": _safe_int(row["cache_prefiltered_items"]),
+                    "fallback_single_call_items": _safe_int(row["fallback_single_call_items"]),
+                    "completed_items": _safe_int(row["completed_items"]),
+                    "failed_items": _safe_int(row["failed_items"]),
+                    "estimated_sequential_cost_usd": round(
+                        _safe_float(row["estimated_sequential_cost_usd"]),
+                        6,
+                    ),
+                    "estimated_batch_cost_usd": round(
+                        _safe_float(row["estimated_batch_cost_usd"]),
+                        6,
+                    ),
+                    "estimated_savings_usd": round(
+                        max(
+                            0.0,
+                            _safe_float(row["estimated_sequential_cost_usd"])
+                            - _safe_float(row["estimated_batch_cost_usd"]),
+                        ),
+                        6,
+                    ),
+                    "last_submitted_at": row["last_submitted_at"].isoformat() if row["last_submitted_at"] else None,
+                    "last_completed_at": row["last_completed_at"].isoformat() if row["last_completed_at"] else None,
+                }
+                for row in batch_stage_rows
+            ],
+        },
         "semantic_cache": {
             "active_entries": _safe_int(semantic_summary_row.get("active_entries")),
             "invalidated_entries": _safe_int(semantic_summary_row.get("invalidated_entries")),
@@ -853,6 +1409,447 @@ async def cache_health(days: int = Query(default=30, ge=1, le=365)):
         "task_reuse": {
             "tasks": list(task_rollups.values()),
         },
+    }
+
+
+@router.get("/runs/{run_id}")
+async def cost_run_detail(
+    run_id: str,
+    call_limit: int = Query(default=25, ge=1, le=100),
+    event_limit: int = Query(default=25, ge=1, le=100),
+    attempt_limit: int = Query(default=25, ge=1, le=100),
+    batch_item_limit: int = Query(default=100, ge=1, le=500),
+):
+    """Correlate one execution across task, llm, artifact, and visibility tables."""
+    pool = _pool_or_503()
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        raise HTTPException(status_code=400, detail="run_id is required")
+
+    execution_row = None
+    try:
+        import uuid as _uuid
+
+        execution_row = await _safe_fetchrow(
+            pool,
+            """
+            SELECT
+                e.id,
+                e.task_id,
+                t.name AS task_name,
+                e.status,
+                e.started_at,
+                e.completed_at,
+                e.duration_ms,
+                e.retry_count,
+                e.result_text,
+                e.error,
+                e.metadata
+            FROM task_executions e
+            JOIN scheduled_tasks t ON t.id = e.task_id
+            WHERE e.id = $1
+            """,
+            _uuid.UUID(normalized_run_id),
+        )
+    except (TypeError, ValueError):
+        execution_row = None
+
+    llm_summary_row = await _safe_fetchrow(
+        pool,
+        """
+        SELECT
+            COUNT(*) AS total_calls,
+            COALESCE(SUM(cost_usd), 0) AS total_cost,
+            COALESCE(SUM(input_tokens), 0) AS total_input,
+            COALESCE(SUM(billable_input_tokens), 0) AS total_billable_input,
+            COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
+            COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens,
+            COALESCE(SUM(output_tokens), 0) AS total_output,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens,
+            COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+            COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
+            MIN(created_at) AS first_call_at,
+            MAX(created_at) AS last_call_at
+        FROM llm_usage
+        WHERE run_id = $1
+        """,
+        normalized_run_id,
+    ) or {}
+    operation_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            span_name,
+            operation_type,
+            model_name,
+            model_provider,
+            COALESCE(SUM(cost_usd), 0) AS cost,
+            COALESCE(SUM(input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+            COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+            COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens,
+            COUNT(*) AS calls,
+            COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+            COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
+            COALESCE(AVG(duration_ms), 0) AS avg_duration_ms,
+            MAX(created_at) AS latest_created_at
+        FROM llm_usage
+        WHERE run_id = $1
+        GROUP BY span_name, operation_type, model_name, model_provider
+        ORDER BY COALESCE(SUM(cost_usd), 0) DESC, COUNT(*) DESC
+        """,
+        normalized_run_id,
+    )
+    llm_call_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            id, span_name, operation_type, model_name, model_provider,
+            input_tokens, billable_input_tokens, cached_tokens, cache_write_tokens,
+            output_tokens, total_tokens, cost_usd, duration_ms, ttft_ms,
+            inference_time_ms, queue_time_ms, tokens_per_second, status,
+            api_endpoint, provider_request_id, metadata, created_at
+        FROM llm_usage
+        WHERE run_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        normalized_run_id,
+        call_limit,
+    )
+    batch_summary_row = await _safe_fetchrow(
+        pool,
+        """
+        SELECT
+            COUNT(*) AS total_jobs,
+            COUNT(*) FILTER (WHERE provider_batch_id IS NOT NULL) AS submitted_jobs,
+            COALESCE(SUM(submitted_items), 0) AS submitted_items,
+            COALESCE(SUM(cache_prefiltered_items), 0) AS cache_prefiltered_items,
+            COALESCE(SUM(fallback_single_call_items), 0) AS fallback_single_call_items,
+            COALESCE(SUM(completed_items), 0) AS completed_items,
+            COALESCE(SUM(failed_items), 0) AS failed_items,
+            COALESCE(SUM(estimated_sequential_cost_usd), 0) AS estimated_sequential_cost_usd,
+            COALESCE(SUM(estimated_batch_cost_usd), 0) AS estimated_batch_cost_usd
+        FROM anthropic_message_batches
+        WHERE run_id = $1
+        """,
+        normalized_run_id,
+    ) or {}
+    batch_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            id,
+            stage_id,
+            task_name,
+            status,
+            provider_batch_id,
+            total_items,
+            submitted_items,
+            cache_prefiltered_items,
+            fallback_single_call_items,
+            completed_items,
+            failed_items,
+            estimated_sequential_cost_usd,
+            estimated_batch_cost_usd,
+            submitted_at,
+            completed_at
+        FROM anthropic_message_batches
+        WHERE run_id = $1
+        ORDER BY created_at DESC
+        """,
+        normalized_run_id,
+    )
+    batch_item_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            i.id,
+            i.batch_id,
+            i.custom_id,
+            i.stage_id,
+            b.task_name,
+            b.provider_batch_id,
+            i.artifact_type,
+            i.artifact_id,
+            i.vendor_name,
+            i.status,
+            i.cache_prefiltered,
+            i.fallback_single_call,
+            i.input_tokens,
+            i.billable_input_tokens,
+            i.cached_tokens,
+            i.cache_write_tokens,
+            i.output_tokens,
+            (i.input_tokens + i.output_tokens) AS total_tokens,
+            i.cost_usd,
+            i.provider_request_id,
+            i.error_text,
+            i.request_metadata,
+            i.created_at,
+            i.completed_at
+        FROM anthropic_message_batch_items i
+        JOIN anthropic_message_batches b ON b.id = i.batch_id
+        WHERE b.run_id = $1
+        ORDER BY COALESCE(i.completed_at, i.created_at) DESC, i.created_at DESC
+        LIMIT $2
+        """,
+        normalized_run_id,
+        batch_item_limit,
+    )
+    attempt_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            id, artifact_type, artifact_id, run_id, attempt_no, stage, status,
+            score, threshold, blocker_count, warning_count,
+            blocking_issues, warnings, failure_step, error_message,
+            started_at, completed_at
+        FROM artifact_attempts
+        WHERE run_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        normalized_run_id,
+        attempt_limit,
+    )
+    event_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            id, occurred_at, run_id, stage, event_type, severity, actionable,
+            entity_type, entity_id, artifact_type, reason_code, rule_code,
+            decision, summary, detail, fingerprint
+        FROM pipeline_visibility_events
+        WHERE run_id = $1
+        ORDER BY occurred_at DESC
+        LIMIT $2
+        """,
+        normalized_run_id,
+        event_limit,
+    )
+
+    if (
+        execution_row is None
+        and _safe_int(llm_summary_row.get("total_calls")) == 0
+        and _safe_int(batch_summary_row.get("total_jobs")) == 0
+        and not attempt_rows
+        and not event_rows
+    ):
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    calls = []
+    for row in llm_call_rows:
+        metadata = _normalize_metadata(row["metadata"])
+        title, detail = _describe_recent_call(row["span_name"], metadata)
+        calls.append({
+            "id": str(row["id"]),
+            "span_name": row["span_name"],
+            "operation_type": row["operation_type"],
+            "title": title,
+            "detail": detail,
+            "model": row["model_name"],
+            "provider": row["model_provider"],
+            "input_tokens": row["input_tokens"],
+            "billable_input_tokens": row["billable_input_tokens"],
+            "cached_tokens": row["cached_tokens"],
+            "cache_write_tokens": row["cache_write_tokens"],
+            "output_tokens": row["output_tokens"],
+            "total_tokens": row["total_tokens"],
+            "cost_usd": float(row["cost_usd"]) if row["cost_usd"] else 0,
+            "duration_ms": row["duration_ms"],
+            "ttft_ms": row["ttft_ms"],
+            "inference_time_ms": row["inference_time_ms"],
+            "queue_time_ms": row["queue_time_ms"],
+            "tokens_per_second": row["tokens_per_second"],
+            "status": row["status"],
+            "cache_hit": bool(row["cached_tokens"]),
+            "cache_write": bool(row["cache_write_tokens"]),
+            "api_endpoint": row["api_endpoint"],
+            "provider_request_id": row["provider_request_id"],
+            "metadata": metadata,
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        })
+
+    return {
+        "run_id": normalized_run_id,
+        "task_execution": {
+            "id": str(execution_row["id"]),
+            "task_id": str(execution_row["task_id"]),
+            "task_name": execution_row["task_name"],
+            "status": execution_row["status"],
+            "started_at": execution_row["started_at"].isoformat() if execution_row["started_at"] else None,
+            "completed_at": execution_row["completed_at"].isoformat() if execution_row["completed_at"] else None,
+            "duration_ms": execution_row["duration_ms"],
+            "retry_count": execution_row["retry_count"],
+            "result": _parse_task_result_payload(execution_row["result_text"]),
+            "result_text": execution_row["result_text"],
+            "error": execution_row["error"],
+            "metadata": _normalize_metadata(execution_row["metadata"]),
+        } if execution_row else None,
+        "llm_summary": {
+            "total_calls": _safe_int(llm_summary_row.get("total_calls")),
+            "total_cost_usd": float(llm_summary_row.get("total_cost") or 0),
+            "total_input_tokens": _safe_int(llm_summary_row.get("total_input")),
+            "total_billable_input_tokens": _safe_int(llm_summary_row.get("total_billable_input")),
+            "total_cached_tokens": _safe_int(llm_summary_row.get("total_cached_tokens")),
+            "total_cache_write_tokens": _safe_int(llm_summary_row.get("total_cache_write_tokens")),
+            "total_output_tokens": _safe_int(llm_summary_row.get("total_output")),
+            "total_tokens": _safe_int(llm_summary_row.get("total_tokens")),
+            "cache_hit_calls": _safe_int(llm_summary_row.get("cache_hit_calls")),
+            "cache_write_calls": _safe_int(llm_summary_row.get("cache_write_calls")),
+            "first_call_at": llm_summary_row.get("first_call_at").isoformat() if llm_summary_row.get("first_call_at") else None,
+            "last_call_at": llm_summary_row.get("last_call_at").isoformat() if llm_summary_row.get("last_call_at") else None,
+        },
+        "batching_summary": {
+            "total_jobs": _safe_int(batch_summary_row.get("total_jobs")),
+            "submitted_jobs": _safe_int(batch_summary_row.get("submitted_jobs")),
+            "submitted_items": _safe_int(batch_summary_row.get("submitted_items")),
+            "cache_prefiltered_items": _safe_int(batch_summary_row.get("cache_prefiltered_items")),
+            "fallback_single_call_items": _safe_int(batch_summary_row.get("fallback_single_call_items")),
+            "completed_items": _safe_int(batch_summary_row.get("completed_items")),
+            "failed_items": _safe_int(batch_summary_row.get("failed_items")),
+            "estimated_sequential_cost_usd": round(
+                _safe_float(batch_summary_row.get("estimated_sequential_cost_usd")),
+                6,
+            ),
+            "estimated_batch_cost_usd": round(
+                _safe_float(batch_summary_row.get("estimated_batch_cost_usd")),
+                6,
+            ),
+            "estimated_savings_usd": round(
+                max(
+                    0.0,
+                    _safe_float(batch_summary_row.get("estimated_sequential_cost_usd"))
+                    - _safe_float(batch_summary_row.get("estimated_batch_cost_usd")),
+                ),
+                6,
+            ),
+        },
+        "operations": [
+            {
+                "span_name": row["span_name"],
+                "operation_type": row["operation_type"],
+                "model": row["model_name"],
+                "provider": row["model_provider"],
+                "cost_usd": float(row["cost"]) if row["cost"] else 0,
+                "input_tokens": _safe_int(row["input_tokens"]),
+                "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
+                "cached_tokens": _safe_int(row["cached_tokens"]),
+                "cache_write_tokens": _safe_int(row["cache_write_tokens"]),
+                "output_tokens": _safe_int(row["output_tokens"]),
+                "total_tokens": _safe_int(row["total_tokens"]),
+                "calls": _safe_int(row["calls"]),
+                "cache_hit_calls": _safe_int(row["cache_hit_calls"]),
+                "cache_write_calls": _safe_int(row["cache_write_calls"]),
+                "avg_duration_ms": round(float(row["avg_duration_ms"] or 0), 1),
+                "latest_created_at": row["latest_created_at"].isoformat() if row["latest_created_at"] else None,
+            }
+            for row in operation_rows
+        ],
+        "batch_jobs": [
+            {
+                "id": str(row["id"]),
+                "stage_id": str(row["stage_id"]),
+                "task_name": str(row["task_name"]),
+                "status": str(row["status"]),
+                "provider_batch_id": row["provider_batch_id"],
+                "total_items": _safe_int(row["total_items"]),
+                "submitted_items": _safe_int(row["submitted_items"]),
+                "cache_prefiltered_items": _safe_int(row["cache_prefiltered_items"]),
+                "fallback_single_call_items": _safe_int(row["fallback_single_call_items"]),
+                "completed_items": _safe_int(row["completed_items"]),
+                "failed_items": _safe_int(row["failed_items"]),
+                "estimated_sequential_cost_usd": round(_safe_float(row["estimated_sequential_cost_usd"]), 6),
+                "estimated_batch_cost_usd": round(_safe_float(row["estimated_batch_cost_usd"]), 6),
+                "estimated_savings_usd": round(
+                    max(
+                        0.0,
+                        _safe_float(row["estimated_sequential_cost_usd"])
+                        - _safe_float(row["estimated_batch_cost_usd"]),
+                    ),
+                    6,
+                ),
+                "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+                "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+            }
+            for row in batch_rows
+        ],
+        "batch_items": [
+            {
+                "id": str(row["id"]),
+                "batch_id": str(row["batch_id"]),
+                "custom_id": str(row["custom_id"]),
+                "stage_id": str(row["stage_id"]),
+                "task_name": str(row["task_name"]),
+                "provider_batch_id": row["provider_batch_id"],
+                "artifact_type": str(row["artifact_type"]),
+                "artifact_id": str(row["artifact_id"]),
+                "vendor_name": str(row["vendor_name"]) if row["vendor_name"] else None,
+                "status": str(row["status"]),
+                "cache_prefiltered": bool(row["cache_prefiltered"]),
+                "fallback_single_call": bool(row["fallback_single_call"]),
+                "input_tokens": _safe_int(row["input_tokens"]),
+                "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
+                "cached_tokens": _safe_int(row["cached_tokens"]),
+                "cache_write_tokens": _safe_int(row["cache_write_tokens"]),
+                "output_tokens": _safe_int(row["output_tokens"]),
+                "total_tokens": _safe_int(row["total_tokens"]),
+                "cost_usd": round(_safe_float(row["cost_usd"]), 6),
+                "provider_request_id": row["provider_request_id"],
+                "error_text": row["error_text"],
+                "request_metadata": _normalize_metadata(row["request_metadata"]),
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+            }
+            for row in batch_item_rows
+        ],
+        "calls": calls,
+        "artifact_attempts": [
+            {
+                "id": str(row["id"]),
+                "artifact_type": row["artifact_type"],
+                "artifact_id": row["artifact_id"],
+                "run_id": row["run_id"],
+                "attempt_no": _safe_int(row["attempt_no"]),
+                "stage": row["stage"],
+                "status": row["status"],
+                "score": row["score"],
+                "threshold": row["threshold"],
+                "blocker_count": _safe_int(row["blocker_count"]),
+                "warning_count": _safe_int(row["warning_count"]),
+                "blocking_issues": row["blocking_issues"] if isinstance(row["blocking_issues"], list) else [],
+                "warnings": row["warnings"] if isinstance(row["warnings"], list) else [],
+                "failure_step": row["failure_step"],
+                "error_message": row["error_message"],
+                "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+                "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+            }
+            for row in attempt_rows
+        ],
+        "visibility_events": [
+            {
+                "id": str(row["id"]),
+                "occurred_at": row["occurred_at"].isoformat() if row["occurred_at"] else None,
+                "run_id": row["run_id"],
+                "stage": row["stage"],
+                "event_type": row["event_type"],
+                "severity": row["severity"],
+                "actionable": bool(row["actionable"]),
+                "entity_type": row["entity_type"],
+                "entity_id": row["entity_id"],
+                "artifact_type": row["artifact_type"],
+                "reason_code": row["reason_code"],
+                "rule_code": row["rule_code"],
+                "decision": row["decision"],
+                "summary": row["summary"],
+                "detail": _normalize_metadata(row["detail"]),
+                "fingerprint": row["fingerprint"],
+            }
+            for row in event_rows
+        ],
     }
 
 

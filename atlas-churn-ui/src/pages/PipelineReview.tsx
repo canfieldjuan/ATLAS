@@ -27,11 +27,27 @@ import type {
   ArtifactAttempt,
   EnrichmentQuarantine,
   ExtractionHealthDailyRow,
+  ExtractionHealthSourceRow,
+  ExtractionHealthRunRow,
   ExtractionHealthVendorRow,
   SynthesisValidationResult,
   AdminCostSummary,
   AdminCostOperation,
+  AdminCostVendor,
+  AdminCostVendorPassRow,
+  AdminCostSourceEfficiencyRow,
+  AdminCostB2bRunRow,
+  AdminCostB2bEfficiency,
   AdminCostRecentCall,
+  AdminCostCacheHealth,
+  AdminCostBatchStage,
+  AdminCostExactCacheStage,
+  AdminCostPromptCacheSpan,
+  AdminCostSemanticPatternClass,
+  AdminCostTaskReuseRow,
+  AdminCostRunDetail,
+  AdminCostRunBatchJob,
+  AdminCostRunBatchItem,
 } from '../types'
 import {
   fetchVisibilitySummary,
@@ -44,10 +60,19 @@ import {
   resolveVisibilityReview,
   fetchAdminCostSummary,
   fetchAdminCostByOperation,
+  fetchAdminCostByVendor,
+  fetchAdminCostB2bEfficiency,
   fetchAdminCostRecent,
+  fetchAdminCostCacheHealth,
+  fetchAdminCostRun,
 } from '../api/client'
 
 type TabKey = 'queue' | 'failures' | 'quality' | 'audit' | 'costs'
+
+const EXTRACTION_HEALTH_TOP_N = 12
+const COST_VENDOR_LIMIT = 100
+const B2B_EFFICIENCY_TOP_N = 25
+const B2B_EFFICIENCY_RUN_LIMIT = 25
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -130,6 +155,10 @@ function formatCurrency(value: number | null | undefined): string {
   }).format(value ?? 0)
 }
 
+function formatMaybeCurrency(value: number | null | undefined): string {
+  return value == null ? '--' : formatCurrency(value)
+}
+
 function formatCompactTokens(value: number | null | undefined): string {
   const amount = Math.abs(value ?? 0)
   if (amount >= 1_000_000) {
@@ -145,7 +174,7 @@ function truncateLabel(value: string | null | undefined, max = 38): string {
   const text = String(value || '').trim()
   if (!text) return '--'
   if (text.length <= max) return text
-  return `${text.slice(0, max - 1)}…`
+  return `${text.slice(0, max - 3)}...`
 }
 
 const visibilityCodeLabels: Record<string, string> = {
@@ -311,7 +340,7 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
         <div className="max-w-sm">
           <span className="text-white text-sm line-clamp-1">{r.summary}</span>
           <span className="text-xs text-slate-500 block">
-            {r.reason_code ? `${formatVisibilityCode(r.reason_code)} · ` : ''}
+            {r.reason_code ? `${formatVisibilityCode(r.reason_code)} | ` : ''}
             {r.entity_type}: {r.entity_id}
           </span>
         </div>
@@ -591,7 +620,7 @@ function QualityTab() {
     () =>
       fetchExtractionHealth({
         days: Number(healthDays),
-        top_n: 12,
+        top_n: EXTRACTION_HEALTH_TOP_N,
       }),
     [healthDays],
   )
@@ -835,12 +864,109 @@ function QualityTab() {
     },
   ]
 
+  const sourceColumns: Column<ExtractionHealthSourceRow>[] = [
+    {
+      key: 'source',
+      header: 'Source',
+      render: (r) => <span className="text-sm text-white">{r.source}</span>,
+      sortable: true,
+      sortValue: (r) => r.source,
+    },
+    {
+      key: 'enriched_rows',
+      header: 'Enriched',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.enriched_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.enriched_rows,
+    },
+    {
+      key: 'span_count',
+      header: 'Spans',
+      render: (r) => <span className="text-xs text-cyan-300">{formatNumber(r.span_count)}</span>,
+      sortable: true,
+      sortValue: (r) => r.span_count,
+    },
+    {
+      key: 'witness_yield_rate',
+      header: 'Yield / Review',
+      render: (r) => <span className="text-xs text-slate-300">{r.witness_yield_rate.toFixed(2)}</span>,
+      sortable: true,
+      sortValue: (r) => r.witness_yield_rate,
+    },
+    {
+      key: 'repair_trigger_rate',
+      header: 'Repair Trigger',
+      render: (r) => <span className="text-xs text-amber-300">{(r.repair_trigger_rate * 100).toFixed(1)}%</span>,
+      sortable: true,
+      sortValue: (r) => r.repair_trigger_rate,
+    },
+    {
+      key: 'repair_promoted_rate',
+      header: 'Repair Promoted',
+      render: (r) => <span className="text-xs text-slate-300">{(r.repair_promoted_rate * 100).toFixed(1)}%</span>,
+      sortable: true,
+      sortValue: (r) => r.repair_promoted_rate,
+    },
+  ]
+
+  const runColumns: Column<ExtractionHealthRunRow>[] = [
+    {
+      key: 'started_at',
+      header: 'Run',
+      render: (r) => (
+        <div className="max-w-[220px]">
+          <p className="truncate text-sm text-white">{r.task_name}</p>
+          <p className="truncate text-xs text-slate-500">{formatTs(r.started_at)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (r) => r.started_at || '',
+    },
+    {
+      key: 'reviews_processed',
+      header: 'Processed',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.reviews_processed)}</span>,
+      sortable: true,
+      sortValue: (r) => r.reviews_processed,
+    },
+    {
+      key: 'witness_count',
+      header: 'Spans',
+      render: (r) => <span className="text-xs text-cyan-300">{formatNumber(r.witness_count)}</span>,
+      sortable: true,
+      sortValue: (r) => r.witness_count,
+    },
+    {
+      key: 'witness_yield_rate',
+      header: 'Yield / Review',
+      render: (r) => <span className="text-xs text-slate-300">{r.witness_yield_rate.toFixed(2)}</span>,
+      sortable: true,
+      sortValue: (r) => r.witness_yield_rate,
+    },
+    {
+      key: 'secondary_write_hits',
+      header: 'Secondary Writes',
+      render: (r) => <span className="text-xs text-amber-300">{formatNumber(r.secondary_write_hits)}</span>,
+      sortable: true,
+      sortValue: (r) => r.secondary_write_hits,
+    },
+    {
+      key: 'exact_cache_hits',
+      header: 'Exact Hits',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.exact_cache_hits)}</span>,
+      sortable: true,
+      sortValue: (r) => r.exact_cache_hits,
+    },
+  ]
+
   const loading = quarantinesLoading || validationsLoading || extractionHealthLoading
   const refreshing = quarantinesRefreshing || validationsRefreshing || extractionHealthRefreshing
   const error = quarantinesError || validationsError || extractionHealthError
   const snapshot = extractionHealth?.current_snapshot
   const extractionTrend = extractionHealth?.daily_trend ?? []
   const extractionVendors = extractionHealth?.top_vendors ?? []
+  const extractionSources = extractionHealth?.top_sources ?? []
+  const extractionRuns = extractionHealth?.recent_runs ?? []
 
   const refresh = () => {
     refreshQuarantines()
@@ -954,6 +1080,33 @@ function QualityTab() {
           />
         </div>
 
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+          <StatCard
+            label="Witness Yield / Review"
+            value={snapshot ? snapshot.witness_yield_rate.toFixed(2) : '0.00'}
+            icon={<Database className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Repair Trigger Rate"
+            value={snapshot ? `${(snapshot.repair_trigger_rate * 100).toFixed(1)}%` : '0.0%'}
+            icon={<RefreshCw className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label={`Secondary Writes ${healthDays}d`}
+            value={snapshot?.secondary_write_hits_window ?? 0}
+            icon={<GitCompareArrows className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Total Spans"
+            value={snapshot?.span_count ?? 0}
+            icon={<Database className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+        </div>
+
         <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
           <StatCard
             label="Strategic Candidates"
@@ -1022,6 +1175,40 @@ function QualityTab() {
                 columns={vendorColumns}
                 data={extractionVendors}
                 emptyMessage="No vendors currently show extraction-health gaps"
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="border border-slate-700/50 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700/50">
+              <h3 className="text-sm font-medium text-white">Top Sources</h3>
+              <p className="text-xs text-slate-500">Witness yield and repair pressure by review source</p>
+            </div>
+            {loading ? (
+              <DataTable columns={sourceColumns} data={[]} skeletonRows={6} />
+            ) : (
+              <DataTable
+                columns={sourceColumns}
+                data={extractionSources}
+                emptyMessage="No source-level extraction health rows in the selected window"
+              />
+            )}
+          </div>
+
+          <div className="border border-slate-700/50 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700/50">
+              <h3 className="text-sm font-medium text-white">Recent Enrichment Runs</h3>
+              <p className="text-xs text-slate-500">Per-run witness yield and secondary-write activity</p>
+            </div>
+            {loading ? (
+              <DataTable columns={runColumns} data={[]} skeletonRows={6} />
+            ) : (
+              <DataTable
+                columns={runColumns}
+                data={extractionRuns}
+                emptyMessage="No recent enrichment or repair runs in the selected window"
               />
             )}
           </div>
@@ -1214,7 +1401,7 @@ function AuditTab() {
 // Tab: Costs
 // ---------------------------------------------------------------------------
 
-interface CostTabData {
+interface CostCoreData {
   summary: AdminCostSummary
   operations: AdminCostOperation[]
   recent: AdminCostRecentCall[]
@@ -1222,11 +1409,14 @@ interface CostTabData {
 
 function CostsTab() {
   const [days, setDays] = useState('30')
+  const [cacheTopN, setCacheTopN] = useState('8')
   const [providerFilter, setProviderFilter] = useState('')
   const [modelFilter, setModelFilter] = useState('')
   const [spanFilter, setSpanFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [cacheFilter, setCacheFilter] = useState('')
+  const [runIdInput, setRunIdInput] = useState('')
+  const [activeRunId, setActiveRunId] = useState('')
 
   const {
     data,
@@ -1234,7 +1424,7 @@ function CostsTab() {
     error,
     refresh,
     refreshing,
-  } = useApiData<CostTabData>(
+  } = useApiData<CostCoreData>(
     async () => {
       const numericDays = Number(days)
       const cacheOnly =
@@ -1269,8 +1459,74 @@ function CostsTab() {
     [days, providerFilter, modelFilter, spanFilter, statusFilter, cacheFilter],
   )
 
+  const {
+    data: vendors,
+    loading: vendorsLoading,
+    error: vendorsError,
+    refresh: refreshVendors,
+    refreshing: vendorsRefreshing,
+  } = useApiData<AdminCostVendor[]>(
+    async () => {
+      const response = await fetchAdminCostByVendor({
+        days: Number(days),
+        limit: COST_VENDOR_LIMIT,
+      })
+      return response.vendors
+    },
+    [days],
+  )
+
+  const {
+    data: b2bEfficiency,
+    loading: b2bEfficiencyLoading,
+    error: b2bEfficiencyError,
+    refresh: refreshB2bEfficiency,
+    refreshing: b2bEfficiencyRefreshing,
+  } = useApiData<AdminCostB2bEfficiency>(
+    () =>
+      fetchAdminCostB2bEfficiency({
+        days: Number(days),
+        top_n: B2B_EFFICIENCY_TOP_N,
+        run_limit: B2B_EFFICIENCY_RUN_LIMIT,
+      }),
+    [days],
+  )
+
+  const {
+    data: cacheHealth,
+    loading: cacheHealthLoading,
+    error: cacheHealthError,
+    refresh: refreshCacheHealth,
+    refreshing: cacheHealthRefreshing,
+  } = useApiData<AdminCostCacheHealth>(
+    () => fetchAdminCostCacheHealth(Number(days), Number(cacheTopN)),
+    [days, cacheTopN],
+  )
+  const {
+    data: runDetail,
+    loading: runDetailLoading,
+    error: runDetailError,
+    refresh: refreshRunDetail,
+    refreshing: runDetailRefreshing,
+  } = useApiData<AdminCostRunDetail | null>(
+    () => (
+      activeRunId.trim()
+        ? fetchAdminCostRun(activeRunId.trim(), { call_limit: 25, event_limit: 15, attempt_limit: 15 })
+        : Promise.resolve(null)
+    ),
+    [activeRunId],
+  )
+
   const operations = data?.operations ?? []
+  const vendorRows = vendors ?? []
+  const vendorPasses = b2bEfficiency?.vendor_passes ?? []
+  const sourceEfficiency = b2bEfficiency?.source_efficiency ?? []
+  const recentPipelineRuns = b2bEfficiency?.recent_runs ?? []
   const recentCalls = data?.recent ?? []
+  const unifiedError = error || vendorsError || b2bEfficiencyError || cacheHealthError
+  const unifiedLoading = loading || vendorsLoading || b2bEfficiencyLoading || cacheHealthLoading
+  const unifiedRefreshing =
+    refreshing || vendorsRefreshing || b2bEfficiencyRefreshing || cacheHealthRefreshing
   const providerOptions = Array.from(
     new Set(
       [...operations.map((row) => row.provider), ...recentCalls.map((row) => row.provider || '')]
@@ -1296,6 +1552,234 @@ function CostsTab() {
     new Set(recentCalls.map((row) => row.status).map((value) => value.trim()).filter(Boolean)),
   ).sort()
 
+  const exactStageColumns: Column<AdminCostExactCacheStage>[] = [
+    {
+      key: 'stage_id',
+      header: 'Atlas Exact Stage',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{row.stage_id}</p>
+          <p className="truncate text-xs text-slate-500">{truncateLabel(row.namespace || row.file_path, 48)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.stage_id,
+    },
+    {
+      key: 'rows',
+      header: 'Rows',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.rows)}</span>,
+      sortable: true,
+      sortValue: (row) => row.rows,
+    },
+    {
+      key: 'total_hits',
+      header: 'Hits',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.total_hits)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_hits,
+    },
+    {
+      key: 'writes_in_window',
+      header: `Writes ${days}d`,
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.writes_in_window)}</span>,
+      sortable: true,
+      sortValue: (row) => row.writes_in_window,
+    },
+    {
+      key: 'rows_hit_in_window',
+      header: `Rows Hit ${days}d`,
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.rows_hit_in_window)}</span>,
+      sortable: true,
+      sortValue: (row) => row.rows_hit_in_window,
+    },
+    {
+      key: 'last_hit_at',
+      header: 'Last Hit',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.last_hit_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.last_hit_at || '',
+    },
+  ]
+
+  const taskReuseColumns: Column<AdminCostTaskReuseRow>[] = [
+    {
+      key: 'task_name',
+      header: 'Task',
+      render: (row) => <span className="text-sm text-white">{row.task_name}</span>,
+      sortable: true,
+      sortValue: (row) => row.task_name,
+    },
+    {
+      key: 'executions',
+      header: 'Runs',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.executions)}</span>,
+      sortable: true,
+      sortValue: (row) => row.executions,
+    },
+    {
+      key: 'reused',
+      header: 'Reused',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatNumber(row.reused)}</span>,
+      sortable: true,
+      sortValue: (row) => row.reused,
+    },
+    {
+      key: 'exact_cache_hits',
+      header: 'Exact Hits',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.exact_cache_hits)}</span>,
+      sortable: true,
+      sortValue: (row) => row.exact_cache_hits,
+    },
+    {
+      key: 'semantic_cache_hits',
+      header: 'Semantic Hits',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.semantic_cache_hits)}</span>,
+      sortable: true,
+      sortValue: (row) => row.semantic_cache_hits,
+    },
+    {
+      key: 'evidence_hash_reuse',
+      header: 'Hash Reuse',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.evidence_hash_reuse)}</span>,
+      sortable: true,
+      sortValue: (row) => row.evidence_hash_reuse,
+    },
+    {
+      key: 'generated',
+      header: 'Generated',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.generated)}</span>,
+      sortable: true,
+      sortValue: (row) => row.generated,
+    },
+  ]
+
+  const promptCacheColumns: Column<AdminCostPromptCacheSpan>[] = [
+    {
+      key: 'span_name',
+      header: 'Provider Prompt Cache Leader',
+      render: (row) => <span className="text-sm text-white">{truncateLabel(row.span_name, 52)}</span>,
+      sortable: true,
+      sortValue: (row) => row.span_name,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cache_hit_calls',
+      header: 'Read Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.cache_hit_calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_hit_calls,
+    },
+    {
+      key: 'cache_write_calls',
+      header: 'Write Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.cache_write_calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_write_calls,
+    },
+    {
+      key: 'cached_tokens',
+      header: 'Read Tokens',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cached_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cached_tokens,
+    },
+    {
+      key: 'cache_write_tokens',
+      header: 'Write Tokens',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cache_write_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_write_tokens,
+    },
+  ]
+
+  const batchStageColumns: Column<AdminCostBatchStage>[] = [
+    {
+      key: 'stage_id',
+      header: 'Batch Stage',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{row.stage_id}</p>
+          <p className="truncate text-xs text-slate-500">{truncateLabel(row.task_name, 48)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.stage_id,
+    },
+    {
+      key: 'submitted_jobs',
+      header: 'Jobs',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.submitted_jobs)}</span>,
+      sortable: true,
+      sortValue: (row) => row.submitted_jobs,
+    },
+    {
+      key: 'submitted_items',
+      header: 'Items',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.submitted_items)}</span>,
+      sortable: true,
+      sortValue: (row) => row.submitted_items,
+    },
+    {
+      key: 'cache_prefiltered_items',
+      header: 'Prefiltered',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.cache_prefiltered_items)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_prefiltered_items,
+    },
+    {
+      key: 'fallback_single_call_items',
+      header: 'Fallback Single',
+      render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.fallback_single_call_items)}</span>,
+      sortable: true,
+      sortValue: (row) => row.fallback_single_call_items,
+    },
+    {
+      key: 'estimated_savings_usd',
+      header: 'Est Savings',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.estimated_savings_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.estimated_savings_usd,
+    },
+    {
+      key: 'last_completed_at',
+      header: 'Last Complete',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.last_completed_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.last_completed_at || '',
+    },
+  ]
+
+  const semanticColumns: Column<AdminCostSemanticPatternClass>[] = [
+    {
+      key: 'pattern_class',
+      header: 'Semantic Pattern',
+      render: (row) => <span className="text-sm text-white">{row.pattern_class}</span>,
+      sortable: true,
+      sortValue: (row) => row.pattern_class,
+    },
+    {
+      key: 'active_entries',
+      header: 'Active',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.active_entries)}</span>,
+      sortable: true,
+      sortValue: (row) => row.active_entries,
+    },
+    {
+      key: 'recent_validations',
+      header: `Validated ${days}d`,
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.recent_validations)}</span>,
+      sortable: true,
+      sortValue: (row) => row.recent_validations,
+    },
+  ]
+
   const operationColumns: Column<AdminCostOperation>[] = [
     {
       key: 'span_name',
@@ -1303,7 +1787,7 @@ function CostsTab() {
       render: (row) => (
         <div className="max-w-[260px]">
           <p className="truncate text-sm text-white">{row.span_name}</p>
-          <p className="truncate text-xs text-slate-500">{row.provider} · {truncateLabel(row.model, 48)}</p>
+          <p className="truncate text-xs text-slate-500">{row.provider} | {truncateLabel(row.model, 48)}</p>
         </div>
       ),
       sortable: true,
@@ -1367,6 +1851,219 @@ function CostsTab() {
     },
   ]
 
+  const vendorColumns: Column<AdminCostVendor>[] = [
+    {
+      key: 'vendor_name',
+      header: 'Vendor',
+      render: (row) => <span className="text-sm text-white">{row.vendor_name}</span>,
+      sortable: true,
+      sortValue: (row) => row.vendor_name,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'input_tokens',
+      header: 'Raw In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.input_tokens,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+    {
+      key: 'avg_duration_ms',
+      header: 'Avg ms',
+      render: (row) => <span className="text-xs text-slate-400">{formatNumber(Math.round(row.avg_duration_ms))}</span>,
+      sortable: true,
+      sortValue: (row) => row.avg_duration_ms,
+    },
+  ]
+
+  const vendorPassColumns: Column<AdminCostVendorPassRow>[] = [
+    {
+      key: 'vendor_name',
+      header: 'Vendor',
+      render: (row) => <span className="text-sm text-white">{row.vendor_name}</span>,
+      sortable: true,
+      sortValue: (row) => row.vendor_name,
+    },
+    {
+      key: 'total_cost_usd',
+      header: 'Total Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.total_cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_cost_usd,
+    },
+    {
+      key: 'extraction_cost_usd',
+      header: 'Extraction',
+      render: (row) => (
+        <div className="text-xs">
+          <div className="text-slate-300">{formatCurrency(row.extraction_cost_usd)}</div>
+          <div className="text-slate-500">{formatNumber(row.extraction_calls)} calls</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.extraction_cost_usd,
+    },
+    {
+      key: 'repair_cost_usd',
+      header: 'Repair',
+      render: (row) => (
+        <div className="text-xs">
+          <div className="text-slate-300">{formatCurrency(row.repair_cost_usd)}</div>
+          <div className="text-slate-500">{formatNumber(row.repair_calls)} calls</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.repair_cost_usd,
+    },
+    {
+      key: 'reasoning_cost_usd',
+      header: 'Reasoning',
+      render: (row) => (
+        <div className="text-xs">
+          <div className="text-slate-300">{formatCurrency(row.reasoning_cost_usd)}</div>
+          <div className="text-slate-500">{formatNumber(row.reasoning_calls)} calls</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.reasoning_cost_usd,
+    },
+  ]
+
+  const sourceEfficiencyColumns: Column<AdminCostSourceEfficiencyRow>[] = [
+    {
+      key: 'source',
+      header: 'Source',
+      render: (row) => <span className="text-sm text-white">{row.source}</span>,
+      sortable: true,
+      sortValue: (row) => row.source,
+    },
+    {
+      key: 'total_cost_usd',
+      header: 'Total Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.total_cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_cost_usd,
+    },
+    {
+      key: 'witness_yield_rate',
+      header: 'Yield / Review',
+      render: (row) => <span className="text-xs text-slate-300">{row.witness_yield_rate.toFixed(2)}</span>,
+      sortable: true,
+      sortValue: (row) => row.witness_yield_rate,
+    },
+    {
+      key: 'repair_trigger_rate',
+      header: 'Repair Trigger',
+      render: (row) => <span className="text-xs text-amber-300">{(row.repair_trigger_rate * 100).toFixed(1)}%</span>,
+      sortable: true,
+      sortValue: (row) => row.repair_trigger_rate,
+    },
+    {
+      key: 'span_count',
+      header: 'Spans',
+      render: (row) => <span className="text-xs text-cyan-300">{formatNumber(row.span_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.span_count,
+    },
+    {
+      key: 'cost_per_witness_usd',
+      header: 'Cost / Witness',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeCurrency(row.cost_per_witness_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_per_witness_usd ?? -1,
+    },
+  ]
+
+  const b2bRunColumns: Column<AdminCostB2bRunRow>[] = [
+    {
+      key: 'started_at',
+      header: 'Run',
+      render: (row) => (
+        <div className="max-w-[240px]">
+          <p className="truncate text-sm text-white">{row.task_name}</p>
+          <p className="truncate text-xs text-slate-500">{formatTs(row.started_at)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.started_at || '',
+    },
+    {
+      key: 'total_cost_usd',
+      header: 'Total Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.total_cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_cost_usd,
+    },
+    {
+      key: 'pass_costs',
+      header: 'Pass Split',
+      render: (row) => (
+        <div className="space-y-0.5 text-[11px] text-slate-400">
+          <div>Ext {formatMaybeCurrency(row.extraction_cost_usd)}</div>
+          <div>Rep {formatMaybeCurrency(row.repair_cost_usd)}</div>
+          <div>Reas {formatMaybeCurrency(row.reasoning_cost_usd)}</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.extraction_cost_usd + row.repair_cost_usd + row.reasoning_cost_usd,
+    },
+    {
+      key: 'reviews_processed',
+      header: 'Processed',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.reviews_processed)}</span>,
+      sortable: true,
+      sortValue: (row) => row.reviews_processed,
+    },
+    {
+      key: 'witness_count',
+      header: 'Spans',
+      render: (row) => <span className="text-xs text-cyan-300">{formatNumber(row.witness_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.witness_count,
+    },
+    {
+      key: 'cost_per_witness_usd',
+      header: 'Cost / Witness',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeCurrency(row.cost_per_witness_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_per_witness_usd ?? -1,
+    },
+    {
+      key: 'secondary_write_hits',
+      header: 'Secondary Writes',
+      render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.secondary_write_hits)}</span>,
+      sortable: true,
+      sortValue: (row) => row.secondary_write_hits,
+    },
+  ]
+
   const recentColumns: Column<AdminCostRecentCall>[] = [
     {
       key: 'created_at',
@@ -1382,7 +2079,7 @@ function CostsTab() {
         <div className="max-w-[280px]">
           <p className="truncate text-sm text-white">{row.title}</p>
           <p className="truncate text-xs text-slate-500">
-            {[row.provider, row.model, row.detail].filter(Boolean).map((value) => truncateLabel(value as string, 44)).join(' · ') || row.span_name}
+            {[row.provider, row.model, row.detail].filter(Boolean).map((value) => truncateLabel(value as string, 44)).join(' | ') || row.span_name}
           </p>
         </div>
       ),
@@ -1460,6 +2157,242 @@ function CostsTab() {
     },
   ]
 
+  const runAttemptColumns: Column<ArtifactAttempt>[] = [
+    {
+      key: 'stage',
+      header: 'Stage',
+      render: (row) => <StageBadge stage={row.stage} />,
+      sortable: true,
+      sortValue: (row) => row.stage,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge status={row.status} />,
+      sortable: true,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: 'artifact_type',
+      header: 'Artifact',
+      render: (row) => (
+        <div className="max-w-[220px]">
+          <p className="truncate text-sm text-white">{row.artifact_type}</p>
+          <p className="truncate text-xs text-slate-500">{row.artifact_id || '--'}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.artifact_type}:${row.artifact_id || ''}`,
+    },
+    {
+      key: 'blocker_count',
+      header: 'Blockers',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.blocker_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.blocker_count,
+    },
+    {
+      key: 'warning_count',
+      header: 'Warnings',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.warning_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.warning_count,
+    },
+    {
+      key: 'completed_at',
+      header: 'Completed',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.completed_at || row.started_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.completed_at || row.started_at,
+    },
+  ]
+
+  const runEventColumns: Column<VisibilityEvent>[] = [
+    {
+      key: 'occurred_at',
+      header: 'Time',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.occurred_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.occurred_at || '',
+    },
+    {
+      key: 'event_type',
+      header: 'Event',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{row.event_type}</p>
+          <p className="truncate text-xs text-slate-500">{row.summary}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.event_type,
+    },
+    {
+      key: 'stage',
+      header: 'Stage',
+      render: (row) => <StageBadge stage={row.stage} />,
+      sortable: true,
+      sortValue: (row) => row.stage,
+    },
+    {
+      key: 'severity',
+      header: 'Severity',
+      render: (row) => <SeverityBadge severity={row.severity} />,
+      sortable: true,
+      sortValue: (row) => row.severity,
+    },
+    {
+      key: 'entity_id',
+      header: 'Entity',
+      render: (row) => <span className="text-xs text-slate-300">{truncateLabel(row.entity_id, 40)}</span>,
+      sortable: true,
+      sortValue: (row) => row.entity_id,
+    },
+  ]
+
+  const runBatchColumns: Column<AdminCostRunBatchJob>[] = [
+    {
+      key: 'stage_id',
+      header: 'Batch Stage',
+      render: (row) => (
+        <div className="max-w-[220px]">
+          <p className="truncate text-sm text-white">{row.stage_id}</p>
+          <p className="truncate text-xs text-slate-500">{truncateLabel(row.provider_batch_id || row.task_name, 40)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.stage_id,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge status={row.status} />,
+      sortable: true,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: 'submitted_items',
+      header: 'Items',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.submitted_items)}</span>,
+      sortable: true,
+      sortValue: (row) => row.submitted_items,
+    },
+    {
+      key: 'cache_prefiltered_items',
+      header: 'Prefiltered',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.cache_prefiltered_items)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_prefiltered_items,
+    },
+    {
+      key: 'fallback_single_call_items',
+      header: 'Fallback Single',
+      render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.fallback_single_call_items)}</span>,
+      sortable: true,
+      sortValue: (row) => row.fallback_single_call_items,
+    },
+    {
+      key: 'estimated_savings_usd',
+      header: 'Est Savings',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.estimated_savings_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.estimated_savings_usd,
+    },
+  ]
+
+  const runBatchItemColumns: Column<AdminCostRunBatchItem>[] = [
+    {
+      key: 'created_at',
+      header: 'Time',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.completed_at || row.created_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.completed_at || row.created_at || '',
+    },
+    {
+      key: 'artifact_id',
+      header: 'Batch Item',
+      render: (row) => {
+        const channel = typeof row.request_metadata.channel === 'string' ? row.request_metadata.channel : ''
+        const tier = typeof row.request_metadata.tier === 'string' ? row.request_metadata.tier : ''
+        const vendor = row.vendor_name || truncateLabel(row.artifact_id, 42)
+        const detail = [row.artifact_type, channel, tier].filter(Boolean).join(' | ')
+        return (
+          <div className="max-w-[260px]">
+            <p className="truncate text-sm text-white">{vendor}</p>
+            <p className="truncate text-xs text-slate-500">{detail || row.custom_id}</p>
+          </div>
+        )
+      },
+      sortable: true,
+      sortValue: (row) => row.vendor_name || row.artifact_id,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge status={row.status} />,
+      sortable: true,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: 'path',
+      header: 'Path',
+      render: (row) => (
+        <span className="text-xs text-slate-300">
+          {row.cache_prefiltered ? 'Prefiltered' : row.fallback_single_call ? 'Fallback' : 'Batch'}
+        </span>
+      ),
+      sortable: true,
+      sortValue: (row) => (row.cache_prefiltered ? 2 : row.fallback_single_call ? 1 : 0),
+    },
+    {
+      key: 'cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'cached_tokens',
+      header: 'Cached Read',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cached_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cached_tokens,
+    },
+    {
+      key: 'cache_write_tokens',
+      header: 'Cache Write',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cache_write_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_write_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+    {
+      key: 'provider_request_id',
+      header: 'Provider Ref',
+      render: (row) => (
+        <div className="max-w-[180px]">
+          <p className="truncate text-xs text-slate-400">{truncateLabel(row.provider_request_id || row.provider_batch_id || row.custom_id, 28)}</p>
+          {row.error_text ? <p className="truncate text-[11px] text-rose-300">{truncateLabel(row.error_text, 40)}</p> : null}
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.provider_request_id || row.provider_batch_id || row.custom_id,
+    },
+  ]
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-4">
@@ -1473,6 +2406,17 @@ function CostsTab() {
             { value: '30', label: '30 days' },
             { value: '90', label: '90 days' },
             { value: '365', label: '365 days' },
+          ]}
+        />
+        <FilterSelect
+          label="Cache Top"
+          value={cacheTopN}
+          onChange={setCacheTopN}
+          options={[
+            { value: '5', label: 'Top 5' },
+            { value: '8', label: 'Top 8' },
+            { value: '12', label: 'Top 12' },
+            { value: '20', label: 'Top 20' },
           ]}
         />
         <FilterSelect
@@ -1521,23 +2465,400 @@ function CostsTab() {
             { value: 'uncached', label: 'Uncached only' },
           ]}
         />
+        <label className="flex min-w-[240px] flex-col gap-1 text-xs text-slate-500">
+          <span>Run ID</span>
+          <input
+            value={runIdInput}
+            onChange={(e) => setRunIdInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setActiveRunId(runIdInput.trim())
+            }}
+            placeholder="Paste execution id"
+            className="rounded border border-slate-700/60 bg-slate-950/60 px-2.5 py-1.5 text-xs text-white outline-none transition focus:border-cyan-500/60"
+          />
+        </label>
         <button
-          onClick={refresh}
-          disabled={refreshing}
+          onClick={() => setActiveRunId(runIdInput.trim())}
+          disabled={!runIdInput.trim()}
+          className="mt-5 flex items-center gap-1.5 rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Load Run
+        </button>
+        <button
+          onClick={() => {
+            setRunIdInput('')
+            setActiveRunId('')
+          }}
+          disabled={!activeRunId}
+          className="mt-5 flex items-center gap-1.5 rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-400 transition hover:border-slate-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Clear Run
+        </button>
+        <button
+          onClick={() => {
+            refresh()
+            refreshVendors()
+            refreshB2bEfficiency()
+            refreshCacheHealth()
+            if (activeRunId) refreshRunDetail()
+          }}
+          disabled={unifiedRefreshing || runDetailRefreshing}
           className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
         >
-          <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
+          <RefreshCw className={clsx('h-3 w-3', (unifiedRefreshing || runDetailRefreshing) && 'animate-spin')} />
           Refresh
         </button>
       </div>
 
       <div className="rounded-xl border border-slate-700/50 bg-slate-900/40 p-4 text-sm text-slate-400">
-        Provider/model calls only. Local exact-cache hits are intentionally excluded from these tables so per-call economics stay truthful.
+        Provider/model calls below show prompt-cache economics only. Atlas exact cache, semantic reuse, and evidence-hash skips are surfaced separately so cost tables stay truthful without hiding internal reuse.
       </div>
 
-      {error && (
+      {unifiedError && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
-          {error.message}
+          {unifiedError.message}
+        </div>
+      )}
+      {runDetailError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {runDetailError.message}
+        </div>
+      )}
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+          <div>
+            <h2 className="text-sm font-medium text-white">Atlas Cache Health</h2>
+            <p className="text-xs text-slate-500">
+              Exact cache, Anthropic batching, semantic reuse, evidence-hash skips, and provider prompt cache leaders for the last {days} days.
+            </p>
+          </div>
+          <span
+            className={clsx(
+              'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
+              cacheHealth?.exact_cache.enabled
+                ? 'bg-green-500/15 text-green-400'
+                : 'bg-red-500/15 text-red-400',
+            )}
+          >
+            Exact cache {cacheHealth?.exact_cache.enabled ? 'enabled' : 'disabled'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-3 xl:grid-cols-9">
+          <StatCard
+            label="Exact Rows"
+            value={formatNumber(cacheHealth?.exact_cache.total_rows)}
+            icon={<Database className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label="Exact Hits"
+            value={formatNumber(cacheHealth?.exact_cache.total_hits)}
+            icon={<RefreshCw className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label={`Exact Writes ${days}d`}
+            value={formatNumber(cacheHealth?.exact_cache.writes_in_window)}
+            icon={<Database className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label={`Rows Hit ${days}d`}
+            value={formatNumber(cacheHealth?.exact_cache.rows_hit_in_window)}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label="Semantic Active"
+            value={formatNumber(cacheHealth?.semantic_cache.active_entries)}
+            icon={<Cpu className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label="Cross-Vendor Cached"
+            value={formatNumber(cacheHealth?.evidence_hash_reuse.cross_vendor_cached_rows)}
+            icon={<Shield className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label={`Batch Jobs ${days}d`}
+            value={formatNumber(cacheHealth?.anthropic_batching.submitted_jobs)}
+            icon={<Workflow className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label="Batch Items"
+            value={formatNumber(cacheHealth?.anthropic_batching.submitted_items)}
+            icon={<Cpu className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+          <StatCard
+            label="Batch Savings"
+            value={formatMaybeCurrency(cacheHealth?.anthropic_batching.estimated_savings_usd)}
+            icon={<DollarSign className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
+        </div>
+
+        <div className="grid gap-4 p-4 xl:grid-cols-[1.15fr,0.85fr]">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Exact Cache Stages</h3>
+              <p className="text-xs text-slate-500">Declared exact-cache stages with row and hit coverage.</p>
+            </div>
+            {cacheHealthLoading ? (
+              <DataTable columns={exactStageColumns} data={[]} skeletonRows={5} />
+            ) : (
+              <DataTable
+                columns={exactStageColumns}
+                data={cacheHealth?.exact_cache.stages ?? []}
+                emptyMessage="No Atlas exact-cache stages found"
+              />
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+              <div className="border-b border-slate-700/50 px-4 py-3">
+                <h3 className="text-sm font-medium text-white">Recent Task Reuse</h3>
+                <p className="text-xs text-slate-500">Reuse observed in recent task executions by strategy.</p>
+              </div>
+            {cacheHealthLoading ? (
+              <DataTable columns={taskReuseColumns} data={[]} skeletonRows={3} />
+            ) : (
+                <DataTable
+                  columns={taskReuseColumns}
+                  data={cacheHealth?.task_reuse.tasks ?? []}
+                  emptyMessage="No recent task reuse rows in the current window"
+                />
+              )}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+              <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                <div className="border-b border-slate-700/50 px-4 py-3">
+                  <h3 className="text-sm font-medium text-white">Provider Prompt Cache Leaders</h3>
+                  <p className="text-xs text-slate-500">OpenRouter/provider-side prompt caching by span.</p>
+                </div>
+                {cacheHealthLoading ? (
+                  <DataTable columns={promptCacheColumns} data={[]} skeletonRows={4} />
+                ) : (
+                  <DataTable
+                    columns={promptCacheColumns}
+                    data={cacheHealth?.provider_prompt_cache.top_spans ?? []}
+                    emptyMessage="No provider prompt-cache activity in the current window"
+                  />
+                )}
+              </div>
+
+              <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                <div className="border-b border-slate-700/50 px-4 py-3">
+                  <h3 className="text-sm font-medium text-white">Semantic Cache Classes</h3>
+                  <p className="text-xs text-slate-500">Active semantic reuse buckets and recent validations.</p>
+                </div>
+                {cacheHealthLoading ? (
+                  <DataTable columns={semanticColumns} data={[]} skeletonRows={4} />
+                ) : (
+                  <DataTable
+                    columns={semanticColumns}
+                    data={cacheHealth?.semantic_cache.pattern_classes ?? []}
+                    emptyMessage="No semantic-cache classes found"
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-slate-700/50 p-4">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+              <div>
+                <h3 className="text-sm font-medium text-white">Anthropic Batching</h3>
+                <p className="text-xs text-slate-500">
+                  Submitted batch jobs, prefiltered items, fallback singles, and estimated savings by stage.
+                </p>
+              </div>
+              <span
+                className={clsx(
+                  'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
+                  cacheHealth?.anthropic_batching.enabled
+                    ? 'bg-green-500/15 text-green-400'
+                    : 'bg-red-500/15 text-red-400',
+                )}
+              >
+                Anthropic batching {cacheHealth?.anthropic_batching.enabled ? 'enabled' : 'disabled'}
+              </span>
+            </div>
+            {cacheHealthLoading ? (
+              <DataTable columns={batchStageColumns} data={[]} skeletonRows={4} />
+            ) : (
+              <DataTable
+                columns={batchStageColumns}
+                data={cacheHealth?.anthropic_batching.stages ?? []}
+                emptyMessage="No Anthropic batch jobs in the current window"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {activeRunId && (
+        <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+            <div>
+              <h2 className="text-sm font-medium text-white">Run Detail</h2>
+              <p className="text-xs text-slate-500">
+                Correlates one execution across task output, llm usage, attempts, and visibility events.
+              </p>
+            </div>
+            <span className="max-w-[320px] truncate text-xs text-slate-400">{activeRunId}</span>
+          </div>
+
+          {runDetailLoading ? (
+            <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-3 xl:grid-cols-6">
+              <StatCard label="Task" value="--" icon={<Workflow className="h-4 w-4" />} skeleton />
+              <StatCard label="LLM Calls" value="--" icon={<Cpu className="h-4 w-4" />} skeleton />
+              <StatCard label="Cost" value="--" icon={<DollarSign className="h-4 w-4" />} skeleton />
+              <StatCard label="Billable In" value="--" icon={<Database className="h-4 w-4" />} skeleton />
+              <StatCard label="Cached Read" value="--" icon={<RefreshCw className="h-4 w-4" />} skeleton />
+              <StatCard label="Artifacts" value="--" icon={<GitCompareArrows className="h-4 w-4" />} skeleton />
+            </div>
+          ) : runDetail ? (
+            <>
+            <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-4 xl:grid-cols-8">
+              <StatCard
+                label="Task"
+                value={runDetail.task_execution?.task_name || 'External'}
+                  sub={runDetail.task_execution?.status || 'No execution row'}
+                  icon={<Workflow className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="LLM Calls"
+                  value={formatNumber(runDetail.llm_summary.total_calls)}
+                  sub={runDetail.llm_summary.last_call_at ? `Last ${formatTs(runDetail.llm_summary.last_call_at)}` : 'No llm calls'}
+                  icon={<Cpu className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Cost"
+                  value={formatCurrency(runDetail.llm_summary.total_cost_usd)}
+                  sub={`${formatCompactTokens(runDetail.llm_summary.total_tokens)} total tokens`}
+                  icon={<DollarSign className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Billable In"
+                  value={formatCompactTokens(runDetail.llm_summary.total_billable_input_tokens)}
+                  sub={`${formatCompactTokens(runDetail.llm_summary.total_input_tokens)} raw input`}
+                  icon={<Database className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Cached Read"
+                  value={formatCompactTokens(runDetail.llm_summary.total_cached_tokens)}
+                  sub={`${formatNumber(runDetail.llm_summary.cache_hit_calls)} cache-hit calls`}
+                  icon={<RefreshCw className="h-4 w-4" />}
+                />
+              <StatCard
+                label="Artifacts"
+                value={formatNumber(runDetail.artifact_attempts.length)}
+                sub={`${formatNumber(runDetail.visibility_events.length)} visibility events`}
+                icon={<GitCompareArrows className="h-4 w-4" />}
+              />
+              <StatCard
+                label="Batch Jobs"
+                value={formatNumber(runDetail.batching_summary.submitted_jobs)}
+                sub={`${formatNumber(runDetail.batching_summary.submitted_items)} submitted items`}
+                icon={<Workflow className="h-4 w-4" />}
+              />
+              <StatCard
+                label="Batch Savings"
+                value={formatMaybeCurrency(runDetail.batching_summary.estimated_savings_usd)}
+                sub={`${formatNumber(runDetail.batching_summary.fallback_single_call_items)} fallback singles`}
+                icon={<DollarSign className="h-4 w-4" />}
+              />
+            </div>
+
+              <div className="grid gap-4 p-4 xl:grid-cols-[1.05fr,0.95fr]">
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-medium text-white">Execution</h3>
+                        <p className="text-xs text-slate-500">
+                          {runDetail.task_execution?.started_at ? `Started ${formatTs(runDetail.task_execution.started_at)}` : 'No task execution row'}
+                        </p>
+                      </div>
+                      {runDetail.task_execution && <StatusBadge status={runDetail.task_execution.status} />}
+                    </div>
+                    <div className="mt-3 grid gap-2 text-xs text-slate-400 md:grid-cols-2">
+                      <div>Duration: <span className="text-slate-200">{formatNumber(runDetail.task_execution?.duration_ms)} ms</span></div>
+                      <div>Retry count: <span className="text-slate-200">{formatNumber(runDetail.task_execution?.retry_count)}</span></div>
+                      <div>Call window: <span className="text-slate-200">{formatTs(runDetail.llm_summary.first_call_at)}</span></div>
+                      <div>Last call: <span className="text-slate-200">{formatTs(runDetail.llm_summary.last_call_at)}</span></div>
+                    </div>
+                    {runDetail.task_execution?.result_text && (
+                      <pre className="mt-3 max-h-48 overflow-auto rounded border border-slate-800 bg-slate-950/70 p-3 text-[11px] text-slate-300">
+                        {JSON.stringify(runDetail.task_execution.result, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                    <div className="border-b border-slate-700/50 px-4 py-3">
+                      <h3 className="text-sm font-medium text-white">Run Operations</h3>
+                      <p className="text-xs text-slate-500">Aggregated LLM usage for this run only.</p>
+                    </div>
+                    <DataTable columns={operationColumns} data={runDetail.operations} emptyMessage="No operation rows for this run" />
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                    <div className="border-b border-slate-700/50 px-4 py-3">
+                      <h3 className="text-sm font-medium text-white">Run Calls</h3>
+                      <p className="text-xs text-slate-500">Recent traced model calls attached to this run id.</p>
+                    </div>
+                    <DataTable columns={recentColumns} data={runDetail.calls} emptyMessage="No traced calls for this run" />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                    <div className="border-b border-slate-700/50 px-4 py-3">
+                      <h3 className="text-sm font-medium text-white">Run Batch Jobs</h3>
+                      <p className="text-xs text-slate-500">Batch execution summary attached to this run id.</p>
+                    </div>
+                    <DataTable columns={runBatchColumns} data={runDetail.batch_jobs} emptyMessage="No batch jobs for this run" />
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                    <div className="border-b border-slate-700/50 px-4 py-3">
+                      <h3 className="text-sm font-medium text-white">Run Batch Items</h3>
+                      <p className="text-xs text-slate-500">Per-item batch outcomes, including prefiltered cache hits and fallback singles.</p>
+                    </div>
+                    <DataTable columns={runBatchItemColumns} data={runDetail.batch_items} emptyMessage="No batch items for this run" />
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                    <div className="border-b border-slate-700/50 px-4 py-3">
+                      <h3 className="text-sm font-medium text-white">Artifact Attempts</h3>
+                      <p className="text-xs text-slate-500">Quality and persistence attempts recorded for this run.</p>
+                    </div>
+                    <DataTable columns={runAttemptColumns} data={runDetail.artifact_attempts} emptyMessage="No artifact attempts for this run" />
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+                    <div className="border-b border-slate-700/50 px-4 py-3">
+                      <h3 className="text-sm font-medium text-white">Visibility Events</h3>
+                      <p className="text-xs text-slate-500">Warnings, failures, and summaries emitted under the same run id.</p>
+                    </div>
+                    <DataTable columns={runEventColumns} data={runDetail.visibility_events} emptyMessage="No visibility events for this run" />
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="p-4 text-sm text-slate-500">Load a run id to inspect one execution end to end.</div>
+          )}
         </div>
       )}
 
@@ -1578,6 +2899,99 @@ function CostsTab() {
           icon={<RefreshCw className="h-4 w-4" />}
           skeleton={loading}
         />
+      </div>
+
+      {(vendorsLoading || vendorRows.length > 0) && (
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">Cost By Vendor</h2>
+            <p className="text-xs text-slate-500">
+              LLM spend attributed to tracked B2B vendors ({vendorRows.length} vendors). Window-only rollup; provider/model filters do not change this section.
+            </p>
+          </div>
+          {vendorsLoading ? (
+            <DataTable columns={vendorColumns} data={[]} skeletonRows={5} />
+          ) : (
+            <DataTable columns={vendorColumns} data={vendorRows} emptyMessage="No vendor-attributed costs" />
+          )}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard
+          label="Tracked B2B Cost"
+          value={formatCurrency(b2bEfficiency?.summary.tracked_cost_usd)}
+          icon={<DollarSign className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+        <StatCard
+          label="Measured Runs"
+          value={formatNumber(b2bEfficiency?.summary.measured_runs)}
+          icon={<Workflow className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+        <StatCard
+          label="Tracked Witnesses"
+          value={formatNumber(b2bEfficiency?.summary.tracked_witness_count)}
+          icon={<Database className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+        <StatCard
+          label="Cost / Witness"
+          value={formatMaybeCurrency(b2bEfficiency?.summary.cost_per_witness_usd)}
+          icon={<GitCompareArrows className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">B2B Cost By Vendor Pass</h2>
+            <p className="text-xs text-slate-500">Extraction, repair, and reasoning spend split per vendor. Window-only rollup; provider/model filters do not change this section.</p>
+          </div>
+          {b2bEfficiencyLoading ? (
+            <DataTable columns={vendorPassColumns} data={[]} skeletonRows={6} />
+          ) : (
+            <DataTable
+              columns={vendorPassColumns}
+              data={vendorPasses}
+              emptyMessage="No vendor pass cost rows in the selected window"
+            />
+          )}
+        </div>
+
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">B2B Cost By Source</h2>
+            <p className="text-xs text-slate-500">Spend, witness yield, and repair pressure by source. Window-only rollup; provider/model filters do not change this section.</p>
+          </div>
+          {b2bEfficiencyLoading ? (
+            <DataTable columns={sourceEfficiencyColumns} data={[]} skeletonRows={6} />
+          ) : (
+            <DataTable
+              columns={sourceEfficiencyColumns}
+              data={sourceEfficiency}
+              emptyMessage="No source efficiency rows in the selected window"
+            />
+          )}
+        </div>
+      </div>
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-700/50">
+          <h2 className="text-sm font-medium text-white">Recent Pipeline Run Efficiency</h2>
+          <p className="text-xs text-slate-500">Per-run cost, witness yield, and secondary-write activity. Window-only rollup; provider/model filters do not change this section.</p>
+        </div>
+        {b2bEfficiencyLoading ? (
+          <DataTable columns={b2bRunColumns} data={[]} skeletonRows={6} />
+        ) : (
+          <DataTable
+            columns={b2bRunColumns}
+            data={recentPipelineRuns}
+            emptyMessage="No recent B2B pipeline runs in the selected window"
+          />
+        )}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.1fr,0.9fr]">
