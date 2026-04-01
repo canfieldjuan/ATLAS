@@ -26,6 +26,7 @@ _DETACHED_BATCH_STALE_MINUTES = 30
 _RECON_TASK_NAME = "b2b_campaign_batch_reconciliation"
 _MANAGED_HEALTH_REASON_CODES = {
     "detached_batch_stale",
+    "detached_batch_item_claim_stale",
     "detached_batch_reconciliation_missing",
     "detached_batch_reconciliation_disabled",
     "detached_batch_reconciliation_never_ran",
@@ -152,7 +153,13 @@ async def _emit_managed_health_issue(
         artifact_type="campaign_batch",
         reason_code=reason_code,
         detail=detail,
-        source_table="anthropic_message_batches" if entity_type == "batch_job" else "scheduled_tasks",
+        source_table=(
+            "anthropic_message_batches"
+            if entity_type == "batch_job"
+            else "anthropic_message_batch_items"
+            if entity_type == "batch_item"
+            else "scheduled_tasks"
+        ),
         source_id=entity_id,
     )
 
@@ -193,6 +200,28 @@ async def _sync_detached_batch_health(pool) -> None:
         """,
         _DETACHED_BATCH_STALE_MINUTES,
     )
+    stale_claims = await pool.fetch(
+        """
+        SELECT
+            i.id,
+            i.batch_id,
+            i.custom_id,
+            i.artifact_id,
+            i.status,
+            i.request_metadata->>'applying_by' AS applying_by,
+            NULLIF(i.request_metadata->>'applying_at', '')::timestamptz AS applying_at,
+            b.run_id,
+            b.provider_batch_id
+        FROM anthropic_message_batch_items i
+        JOIN anthropic_message_batches b ON b.id = i.batch_id
+        WHERE COALESCE(i.request_metadata->>'applied_at', '') = ''
+          AND COALESCE(i.request_metadata->>'applying_at', '') <> ''
+          AND NULLIF(i.request_metadata->>'applying_at', '')::timestamptz <= NOW() - make_interval(mins => $1)
+        ORDER BY NULLIF(i.request_metadata->>'applying_at', '')::timestamptz ASC
+        LIMIT 25
+        """,
+        _DETACHED_BATCH_STALE_MINUTES,
+    )
     for row in stale_batches:
         batch_id = str(row["id"])
         key = _managed_health_key(
@@ -225,6 +254,41 @@ async def _sync_detached_batch_health(pool) -> None:
                 "completed_items": int(row["completed_items"] or 0),
                 "failed_items": int(row["failed_items"] or 0),
                 "fallback_single_call_items": int(row["fallback_single_call_items"] or 0),
+                "stale_minutes": stale_minutes,
+            },
+        )
+    for row in stale_claims:
+        item_id = str(row["id"])
+        key = _managed_health_key(
+            stage="task_execution",
+            event_type="detached_batch_health",
+            entity_type="batch_item",
+            entity_id=item_id,
+            reason_code="detached_batch_item_claim_stale",
+        )
+        active_keys.add(key)
+        applying_at = row["applying_at"]
+        stale_minutes = max(
+            0,
+            int((datetime.now(timezone.utc) - applying_at).total_seconds() // 60),
+        ) if applying_at else _DETACHED_BATCH_STALE_MINUTES
+        await _emit_managed_health_issue(
+            pool,
+            stage="task_execution",
+            event_type="detached_batch_health",
+            entity_type="batch_item",
+            entity_id=item_id,
+            reason_code="detached_batch_item_claim_stale",
+            summary=f"Detached campaign batch item has been claimed for {stale_minutes} minutes without apply completion",
+            severity="error",
+            detail={
+                "batch_id": str(row["batch_id"]),
+                "custom_id": str(row["custom_id"] or ""),
+                "artifact_id": str(row["artifact_id"] or "") or None,
+                "status": str(row["status"] or ""),
+                "applying_by": str(row["applying_by"] or "") or None,
+                "provider_batch_id": str(row["provider_batch_id"] or "") or None,
+                "run_id": str(row["run_id"] or "") or None,
                 "stale_minutes": stale_minutes,
             },
         )

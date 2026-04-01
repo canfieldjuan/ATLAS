@@ -217,6 +217,20 @@ async def test_sync_detached_batch_health_emits_stale_batch_and_scheduler_events
                         "stale_since": datetime.now(timezone.utc) - timedelta(minutes=61),
                     }
                 ]
+            if "FROM anthropic_message_batch_items i" in query and "request_metadata->>'applying_at'" in query:
+                return [
+                    {
+                        "id": str(uuid4()),
+                        "batch_id": str(uuid4()),
+                        "custom_id": "campaign:slack:email",
+                        "artifact_id": "batch-1:Slack:email",
+                        "status": "batch_succeeded",
+                        "applying_by": "reconcile:task-1:abc123",
+                        "applying_at": datetime.now(timezone.utc) - timedelta(minutes=64),
+                        "run_id": "run-batch-1",
+                        "provider_batch_id": "msgbatch_123",
+                    }
+                ]
             if "FROM pipeline_visibility_reviews r" in query and "e.reason_code = ANY" in query:
                 return []
             raise AssertionError(f"Unexpected fetch query: {query}")
@@ -256,10 +270,14 @@ async def test_sync_detached_batch_health_emits_stale_batch_and_scheduler_events
 
     reason_codes = {item["reason_code"] for item in emitted}
     assert "detached_batch_stale" in reason_codes
+    assert "detached_batch_item_claim_stale" in reason_codes
     assert "detached_batch_reconciliation_failed" in reason_codes
     stale_event = next(item for item in emitted if item["reason_code"] == "detached_batch_stale")
     assert stale_event["entity_type"] == "batch_job"
     assert stale_event["severity"] == "error"
+    stale_claim_event = next(item for item in emitted if item["reason_code"] == "detached_batch_item_claim_stale")
+    assert stale_claim_event["entity_type"] == "batch_item"
+    assert stale_claim_event["detail"]["applying_by"] == "reconcile:task-1:abc123"
     scheduler_event = next(item for item in emitted if item["reason_code"] == "detached_batch_reconciliation_failed")
     assert scheduler_event["entity_type"] == "task"
     assert scheduler_event["detail"]["last_error"] == "network timeout"
