@@ -10,6 +10,8 @@ Runs weekly (default Monday 6 AM).
 """
 
 import asyncio
+import importlib
+import inspect
 import json
 import logging
 from datetime import date, timedelta
@@ -32,6 +34,27 @@ _QUERY_TEMPLATES = {
 }
 
 
+def _patch_pytrends_retry_compat(pytrends_request_module: Any) -> None:
+    """Adapt pytrends' Retry usage for urllib3>=2 without touching global deps."""
+    retry_cls = getattr(pytrends_request_module, "Retry", None)
+    if retry_cls is None:
+        return
+    try:
+        params = inspect.signature(retry_cls.__init__).parameters
+    except (TypeError, ValueError):
+        return
+    if "method_whitelist" in params or "allowed_methods" not in params:
+        return
+
+    class CompatRetry(retry_cls):
+        def __init__(self, *args: Any, method_whitelist: Any = None, **kwargs: Any) -> None:
+            if method_whitelist is not None and "allowed_methods" not in kwargs:
+                kwargs["allowed_methods"] = method_whitelist
+            super().__init__(*args, **kwargs)
+
+    pytrends_request_module.Retry = CompatRetry
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Collect Google Trends keyword signals for tracked B2B vendors."""
     cfg = settings.b2b_churn
@@ -43,10 +66,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": True, "skipped": "db not ready"}
 
     try:
-        from pytrends.request import TrendReq
+        pytrends_request = importlib.import_module("pytrends.request")
     except ImportError:
         logger.error("pytrends not installed -- pip install pytrends")
         return {"_skip_synthesis": True, "skipped": "pytrends not installed"}
+    _patch_pytrends_retry_compat(pytrends_request)
+    TrendReq = pytrends_request.TrendReq
 
     # Load enabled vendors
     rows = await pool.fetch(

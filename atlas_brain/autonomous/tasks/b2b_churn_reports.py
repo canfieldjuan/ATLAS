@@ -20,7 +20,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ._b2b_shared import _timing_summary_payload, _build_inbound_displacement_lookup
+from ._b2b_shared import _timing_summary_payload, _build_inbound_displacement_lookup, _reasoning_int
 
 logger = logging.getLogger("atlas.tasks.b2b_churn_reports")
 
@@ -35,6 +35,42 @@ def _pair_opponent(pair_key: tuple[str, ...] | list[str] | Any, vendor: str) -> 
         if candidate and candidate != vendor_text:
             return candidate
     return ""
+
+
+def _copy_reference_ids(reference_ids: dict[str, Any] | None) -> dict[str, list[str]]:
+    from ._b2b_cross_vendor_synthesis import _copy_reference_ids as _canonical_copy
+
+    result = _canonical_copy(reference_ids)
+    # Strip empty lists so callers can use ``if reference_ids:`` truthiness
+    return {k: v for k, v in result.items() if v}
+
+
+def _build_category_council_context(council: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(council, dict):
+        return {}
+    conclusion = council.get("conclusion")
+    if not isinstance(conclusion, dict):
+        return {}
+    context = {
+        "winner": conclusion.get("winner") or "",
+        "loser": conclusion.get("loser") or "",
+        "conclusion": conclusion.get("conclusion") or "",
+        "market_regime": conclusion.get("market_regime") or "",
+        "durability": conclusion.get("durability_assessment") or "",
+        "confidence": council.get("confidence"),
+        "key_insights": conclusion.get("key_insights") or [],
+    }
+    if not any(
+        [
+            context.get("winner"),
+            context.get("loser"),
+            context.get("conclusion"),
+            context.get("market_regime"),
+            context.get("key_insights"),
+        ]
+    ):
+        return {}
+    return context
 
 
 def _build_scorecard_narrative_payload(
@@ -238,14 +274,6 @@ def _scorecard_narrative_max_tokens() -> int:
     return int(cfg.scorecard_narrative_max_tokens)
 
 
-def _reasoning_int(value: Any) -> int | None:
-    """Coerce traced-number wrappers into ints."""
-    if isinstance(value, dict):
-        value = value.get("value")
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
 
 
 def _account_reasoning_named_accounts(
@@ -357,22 +385,11 @@ async def _fetch_latest_synthesis_views(
     analysis_window_days: int,
 ) -> dict[str, Any]:
     """Fetch best reasoning views for all vendors (synthesis-first, legacy fallback)."""
-    from ._b2b_synthesis_reader import load_best_reasoning_views
+    from ._b2b_synthesis_reader import discover_reasoning_vendor_names, load_best_reasoning_views
 
-    # Collect vendor names from both synthesis and legacy tables
-    synth_names = await pool.fetch(
-        "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
-        "WHERE as_of_date <= $1 AND analysis_window_days = $2",
-        as_of, analysis_window_days,
+    all_names = await discover_reasoning_vendor_names(
+        pool, as_of=as_of, analysis_window_days=analysis_window_days,
     )
-    legacy_names = await pool.fetch(
-        "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
-        "WHERE archetype IS NOT NULL",
-    )
-    all_names = list({
-        r["vendor_name"] for r in (*synth_names, *legacy_names)
-        if r.get("vendor_name")
-    })
     if not all_names:
         return {}
     return await load_best_reasoning_views(
@@ -638,18 +655,9 @@ def _attach_context_to_deterministic_reports(
         category_name = str(entry.get("category") or "").strip()
         if category_name:
             council = xv_lookup.get("councils", {}).get(category_name)
-            if council:
-                c = council.get("conclusion", {})
-                if any([c.get("winner"), c.get("loser"), c.get("conclusion"), c.get("market_regime"), c.get("key_insights")]):
-                    entry["category_council"] = {
-                        "winner": c.get("winner") or "",
-                        "loser": c.get("loser") or "",
-                        "conclusion": c.get("conclusion") or "",
-                        "market_regime": c.get("market_regime") or "",
-                        "durability": c.get("durability_assessment") or "",
-                        "confidence": council.get("confidence"),
-                        "key_insights": c.get("key_insights") or [],
-                    }
+            council_context = _build_category_council_context(council)
+            if council_context:
+                entry["category_council"] = council_context
 
     feed_category_lookup = {
         str(entry.get("vendor") or "").strip(): str(entry.get("category") or "").strip()
@@ -687,18 +695,9 @@ def _attach_context_to_deterministic_reports(
         if category_name:
             scorecard.setdefault("category", category_name)
             council = xv_lookup.get("councils", {}).get(category_name)
-            if council:
-                c = council.get("conclusion", {})
-                if any([c.get("winner"), c.get("loser"), c.get("conclusion"), c.get("market_regime"), c.get("key_insights")]):
-                    scorecard["category_council"] = {
-                        "winner": c.get("winner") or "",
-                        "loser": c.get("loser") or "",
-                        "conclusion": c.get("conclusion") or "",
-                        "market_regime": c.get("market_regime") or "",
-                        "durability": c.get("durability_assessment") or "",
-                        "confidence": council.get("confidence"),
-                        "key_insights": c.get("key_insights") or [],
-                    }
+            council_context = _build_category_council_context(council)
+            if council_context:
+                scorecard["category_council"] = council_context
         comparisons = []
         for pair_key, asym in xv_lookup.get("asymmetries", {}).items():
             if vendor in pair_key:
@@ -735,18 +734,9 @@ def _attach_context_to_deterministic_reports(
         dd_category = str(dd_entry.get("category") or "").strip()
         if dd_category:
             council = xv_lookup.get("councils", {}).get(dd_category)
-            if council:
-                cc = council.get("conclusion", {})
-                if any([cc.get("winner"), cc.get("loser"), cc.get("conclusion"), cc.get("market_regime"), cc.get("key_insights")]):
-                    dd_entry["category_council"] = {
-                        "winner": cc.get("winner") or "",
-                        "loser": cc.get("loser") or "",
-                        "conclusion": cc.get("conclusion") or "",
-                        "market_regime": cc.get("market_regime") or "",
-                        "durability": cc.get("durability_assessment") or "",
-                        "confidence": council.get("confidence"),
-                        "key_insights": cc.get("key_insights") or [],
-                    }
+            council_context = _build_category_council_context(council)
+            if council_context:
+                dd_entry["category_council"] = council_context
         view = synthesis_views.get(vendor)
         if view:
             _attach_synthesis_contracts_to_report_entry(
@@ -756,6 +746,26 @@ def _attach_context_to_deterministic_reports(
                 requested_as_of=as_of,
                 include_displacement=False,
             )
+
+    for cat_entry in deterministic_category_overview:
+        category_name = str(cat_entry.get("category") or "").strip()
+        if not category_name:
+            continue
+        council = xv_lookup.get("councils", {}).get(category_name)
+        council_context = _build_category_council_context(council)
+        if not council_context:
+            continue
+        cat_entry["category_council"] = council_context
+        cat_entry["cross_vendor_analysis"] = dict(council_context)
+        cat_entry["reasoning_source"] = "b2b_cross_vendor_reasoning_synthesis"
+        computed_date = council.get("computed_date") if isinstance(council, dict) else None
+        if computed_date is not None and hasattr(computed_date, "isoformat"):
+            cat_entry["data_as_of_date"] = computed_date.isoformat()
+        reference_ids = _copy_reference_ids(
+            council.get("reference_ids") if isinstance(council, dict) else None,
+        )
+        if reference_ids:
+            cat_entry["reference_ids"] = reference_ids
 
     for edge in deterministic_displacement_map:
         pair = tuple(sorted([edge["from_vendor"], edge["to_vendor"]]))
@@ -769,6 +779,21 @@ def _attach_context_to_deterministic_reports(
             if not battle_loser or edge["from_vendor"].strip().lower() == battle_loser:
                 edge["battle_conclusion"] = bc.get("conclusion", "")
                 edge["durability"] = bc.get("durability_assessment", "")
+                reference_ids = _copy_reference_ids(
+                    battle.get("reference_ids") if isinstance(battle, dict) else None,
+                )
+                if reference_ids:
+                    edge["reference_ids"] = reference_ids
+                computed_date = battle.get("computed_date") if isinstance(battle, dict) else None
+                if computed_date is not None and hasattr(computed_date, "isoformat"):
+                    edge["data_as_of_date"] = computed_date.isoformat()
+                battle_source = str(battle.get("source") or "").strip() if isinstance(battle, dict) else ""
+                if battle_source:
+                    edge["reasoning_source"] = (
+                        "b2b_cross_vendor_reasoning_synthesis"
+                        if battle_source == "synthesis"
+                        else battle_source
+                    )
 
     return len(attached_vendors)
 
@@ -816,14 +841,16 @@ async def _build_deterministic_report_bundle(
         _fetch_latest_evidence_vault,
         _structure_displacement_report,
     )
-    from .b2b_churn_intelligence import (
-        reconstruct_cross_vendor_lookup,
-        reconstruct_reasoning_lookup,
-    )
+    from .b2b_churn_intelligence import reconstruct_reasoning_lookup
+    from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
     from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
 
     if xv_lookup is None:
-        xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=as_of)
+        xv_lookup = await load_best_cross_vendor_lookup(
+            pool,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
     if synthesis_views is None:
         synthesis_views = await _fetch_latest_synthesis_views(
             pool,
@@ -1101,7 +1128,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _apply_vendor_scope_to_churn_inputs,
         _normalize_test_vendors,
         reconstruct_reasoning_lookup,
-        reconstruct_cross_vendor_lookup,
     )
 
     window_days = cfg.intelligence_window_days
@@ -1351,7 +1377,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     cached = await lookup_cached_text(_cache_namespace, request_envelope)
                     if cached is not None:
                         parsed_narrative = parse_json_response(cached["response_text"])
-                        expert_take = parsed_narrative.get("expert_take", "")
+                        from ._b2b_shared import _normalize_scorecard_expert_take
+
+                        expert_take = _normalize_scorecard_expert_take(
+                            parsed_narrative.get("expert_take", "")
+                        )
                         narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
                         if not narrative_errors:
                             scorecard_cache_hits += 1
@@ -1370,13 +1400,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     timeout=45,
                 )
                 parsed_narrative = parse_json_response(narrative)
-                expert_take = parsed_narrative.get("expert_take", "")
+                from ._b2b_shared import _normalize_scorecard_expert_take
+
+                expert_take = _normalize_scorecard_expert_take(
+                    parsed_narrative.get("expert_take", "")
+                )
                 narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
                 if narrative_errors:
                     scorecard_guardrail_fallbacks += 1
                     sc["expert_take"] = _fallback_scorecard_expert_take(sc)
                 else:
                     sc["expert_take"] = expert_take
+                    parsed_narrative["expert_take"] = expert_take
                     if request_envelope is None:
                         try:
                             _, request_envelope, _ = build_skill_request_envelope(
@@ -1397,7 +1432,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             request_envelope,
                             provider=_provider,
                             model=_model,
-                            response_text=narrative,
+                            response_text=json.dumps(parsed_narrative, separators=(",", ":")),
                             metadata={
                                 "task": "b2b_churn_reports",
                                 "vendor_name": sc.get("vendor_name") or sc.get("vendor"),

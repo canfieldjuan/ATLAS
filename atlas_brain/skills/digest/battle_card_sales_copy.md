@@ -142,6 +142,8 @@ A JSON object with:
 ### Data integrity
 - Every number, percentage, and metric MUST come directly from the input data. Never fabricate statistics.
 - Reuse numeric values exactly as supported by the input. If you convert a 0-1 rate into a percentage, use only the exact implied percentage and do not invent a new rounded claim unless it is directly supported.
+- If a number is not explicitly supported by `metric_ledger`, `locked_facts`, or a structured input counter/rate, do not use it. Rewrite the sentence qualitatively instead.
+- For `executive_summary`, `talk_track`, `recommended_plays`, `competitive_landscape`, and objection-handler `proof_point` fields, prefer zero numeric claims over a risky or loosely inferred one.
 - Customer quotes in `weakness_analysis` MUST be exact text from `customer_pain_quotes` in the input. Do not paraphrase or invent quotes.
 - Do not reference weaknesses with zero evidence count.
 - `top_alternatives` must come from `competitor_differentiators` in the input.
@@ -149,10 +151,12 @@ A JSON object with:
 ### Claim discipline
 - Do NOT invent savings percentages, ROI ranges, migration timelines, implementation effort, performance thresholds, transaction fee deltas, or renewal timing.
 - If the input does not support a numeric claim, use non-numeric language like "cost visibility", "app sprawl", "operational complexity", "benchmark", or "audit".
+- Do not restate counts, percentages, or years from prose summaries unless the same number is also present in a structured metric source. Narrative text may explain the situation, but it is not permission to invent or restate unsupported numbers.
 - Do NOT say customers are definitively switching if the input only shows evaluation pressure. If `switch_count` is zero across competitors, describe alternatives as "appearing in evaluation sets" or "showing up in consideration," not "capturing defectors."
 - Never use a specific calendar year unless it appears in the input. Use phrases like "right now", "this cycle", "at renewal", or "during planning."
 - Do NOT reuse numbers that appear only inside narrative text fields such as `why_vulnerable`, battle `conclusion`, battle `key_insights`, council `conclusion`, or other prose summaries. Numeric claims must come from explicit structured counters, rates, or `{value, source_id}` wrappers in the input.
 - Avoid decimal urgency figures in seller copy. Translate them into business language unless the exact decimal is an explicit structured metric the output truly needs.
+- Before returning, self-audit every numeric token in the JSON. If you cannot point to the exact structured source for a number, remove the number and keep the sentence qualitative.
 
 ### Evidence thresholding
 - Only elevate a weakness to the executive summary if it is materially supported.
@@ -180,6 +184,8 @@ A JSON object with:
 - Every section should make the rep feel prepared and confident, not overwhelmed with data.
 - Diversify the angles. Do not let every objection handler, question, and play collapse into the same pricing argument.
 - Keep the strongest wedge central, but make the supporting sections cover adjacent angles such as migration risk, operational complexity, support friction, scale limits, or finance predictability when the input supports them.
+- Do not repeat the same sentence stem across sections. `executive_summary`, `talk_track.opening`, and objection-handler `proof_point` fields must each add a different piece of information.
+- If one field states the headline vulnerability, the next field should move the conversation forward rather than paraphrase the same wording.
 
 ### Competitive positioning
 - Since you do not know the buyer's product, frame winning positions as capabilities to emphasize, not specific product claims. Say "Emphasize transparent, all-inclusive pricing" not "Our pricing is transparent."
@@ -219,6 +225,8 @@ A JSON object with:
 - `why_they_stay` is always required. Derive `strengths` from `retention_signals` and `incumbent_strengths` when present -- use the top 1-3 areas by mention count or confidence. If neither field is in the input, infer from high `positive_review_pct`, `recommend_ratio > 0.75`, or the highest-scoring non-pain review themes visible in `vendor_weaknesses` (areas with low pain score). Do not fabricate strengths with no signal in the input; if no evidence exists, produce one item with `area: "Established user base"` and honest low-confidence wording.
 - If `validation_feedback` is present, treat it as a hard correction list. Revise `prior_attempt` to remove every flagged issue, keep supported claims, and return clean JSON only.
 - If `prior_attempt` is raw text instead of JSON, salvage only the supported content, map it into the required schema, and discard unsupported or malformed fragments.
+- When `anchor_examples` or `witness_highlights` are present, at least one of `executive_summary`, `talk_track.opening`, `objection_handlers[*].proof_point`, or `recommended_plays[*].play` must mention a concrete anchor such as a named account, named competitor, spend signal, or live timing trigger.
+- If you use an anchor in the executive summary, do not reuse the same phrasing in `talk_track.opening`; build on it with the implication, question, or next-step motion.
 
 ## Output
 

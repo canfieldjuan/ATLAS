@@ -24,6 +24,13 @@ logger = logging.getLogger("atlas.autonomous.tasks.daily_intelligence")
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: daily deep intelligence analysis."""
+    return {
+        "_skip_synthesis": (
+            "Daily intelligence retired: legacy market/news synthesis is disabled "
+            "to avoid oversized prompt spend"
+        )
+    }
+
     cfg = settings.external_data
     if not cfg.enabled or not cfg.intelligence_enabled:
         return {"_skip_synthesis": "Daily intelligence disabled"}
@@ -785,5 +792,4 @@ async def _upsert_pressure_baselines(
 
     if upserted:
         logger.info("Upserted %d entity pressure baselines (%d clamped)", upserted, clamped)
-
 

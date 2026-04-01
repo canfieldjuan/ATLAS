@@ -4687,3 +4687,271 @@ class TestReasoningSynthesisTask:
         assert result["cross_vendor_mirrored"] == 4
         assert seen["force"] is True
         assert seen["vendor_names"] == ["ModelVendor"]
+
+    @pytest.mark.asyncio
+    async def test_run_cross_vendor_synthesis_records_success_attempt(self, monkeypatch):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _run_cross_vendor_synthesis,
+        )
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+                return None
+
+        class FakeLLM:
+            model = "fake-cross-vendor"
+
+            def chat(self, *, messages, max_tokens, temperature, response_format):
+                return {
+                    "response": json.dumps({
+                        "summary": "Alpha wins on admin simplicity",
+                        "citations": ["xv:pairwise:alpha|beta"],
+                    }),
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                    },
+                }
+
+        async def _fake_select_battles(
+            pool,
+            displacement_edges,
+            evidence_lookup,
+            *,
+            product_profiles,
+            max_battles,
+            min_context_score,
+        ):
+            return [("Alpha", "Beta", {"score": 0.9})]
+
+        async def _fake_select_asymmetry_pairs(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.cross_vendor_selection.select_battles",
+            _fake_select_battles,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.cross_vendor_selection.select_categories",
+            lambda *args, **kwargs: [],
+        )
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.cross_vendor_selection.select_asymmetry_pairs",
+            _fake_select_asymmetry_pairs,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.build_pairwise_battle_packet",
+            lambda vendor_a, vendor_b, edge, vendor_pools, product_profiles: {
+                "analysis_type": "pairwise_battle",
+                "vendors": [vendor_a, vendor_b],
+                "edge": edge,
+            },
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.attach_cross_vendor_citation_registry",
+            lambda packet, **kwargs: packet,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.compute_cross_vendor_evidence_hash",
+            lambda packet: "xv-hash",
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.normalize_cross_vendor_contract",
+            lambda parsed, analysis_type: parsed,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.materialize_cross_vendor_reference_ids",
+            lambda synthesis, packet: {
+                **synthesis,
+                "reference_ids": {
+                    "metric_ids": ["m1"],
+                    "witness_ids": ["w1"],
+                },
+            },
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.to_legacy_cross_vendor_conclusion",
+            lambda synthesis, analysis_type, vendors, **kwargs: {
+                "analysis_type": analysis_type,
+                "vendors": vendors,
+                "category": kwargs.get("category"),
+                "conclusion": synthesis,
+                "confidence": 0.9,
+                "tokens_used": kwargs.get("tokens_used", 0),
+                "cached": False,
+            },
+        )
+
+        fake_pool = FakePool()
+        vendor_pools = {
+            "Alpha": _make_layers(),
+            "Beta": _make_layers(),
+        }
+        cfg = SimpleNamespace(
+            cross_vendor_max_battles=1,
+            cross_vendor_battle_min_context_score=0.0,
+            cross_vendor_category_min_vendors=2,
+            cross_vendor_category_min_context_vendors=2,
+            cross_vendor_category_min_displacement_intensity=0.0,
+            cross_vendor_max_categories=0,
+            cross_vendor_max_asymmetry=0,
+            cross_vendor_asymmetry_pressure_delta_max=1.0,
+            cross_vendor_asymmetry_review_ratio_min=1.0,
+            cross_vendor_asymmetry_segment_divergence_bonus=0.0,
+            cross_vendor_asymmetry_min_divergence_score=0.0,
+            cross_vendor_asymmetry_min_context_score=0.0,
+            cross_vendor_synthesis_concurrency=1,
+            cross_vendor_synthesis_attempts=1,
+            reasoning_synthesis_timeout_seconds=30.0,
+            reasoning_synthesis_max_tokens=1024,
+            reasoning_synthesis_temperature=0.0,
+        )
+        rcfg = SimpleNamespace(max_tokens=1024, temperature=0.0)
+
+        result = await _run_cross_vendor_synthesis(
+            pool=fake_pool,
+            vendor_pools=vendor_pools,
+            llm=FakeLLM(),
+            rcfg=rcfg,
+            cfg=cfg,
+            today=date(2026, 3, 31),
+            window_days=30,
+            run_id="run-xv-1",
+            force=True,
+        )
+
+        assert result == (1, 0, 150, 1)
+        attempt_rows = [
+            item for item in fake_pool.executed
+            if "INSERT INTO artifact_attempts" in item[0]
+        ]
+        assert len(attempt_rows) == 1
+        assert attempt_rows[0][1][1] == "cross_vendor_reasoning"
+        assert attempt_rows[0][1][2] == "pairwise_battle:alpha|beta"
+        assert attempt_rows[0][1][3] == "run-xv-1"
+        assert attempt_rows[0][1][4] == 1
+        assert attempt_rows[0][1][5] == "complete"
+        assert attempt_rows[0][1][6] == "succeeded"
+
+    @pytest.mark.asyncio
+    async def test_run_cross_vendor_synthesis_rejects_oversized_prompt(self, monkeypatch):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _run_cross_vendor_synthesis,
+        )
+
+        class FakePool:
+            def __init__(self):
+                self.executed = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+                return None
+
+        class FakeLLM:
+            model = "fake-cross-vendor"
+
+            def chat(self, *, messages, max_tokens, temperature, response_format):
+                raise AssertionError("LLM should not be called when input cap is exceeded")
+
+        async def _fake_select_battles(
+            pool,
+            displacement_edges,
+            evidence_lookup,
+            *,
+            product_profiles,
+            max_battles,
+            min_context_score,
+        ):
+            return [("Alpha", "Beta", {"score": 0.9})]
+
+        async def _fake_select_asymmetry_pairs(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.cross_vendor_selection.select_battles",
+            _fake_select_battles,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.cross_vendor_selection.select_categories",
+            lambda *args, **kwargs: [],
+        )
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.cross_vendor_selection.select_asymmetry_pairs",
+            _fake_select_asymmetry_pairs,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.build_pairwise_battle_packet",
+            lambda vendor_a, vendor_b, edge, vendor_pools, product_profiles: {
+                "analysis_type": "pairwise_battle",
+                "vendors": [vendor_a, vendor_b],
+                "oversized_text": "x" * 5000,
+            },
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.attach_cross_vendor_citation_registry",
+            lambda packet, **kwargs: packet,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.compute_cross_vendor_evidence_hash",
+            lambda packet: "xv-hash",
+        )
+
+        fake_pool = FakePool()
+        vendor_pools = {
+            "Alpha": _make_layers(),
+            "Beta": _make_layers(),
+        }
+        cfg = SimpleNamespace(
+            cross_vendor_max_battles=1,
+            cross_vendor_battle_min_context_score=0.0,
+            cross_vendor_category_min_vendors=2,
+            cross_vendor_category_min_context_vendors=2,
+            cross_vendor_category_min_displacement_intensity=0.0,
+            cross_vendor_max_categories=0,
+            cross_vendor_max_asymmetry=0,
+            cross_vendor_asymmetry_pressure_delta_max=1.0,
+            cross_vendor_asymmetry_review_ratio_min=1.0,
+            cross_vendor_asymmetry_segment_divergence_bonus=0.0,
+            cross_vendor_asymmetry_min_divergence_score=0.0,
+            cross_vendor_asymmetry_min_context_score=0.0,
+            cross_vendor_synthesis_concurrency=1,
+            cross_vendor_synthesis_attempts=1,
+            cross_vendor_llm_max_input_tokens=10,
+            reasoning_synthesis_timeout_seconds=30.0,
+            reasoning_synthesis_max_tokens=1024,
+            reasoning_synthesis_temperature=0.0,
+        )
+        rcfg = SimpleNamespace(max_tokens=1024, temperature=0.0)
+
+        result = await _run_cross_vendor_synthesis(
+            pool=fake_pool,
+            vendor_pools=vendor_pools,
+            llm=FakeLLM(),
+            rcfg=rcfg,
+            cfg=cfg,
+            today=date(2026, 3, 31),
+            window_days=30,
+            run_id="run-xv-cap",
+            force=True,
+        )
+
+        assert result == (0, 1, 0, 0)
+        attempt_rows = [
+            item for item in fake_pool.executed
+            if "INSERT INTO artifact_attempts" in item[0]
+        ]
+        assert len(attempt_rows) == 1
+        assert attempt_rows[0][1][5] == "generation"
+        assert attempt_rows[0][1][6] == "rejected"

@@ -238,12 +238,15 @@ async def build_challenger_brief(
         from atlas_brain.autonomous.tasks.b2b_challenger_brief import (
             _build_challenger_brief,
             _fetch_churn_signal,
-            _fetch_cross_vendor_battle,
             _fetch_displacement_detail,
             _fetch_persisted_report,
             _fetch_persisted_report_record,
             _fetch_product_profile,
+            _resolve_cross_vendor_battle,
             _fetch_review_pain_quotes,
+        )
+        from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
+            load_best_cross_vendor_lookup,
         )
         from atlas_brain.config import settings
 
@@ -265,7 +268,7 @@ async def build_challenger_brief(
             inc_profile,
             chl_profile,
             churn_sig,
-            xv_battle,
+            xv_lookup,
             review_quotes,
         ) = await asyncio.gather(
             _fetch_persisted_report_record(
@@ -278,7 +281,11 @@ async def build_challenger_brief(
             _fetch_product_profile(pool, inc),
             _fetch_product_profile(pool, chl),
             _fetch_churn_signal(pool, inc, today),
-            _fetch_cross_vendor_battle(pool, inc, chl, today),
+            load_best_cross_vendor_lookup(
+                pool,
+                as_of=today,
+                analysis_window_days=window_days,
+            ),
             _fetch_review_pain_quotes(
                 pool,
                 inc,
@@ -287,6 +294,13 @@ async def build_challenger_brief(
                 candidate_limit=cfg.challenger_brief_quote_candidate_limit,
                 similarity_threshold=cfg.challenger_brief_quote_similarity_threshold,
             ),
+        )
+        xv_battle = await _resolve_cross_vendor_battle(
+            pool,
+            inc,
+            chl,
+            today,
+            xv_lookup,
         )
 
         battle_card = battle_card_rec["data"] if battle_card_rec else None

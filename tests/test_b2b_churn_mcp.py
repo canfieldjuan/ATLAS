@@ -18,6 +18,7 @@ for _heavy_mod in [
     "numpy",
     "sentence_transformers",
     "asyncpg",
+    "asyncpg.exceptions",
     "llama_cpp",
     "dateparser",
     "sse_starlette", "sse_starlette.sse",
@@ -52,7 +53,7 @@ sys.modules.setdefault("mcp.server", _mcp_server_mod)
 sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -110,6 +111,21 @@ def _make_churn_signal(**kwargs) -> dict:
         "review_window_start": None,
         "review_window_end": None,
         "confidence_score": Decimal("0.85"),
+        "archetype": kwargs.get("archetype", "pricing_pressure"),
+        "archetype_confidence": Decimal("0.82"),
+        "reasoning_mode": kwargs.get("reasoning_mode", "replacement"),
+        "reasoning_risk_level": kwargs.get("reasoning_risk_level", "high"),
+        "reasoning_executive_summary": "Pricing pressure is driving active replacement motion.",
+        "reasoning_key_signals": ["price fatigue", "competitor mentions"],
+        "reasoning_uncertainty_sources": ["limited enterprise sample"],
+        "falsification_conditions": ["renewal sentiment stabilizes"],
+        "insider_signal_count": 2,
+        "insider_org_health_summary": "Minor talent churn in support org.",
+        "insider_talent_drain_rate": Decimal("0.11"),
+        "insider_quotable_evidence": ["Support leaders are leaving."],
+        "keyword_spike_count": 3,
+        "keyword_spike_keywords": ["migration", "pricing", "switch"],
+        "keyword_trend_summary": "Migration and pricing complaints are rising.",
         "last_computed_at": datetime(2026, 2, 28, 12, 0, tzinfo=timezone.utc),
         "created_at": datetime(2026, 2, 28, 12, 0, tzinfo=timezone.utc),
     }
@@ -154,12 +170,18 @@ def _make_review_row(**kwargs) -> dict:
         "enriched_at": datetime(2026, 2, 21, tzinfo=timezone.utc),
         "content_type": kwargs.get("content_type", "review"),
         "thread_id": kwargs.get("thread_id", None),
+        "relevance_score": Decimal("0.88"),
+        "author_churn_score": Decimal("0.73"),
+        "low_fidelity": False,
+        "low_fidelity_reasons": [],
     }
 
 
 def _make_high_intent_row(**kwargs) -> dict:
     return {
-        "reviewer_company": kwargs.get("reviewer_company", "Acme Corp"),
+        "company": kwargs.get("company", "Acme Corp"),
+        "raw_company": kwargs.get("raw_company", kwargs.get("company", "Acme Corp")),
+        "resolution_confidence": kwargs.get("resolution_confidence", "high"),
         "vendor_name": kwargs.get("vendor_name", "Zendesk"),
         "product_category": "Customer Support",
         "role_level": "vp",
@@ -175,6 +197,19 @@ def _make_high_intent_row(**kwargs) -> dict:
         "reviewer_title": "VP Operations",
         "company_size_raw": "201-500",
         "industry": "SaaS",
+        "verified_employee_count": 320,
+        "company_country": "US",
+        "company_domain": "acme.example",
+        "revenue_range": "$50M-$100M",
+        "founded_year": 2015,
+        "total_funding": 25000000,
+        "latest_funding_stage": "Series B",
+        "headcount_growth_6m": Decimal("0.12"),
+        "headcount_growth_12m": Decimal("0.25"),
+        "headcount_growth_24m": Decimal("0.50"),
+        "publicly_traded_exchange": None,
+        "publicly_traded_symbol": None,
+        "company_description": "B2B SaaS operations platform.",
     }
 
 
@@ -204,6 +239,7 @@ def _make_scrape_target(**kwargs) -> dict:
         "product_category": "Customer Support",
         "enabled": kwargs.get("enabled", True),
         "priority": kwargs.get("priority", 5),
+        "scrape_mode": kwargs.get("scrape_mode", "incremental"),
         "last_scraped_at": datetime(2026, 2, 27, 6, 0, tzinfo=timezone.utc),
         "last_scrape_status": "success",
         "last_scrape_reviews": 15,
@@ -220,7 +256,7 @@ class TestB2BChurnMCPTools:
     # -- list_churn_signals ------------------------------------------------
 
     async def test_list_churn_signals_returns_results(self):
-        from atlas_brain.mcp.b2b_churn_server import list_churn_signals
+        from atlas_brain.mcp.b2b.signals import list_churn_signals
 
         signal = _make_churn_signal()
         pool = _mock_pool(fetch_return=[signal])
@@ -234,7 +270,7 @@ class TestB2BChurnMCPTools:
         assert data["signals"][0]["avg_urgency_score"] == 7.2
 
     async def test_list_churn_signals_empty(self):
-        from atlas_brain.mcp.b2b_churn_server import list_churn_signals
+        from atlas_brain.mcp.b2b.signals import list_churn_signals
 
         pool = _mock_pool(fetch_return=[])
 
@@ -246,7 +282,7 @@ class TestB2BChurnMCPTools:
         assert data["signals"] == []
 
     async def test_list_churn_signals_with_vendor_filter(self):
-        from atlas_brain.mcp.b2b_churn_server import list_churn_signals
+        from atlas_brain.mcp.b2b.signals import list_churn_signals
 
         pool = _mock_pool(fetch_return=[_make_churn_signal()])
 
@@ -261,7 +297,7 @@ class TestB2BChurnMCPTools:
         assert "Zendesk" in call_args[0][1:]
 
     async def test_list_churn_signals_with_min_urgency(self):
-        from atlas_brain.mcp.b2b_churn_server import list_churn_signals
+        from atlas_brain.mcp.b2b.signals import list_churn_signals
 
         pool = _mock_pool(fetch_return=[])
 
@@ -273,7 +309,7 @@ class TestB2BChurnMCPTools:
         assert "avg_urgency_score >=" in call_args[0][0]
 
     async def test_list_churn_signals_limit_capped(self):
-        from atlas_brain.mcp.b2b_churn_server import list_churn_signals
+        from atlas_brain.mcp.b2b.signals import list_churn_signals
 
         pool = _mock_pool(fetch_return=[])
 
@@ -285,7 +321,7 @@ class TestB2BChurnMCPTools:
         assert call_args[0][-1] == 100
 
     async def test_list_churn_signals_error(self):
-        from atlas_brain.mcp.b2b_churn_server import list_churn_signals
+        from atlas_brain.mcp.b2b.signals import list_churn_signals
 
         pool = _mock_pool()
         pool.fetch = AsyncMock(side_effect=RuntimeError("DB down"))
@@ -301,7 +337,7 @@ class TestB2BChurnMCPTools:
     # -- get_churn_signal --------------------------------------------------
 
     async def test_get_churn_signal_found(self):
-        from atlas_brain.mcp.b2b_churn_server import get_churn_signal
+        from atlas_brain.mcp.b2b.signals import get_churn_signal
 
         signal = _make_churn_signal()
         pool = _mock_pool(fetchrow_return=signal)
@@ -316,7 +352,7 @@ class TestB2BChurnMCPTools:
         assert isinstance(data["signal"]["top_competitors"], list)
 
     async def test_get_churn_signal_not_found(self):
-        from atlas_brain.mcp.b2b_churn_server import get_churn_signal
+        from atlas_brain.mcp.b2b.signals import get_churn_signal
 
         pool = _mock_pool(fetchrow_return=None)
 
@@ -328,7 +364,7 @@ class TestB2BChurnMCPTools:
         assert "no churn signal found" in data["error"].lower()
 
     async def test_get_churn_signal_empty_name(self):
-        from atlas_brain.mcp.b2b_churn_server import get_churn_signal
+        from atlas_brain.mcp.b2b.signals import get_churn_signal
 
         raw = await get_churn_signal(vendor_name="")
         data = json.loads(raw)
@@ -336,7 +372,7 @@ class TestB2BChurnMCPTools:
         assert "required" in data["error"]
 
     async def test_get_churn_signal_with_category(self):
-        from atlas_brain.mcp.b2b_churn_server import get_churn_signal
+        from atlas_brain.mcp.b2b.signals import get_churn_signal
 
         signal = _make_churn_signal()
         pool = _mock_pool(fetchrow_return=signal)
@@ -354,7 +390,7 @@ class TestB2BChurnMCPTools:
     # -- list_high_intent_companies ----------------------------------------
 
     async def test_list_high_intent_companies_found(self):
-        from atlas_brain.mcp.b2b_churn_server import list_high_intent_companies
+        from atlas_brain.mcp.b2b.signals import list_high_intent_companies
 
         row = _make_high_intent_row()
         pool = _mock_pool(fetch_return=[row])
@@ -368,7 +404,7 @@ class TestB2BChurnMCPTools:
         assert data["companies"][0]["decision_maker"] is True
 
     async def test_list_high_intent_companies_with_vendor(self):
-        from atlas_brain.mcp.b2b_churn_server import list_high_intent_companies
+        from atlas_brain.mcp.b2b.signals import list_high_intent_companies
 
         pool = _mock_pool(fetch_return=[_make_high_intent_row()])
 
@@ -381,7 +417,7 @@ class TestB2BChurnMCPTools:
         assert "ILIKE" in call_args[0][0]
 
     async def test_list_high_intent_companies_error(self):
-        from atlas_brain.mcp.b2b_churn_server import list_high_intent_companies
+        from atlas_brain.mcp.b2b.signals import list_high_intent_companies
 
         pool = _mock_pool()
         pool.fetch = AsyncMock(side_effect=RuntimeError("timeout"))
@@ -397,7 +433,7 @@ class TestB2BChurnMCPTools:
     # -- get_vendor_profile ------------------------------------------------
 
     async def test_get_vendor_profile_full(self):
-        from atlas_brain.mcp.b2b_churn_server import get_vendor_profile
+        from atlas_brain.mcp.b2b.signals import get_vendor_profile
 
         signal = _make_churn_signal()
         counts_row = {"total_reviews": 120, "pending_enrichment": 5, "enriched": 115}
@@ -408,6 +444,19 @@ class TestB2BChurnMCPTools:
             "reviewer_title": "VP Operations",
             "company_size_raw": "201-500",
             "industry": "SaaS",
+            "verified_employee_count": 320,
+            "company_country": "US",
+            "company_domain": "acme.example",
+            "revenue_range": "$50M-$100M",
+            "founded_year": 2015,
+            "total_funding": 25000000,
+            "latest_funding_stage": "Series B",
+            "headcount_growth_6m": Decimal("0.12"),
+            "headcount_growth_12m": Decimal("0.25"),
+            "headcount_growth_24m": Decimal("0.50"),
+            "publicly_traded_exchange": None,
+            "publicly_traded_symbol": None,
+            "company_description": "B2B SaaS operations platform.",
         }
         pain_row = {"pain": "pricing", "cnt": 25}
 
@@ -430,7 +479,7 @@ class TestB2BChurnMCPTools:
         assert len(profile["pain_distribution"]) == 1
 
     async def test_get_vendor_profile_no_signal(self):
-        from atlas_brain.mcp.b2b_churn_server import get_vendor_profile
+        from atlas_brain.mcp.b2b.signals import get_vendor_profile
 
         counts_row = {"total_reviews": 10, "pending_enrichment": 10, "enriched": 0}
 
@@ -447,7 +496,7 @@ class TestB2BChurnMCPTools:
         assert data["profile"]["review_counts"]["total"] == 10
 
     async def test_get_vendor_profile_empty_name(self):
-        from atlas_brain.mcp.b2b_churn_server import get_vendor_profile
+        from atlas_brain.mcp.b2b.signals import get_vendor_profile
 
         raw = await get_vendor_profile(vendor_name="  ")
         data = json.loads(raw)
@@ -457,7 +506,7 @@ class TestB2BChurnMCPTools:
     # -- list_reports ------------------------------------------------------
 
     async def test_list_reports_returns_results(self):
-        from atlas_brain.mcp.b2b_churn_server import list_reports
+        from atlas_brain.mcp.b2b.reports import list_reports
 
         report = _make_report_row()
         pool = _mock_pool(fetch_return=[report])
@@ -470,7 +519,7 @@ class TestB2BChurnMCPTools:
         assert data["reports"][0]["report_type"] == "weekly_churn_feed"
 
     async def test_list_reports_with_type_filter(self):
-        from atlas_brain.mcp.b2b_churn_server import list_reports
+        from atlas_brain.mcp.b2b.reports import list_reports
 
         pool = _mock_pool(fetch_return=[_make_report_row()])
 
@@ -481,7 +530,7 @@ class TestB2BChurnMCPTools:
         assert "report_type = $1" in call_args[0][0]
 
     async def test_list_reports_invalid_type(self):
-        from atlas_brain.mcp.b2b_churn_server import list_reports
+        from atlas_brain.mcp.b2b.reports import list_reports
 
         raw = await list_reports(report_type="invalid_type")
         data = json.loads(raw)
@@ -492,7 +541,7 @@ class TestB2BChurnMCPTools:
     # -- get_report --------------------------------------------------------
 
     async def test_get_report_found(self):
-        from atlas_brain.mcp.b2b_churn_server import get_report
+        from atlas_brain.mcp.b2b.reports import get_report
 
         report = _make_report_row()
         pool = _mock_pool(fetchrow_return=report)
@@ -506,7 +555,7 @@ class TestB2BChurnMCPTools:
         assert isinstance(data["report"]["intelligence_data"], dict)
 
     async def test_get_report_not_found(self):
-        from atlas_brain.mcp.b2b_churn_server import get_report
+        from atlas_brain.mcp.b2b.reports import get_report
 
         pool = _mock_pool(fetchrow_return=None)
 
@@ -518,7 +567,7 @@ class TestB2BChurnMCPTools:
         assert "not found" in data["error"].lower()
 
     async def test_get_report_invalid_uuid(self):
-        from atlas_brain.mcp.b2b_churn_server import get_report
+        from atlas_brain.mcp.b2b.reports import get_report
 
         raw = await get_report(report_id="not-a-uuid")
         data = json.loads(raw)
@@ -528,7 +577,7 @@ class TestB2BChurnMCPTools:
     # -- search_reviews ----------------------------------------------------
 
     async def test_search_reviews_returns_results(self):
-        from atlas_brain.mcp.b2b_churn_server import search_reviews
+        from atlas_brain.mcp.b2b.reviews import search_reviews
 
         row = {
             "id": uuid4(),
@@ -546,6 +595,10 @@ class TestB2BChurnMCPTools:
             "industry": "SaaS",
             "content_type": "review",
             "thread_id": None,
+            "relevance_score": Decimal("0.88"),
+            "author_churn_score": Decimal("0.73"),
+            "low_fidelity": False,
+            "low_fidelity_reasons": [],
         }
         pool = _mock_pool(fetch_return=[row])
 
@@ -558,7 +611,7 @@ class TestB2BChurnMCPTools:
         assert data["reviews"][0]["intent_to_leave"] is True
 
     async def test_search_reviews_all_filters(self):
-        from atlas_brain.mcp.b2b_churn_server import search_reviews
+        from atlas_brain.mcp.b2b.reviews import search_reviews
 
         pool = _mock_pool(fetch_return=[])
 
@@ -584,7 +637,7 @@ class TestB2BChurnMCPTools:
         assert "intent_to_leave" in sql
 
     async def test_search_reviews_limit_capped(self):
-        from atlas_brain.mcp.b2b_churn_server import search_reviews
+        from atlas_brain.mcp.b2b.reviews import search_reviews
 
         pool = _mock_pool(fetch_return=[])
 
@@ -595,7 +648,7 @@ class TestB2BChurnMCPTools:
         assert call_args[0][-1] == 100
 
     async def test_search_reviews_error(self):
-        from atlas_brain.mcp.b2b_churn_server import search_reviews
+        from atlas_brain.mcp.b2b.reviews import search_reviews
 
         pool = _mock_pool()
         pool.fetch = AsyncMock(side_effect=RuntimeError("connection lost"))
@@ -611,7 +664,7 @@ class TestB2BChurnMCPTools:
     # -- get_review --------------------------------------------------------
 
     async def test_get_review_found(self):
-        from atlas_brain.mcp.b2b_churn_server import get_review
+        from atlas_brain.mcp.b2b.reviews import get_review
 
         row = _make_review_row()
         pool = _mock_pool(fetchrow_return=row)
@@ -626,7 +679,7 @@ class TestB2BChurnMCPTools:
         assert isinstance(data["review"]["enrichment"], dict)
 
     async def test_get_review_not_found(self):
-        from atlas_brain.mcp.b2b_churn_server import get_review
+        from atlas_brain.mcp.b2b.reviews import get_review
 
         pool = _mock_pool(fetchrow_return=None)
 
@@ -638,7 +691,7 @@ class TestB2BChurnMCPTools:
         assert "not found" in data["error"].lower()
 
     async def test_get_review_invalid_uuid(self):
-        from atlas_brain.mcp.b2b_churn_server import get_review
+        from atlas_brain.mcp.b2b.reviews import get_review
 
         raw = await get_review(review_id="bad-id")
         data = json.loads(raw)
@@ -648,7 +701,7 @@ class TestB2BChurnMCPTools:
     # -- get_pipeline_status -----------------------------------------------
 
     async def test_get_pipeline_status_success(self):
-        from atlas_brain.mcp.b2b_churn_server import get_pipeline_status
+        from atlas_brain.mcp.b2b.pipeline import get_pipeline_status
 
         status_rows = [
             {"enrichment_status": "pending", "cnt": 50},
@@ -677,7 +730,7 @@ class TestB2BChurnMCPTools:
         assert data["active_scrape_targets"] == 8
 
     async def test_get_pipeline_status_error(self):
-        from atlas_brain.mcp.b2b_churn_server import get_pipeline_status
+        from atlas_brain.mcp.b2b.pipeline import get_pipeline_status
 
         pool = _mock_pool()
         pool.fetch = AsyncMock(side_effect=RuntimeError("DB unavailable"))
@@ -692,7 +745,7 @@ class TestB2BChurnMCPTools:
     # -- list_scrape_targets -----------------------------------------------
 
     async def test_list_scrape_targets_returns_results(self):
-        from atlas_brain.mcp.b2b_churn_server import list_scrape_targets
+        from atlas_brain.mcp.b2b.scrape_targets import list_scrape_targets
 
         target = _make_scrape_target()
         pool = _mock_pool(fetch_return=[target])
@@ -706,7 +759,7 @@ class TestB2BChurnMCPTools:
         assert data["targets"][0]["source"] == "g2"
 
     async def test_list_scrape_targets_source_filter(self):
-        from atlas_brain.mcp.b2b_churn_server import list_scrape_targets
+        from atlas_brain.mcp.b2b.scrape_targets import list_scrape_targets
 
         pool = _mock_pool(fetch_return=[])
 
@@ -717,7 +770,7 @@ class TestB2BChurnMCPTools:
         assert "source = $1" in call_args[0][0]
 
     async def test_list_scrape_targets_invalid_source(self):
-        from atlas_brain.mcp.b2b_churn_server import list_scrape_targets
+        from atlas_brain.mcp.b2b.scrape_targets import list_scrape_targets
 
         raw = await list_scrape_targets(source="yelp")
         data = json.loads(raw)
@@ -726,7 +779,7 @@ class TestB2BChurnMCPTools:
         assert data["count"] == 0
 
     async def test_list_scrape_targets_disabled_included(self):
-        from atlas_brain.mcp.b2b_churn_server import list_scrape_targets
+        from atlas_brain.mcp.b2b.scrape_targets import list_scrape_targets
 
         pool = _mock_pool(fetch_return=[])
 
@@ -738,7 +791,7 @@ class TestB2BChurnMCPTools:
         assert "enabled = true" not in sql
 
     async def test_list_scrape_targets_error(self):
-        from atlas_brain.mcp.b2b_churn_server import list_scrape_targets
+        from atlas_brain.mcp.b2b.scrape_targets import list_scrape_targets
 
         pool = _mock_pool()
         pool.fetch = AsyncMock(side_effect=RuntimeError("connection refused"))
@@ -765,12 +818,12 @@ class TestNoduplicateToolDefinitions:
         import pathlib
 
         src = (pathlib.Path(__file__).parent.parent /
-               "atlas_brain/mcp/b2b_churn_server.py").read_text()
+               "atlas_brain/mcp/b2b/calibration.py").read_text()
         tree = ast.parse(src)
         names = [n.name for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)]
         count = names.count("trigger_score_calibration")
         assert count == 1, (
-            f"trigger_score_calibration defined {count} times in b2b_churn_server.py "
+            f"trigger_score_calibration defined {count} times in atlas_brain/mcp/b2b/calibration.py "
             "(expected exactly 1)"
         )
 
@@ -790,7 +843,7 @@ def _patch_calibrate(fake_fn):
 @pytest.mark.asyncio
 class TestTriggerScoreCalibration:
     async def test_response_shape(self):
-        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+        from atlas_brain.mcp.b2b.calibration import trigger_score_calibration
 
         pool = _mock_pool()
         calibrate_result = {"weights_updated": 3, "sequences_used": 42}
@@ -805,7 +858,7 @@ class TestTriggerScoreCalibration:
         assert data["triggered_by"] == "mcp"
 
     async def test_window_clamped_to_floor(self):
-        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+        from atlas_brain.mcp.b2b.calibration import trigger_score_calibration
 
         pool = _mock_pool()
         captured = {}
@@ -820,7 +873,7 @@ class TestTriggerScoreCalibration:
         assert captured["window_days"] >= 30
 
     async def test_window_clamped_to_ceiling(self):
-        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+        from atlas_brain.mcp.b2b.calibration import trigger_score_calibration
 
         pool = _mock_pool()
         captured = {}
@@ -835,7 +888,7 @@ class TestTriggerScoreCalibration:
         assert captured["window_days"] <= 730
 
     async def test_db_not_ready(self):
-        from atlas_brain.mcp.b2b_churn_server import trigger_score_calibration
+        from atlas_brain.mcp.b2b.calibration import trigger_score_calibration
 
         pool = _mock_pool()
         pool.is_initialized = False
@@ -851,7 +904,7 @@ class TestTriggerScoreCalibration:
 class TestGetParserHealth:
     async def test_no_nameerror(self):
         """Regression: _pool_or_fail must not be referenced."""
-        from atlas_brain.mcp.b2b_churn_server import get_parser_health
+        from atlas_brain.mcp.b2b.pipeline import get_parser_health
 
         pool = _mock_pool(fetch_return=[])
         with _patch_pool(pool):
@@ -862,7 +915,7 @@ class TestGetParserHealth:
         assert "sources" in data
 
     async def test_db_not_ready(self):
-        from atlas_brain.mcp.b2b_churn_server import get_parser_health
+        from atlas_brain.mcp.b2b.pipeline import get_parser_health
 
         pool = _mock_pool()
         pool.is_initialized = False
@@ -875,7 +928,7 @@ class TestGetParserHealth:
         assert "Database not ready" in data.get("error", "")
 
     async def test_success_shape(self):
-        from atlas_brain.mcp.b2b_churn_server import get_parser_health
+        from atlas_brain.mcp.b2b.pipeline import get_parser_health
 
         fake_row = {
             "source": "reddit",
@@ -899,7 +952,7 @@ class TestGetParserHealth:
 class TestCreateDataCorrectionSuppressSource:
     async def test_suppress_source_without_entity_id(self):
         """suppress_source must succeed without a client-supplied UUID."""
-        from atlas_brain.mcp.b2b_churn_server import create_data_correction
+        from atlas_brain.mcp.b2b.corrections import create_data_correction
 
         inserted_row = {
             "id": str(uuid4()),
@@ -934,7 +987,7 @@ class TestCreateDataCorrectionSuppressSource:
 
     async def test_suppress_source_missing_source_name(self):
         """suppress_source without metadata.source_name should fail gracefully."""
-        from atlas_brain.mcp.b2b_churn_server import create_data_correction
+        from atlas_brain.mcp.b2b.corrections import create_data_correction
 
         pool = _mock_pool()
         with _patch_pool(pool):
@@ -955,7 +1008,7 @@ class TestCreateDataCorrectionSuppressSource:
 class TestGetDisplacementHistorySuppression:
     async def test_suppression_predicate_in_query(self):
         """get_displacement_history must include suppression filtering."""
-        from atlas_brain.mcp.b2b_churn_server import get_displacement_history
+        from atlas_brain.mcp.b2b.displacement import get_displacement_history
 
         pool = _mock_pool(fetch_return=[])
         with _patch_pool(pool):
@@ -1055,3 +1108,65 @@ class TestDraftCampaignBlogIntegration:
         result = json.loads(result_json)
         assert result["success"] is True
         assert "blog_posts" not in result
+
+
+@pytest.mark.asyncio
+class TestBuildChallengerBriefMCP:
+    async def test_uses_merged_cross_vendor_lookup(self, monkeypatch):
+        from atlas_brain.mcp.b2b.write_intelligence import build_challenger_brief
+        import atlas_brain.autonomous.tasks.b2b_challenger_brief as brief_mod
+        import atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis as xv_mod
+
+        pool = _mock_pool(fetchrow_return=None)
+        merged_lookup = {
+            "battles": {
+                ("Freshdesk", "Zendesk"): {
+                    "conclusion": {
+                        "conclusion": "Freshdesk gaining on pricing advantage",
+                        "winner": "Freshdesk",
+                    },
+                },
+            },
+            "councils": {},
+            "asymmetries": {},
+        }
+        resolve_battle = AsyncMock(return_value={"winner": "Freshdesk"})
+        build_brief = MagicMock(return_value={"_executive_summary": "summary", "displacement_summary": {}})
+
+        monkeypatch.setattr(
+            brief_mod,
+            "_fetch_persisted_report_record",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(brief_mod, "_fetch_persisted_report", AsyncMock(return_value=None))
+        monkeypatch.setattr(
+            brief_mod,
+            "_fetch_displacement_detail",
+            AsyncMock(return_value={"total_mentions": 2, "source_distribution": {"g2": 2}}),
+        )
+        monkeypatch.setattr(brief_mod, "_fetch_product_profile", AsyncMock(return_value=None))
+        monkeypatch.setattr(brief_mod, "_fetch_churn_signal", AsyncMock(return_value=None))
+        monkeypatch.setattr(brief_mod, "_fetch_review_pain_quotes", AsyncMock(return_value=[]))
+        monkeypatch.setattr(brief_mod, "_resolve_cross_vendor_battle", resolve_battle)
+        monkeypatch.setattr(brief_mod, "_build_challenger_brief", build_brief)
+        monkeypatch.setattr(
+            xv_mod,
+            "load_best_cross_vendor_lookup",
+            AsyncMock(return_value=merged_lookup),
+        )
+
+        with _patch_pool(pool):
+            raw = await build_challenger_brief(
+                incumbent="Zendesk",
+                challenger="Freshdesk",
+                persist=False,
+                max_target_accounts=25,
+            )
+
+        payload = json.loads(raw)
+        assert payload["success"] is True
+        xv_mod.load_best_cross_vendor_lookup.assert_awaited_once()
+        resolve_args = resolve_battle.await_args.args
+        assert resolve_args[1:4] == ("Zendesk", "Freshdesk", date.today())
+        assert resolve_args[4] == merged_lookup
+        build_brief.assert_called_once()

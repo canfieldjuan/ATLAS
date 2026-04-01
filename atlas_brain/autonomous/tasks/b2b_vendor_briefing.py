@@ -12,7 +12,7 @@ Data sources (in priority order):
 5. b2b_reasoning_synthesis -- reasoning contracts fallback when feed absent (sets reasoning_synthesis flag)
 6. b2b_segment_intelligence -- buyer segment breakdown (role, stage, pain)
 7. b2b_temporal_intelligence -- renewal windows, budget cycles, keyword spikes
-8. b2b_cross_vendor_conclusions -- pairwise battle + category council outcomes
+8. b2b_cross_vendor_reasoning_synthesis -- pairwise battle + category council outcomes
 9. b2b_vendor_buyer_profiles -- role/stage distribution with urgency signals
 10. b2b_reviews -- high-urgency quotes if evidence is still insufficient
 """
@@ -37,7 +37,7 @@ from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...templates.email.vendor_briefing import render_vendor_briefing_html
-from ._b2b_shared import _timing_summary_payload
+from ._b2b_shared import _timing_summary_payload, _reasoning_int
 from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
@@ -224,16 +224,6 @@ def _apply_reasoning_synthesis_to_briefing(
             used = True
 
     return used
-
-
-def _reasoning_int(value: Any) -> int | None:
-    """Coerce traced-number wrappers into ints."""
-    if isinstance(value, dict):
-        value = value.get("value")
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
 
 
 def _account_reasoning_named_accounts(
@@ -796,6 +786,7 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
     cache_namespace = "b2b_vendor_briefing.analyst_summary"
 
     try:
+        from ...pipelines.llm import clean_llm_output
         from ...services.b2b.llm_exact_cache import (
             build_request_envelope,
             lookup_cached_text,
@@ -817,8 +808,9 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
         cached = await lookup_cached_text(cache_namespace, request_envelope)
         if cached is not None:
             try:
-                json.loads(cached["response_text"])
-                content = cached["response_text"]
+                cleaned_cached = clean_llm_output(cached["response_text"])
+                json.loads(cleaned_cached)
+                content = cleaned_cached
             except json.JSONDecodeError:
                 content = None
 
@@ -847,6 +839,7 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
             if not content:
                 logger.warning("Analyst enrichment returned empty content")
                 return
+            content = clean_llm_output(content)
 
         result = json.loads(content)
 
@@ -1876,9 +1869,13 @@ async def build_vendor_briefing(
             briefing["data_sources"]["temporal_intelligence"] = True
 
     # ------------------------------------------------------------------
-    # Source 8: b2b_cross_vendor_conclusions
+    # Source 8: cross-vendor reasoning (synthesis-first, legacy fallback)
     # ------------------------------------------------------------------
-    conclusions = await _fetch_cross_vendor_conclusions(pool, vendor_name)
+    conclusions = await _fetch_cross_vendor_conclusions(
+        pool,
+        vendor_name,
+        category=str(briefing.get("category") or "").strip() or None,
+    )
     if conclusions:
         briefing["cross_vendor_conclusions"] = conclusions
         briefing["data_sources"]["cross_vendor_conclusions"] = True
@@ -2194,53 +2191,29 @@ async def _fetch_temporal_intelligence(pool: Any, vendor_name: str) -> dict[str,
 
 
 async def _fetch_cross_vendor_conclusions(
-    pool: Any, vendor_name: str
+    pool: Any,
+    vendor_name: str,
+    *,
+    category: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch pairwise battle and category council conclusions involving this vendor."""
+    """Fetch pairwise battle and category council conclusions for one vendor."""
     window_days = max(settings.b2b_churn.intelligence_window_days, 60)
-    cutoff = date.today() - timedelta(days=window_days)
-    rows = await pool.fetch(
-        """
-        SELECT analysis_type, vendors, conclusion, confidence, computed_date
-        FROM b2b_cross_vendor_conclusions
-        WHERE EXISTS (
-            SELECT 1 FROM unnest(vendors) v WHERE LOWER(v) = LOWER($1)
-        )
-          AND computed_date > $2
-        ORDER BY
-            CASE analysis_type WHEN 'pairwise_battle' THEN 0 ELSE 1 END,
-            confidence DESC,
-            computed_date DESC
-        LIMIT 5
-        """,
-        vendor_name,
-        cutoff,
+    from ._b2b_cross_vendor_synthesis import (
+        build_cross_vendor_conclusions_for_vendor,
+        load_best_cross_vendor_lookup,
     )
-    if not rows:
-        return []
-    results = []
-    for r in rows:
-        conclusion = r["conclusion"]
-        if isinstance(conclusion, str):
-            try:
-                conclusion = json.loads(conclusion)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        summary = ""
-        if isinstance(conclusion, dict):
-            summary = (
-                conclusion.get("conclusion")
-                or conclusion.get("summary")
-                or ""
-            )
-        results.append({
-            "analysis_type": r["analysis_type"],
-            "vendors": list(r["vendors"]),
-            "confidence": float(r["confidence"] or 0),
-            "summary": summary,
-            "computed_date": r["computed_date"].isoformat() if r["computed_date"] else None,
-        })
-    return results
+
+    xv_lookup = await load_best_cross_vendor_lookup(
+        pool,
+        as_of=date.today(),
+        analysis_window_days=window_days,
+    )
+    return build_cross_vendor_conclusions_for_vendor(
+        vendor_name,
+        category=category,
+        xv_lookup=xv_lookup,
+        limit=5,
+    )
 
 
 async def _fetch_buyer_profiles(

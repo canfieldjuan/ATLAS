@@ -28,6 +28,21 @@ from ...services.vendor_registry import resolve_vendor_name_cached
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_shared")
 
 
+def _reasoning_int(value: Any) -> int | None:
+    """Unwrap a traced numeric contract field into an integer."""
+    raw = value.get("value") if isinstance(value, dict) else value
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        try:
+            return int(float(raw))
+        except (TypeError, ValueError):
+            return None
+
+
+
 def filter_vendors_by_focus_categories(
     vendor_scores: list[dict],
     focus_categories_raw: str,
@@ -1421,7 +1436,14 @@ def _battle_card_safe_play_text(card: dict[str, Any], path: str) -> str:
         return f"{prefix} teams showing fit and renewal pressure with a focused benchmark."
     if path.startswith("talk_track."):
         if path.endswith(".opening"):
-            return _battle_card_safe_summary(card)
+            vendor = str(card.get("vendor") or "the incumbent").strip() or "the incumbent"
+            anchor_phrase = _battle_card_anchor_phrase_from_card(card)
+            opening = (
+                f"Buyers are actively pressure-testing {vendor} because {weakness} concerns keep resurfacing during evaluation."
+            )
+            if anchor_phrase:
+                opening = f"{opening} The clearest live signal is coming from {anchor_phrase}."
+            return opening
         if path.endswith(".mid_call_pivot"):
             return "Once pain is confirmed, pivot to the recurring friction and evaluation pressure visible in the current evidence."
         if path.endswith(".closing"):
@@ -1561,7 +1583,17 @@ def _battle_card_safe_text(card: dict[str, Any], path: str) -> str:
     if path.endswith(".evidence"):
         return "Supported by recurring customer complaints and churn-oriented review evidence."
     if path.endswith(".proof_point"):
-        return _battle_card_structured_proof_text(card)
+        base = _battle_card_structured_proof_text(card).rstrip(".")
+        weakness = _battle_card_primary_weakness(card)
+        index_match = re.search(r"\[(\d+)\]", path)
+        index = int(index_match.group(1)) if index_match else 0
+        variants = [
+            f"{base}.",
+            f"{base}, which keeps reinforcing buyer scrutiny around {weakness}.",
+            f"{base}. That pattern is showing up again in current evaluation motion.",
+            f"{base}. It is one of the clearest signals behind current switching pressure.",
+        ]
+        return variants[index % len(variants)]
     if path.startswith("recommended_plays[") or path.startswith("talk_track."):
         return _battle_card_safe_play_text(card, path)
     if path.startswith("competitive_landscape."):
@@ -1573,6 +1605,138 @@ def _battle_card_safe_text(card: dict[str, Any], path: str) -> str:
             )
         return "Competitive pressure is present where buyers are re-evaluating fit and value."
     return ""
+
+
+def _battle_card_anchor_phrase_from_card(card: dict[str, Any]) -> str:
+    """Return a seller-safe anchor phrase from raw anchor_examples."""
+    raw = card.get("anchor_examples")
+    if not isinstance(raw, dict):
+        return ""
+    for rows in raw.values():
+        if not isinstance(rows, list):
+            continue
+        for witness in rows:
+            if not isinstance(witness, dict):
+                continue
+            company = str(witness.get("reviewer_company") or "").strip()
+            competitor = str(witness.get("competitor") or "").strip()
+            time_anchor = str(witness.get("time_anchor") or "").strip()
+            parts: list[str] = []
+            if company:
+                parts.append(f"accounts like {company}")
+            if competitor:
+                parts.append(f"while evaluating {competitor}")
+            if time_anchor:
+                parts.append(f"during {time_anchor}")
+            if parts:
+                return " ".join(parts)
+            excerpt = str(witness.get("excerpt_text") or "")
+            numeric_tokens = re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt)
+            if numeric_tokens:
+                preview = ", ".join(numeric_tokens[:3])
+                return f"pricing callouts like {preview} in current review evidence"
+    return ""
+
+
+def _battle_card_anchor_terms_from_card(card: dict[str, Any]) -> set[str]:
+    """Collect non-numeric anchor terms from raw anchor_examples."""
+    raw = card.get("anchor_examples")
+    if not isinstance(raw, dict):
+        return set()
+    terms: set[str] = set()
+    for rows in raw.values():
+        if not isinstance(rows, list):
+            continue
+        for witness in rows:
+            if not isinstance(witness, dict):
+                continue
+            for value in (
+                witness.get("reviewer_company"),
+                witness.get("competitor"),
+                witness.get("time_anchor"),
+            ):
+                term = str(value or "").strip().lower()
+                if term:
+                    terms.add(term)
+            excerpt = str(witness.get("excerpt_text") or "")
+            for token in re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt):
+                normalized = token.strip().lower()
+                if normalized:
+                    terms.add(normalized)
+    return terms
+
+
+def _battle_card_render_text_from_generated(generated: dict[str, Any]) -> str:
+    """Flatten generated seller copy into comparable lowercase text."""
+    return " ".join(text for _, text in _battle_card_iter_text(generated) if text).lower()
+
+
+def _battle_card_set_generated_path(generated: dict[str, Any], path: str, value: str) -> None:
+    """Set a nested generated path like talk_track.opening or objection_handlers[1].proof_point."""
+    current: Any = generated
+    tokens = re.findall(r"([^\.\[\]]+)|\[(\d+)\]", path)
+    if not tokens:
+        return
+    for idx, (key_token, index_token) in enumerate(tokens):
+        is_last = idx == len(tokens) - 1
+        if index_token:
+            if not isinstance(current, list):
+                return
+            index = int(index_token)
+            if index >= len(current):
+                return
+            if is_last:
+                current[index] = value
+                return
+            current = current[index]
+            continue
+        key = str(key_token)
+        if not isinstance(current, dict) or key not in current:
+            return
+        if is_last:
+            current[key] = value
+            return
+        current = current[key]
+
+
+def _repair_battle_card_duplicate_copy(card: dict[str, Any], generated: dict[str, Any]) -> None:
+    """Replace duplicate long-form sections with grounded fallback phrasing."""
+    long_strings: list[tuple[str, str]] = []
+    for path, text in _battle_card_iter_text(generated):
+        stripped = text.strip()
+        if len(stripped) >= 80:
+            long_strings.append((path, stripped))
+    seen_prefixes: dict[str, str] = {}
+    for path, text in long_strings:
+        prefix = text[:80].lower()
+        first_path = seen_prefixes.get(prefix)
+        if first_path and first_path != path:
+            replacement = _battle_card_safe_text(card, path)
+            if replacement and replacement.strip().lower() != text.lower():
+                _battle_card_set_generated_path(generated, path, replacement)
+        else:
+            seen_prefixes[prefix] = path
+
+
+def _repair_battle_card_missing_anchor(card: dict[str, Any], generated: dict[str, Any]) -> None:
+    """Inject a witness-backed anchor when seller copy stays too generic."""
+    anchor_phrase = _battle_card_anchor_phrase_from_card(card)
+    anchor_terms = _battle_card_anchor_terms_from_card(card)
+    if not anchor_phrase or not anchor_terms:
+        return
+    render_text = _battle_card_render_text_from_generated(generated)
+    if any(term in render_text for term in anchor_terms):
+        return
+    anchor_sentence = f"The clearest live signal is coming from {anchor_phrase}."
+    summary = str(generated.get("executive_summary") or "").strip()
+    if summary:
+        generated["executive_summary"] = f"{summary.rstrip('.')} {anchor_sentence}".strip()
+        return
+    talk_track = generated.get("talk_track")
+    if isinstance(talk_track, dict):
+        opening = str(talk_track.get("opening") or "").strip()
+        if opening:
+            talk_track["opening"] = f"{opening.rstrip('.')} {anchor_sentence}".strip()
 
 
 def _sanitize_battle_card_text(
@@ -1899,6 +2063,9 @@ def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, 
         fallback_plays = _battle_card_fallback_recommended_plays(card)
         if fallback_plays:
             sanitized["recommended_plays"] = fallback_plays
+    if isinstance(sanitized, dict):
+        _repair_battle_card_duplicate_copy(card, sanitized)
+        _repair_battle_card_missing_anchor(card, sanitized)
     allowed_quotes = _battle_card_allowed_quotes(card)
     pain_quote_meta: dict[str, dict[str, Any]] = {}
     for _pq in card.get("customer_pain_quotes") or []:
@@ -2287,6 +2454,14 @@ def _validate_scorecard_expert_take(scorecard: dict[str, Any], expert_take: str)
             warnings.append(f"expert_take references opponent '{opponent}' without high-confidence comparison support")
             break
     return warnings
+
+
+def _normalize_scorecard_expert_take(expert_take: str) -> str:
+    """Clamp synthesized scorecard narratives to the configured word budget."""
+    text = str(expert_take or "").strip()
+    if not text:
+        return ""
+    return _trim_words(text, _synthesis_expert_take_max_words())
 
 
 def _build_buyer_action(vendor: str, pain: str | None, alternatives: list[str], archetype: str | None = None) -> str:
@@ -7857,6 +8032,10 @@ def build_temporal_intelligence(
     # --- Keyword spike details ---
     spike_keywords: list[dict] = []
     trend_summary = kw.get("trend_summary") or {}
+    if isinstance(trend_summary, str):
+        trend_summary = _safe_json(trend_summary) or {}
+    if not isinstance(trend_summary, dict):
+        trend_summary = {}
     for keyword, detail in trend_summary.items():
         if isinstance(detail, dict):
             spike_keywords.append({
@@ -9639,6 +9818,7 @@ def _structure_displacement_report(flows: list[dict[str, Any]]) -> dict[str, Any
         "from_vendor", "to_vendor", "mention_count", "primary_driver",
         "signal_strength", "confidence_score", "key_quote",
         "battle_conclusion", "durability", "source_archetype", "target_archetype",
+        "reference_ids", "data_as_of_date", "reasoning_source",
     }
     top_battles = [{k: v for k, v in f.items() if k in _battle_keep} for f in top_battles]
 

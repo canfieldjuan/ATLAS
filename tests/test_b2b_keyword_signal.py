@@ -102,6 +102,19 @@ def _make_task() -> MagicMock:
 class TestKeywordSignalTask:
     """Tests for b2b_keyword_signal.run()."""
 
+    def test_patch_pytrends_retry_compat_maps_method_whitelist(self):
+        from atlas_brain.autonomous.tasks.b2b_keyword_signal import _patch_pytrends_retry_compat
+
+        class RetryV2:
+            def __init__(self, *args, allowed_methods=None, **kwargs):
+                self.allowed_methods = allowed_methods
+
+        module = MagicMock()
+        module.Retry = RetryV2
+        _patch_pytrends_retry_compat(module)
+        retry = module.Retry(method_whitelist=frozenset({"GET", "POST"}))
+        assert retry.allowed_methods == frozenset({"GET", "POST"})
+
     # -- Early returns --
 
     @pytest.mark.asyncio

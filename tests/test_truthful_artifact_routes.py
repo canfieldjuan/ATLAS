@@ -216,6 +216,8 @@ def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
         is_initialized = True
 
         async def fetch(self, query, *_args):
+            if "AS status_value" in query:
+                return [{"status_value": "draft", "cnt": 1}, {"status_value": "rejected", "cnt": 2}]
             if "AS boundary" in query:
                 return [{"boundary": "publish", "cnt": 2}]
             if "AS cause_type" in query:
@@ -237,11 +239,54 @@ def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
+    assert body["active_failure_count"] == 1
+    assert body["rejected_failure_count"] == 2
+    assert body["by_status"][0]["status"] == "draft"
     assert body["by_boundary"][0]["boundary"] == "publish"
     assert body["by_cause_type"][0]["cause_type"] == "unsupported_claim"
     assert body["top_primary_blockers"][0]["reason"] == "unsupported_data_claim:Magento"
     assert body["by_topic_type"][0]["topic_type"] == "migration_guide"
     assert body["top_subjects"][0]["subject"] == "Shopify"
+
+
+def test_blog_quality_diagnostics_status_counts_ignore_top_n_limit(monkeypatch):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *_args):
+            if "AS status_value" in query:
+                return [
+                    {"status_value": "draft", "cnt": 1},
+                    {"status_value": "rejected", "cnt": 2},
+                ]
+            if "AS boundary" in query:
+                return [{"boundary": "publish", "cnt": 2}]
+            if "AS cause_type" in query:
+                return [{"cause_type": "unsupported_claim", "cnt": 2}]
+            if "AS reason" in query:
+                return [{"reason": "unsupported_data_claim:Magento", "cnt": 2}]
+            if "missing_input.input AS input" in query:
+                return [{"input": "reasoning_anchor_examples", "cnt": 1}]
+            if "AS topic_type" in query:
+                return [{"topic_type": "migration_guide", "cnt": 2}]
+            if "AS subject" in query:
+                return [{"subject": "Shopify", "cnt": 2}]
+            return []
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.get("/admin/blog/quality-diagnostics?top_n=1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["active_failure_count"] == 1
+    assert body["rejected_failure_count"] == 2
+    assert len(body["by_status"]) == 2
 
 
 def test_blog_publish_route_blocks_failed_revalidation(monkeypatch):

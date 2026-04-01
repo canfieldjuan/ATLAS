@@ -174,6 +174,7 @@ class TestAccountsInMotionRewiring:
         source = inspect.getsource(mod)
         assert "build_reasoning_lookup_from_views" in source
         assert "{**legacy_lookup, **synth_lookup}" in source
+        assert "load_best_cross_vendor_lookup" in source
 
     def test_fetch_latest_synthesis_views_accepts_vendor_names(self):
         """When vendor_names provided, should use load_best_reasoning_views."""

@@ -38,6 +38,18 @@ _SCHEMA_VERSION = "v2"
 _PACKET_SCHEMA_VERSION = "witness_packet_v1"
 
 
+def _approx_token_count(text: str) -> int:
+    """Approximate token count without relying on a model-specific tokenizer."""
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _approx_prompt_input_tokens(prompt: str, payload: str) -> int:
+    """Approximate total prompt tokens for a system + user JSON call."""
+    return _approx_token_count(prompt) + _approx_token_count(payload) + 16
+
+
 def _compute_pool_hash(layers: dict[str, Any]) -> str:
     """Deterministic hash of all pool layer data for a vendor."""
     raw = json.dumps(layers, sort_keys=True, separators=(",", ":"), default=str)
@@ -1145,6 +1157,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 cfg=cfg,
                 today=today,
                 window_days=window_days,
+                run_id=run_id,
                 force=force_cross_vendor,
             )
             total_tokens += xv_tokens
@@ -1193,6 +1206,7 @@ async def _run_cross_vendor_synthesis(
     cfg,
     today: date,
     window_days: int,
+    run_id: str | None = None,
     force: bool = False,
 ) -> tuple[int, int, int, int]:
     """Run cross-vendor synthesis: battles, councils, asymmetry.
@@ -1227,6 +1241,20 @@ async def _run_cross_vendor_synthesis(
         normalize_cross_vendor_contract,
         to_legacy_cross_vendor_conclusion,
     )
+    from ..visibility import record_attempt
+
+    def _cross_vendor_artifact_id(
+        analysis_type: str,
+        vendors: list[str],
+        category: str | None,
+    ) -> str:
+        if analysis_type == "category_council":
+            category_key = str(category or "unknown").strip().lower()
+            return f"{analysis_type}:{category_key}"
+        vendor_key = "|".join(
+            sorted(str(vendor).strip().lower() for vendor in vendors if str(vendor).strip()),
+        )
+        return f"{analysis_type}:{vendor_key or 'unknown'}"
 
     def _selector_evidence_from_layers(layers: dict[str, Any]) -> dict[str, Any]:
         evidence_vault = layers.get("evidence_vault") or {}
@@ -1514,7 +1542,19 @@ async def _run_cross_vendor_synthesis(
 
     for cat, eco_ev in categories:
         packet = build_category_council_packet(
-            cat, eco_ev, vendor_pools, product_profiles, displacement_edges,
+            cat,
+            eco_ev,
+            vendor_pools,
+            product_profiles,
+            displacement_edges,
+            vendor_summary_limit=max(
+                1,
+                int(getattr(cfg, "cross_vendor_category_vendor_summary_limit", 8)),
+            ),
+            flow_limit=max(
+                0,
+                int(getattr(cfg, "cross_vendor_category_flow_limit", 10)),
+            ),
         )
         cat_lower = (cat or "").strip().lower()
         cat_vendors = [
@@ -1589,6 +1629,10 @@ async def _run_cross_vendor_synthesis(
             int(rcfg.max_tokens),
         ),
     )
+    xv_llm_max_input_tokens = max(
+        512,
+        int(getattr(cfg, "cross_vendor_llm_max_input_tokens", 12000)),
+    )
     xv_llm_temperature = float(
         getattr(cfg, "reasoning_synthesis_temperature", rcfg.temperature),
     )
@@ -1610,15 +1654,53 @@ async def _run_cross_vendor_synthesis(
         ev_hash = compute_cross_vendor_evidence_hash(packet)
         v_key = "|".join(sorted(vendors))
         cache_key = f"{analysis_type}:{v_key}:{category or ''}"
+        artifact_id = _cross_vendor_artifact_id(analysis_type, vendors, category)
         if not force and existing_xv_hashes.get(cache_key) == ev_hash:
             return  # unchanged
 
         async with xv_sem:
             payload = json.dumps(packet, separators=(",", ":"), sort_keys=True, default=str)
+            estimated_input_tokens = _approx_prompt_input_tokens(prompt, payload)
+            if estimated_input_tokens > xv_llm_max_input_tokens:
+                _failed += 1
+                logger.warning(
+                    "Cross-vendor synthesis rejected for %s %s: estimated input %d exceeds cap %d",
+                    analysis_type,
+                    vendors,
+                    estimated_input_tokens,
+                    xv_llm_max_input_tokens,
+                )
+                await record_attempt(
+                    pool,
+                    artifact_type="cross_vendor_reasoning",
+                    artifact_id=artifact_id,
+                    run_id=run_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="rejected",
+                    blocker_count=1,
+                    blocking_issues=[
+                        (
+                            "input token budget exceeded: "
+                            f"estimated_input_tokens={estimated_input_tokens}, "
+                            f"cap={xv_llm_max_input_tokens}"
+                        ),
+                    ],
+                    failure_step="input_budget",
+                    error_message=(
+                        "Cross-vendor prompt exceeded the configured input token cap"
+                    ),
+                )
+                return
             synthesis: dict[str, Any] | None = None
             item_tokens = 0
+            last_failure_reasons: list[str] = []
+            last_failure_step = "llm_response"
+            terminal_attempt_recorded = False
+            attempt_no = 1
 
             for attempt in range(xv_max_attempts):
+                attempt_no = attempt + 1
                 messages = [
                     Message(role="system", content=prompt),
                     Message(role="user", content=payload),
@@ -1648,7 +1730,14 @@ async def _run_cross_vendor_synthesis(
                             synthesis, packet,
                         )
                         break
+                    last_failure_reasons = ["LLM did not return valid JSON object"]
+                    last_failure_step = "llm_response"
                 except asyncio.TimeoutError:
+                    last_failure_reasons = [
+                        "TimeoutError: cross-vendor reasoning LLM call exceeded "
+                        f"{xv_llm_timeout_seconds:.1f}s",
+                    ]
+                    last_failure_step = "timeout"
                     if attempt + 1 >= xv_max_attempts:
                         logger.warning(
                             "Cross-vendor synthesis timed out: %s %s after %.1fs",
@@ -1656,15 +1745,59 @@ async def _run_cross_vendor_synthesis(
                             vendors,
                             xv_llm_timeout_seconds,
                         )
+                        terminal_attempt_recorded = True
+                        await record_attempt(
+                            pool,
+                            artifact_type="cross_vendor_reasoning",
+                            artifact_id=artifact_id,
+                            run_id=run_id,
+                            attempt_no=attempt_no,
+                            stage="llm_call",
+                            status="failed",
+                            failure_step="timeout",
+                            error_message=(
+                                f"LLM call exceeded {xv_llm_timeout_seconds:.1f}s"
+                            ),
+                        )
                 except Exception:
+                    last_failure_reasons = [
+                        "Cross-vendor reasoning LLM call raised an exception",
+                    ]
+                    last_failure_step = "llm_exception"
                     if attempt + 1 >= xv_max_attempts:
                         logger.warning(
                             "Cross-vendor synthesis failed: %s %s",
                             analysis_type, vendors, exc_info=True,
                         )
+                        terminal_attempt_recorded = True
+                        await record_attempt(
+                            pool,
+                            artifact_type="cross_vendor_reasoning",
+                            artifact_id=artifact_id,
+                            run_id=run_id,
+                            attempt_no=attempt_no,
+                            stage="llm_call",
+                            status="failed",
+                            failure_step="llm_exception",
+                            error_message=last_failure_reasons[0],
+                        )
 
             if synthesis is None:
                 _failed += 1
+                if not terminal_attempt_recorded:
+                    await record_attempt(
+                        pool,
+                        artifact_type="cross_vendor_reasoning",
+                        artifact_id=artifact_id,
+                        run_id=run_id,
+                        attempt_no=attempt_no,
+                        stage="generation",
+                        status="rejected",
+                        blocker_count=len(last_failure_reasons),
+                        blocking_issues=last_failure_reasons[:5],
+                        failure_step=last_failure_step,
+                        error_message="; ".join(last_failure_reasons[:2])[:200],
+                    )
                 return
 
             # Persist to canonical table (upsert -- reruns update with fresh synthesis).
@@ -1725,6 +1858,17 @@ async def _run_cross_vendor_synthesis(
                     analysis_type, vendors, exc_info=True,
                 )
                 _failed += 1
+                await record_attempt(
+                    pool,
+                    artifact_type="cross_vendor_reasoning",
+                    artifact_id=artifact_id,
+                    run_id=run_id,
+                    attempt_no=attempt_no,
+                    stage="persistence",
+                    status="failed",
+                    failure_step="persist",
+                    error_message="Failed to persist cross-vendor synthesis row",
+                )
                 return
 
             # Mirror into legacy b2b_cross_vendor_conclusions (idempotent: delete-then-insert)
@@ -1776,6 +1920,15 @@ async def _run_cross_vendor_synthesis(
                 )
 
             _succeeded += 1
+            await record_attempt(
+                pool,
+                artifact_type="cross_vendor_reasoning",
+                artifact_id=artifact_id,
+                run_id=run_id,
+                attempt_no=attempt_no,
+                stage="complete",
+                status="succeeded",
+            )
             logger.info(
                 "Cross-vendor synthesis: %s %s (%d tokens)",
                 analysis_type, vendors, item_tokens,

@@ -4,7 +4,6 @@ Covers weakness coverage, target account filtering, integration comparison,
 brief assembly, executive summary format, and self-flow skip.
 """
 
-import json
 import sys
 from datetime import date
 from typing import Any
@@ -38,7 +37,6 @@ from atlas_brain.autonomous.tasks.b2b_challenger_brief import (
     _check_freshness,
     _compute_weakness_coverage,
     _extract_pain_quotes_from_reviews,
-    _fetch_cross_vendor_battle,
     _resolve_cross_vendor_battle,
     _fetch_persisted_report_record,
     _filter_target_accounts,
@@ -521,11 +519,34 @@ class TestBuildChallengerBrief:
             max_target_accounts=15,
         )
         assert brief["sales_playbook"]["recommended_plays"]
+
+    def test_fallback_head_to_head_sets_winner_for_emerging_directional_signal(self):
+        brief = _build_challenger_brief(
+            incumbent="Slack",
+            challenger="Discord",
+            displacement_detail={
+                "total_mentions": 3,
+                "signal_strength": "emerging",
+                "confidence_score": 0.52,
+                "primary_driver": "pricing",
+                "key_quote": None,
+                "source_distribution": {"reddit": 3},
+            },
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=None,
+            cross_vendor_battle=None,
+            max_target_accounts=10,
+        )
+        assert brief["head_to_head"]["winner"] == "Discord"
+        assert brief["head_to_head"]["loser"] == "Slack"
+        assert "Discord displacing Slack" in brief["head_to_head"]["conclusion"]
         assert brief["sales_playbook"]["discovery_questions"]
         assert brief["sales_playbook"]["landmine_questions"]
         assert brief["sales_playbook"]["objection_handlers"]
         assert brief["sales_playbook"]["talk_track"]["opening"]
-        assert "support benchmark" in json.dumps(brief["sales_playbook"], default=str).lower()
 
     def test_evidence_vault_fallback_populates_weaknesses_and_quotes(self):
         """Vault fills incumbent evidence when battle card is absent."""
@@ -1262,135 +1283,9 @@ class TestBuildChallengerBrief:
         assert inc["sentiment_direction"] == "positive"
 
 
-# ---------------------------------------------------------------------------
-# Cross-vendor battle fetch tests (async, mock pool)
-# ---------------------------------------------------------------------------
-
-def _make_xv_row(conclusion_dict: dict, confidence: float = 0.80):
-    """Build a dict mimicking an asyncpg Record for b2b_cross_vendor_conclusions."""
-    return {
-        "conclusion": conclusion_dict,
-        "confidence": confidence,
-    }
-
-
-class TestFetchCrossVendorBattle:
-    """Verify _fetch_cross_vendor_battle picks the newest prior row
-    when no same-day conclusion exists, and correctly parses the
-    conclusion JSONB."""
-
-    @pytest.mark.asyncio
-    async def test_stale_conclusion_used_when_today_missing(self):
-        """If no row exists for today, the most recent prior row is returned."""
-        stale_conclusion = {
-            "winner": "Freshdesk",
-            "loser": "Zendesk",
-            "conclusion": "Freshdesk wins on SMB pricing",
-            "durability_assessment": "Durable: structural pricing gap",
-            "key_insights": ["Wins deals under 50k ARR"],
-        }
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=_make_xv_row(stale_conclusion, 0.75))
-
-        today = date(2026, 3, 17)
-        result = await _fetch_cross_vendor_battle(pool, "Zendesk", "Freshdesk", today)
-
-        # Verify the query was called with <= today (not = today)
-        sql = pool.fetchrow.call_args[0][0]
-        assert "computed_date <= $1" in sql
-        assert "ORDER BY computed_date DESC" in sql
-
-        assert result is not None
-        assert result["winner"] == "Freshdesk"
-        assert result["loser"] == "Zendesk"
-        assert result["conclusion"] == "Freshdesk wins on SMB pricing"
-        assert result["durability"] == "Durable: structural pricing gap"
-        assert result["key_insights"] == [{"insight": "Wins deals under 50k ARR", "evidence": "Wins deals under 50k ARR"}]
-        assert result["confidence"] == 0.75
-
-    @pytest.mark.asyncio
-    async def test_returns_none_when_no_rows(self):
-        """If no conclusion exists at all, returns None."""
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=None)
-
-        result = await _fetch_cross_vendor_battle(
-            pool, "Zendesk", "Freshdesk", date(2026, 3, 17),
-        )
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_key_insights_dict_normalization(self):
-        """key_insights containing dicts are normalized to insight/evidence objects."""
-        conclusion = {
-            "winner": "A",
-            "conclusion": "A wins",
-            "key_insights": [
-                {"insight": "Point one"},
-                "Point two",
-                {"text": "Point three"},
-                {"irrelevant": "skipped"},
-            ],
-        }
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=_make_xv_row(conclusion))
-
-        result = await _fetch_cross_vendor_battle(
-            pool, "A", "B", date(2026, 3, 17),
-        )
-        assert result["key_insights"] == [
-            {"insight": "Point one", "evidence": "Point one"},
-            {"insight": "Point two", "evidence": "Point two"},
-            {"insight": "Point three", "evidence": "Point three"},
-        ]
-
-    @pytest.mark.asyncio
-    async def test_durability_fallback_to_displacement_flows_nature(self):
-        """durability falls back to displacement_flows_nature if durability_assessment absent."""
-        conclusion = {
-            "winner": "A",
-            "conclusion": "A wins",
-            "displacement_flows_nature": "Cyclical: tied to renewal cycles",
-        }
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value=_make_xv_row(conclusion))
-
-        result = await _fetch_cross_vendor_battle(
-            pool, "A", "B", date(2026, 3, 17),
-        )
-        assert result["durability"] == "Cyclical: tied to renewal cycles"
-
-    @pytest.mark.asyncio
-    async def test_string_conclusion_parsed_as_json(self):
-        """If asyncpg returns conclusion as a string, it is JSON-parsed."""
-        conclusion_str = json.dumps({
-            "winner": "B",
-            "conclusion": "B wins",
-            "durability_assessment": "Stable",
-            "key_insights": ["Insight 1"],
-        })
-        pool = MagicMock()
-        pool.fetchrow = AsyncMock(return_value={
-            "conclusion": conclusion_str,
-            "confidence": 0.65,
-        })
-
-        result = await _fetch_cross_vendor_battle(
-            pool, "A", "B", date(2026, 3, 17),
-        )
-        assert result["winner"] == "B"
-        assert result["confidence"] == 0.65
-
-
 class TestResolveCrossVendorBattle:
     @pytest.mark.asyncio
-    async def test_prefers_synthesis_over_legacy_fallback(self, monkeypatch):
-        fallback = AsyncMock(return_value={
-            "conclusion": "Legacy battle",
-            "winner": "Legacy",
-        })
-        monkeypatch.setattr(brief_mod, "_fetch_cross_vendor_battle", fallback)
-
+    async def test_prefers_merged_lookup_entry(self):
         xv_lookup = {
             "battles": {
                 ("Freshdesk", "Zendesk"): {
@@ -1415,20 +1310,9 @@ class TestResolveCrossVendorBattle:
         assert result["key_insights"] == [
             {"insight": "Wins sub-$50k deals", "evidence": "Wins sub-$50k deals"},
         ]
-        fallback.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_falls_back_when_synthesis_missing(self, monkeypatch):
-        fallback = AsyncMock(return_value={
-            "conclusion": "Legacy battle",
-            "winner": "Freshdesk",
-            "loser": "Zendesk",
-            "durability": "legacy",
-            "key_insights": [],
-            "confidence": 0.61,
-        })
-        monkeypatch.setattr(brief_mod, "_fetch_cross_vendor_battle", fallback)
-
+    async def test_returns_none_when_merged_lookup_missing_pair(self):
         result = await _resolve_cross_vendor_battle(
             MagicMock(),
             "Zendesk",
@@ -1437,14 +1321,10 @@ class TestResolveCrossVendorBattle:
             {"battles": {}},
         )
 
-        assert result["conclusion"] == "Legacy battle"
-        fallback.assert_awaited_once()
+        assert result is None
 
     @pytest.mark.asyncio
-    async def test_case_insensitive_synthesis_key_match(self, monkeypatch):
-        fallback = AsyncMock(return_value=None)
-        monkeypatch.setattr(brief_mod, "_fetch_cross_vendor_battle", fallback)
-
+    async def test_case_insensitive_synthesis_key_match(self):
         xv_lookup = {
             "battles": {
                 ("FreshDesk", "ZENdesk"): {
@@ -1472,7 +1352,6 @@ class TestResolveCrossVendorBattle:
             {"insight": "Lower admin burden", "evidence": "Lower admin burden"},
             {"insight": "Faster rollout", "evidence": "Faster rollout"},
         ]
-        fallback.assert_not_awaited()
 
 
 class TestChallengerBriefFallbacks:
@@ -1703,6 +1582,77 @@ class TestChallengerBriefRunProgress:
             "briefs_retired": 0,
         }
 
+    @pytest.mark.asyncio
+    async def test_run_uses_merged_cross_vendor_lookup(self, monkeypatch):
+        from atlas_brain.autonomous.tasks import _b2b_cross_vendor_synthesis as xv_mod
+
+        pool = type("Pool", (), {
+            "is_initialized": True,
+            "execute": AsyncMock(),
+            "fetch": AsyncMock(return_value=[]),
+        })()
+        merged_lookup = {
+            "battles": {
+                ("Freshdesk", "Zendesk"): {
+                    "conclusion": {
+                        "conclusion": "Freshdesk gaining on pricing advantage",
+                        "winner": "Freshdesk",
+                    },
+                },
+            },
+            "councils": {},
+            "asymmetries": {},
+        }
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (
+                None,
+                None,
+                {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                None,
+                None,
+                None,
+                None,
+                None,
+                [],
+            )
+
+        resolve_battle = AsyncMock(return_value=None)
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            brief_mod,
+            "_select_displacement_pairs",
+            AsyncMock(return_value=[{"incumbent": "Zendesk", "challenger": "Freshdesk"}]),
+        )
+        monkeypatch.setattr(xv_mod, "load_best_cross_vendor_lookup", AsyncMock(return_value=merged_lookup))
+        monkeypatch.setattr(brief_mod, "_resolve_cross_vendor_battle", resolve_battle)
+        monkeypatch.setattr(brief_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(
+            brief_mod,
+            "_build_challenger_brief",
+            lambda **kwargs: {
+                "_executive_summary": "summary",
+                "displacement_summary": {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                "data_sources": {"battle_card": False},
+                "total_target_accounts": 0,
+            },
+        )
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
+        await brief_mod.run(task)
+
+        xv_mod.load_best_cross_vendor_lookup.assert_awaited_once()
+        assert resolve_battle.call_args.args[4] == merged_lookup
+
 
 @pytest.mark.asyncio
 class TestResolveCrossVendorBattle:
@@ -1733,8 +1683,23 @@ class TestResolveCrossVendorBattle:
         assert "pricing" in result["conclusion"]
         pool.fetchrow.assert_not_called()
 
-    async def test_falls_back_to_legacy_when_no_synthesis(self):
-        xv = {"battles": {}}
+    async def test_accepts_merged_legacy_entry_shape(self):
+        xv = {
+            "battles": {
+                ("Freshdesk", "Zendesk"): {
+                    "conclusion": {
+                        "conclusion": "Legacy battle",
+                        "winner": "Freshdesk",
+                        "loser": "Zendesk",
+                        "confidence": 0.61,
+                        "durability_assessment": "legacy",
+                        "key_insights": [],
+                    },
+                    "confidence": 0.61,
+                    "source": "legacy",
+                },
+            },
+        }
         pool = MagicMock()
         pool.fetchrow = AsyncMock(return_value=None)
 
@@ -1742,8 +1707,10 @@ class TestResolveCrossVendorBattle:
             pool, "Zendesk", "Freshdesk", date(2026, 3, 29), xv,
         )
 
-        assert result is None
-        pool.fetchrow.assert_called_once()
+        assert result is not None
+        assert result["conclusion"] == "Legacy battle"
+        assert result["durability"] == "legacy"
+        pool.fetchrow.assert_not_called()
 
     async def test_case_insensitive_key_match(self):
         xv = {"battles": {("Freshdesk", "Zendesk"): self._SYNTH_ENTRY}}

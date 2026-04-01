@@ -143,6 +143,46 @@ def test_apply_reasoning_synthesis_to_briefing_copies_contract_fields():
     assert "causal_narrative" not in briefing
 
 
+@pytest.mark.asyncio
+async def test_fetch_cross_vendor_conclusions_uses_canonical_lookup(monkeypatch):
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.load_best_cross_vendor_lookup",
+        AsyncMock(
+            return_value={
+                "battles": {
+                    ("HubSpot", "Zendesk"): {
+                        "confidence": 0.72,
+                        "source": "synthesis",
+                        "computed_date": None,
+                        "conclusion": {"conclusion": "HubSpot is winning SMB evaluations."},
+                    },
+                },
+                "councils": {
+                    "CRM": {
+                        "confidence": 0.64,
+                        "source": "synthesis",
+                        "computed_date": None,
+                        "reference_ids": {"witness_ids": ["witness:crm:1"]},
+                        "conclusion": {"conclusion": "Pricing pressure is fragmenting CRM."},
+                        "vendors": ["HubSpot", "Zendesk"],
+                    },
+                },
+                "asymmetries": {},
+            }
+        ),
+    )
+
+    results = await briefing_mod._fetch_cross_vendor_conclusions(
+        pool=object(),
+        vendor_name="Zendesk",
+        category="CRM",
+    )
+
+    assert results[0]["analysis_type"] == "pairwise_battle"
+    assert results[1]["analysis_type"] == "category_council"
+    assert results[1]["reference_ids"]["witness_ids"] == ["witness:crm:1"]
+
+
 def test_apply_reasoning_synthesis_to_briefing_normalizes_flat_feed_sections():
     briefing = {}
     feed_entry = {

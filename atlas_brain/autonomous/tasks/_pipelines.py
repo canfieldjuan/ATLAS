@@ -57,7 +57,7 @@ register_pipeline(PipelineConfig(
             schedule_type="cron",
             cron_expression="0 20 * * *",
             timeout_seconds=300,
-            description="Daily deep analysis of accumulated market, news, and business data",
+            description="Retired legacy daily market/news synthesis task kept disabled to avoid oversized LLM spend",
             metadata={
                 "builtin_handler": "daily_intelligence",
                 "notify_priority": "default",

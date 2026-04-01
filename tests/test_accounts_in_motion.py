@@ -895,6 +895,48 @@ class TestBuildVendorAggregate:
         assert agg["total_accounts_in_motion"] == 0
         assert agg["accounts"] == []
 
+    def test_synthesis_account_metrics_are_normalized_to_emitted_accounts(self):
+        class _View:
+            schema_version = "v1"
+            wedge_label = "Pricing shock"
+            primary_wedge = type("W", (), {"value": "pricing_shock"})()
+            meta = {}
+            reference_ids = {}
+
+            def contract(self, name):
+                if name == "account_reasoning":
+                    return {
+                        "market_summary": "Sparse contract metrics despite surfaced accounts.",
+                        "total_accounts": 0,
+                        "high_intent_count": 0,
+                        "active_eval_count": 0,
+                        "top_accounts": [{"name": "Acme Corp"}],
+                    }
+                return {}
+
+            def materialized_contracts(self):
+                return {
+                    "schema_version": "v1",
+                    "account_reasoning": self.contract("account_reasoning"),
+                }
+
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account(company="Acme Corp", urgency=8.0, buying_stage="evaluation")],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+            synthesis_views={"Zendesk": _View()},
+        )
+        assert agg["priority_account_names"] == ["Acme Corp"]
+        assert agg["account_pressure_metrics"]["total_accounts"] == 1
+        assert agg["account_pressure_metrics"]["high_intent_count"] == 1
+        assert agg["account_pressure_metrics"]["active_eval_count"] == 1
+
     def test_vendor_evidence_summary_uses_unique_review_ids_and_sources(self):
         accounts = [
             self._make_account(source_reviews=["uuid-1", "uuid-2"], source_distribution={"g2": 2}),

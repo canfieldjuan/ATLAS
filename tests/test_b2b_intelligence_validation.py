@@ -58,6 +58,7 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     _compute_evidence_confidence,
     _executive_source_list,
     _fallback_scorecard_expert_take,
+    _normalize_scorecard_expert_take,
     _sanitize_battle_card_sales_copy,
     _battle_card_allowed_claims,
     _validate_battle_card_sales_copy,
@@ -1405,6 +1406,103 @@ class TestBattleCardSalesCopySanitization:
         assert sanitized["recommended_plays"][0]["timing"] == (
             "Best tested during active evaluation windows, renewal review, or planning cycles."
         )
+
+    def test_sanitizes_duplicate_long_form_copy(self):
+        card = _sample_battle_card()
+        generated = {
+            "executive_summary": (
+                "Shopify is vulnerable because pricing pressure keeps resurfacing during renewal and planning cycles. "
+                "Buyers are re-evaluating cost control and operational fit."
+            ),
+            "talk_track": {
+                "opening": (
+                    "Shopify is vulnerable because pricing pressure keeps resurfacing during renewal and planning cycles. "
+                    "Buyers are re-evaluating cost control and operational fit."
+                ),
+                "mid_call_pivot": "Show how simpler pricing reduces surprise costs.",
+                "closing": "Offer a renewal benchmark.",
+            },
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not any("duplicates content already present" in w for w in warnings)
+        assert sanitized["talk_track"]["opening"] != sanitized["executive_summary"]
+
+    def test_sanitizes_duplicate_objection_proof_points(self):
+        card = _sample_battle_card()
+        repeated = "81 active evaluation signals show recurring buyer pressure around pricing."
+        generated = {
+            "objection_handlers": [
+                {
+                    "objection": "The incumbent is still good enough on pricing.",
+                    "acknowledge": "It makes sense that teams want predictable pricing.",
+                    "pivot": "The better question is whether pricing friction is adding enough drag to force a rethink.",
+                    "proof_point": repeated,
+                },
+                {
+                    "objection": "We can negotiate on pricing later.",
+                    "acknowledge": "That can work when the broader pattern is stable.",
+                    "pivot": "The issue is whether the pricing pressure keeps resurfacing every renewal cycle.",
+                    "proof_point": repeated,
+                },
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not any("duplicates content already present" in w for w in warnings)
+        assert (
+            sanitized["objection_handlers"][0]["proof_point"]
+            != sanitized["objection_handlers"][1]["proof_point"]
+        )
+
+    def test_sanitizes_missing_anchor_usage_with_named_example(self):
+        card = _sample_battle_card() | {
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "reviewer_company": "Acme Commerce",
+                        "competitor": "WooCommerce",
+                        "time_anchor": "renewal review",
+                    }
+                ]
+            }
+        }
+        generated = {
+            "executive_summary": "Pricing pressure is creating renewed buyer scrutiny.",
+            "talk_track": {
+                "opening": "Teams are taking a harder look at fit and value.",
+                "mid_call_pivot": "Show how simpler pricing reduces surprise costs.",
+                "closing": "Offer a renewal benchmark.",
+            },
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        assert "acme commerce" in sanitized["executive_summary"].lower()
+
+    def test_sanitizes_missing_anchor_usage_with_numeric_outlier(self):
+        card = _sample_battle_card() | {
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "excerpt_text": "It went from $9 a month to the last suggested price of $29 and then added $15 per user.",
+                        "reviewer_company": None,
+                        "competitor": None,
+                        "time_anchor": None,
+                    }
+                ]
+            }
+        }
+        generated = {
+            "executive_summary": "Pricing pressure is creating renewed buyer scrutiny.",
+            "talk_track": {
+                "opening": "Teams are taking a harder look at fit and value.",
+                "mid_call_pivot": "Show how simpler pricing reduces surprise costs.",
+                "closing": "Offer a renewal benchmark.",
+            },
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        lowered = sanitized["executive_summary"].lower()
+        assert "$9" in lowered
+        assert "$29" in lowered
 
     def test_sanitizes_overcertain_play_when_account_intelligence_is_missing(self):
         card = _sample_battle_card() | {
@@ -2792,6 +2890,12 @@ class TestScorecardNarrativeGuardrails:
         assert len(text.split()) <= 80
         assert "buyers considering zendesk" in text.lower()
 
+    def test_normalize_scorecard_expert_take_trims_to_budget(self):
+        text = " ".join(["Buyer"] * 100)
+        normalized = _normalize_scorecard_expert_take(text)
+        assert len(normalized.split()) == 80
+        assert not _validate_scorecard_expert_take(_sample_scorecard(), normalized)
+
     def test_build_battle_card_locked_facts_captures_allowed_opponents(self):
         locked = _build_battle_card_locked_facts(_sample_battle_card() | {
             "archetype": "pricing_shock",
@@ -2904,6 +3008,29 @@ class TestChurnPressureScore:
         med = _compute_churn_pressure_score(**kwargs, total_reviews=30)
         assert med < high
         assert med == round(high * 0.85, 1)
+
+
+class TestTemporalIntelligence:
+    def test_build_temporal_intelligence_ignores_string_trend_summary(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import (
+            build_temporal_intelligence,
+        )
+
+        temporal = build_temporal_intelligence(
+            "Vendor",
+            keyword_spikes={
+                "spike_count": 1,
+                "spike_keywords": ["outage"],
+                "trend_summary": "not-a-dict",
+            },
+            sentiment={"declining": 2, "stable": 1, "improving": 0},
+            analysis_window_days=90,
+        )
+
+        assert temporal["schema_version"] == "v1"
+        assert temporal["keyword_spikes"]["spike_count"] == 1
+        assert temporal["keyword_spikes"]["spike_keywords"] == ["outage"]
+        assert temporal["keyword_spikes"]["keyword_details"] == []
 
 
 class TestVendorFeedRanking:

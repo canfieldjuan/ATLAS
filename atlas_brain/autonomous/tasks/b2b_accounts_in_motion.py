@@ -16,7 +16,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ._b2b_shared import _segment_targeting_summary, _timing_summary_payload
+from ._b2b_shared import _segment_targeting_summary, _timing_summary_payload, _reasoning_int
 from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_accounts_in_motion")
@@ -148,20 +148,6 @@ def _clean_alternatives(
     return cleaned
 
 
-def _reasoning_int(value: Any) -> int | None:
-    """Unwrap a traced numeric contract field into an integer."""
-    raw = value.get("value") if isinstance(value, dict) else value
-    if raw is None or raw == "":
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        try:
-            return int(float(raw))
-        except (TypeError, ValueError):
-            return None
-
-
 def _account_reasoning_summary_payload(
     account_reasoning: dict[str, Any] | None,
 ) -> tuple[str, dict[str, int], list[str]]:
@@ -182,6 +168,38 @@ def _account_reasoning_summary_payload(
         if name and name not in priority_names:
             priority_names.append(name)
     return summary, metrics, priority_names[:3]
+
+
+def _normalize_account_pressure_metrics(
+    result: dict[str, Any],
+    accounts: list[dict[str, Any]],
+) -> None:
+    """Keep emitted account pressure metrics consistent with the account payload."""
+    metrics = result.get("account_pressure_metrics")
+    if not isinstance(metrics, dict):
+        return
+    normalized = dict(metrics)
+    priority_names = result.get("priority_account_names")
+    priority_count = len(priority_names) if isinstance(priority_names, list) else 0
+    account_count = len(accounts)
+    total_floor = max(account_count, priority_count)
+    current_total = int(normalized.get("total_accounts") or 0)
+    if total_floor and current_total < total_floor:
+        normalized["total_accounts"] = total_floor
+    if accounts:
+        high_urgency_count = sum(1 for a in accounts if float(a.get("urgency") or 0) >= 7)
+        active_eval_count = sum(1 for a in accounts if (a.get("buying_stage") or "").lower() in (
+            "active_purchase", "evaluation", "renewal_decision",
+        ))
+        normalized["high_intent_count"] = max(
+            int(normalized.get("high_intent_count") or 0),
+            high_urgency_count,
+        )
+        normalized["active_eval_count"] = max(
+            int(normalized.get("active_eval_count") or 0),
+            active_eval_count,
+        )
+    result["account_pressure_metrics"] = normalized
 
 
 def _apply_account_quality_adjustments(account: dict[str, Any], cfg) -> tuple[int, dict[str, int], list[str]]:
@@ -412,30 +430,18 @@ async def _fetch_latest_synthesis_views(
     When ``vendor_names`` is provided, scopes to those vendors. Otherwise
     loads all vendors with synthesis rows, then fills gaps from legacy.
     """
+    from ._b2b_synthesis_reader import discover_reasoning_vendor_names, load_best_reasoning_views
+
     if vendor_names:
-        from ._b2b_synthesis_reader import load_best_reasoning_views
         return await load_best_reasoning_views(
             pool, vendor_names,
             as_of=as_of,
             analysis_window_days=analysis_window_days,
         )
 
-    # Broad load: collect vendor names from synthesis + legacy, then batch-load
-    from ._b2b_synthesis_reader import load_best_reasoning_views
-
-    synth_names = await pool.fetch(
-        "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
-        "WHERE as_of_date <= $1 AND analysis_window_days = $2",
-        as_of, analysis_window_days,
+    all_names = await discover_reasoning_vendor_names(
+        pool, as_of=as_of, analysis_window_days=analysis_window_days,
     )
-    legacy_names = await pool.fetch(
-        "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
-        "WHERE archetype IS NOT NULL",
-    )
-    all_names = list({
-        r["vendor_name"] for r in (*synth_names, *legacy_names)
-        if r.get("vendor_name")
-    })
     if not all_names:
         return {}
     return await load_best_reasoning_views(
@@ -1079,6 +1085,7 @@ def _build_vendor_aggregate(
             for a in sorted(accounts, key=lambda a: a.get("opportunity_score", 0), reverse=True)[:3]
             if a.get("company") or a.get("company_name")
         ]
+    _normalize_account_pressure_metrics(result, accounts)
     return result
 
 
@@ -1137,7 +1144,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from .b2b_churn_intelligence import (
         _normalize_test_vendors,
         reconstruct_reasoning_lookup,
-        reconstruct_cross_vendor_lookup,
     )
 
     window_days = cfg.intelligence_window_days
@@ -1255,7 +1261,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         evidence_vault_lookup = {}
 
     # --- Phase 2: Reconstruct reasoning (synthesis-first) + cross-vendor ---
-    xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
+    from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
+
+    xv_lookup = await load_best_cross_vendor_lookup(
+        pool,
+        as_of=today,
+        analysis_window_days=window_days,
+    )
     try:
         raw_synthesis_views = await _fetch_latest_synthesis_views(
             pool,

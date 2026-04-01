@@ -1181,6 +1181,28 @@ async def load_best_reasoning_view(
     )
 
 
+async def discover_reasoning_vendor_names(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int = 90,
+) -> list[str]:
+    """Return the union of vendor names with synthesis or legacy reasoning rows."""
+    synth_names = await pool.fetch(
+        "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
+        "WHERE as_of_date <= $1 AND analysis_window_days = $2",
+        as_of, analysis_window_days,
+    )
+    legacy_names = await pool.fetch(
+        "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
+        "WHERE archetype IS NOT NULL",
+    )
+    return list({
+        r["vendor_name"] for r in (*synth_names, *legacy_names)
+        if r.get("vendor_name")
+    })
+
+
 async def load_best_reasoning_views(
     pool,
     vendor_names: list[str],

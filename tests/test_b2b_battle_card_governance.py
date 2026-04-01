@@ -165,6 +165,12 @@ class TestRenderPayloadGovernance:
         assert payload["witness_highlights"][0]["witness_id"] == "witness:r1:0"
         assert payload["reference_ids"]["witness_ids"] == ["witness:r1:0"]
 
+    def test_full_contract_bundle_omitted_when_section_contracts_present(self):
+        card = _card_with_governance()
+        payload = _build_battle_card_render_payload(card)
+        assert "reasoning_contracts" not in payload
+        assert "vendor_core_reasoning" in payload
+
 
 # ---------------------------------------------------------------------------
 # Tests: governance quality checks

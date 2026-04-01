@@ -32,9 +32,11 @@ for _mod in (
     sys.modules.setdefault(_mod, MagicMock())
 
 from atlas_brain.autonomous.tasks.b2b_churn_reports import (
+    _attach_context_to_deterministic_reports,
     _attach_synthesis_contracts_to_report_entry,
     _build_scorecard_narrative_payload,
 )
+from atlas_brain.autonomous.tasks._b2b_shared import _structure_displacement_report
 from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
     SynthesisView,
 )
@@ -253,6 +255,105 @@ class TestSynthesisReplacesLegacyNarrative:
         assert scorecard["reasoning_summary"] == "Pricing pressure is acute after Q1 hike."
         assert scorecard["reasoning_source"] == "b2b_reasoning_synthesis"
         assert scorecard["archetype"] == "price_squeeze"
+
+
+class TestCategoryOverviewProvenance:
+    def test_category_overview_attaches_cross_vendor_analysis_and_refs(self):
+        category_overview = [{"category": "CRM"}]
+
+        _attach_context_to_deterministic_reports(
+            pool=None,
+            as_of=date(2026, 3, 31),
+            deterministic_weekly_feed=[],
+            deterministic_vendor_scorecards=[],
+            deterministic_displacement_map=[],
+            deterministic_category_overview=category_overview,
+            deterministic_vendor_deep_dives=[],
+            evidence_vault_lookup={},
+            synthesis_views={},
+            xv_lookup={
+                "battles": {},
+                "councils": {
+                    "CRM": {
+                        "confidence": 0.81,
+                        "source": "synthesis",
+                        "computed_date": date(2026, 3, 31),
+                        "reference_ids": {
+                            "metric_ids": ["metric:crm:1"],
+                            "witness_ids": ["witness:crm:1"],
+                        },
+                        "conclusion": {
+                            "winner": "HubSpot",
+                            "loser": "Salesforce",
+                            "conclusion": "SMB buyers are moving toward lower-friction CRM platforms.",
+                            "market_regime": "price_competition",
+                            "durability_assessment": "cyclical",
+                            "key_insights": [{"insight": "Pricing is fragmenting the market.", "evidence": "renewal data"}],
+                        },
+                    },
+                },
+                "asymmetries": {},
+            },
+        )
+
+        entry = category_overview[0]
+        assert entry["cross_vendor_analysis"]["market_regime"] == "price_competition"
+        assert entry["category_council"]["winner"] == "HubSpot"
+        assert entry["reference_ids"]["metric_ids"] == ["metric:crm:1"]
+        assert entry["reasoning_source"] == "b2b_cross_vendor_reasoning_synthesis"
+
+
+class TestDisplacementReportProvenance:
+    def test_displacement_edges_attach_cross_vendor_reference_ids(self):
+        displacement_map = [
+            {
+                "from_vendor": "Zendesk",
+                "to_vendor": "Freshdesk",
+                "mention_count": 14,
+                "signal_strength": "strong",
+                "primary_driver": "pricing",
+            },
+        ]
+
+        _attach_context_to_deterministic_reports(
+            pool=None,
+            as_of=date(2026, 3, 31),
+            deterministic_weekly_feed=[],
+            deterministic_vendor_scorecards=[],
+            deterministic_displacement_map=displacement_map,
+            deterministic_category_overview=[],
+            deterministic_vendor_deep_dives=[],
+            evidence_vault_lookup={},
+            synthesis_views={},
+            xv_lookup={
+                "battles": {
+                    ("Freshdesk", "Zendesk"): {
+                        "confidence": 0.78,
+                        "source": "synthesis",
+                        "computed_date": date(2026, 3, 31),
+                        "reference_ids": {
+                            "metric_ids": ["metric:pair:1"],
+                            "witness_ids": ["witness:pair:1"],
+                        },
+                        "conclusion": {
+                            "loser": "Zendesk",
+                            "conclusion": "Freshdesk is displacing Zendesk on pricing.",
+                            "durability_assessment": "stable",
+                        },
+                    },
+                },
+                "councils": {},
+                "asymmetries": {},
+            },
+        )
+
+        edge = displacement_map[0]
+        assert edge["battle_conclusion"] == "Freshdesk is displacing Zendesk on pricing."
+        assert edge["reference_ids"]["metric_ids"] == ["metric:pair:1"]
+        assert edge["reasoning_source"] == "b2b_cross_vendor_reasoning_synthesis"
+
+        report = _structure_displacement_report(displacement_map)
+        assert report["top_battles"][0]["reference_ids"]["witness_ids"] == ["witness:pair:1"]
 
 
 # ---------------------------------------------------------------------------

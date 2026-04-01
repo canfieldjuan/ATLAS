@@ -154,6 +154,22 @@ class TestBuildCategoryCouncilPacket:
         assert packet["ecosystem_evidence"]["hhi"] == 0.3
         assert packet["ecosystem_evidence"]["market_structure"] == "duopoly"
 
+    def test_category_packet_respects_summary_and_flow_limits(self):
+        packet = build_category_council_packet(
+            "Helpdesk",
+            {"hhi": 0.3, "market_structure": "duopoly", "displacement_intensity": 5.0},
+            _POOL_LAYERS,
+            _PROFILES,
+            displacement_edges=[
+                {"from_vendor": "Zendesk", "to_vendor": "Freshdesk", "mention_count": 12, "primary_driver": "pricing"},
+                {"from_vendor": "Freshdesk", "to_vendor": "Zendesk", "mention_count": 4, "primary_driver": "support"},
+            ],
+            vendor_summary_limit=1,
+            flow_limit=1,
+        )
+        assert len(packet["vendor_summaries"]) == 1
+        assert len(packet["displacement_flows"]) == 1
+
 
 class TestBuildResourceAsymmetryPacket:
     def test_pressure_scores_included(self):

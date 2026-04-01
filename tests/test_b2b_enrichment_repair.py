@@ -119,6 +119,45 @@ async def test_repair_single_promotes_structural_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_repair_extractor_uses_exact_cache_hit(monkeypatch):
+    cached_response = {
+        "response_text": json.dumps({"competitors_mentioned": ["HubSpot"]}),
+        "model": "google/gemini-3.1-flash-lite-preview",
+    }
+
+    monkeypatch.setattr(
+        repair_mod,
+        "get_pipeline_llm",
+        lambda **_kwargs: SimpleNamespace(
+            name="openrouter",
+            model="google/gemini-3.1-flash-lite-preview",
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.llm_exact_cache.build_skill_request_envelope",
+        lambda **_kwargs: ("cache-key", {"messages": [{"role": "user", "content": "cached"}]}, []),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.llm_exact_cache.lookup_cached_text",
+        AsyncMock(return_value=cached_response),
+    )
+
+    def _unexpected_llm_call(*_args, **_kwargs):
+        raise AssertionError("repair extractor should not run on exact-cache hit")
+
+    monkeypatch.setattr(repair_mod, "call_llm_with_skill", _unexpected_llm_call)
+
+    parsed, model = await repair_mod._call_repair_extractor(
+        {"vendor_name": "Zendesk"},
+        "google/gemini-3.1-flash-lite-preview",
+        SimpleNamespace(enrichment_repair_max_tokens=512),
+    )
+
+    assert parsed == {"competitors_mentioned": ["HubSpot"]}
+    assert model == "google/gemini-3.1-flash-lite-preview"
+
+
+@pytest.mark.asyncio
 async def test_repair_single_shadows_when_nothing_promotable(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
     row = {

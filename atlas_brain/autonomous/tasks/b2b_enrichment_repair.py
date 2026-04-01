@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
-from ...pipelines.llm import call_llm_with_skill, parse_json_response
+from ...pipelines.llm import call_llm_with_skill, get_pipeline_llm, parse_json_response
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from . import b2b_enrichment as base_enrichment
@@ -268,7 +268,53 @@ def _build_repair_payload(row: dict[str, Any], baseline: dict[str, Any], review_
 
 
 async def _call_repair_extractor(payload: dict[str, Any], model_id: str, cfg) -> tuple[dict | None, str | None]:
+    from ...services.b2b.llm_exact_cache import (
+        CacheUnavailable,
+        build_skill_request_envelope,
+        llm_identity,
+        lookup_cached_text,
+        store_cached_text,
+    )
+
+    cache_namespace = "b2b_enrichment_repair.extraction"
+    provider_name = ""
+    resolved_model = ""
+    request_envelope: dict[str, Any] | None = None
+
     try:
+        resolved_llm = get_pipeline_llm(
+            workload="openrouter",
+            try_openrouter=True,
+            openrouter_model=model_id,
+        )
+        provider_name, resolved_model = llm_identity(resolved_llm)
+        if provider_name and resolved_model:
+            try:
+                _, request_envelope, _ = build_skill_request_envelope(
+                    namespace=cache_namespace,
+                    skill_name="digest/b2b_churn_repair_extraction",
+                    payload=json.dumps(payload, ensure_ascii=True),
+                    provider=provider_name,
+                    model=resolved_model,
+                    max_tokens=cfg.enrichment_repair_max_tokens,
+                    temperature=0.0,
+                    guided_json=_REPAIR_JSON_SCHEMA,
+                    response_format={"type": "json_object"},
+                    extra={"requested_model": model_id},
+                )
+            except CacheUnavailable:
+                request_envelope = None
+
+        if request_envelope is not None:
+            cached = await lookup_cached_text(cache_namespace, request_envelope)
+            if cached is not None:
+                parsed = parse_json_response(
+                    cached["response_text"],
+                    recover_truncated=True,
+                )
+                if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                    return parsed, str(cached.get("model") or model_id)
+
         response = await asyncio.to_thread(
             call_llm_with_skill,
             "digest/b2b_churn_repair_extraction",
@@ -285,7 +331,16 @@ async def _call_repair_extractor(payload: dict[str, Any], model_id: str, cfg) ->
             return None, model_id
         parsed = parse_json_response(response, recover_truncated=True)
         if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-            return parsed, model_id
+            if request_envelope is not None:
+                await store_cached_text(
+                    cache_namespace,
+                    request_envelope,
+                    provider=provider_name,
+                    model=resolved_model,
+                    response_text=response,
+                    metadata={"requested_model": model_id},
+                )
+            return parsed, resolved_model or model_id
         return None, model_id
     except Exception:
         logger.exception("Repair extractor call failed")

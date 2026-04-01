@@ -2,9 +2,9 @@
 
 Runs after all other B2B follow-up tasks. Reads persisted artifacts from
 b2b_displacement_edges, b2b_intelligence (battle_card, accounts_in_motion),
-b2b_product_profiles, b2b_cross_vendor_conclusions, and b2b_churn_signals.
-Assembles one b2b_intelligence row per (incumbent, challenger) pair with
-report_type='challenger_brief'.
+b2b_product_profiles, shared cross-vendor reasoning lookups, and
+b2b_churn_signals. Assembles one b2b_intelligence row per
+(incumbent, challenger) pair with report_type='challenger_brief'.
 
 No LLM calls -- purely deterministic assembly from pre-computed artifacts.
 """
@@ -501,75 +501,16 @@ async def _fetch_synthesis_view(
     )
 
 
-async def _fetch_cross_vendor_battle(
-    pool, vendor_a: str, vendor_b: str, today: date,
-) -> dict | None:
-    """Fetch the pairwise battle conclusion between two vendors.
-
-    The table schema:
-    - vendors is TEXT[] (not JSONB), use @> ARRAY[...] for containment
-    - computed_date (not analysis_date)
-    - conclusion is JSONB containing winner, durability_assessment, key_insights
-    """
-    row = await pool.fetchrow(
-        """
-        SELECT conclusion, confidence
-        FROM b2b_cross_vendor_conclusions
-        WHERE analysis_type = 'pairwise_battle'
-          AND computed_date <= $1
-          AND vendors @> ARRAY[$2, $3]::text[]
-        ORDER BY computed_date DESC, created_at DESC
-        LIMIT 1
-        """,
-        today,
-        vendor_a,
-        vendor_b,
-    )
-    if not row:
-        return None
-
-    conclusion = row["conclusion"]
-    if isinstance(conclusion, str):
-        try:
-            conclusion = json.loads(conclusion)
-        except (json.JSONDecodeError, TypeError):
-            conclusion = {}
-    if not isinstance(conclusion, dict):
-        conclusion = {}
-
-    key_insights = conclusion.get("key_insights") or []
-    if isinstance(key_insights, list):
-        # Normalize: items can be strings or dicts with "insight"+"evidence"
-        normalized: list[dict[str, str]] = []
-        for item in key_insights:
-            if isinstance(item, str) and item:
-                normalized.append({"insight": item, "evidence": item})
-            elif isinstance(item, dict):
-                text = item.get("insight") or item.get("text") or ""
-                evidence = item.get("evidence") or text
-                if text:
-                    normalized.append({"insight": text, "evidence": evidence})
-        key_insights = normalized
-
-    return {
-        "conclusion": conclusion.get("conclusion") or "",
-        "winner": conclusion.get("winner") or "",
-        "loser": conclusion.get("loser") or "",
-        "durability": conclusion.get("durability_assessment") or conclusion.get("displacement_flows_nature") or "",
-        "key_insights": key_insights,
-        "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
-    }
-
-
 async def _resolve_cross_vendor_battle(
     pool,
     vendor_a: str,
     vendor_b: str,
     today: date,
-    xv_synthesis_lookup: dict[str, Any],
+    xv_lookup: dict[str, Any],
 ) -> dict | None:
-    """Prefer cross-vendor synthesis battle, fall back to legacy DB query."""
-    battles = xv_synthesis_lookup.get("battles") or {}
+    """Resolve a pairwise battle from the merged cross-vendor lookup."""
+    del pool, today
+    battles = xv_lookup.get("battles") or {}
     needle = tuple(sorted([vendor_a.strip().lower(), vendor_b.strip().lower()]))
 
     entry = None
@@ -607,8 +548,7 @@ async def _resolve_cross_vendor_battle(
                 result["reference_ids"] = reference_ids
             return result
 
-    # Fall back to legacy DB query
-    return await _fetch_cross_vendor_battle(pool, vendor_a, vendor_b, today)
+    return None
 
 
 async def _retire_unselected_challenger_briefs(
@@ -1636,8 +1576,8 @@ def _build_challenger_brief(
             if area:
                 insights.append({"insight": "Top incumbent weakness: %s" % area, "evidence": "%d mentions" % count if count else "product profile"})
         head_to_head = {
-            "winner": challenger if mentions >= 5 and signal in ("strong", "moderate") else "",
-            "loser": incumbent if mentions >= 5 and signal in ("strong", "moderate") else "",
+            "winner": challenger if mentions > 0 and signal in ("strong", "moderate", "emerging") else "",
+            "loser": incumbent if mentions > 0 and signal in ("strong", "moderate", "emerging") else "",
             "conclusion": "%s displacing %s driven by %s (%d mentions, %s signal)." % (
                 challenger, incumbent, driver, mentions, signal,
             ),
@@ -1930,15 +1870,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.warning("Failed to load evidence vault for challenger briefs", exc_info=True)
         evidence_vault_lookup = {}
 
-    # Load cross-vendor synthesis (preferred over legacy DB queries)
-    xv_synthesis_lookup: dict[str, Any] = {"battles": {}, "councils": {}, "asymmetries": {}}
+    # Load merged cross-vendor reasoning (canonical synthesis first, legacy gaps filled).
+    xv_lookup: dict[str, Any] = {"battles": {}, "councils": {}, "asymmetries": {}}
     try:
-        from ._b2b_cross_vendor_synthesis import load_cross_vendor_synthesis_lookup
-        xv_synthesis_lookup = await load_cross_vendor_synthesis_lookup(
+        from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
+        xv_lookup = await load_best_cross_vendor_lookup(
             pool, as_of=today, analysis_window_days=window_days,
         )
     except Exception:
-        logger.debug("Cross-vendor synthesis load failed, using legacy fallback")
+        logger.debug("Cross-vendor lookup load failed", exc_info=True)
 
     # --- Phase 2: Fetch artifacts and build briefs ---
     persisted = 0
@@ -1980,7 +1920,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 _fetch_churn_signal(pool, incumbent, today),
                 _fetch_synthesis_view(pool, incumbent, today, window_days),
                 _resolve_cross_vendor_battle(
-                    pool, incumbent, challenger, today, xv_synthesis_lookup,
+                    pool, incumbent, challenger, today, xv_lookup,
                 ),
                 _fetch_review_pain_quotes(
                     pool,

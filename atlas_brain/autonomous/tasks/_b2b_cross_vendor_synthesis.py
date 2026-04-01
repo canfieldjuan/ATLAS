@@ -50,6 +50,11 @@ def _slug(value: str | None) -> str:
     return slug or "unknown"
 
 
+def empty_cross_vendor_lookup() -> dict[str, dict]:
+    """Return the normalized empty cross-vendor lookup shape."""
+    return {"battles": {}, "councils": {}, "asymmetries": {}}
+
+
 # ---------------------------------------------------------------------------
 # Evidence hashing
 # ---------------------------------------------------------------------------
@@ -262,6 +267,9 @@ def build_category_council_packet(
     pool_layers: dict[str, dict[str, Any]],
     product_profiles: dict[str, dict[str, Any]],
     displacement_edges: list[dict[str, Any]] | None = None,
+    *,
+    vendor_summary_limit: int = 10,
+    flow_limit: int = 15,
 ) -> dict[str, Any]:
     """Build a deterministic evidence packet for a category council."""
     # Find vendors in this category from profiles
@@ -272,7 +280,7 @@ def build_category_council_packet(
 
     vendor_summaries = [
         _vendor_pool_summary(v, pool_layers)
-        for v in sorted(category_vendors)[:10]
+        for v in sorted(category_vendors)[: max(1, int(vendor_summary_limit))]
     ]
 
     # Filter displacement edges to this category's vendors
@@ -300,7 +308,7 @@ def build_category_council_packet(
             "archetype_distribution": ecosystem_evidence.get("archetype_distribution") or {},
         },
         "vendor_summaries": vendor_summaries,
-        "displacement_flows": cat_edges[:15],
+        "displacement_flows": cat_edges[: max(0, int(flow_limit))],
     }
 
 
@@ -737,7 +745,17 @@ async def load_cross_vendor_synthesis_lookup(
         candidate_refs = bool(candidate.get("reference_ids"))
         if not existing_refs and candidate_refs:
             return True
-        return False
+        if existing_refs and not candidate_refs:
+            return False
+        existing_date = existing.get("computed_date")
+        candidate_date = candidate.get("computed_date")
+        if existing_date != candidate_date:
+            return candidate_date is not None and (
+                existing_date is None or candidate_date > existing_date
+            )
+        existing_created = str(existing.get("created_at") or "")
+        candidate_created = str(candidate.get("created_at") or "")
+        return candidate_created > existing_created
 
     for r in rows:
         atype = r["analysis_type"]
@@ -770,6 +788,7 @@ async def load_cross_vendor_synthesis_lookup(
             "vendors": vendors,
             "category": category,
             "computed_date": r["as_of_date"],
+            "created_at": r["created_at"],
             "source": "synthesis",
         }
         reference_ids = raw.get("reference_ids")
@@ -789,3 +808,147 @@ async def load_cross_vendor_synthesis_lookup(
                 asymmetries[key] = entry
 
     return {"battles": battles, "councils": councils, "asymmetries": asymmetries}
+
+
+def merge_cross_vendor_lookups(
+    *,
+    primary: dict[str, dict] | None,
+    fallback: dict[str, dict] | None,
+) -> tuple[dict[str, dict], int]:
+    """Merge two cross-vendor lookups with primary entries winning per key."""
+    merged = empty_cross_vendor_lookup()
+    overrides = 0
+    primary = primary or empty_cross_vendor_lookup()
+    fallback = fallback or empty_cross_vendor_lookup()
+
+    for bucket in ("battles", "councils", "asymmetries"):
+        merged_bucket = dict(fallback.get(bucket, {}))
+        for key, value in (primary.get(bucket, {}) or {}).items():
+            if key in merged_bucket:
+                overrides += 1
+            merged_bucket[key] = value
+        merged[bucket] = merged_bucket
+
+    return merged, overrides
+
+
+async def load_best_cross_vendor_lookup(
+    pool,
+    *,
+    as_of: date | None = None,
+    analysis_window_days: int = 90,
+) -> dict[str, dict]:
+    """Load canonical cross-vendor synthesis first, with legacy rows filling gaps."""
+    try:
+        synthesis_lookup = await load_cross_vendor_synthesis_lookup(
+            pool,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+        )
+    except Exception:
+        logger.debug("Cross-vendor synthesis lookup failed; falling back to legacy", exc_info=True)
+        synthesis_lookup = empty_cross_vendor_lookup()
+
+    try:
+        from .b2b_churn_intelligence import reconstruct_cross_vendor_lookup
+
+        legacy_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=as_of)
+    except Exception:
+        logger.debug("Legacy cross-vendor lookup failed", exc_info=True)
+        legacy_lookup = empty_cross_vendor_lookup()
+
+    merged, _ = merge_cross_vendor_lookups(
+        primary=synthesis_lookup,
+        fallback=legacy_lookup,
+    )
+    return merged
+
+
+def build_cross_vendor_conclusions_for_vendor(
+    vendor_name: str,
+    *,
+    category: str | None = None,
+    xv_lookup: dict[str, dict] | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Materialize vendor-facing cross-vendor conclusions from a merged lookup."""
+    vendor = str(vendor_name or "").strip()
+    if not vendor:
+        return []
+    category_name = str(category or "").strip()
+    lookup = xv_lookup or empty_cross_vendor_lookup()
+    results: list[dict[str, Any]] = []
+
+    def _append_entry(
+        *,
+        analysis_type: str,
+        entry: dict[str, Any],
+        vendors: list[str],
+        category_value: str | None = None,
+    ) -> None:
+        conclusion = entry.get("conclusion") or {}
+        if not isinstance(conclusion, dict):
+            return
+        summary = (
+            conclusion.get("conclusion")
+            or conclusion.get("summary")
+            or ""
+        )
+        if not summary:
+            return
+        item: dict[str, Any] = {
+            "analysis_type": analysis_type,
+            "vendors": list(vendors),
+            "confidence": float(entry.get("confidence") or 0),
+            "summary": summary,
+            "source": entry.get("source") or "",
+        }
+        if category_value:
+            item["category"] = category_value
+        computed_date = entry.get("computed_date")
+        if computed_date is not None and hasattr(computed_date, "isoformat"):
+            item["computed_date"] = computed_date.isoformat()
+        reference_ids = entry.get("reference_ids")
+        if isinstance(reference_ids, dict) and reference_ids:
+            item["reference_ids"] = _copy_reference_ids(reference_ids)
+        results.append(item)
+
+    vendor_lower = vendor.lower()
+    for pair_key, entry in (lookup.get("battles") or {}).items():
+        members = [str(value or "").strip() for value in pair_key]
+        if any(member.lower() == vendor_lower for member in members):
+            _append_entry(
+                analysis_type="pairwise_battle",
+                entry=entry,
+                vendors=members,
+            )
+
+    for pair_key, entry in (lookup.get("asymmetries") or {}).items():
+        members = [str(value or "").strip() for value in pair_key]
+        if any(member.lower() == vendor_lower for member in members):
+            _append_entry(
+                analysis_type="resource_asymmetry",
+                entry=entry,
+                vendors=members,
+            )
+
+    if category_name:
+        council = (lookup.get("councils") or {}).get(category_name)
+        if isinstance(council, dict):
+            _append_entry(
+                analysis_type="category_council",
+                entry=council,
+                vendors=list(council.get("vendors") or []),
+                category_value=category_name,
+            )
+
+    results.sort(
+        key=lambda item: (
+            0 if item.get("analysis_type") == "pairwise_battle" else 1,
+            -float(item.get("confidence") or 0),
+            str(item.get("computed_date") or ""),
+        ),
+    )
+    if limit > 0:
+        return results[:limit]
+    return results

@@ -9,6 +9,7 @@ and persists to b2b_intelligence.
 import asyncio
 import json
 import logging
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -18,6 +19,23 @@ from ...storage.models import ScheduledTask
 from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_battle_cards")
+
+
+def _approx_token_count(text: str) -> int:
+    """Approximate token count without relying on a model-specific tokenizer."""
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _approx_message_input_tokens(messages: list[dict[str, Any]]) -> int:
+    """Approximate total input tokens for a prompt message list."""
+    total = 0
+    for message in messages:
+        total += _approx_token_count(str(message.get("role") or ""))
+        total += _approx_token_count(str(message.get("content") or ""))
+        total += 8
+    return total
 
 _STAGE_LOADING_INPUTS = "loading_inputs"
 _STAGE_BUILDING = "building_deterministic_cards"
@@ -583,18 +601,24 @@ def _battle_card_render_text(card: dict[str, Any]) -> str:
 def _witness_numeric_tokens(witness: dict[str, Any]) -> set[str]:
     tokens: set[str] = set()
     numeric_literals = witness.get("numeric_literals")
-    if not isinstance(numeric_literals, dict):
-        return tokens
-    for values in numeric_literals.values():
-        if isinstance(values, list):
-            for value in values:
-                token = str(value or "").strip().lower()
+    if isinstance(numeric_literals, dict):
+        for values in numeric_literals.values():
+            if isinstance(values, list):
+                for value in values:
+                    token = str(value or "").strip().lower()
+                    if token:
+                        tokens.add(token)
+            else:
+                token = str(values or "").strip().lower()
                 if token:
                     tokens.add(token)
-        else:
-            token = str(values or "").strip().lower()
-            if token:
-                tokens.add(token)
+    if tokens:
+        return tokens
+    excerpt = str(witness.get("excerpt_text") or "")
+    for token in re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt):
+        normalized = token.strip().lower()
+        if normalized:
+            tokens.add(normalized)
     return tokens
 
 
@@ -1191,8 +1215,20 @@ def _build_battle_card_render_payload(
     category_reasoning = _battle_card_category_reasoning(card)
     account_reasoning = _battle_card_account_reasoning(card)
     reasoning_contracts = card.get("reasoning_contracts")
+    section_contracts_present = any(
+        (
+            vendor_core_reasoning,
+            displacement_reasoning,
+            category_reasoning,
+            account_reasoning,
+        ),
+    )
 
-    if isinstance(reasoning_contracts, dict) and reasoning_contracts:
+    if (
+        isinstance(reasoning_contracts, dict)
+        and reasoning_contracts
+        and not section_contracts_present
+    ):
         payload["reasoning_contracts"] = reasoning_contracts
     if vendor_core_reasoning:
         payload["vendor_core_reasoning"] = vendor_core_reasoning
@@ -2194,6 +2230,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     retry_delay = cfg.battle_card_llm_retry_delay_seconds
     feedback_limit = cfg.battle_card_llm_feedback_limit
     llm_max_tokens = cfg.battle_card_llm_max_tokens
+    llm_max_input_tokens = max(
+        512,
+        int(getattr(cfg, "battle_card_llm_max_input_tokens", 25000)),
+    )
     llm_temperature = cfg.battle_card_llm_temperature
     llm_timeout = cfg.battle_card_llm_timeout_seconds
     cache_confidence = cfg.battle_card_cache_confidence
@@ -2283,16 +2323,75 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                 return
 
+        from ...services.b2b.llm_exact_cache import build_skill_messages
+
+        estimated_input_tokens = _approx_message_input_tokens(
+            build_skill_messages("digest/battle_card_sales_copy", payload),
+        )
+        if estimated_input_tokens > llm_max_input_tokens:
+            logger.warning(
+                "Skipping battle card LLM for %s: estimated input %d exceeds cap %d",
+                card.get("vendor"),
+                estimated_input_tokens,
+                llm_max_input_tokens,
+            )
+            _populate_battle_card_fallback_sales_copy(card)
+            card["llm_render_status"] = "skipped_input_cap"
+            card["llm_render_error"] = (
+                "LLM input exceeded configured token budget "
+                f"({estimated_input_tokens}>{llm_max_input_tokens})"
+            )
+            _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
+            persisted_ok = False
+            try:
+                persisted = await _persist_battle_card(
+                    pool,
+                    today=today,
+                    card=card,
+                    data_density=data_density,
+                    report_source_review_count=report_source_review_count,
+                    report_source_dist=report_source_dist,
+                    llm_model=_battle_card_llm_model_label(card, llm_options),
+                    status=_battle_card_row_status(card),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist input-capped battle card for %s",
+                    card.get("vendor"),
+                )
+            else:
+                persisted_ok = bool(persisted)
+            async with progress_lock:
+                bc_llm_failures += 1
+                bc_llm_updates += int(persisted_ok)
+                bc_overlay_completed += 1
+                await _update_execution_progress(
+                    task,
+                    stage=_STAGE_LLM_OVERLAY,
+                    progress_current=bc_overlay_completed,
+                    progress_total=total_cards,
+                    progress_message="Applying LLM overlay to battle cards.",
+                    cards_built=total_cards,
+                    cards_persisted=cards_persisted,
+                    cards_llm_updated=bc_llm_updates,
+                    llm_failures=bc_llm_failures,
+                    cache_hits=bc_cache_hits,
+                )
+            return
+
         async with bc_sem:
             failure_reasons: list[str] = []
             render_succeeded = False
             for attempt in range(max_attempts):
+                candidate_for_retry: dict[str, Any] = {}
                 try:
                     parsed_copy = await _request_sales_copy(payload)
                 except Exception as exc:
                     parsed_copy = {}
+                    candidate_for_retry = {}
                     failure_reasons = [f"transport failure: {type(exc).__name__}"]
                 else:
+                    candidate_for_retry = parsed_copy if isinstance(parsed_copy, dict) else {}
                     if parsed_copy.get("_parse_fallback"):
                         failure_reasons = ["LLM did not return valid JSON"]
                     else:
@@ -2300,9 +2399,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         if copy_errors:
                             sanitized_copy = _sanitize_battle_card_sales_copy(card, parsed_copy)
                             sanitized_errors = _validate_battle_card_sales_copy(card, sanitized_copy)
+                            candidate_for_retry = sanitized_copy if isinstance(sanitized_copy, dict) else candidate_for_retry
                             if not sanitized_errors:
                                 parsed_copy = sanitized_copy
                                 copy_errors = []
+                            else:
+                                failure_reasons = sanitized_errors
                         if not copy_errors:
                             for _f in _BATTLE_CARD_LLM_FIELDS:
                                 if _f in parsed_copy:
@@ -2311,7 +2413,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             card.pop("llm_render_error", None)
                             render_succeeded = True
                             break
-                        failure_reasons = copy_errors
+                        if not failure_reasons:
+                            failure_reasons = copy_errors
                 if attempt + 1 >= max_attempts:
                     card["llm_render_status"] = "failed"
                     if failure_reasons:
@@ -2354,7 +2457,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     return
                 payload = _build_battle_card_render_payload(
                     card,
-                    prior_attempt=_battle_card_prior_attempt(parsed_copy),
+                    prior_attempt=_battle_card_prior_attempt(candidate_for_retry or parsed_copy),
                     validation_feedback=failure_reasons[:feedback_limit],
                 )
                 if retry_delay > 0:
