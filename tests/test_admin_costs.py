@@ -318,6 +318,23 @@ class _FakePool:
                 "last_submitted_at": datetime(2026, 3, 31, 22, 0, tzinfo=timezone.utc),
                 "last_completed_at": datetime(2026, 3, 31, 22, 5, tzinfo=timezone.utc),
             }]
+        if "FROM anthropic_message_batches" in query and "completed_at IS NULL" in query:
+            return [{
+                "id": uuid4(),
+                "stage_id": "b2b_campaign_generation.content",
+                "task_name": "b2b_campaign_generation",
+                "run_id": "run-batch-1",
+                "status": "in_progress",
+                "provider_batch_id": "msgbatch_stale_1",
+                "total_items": 12,
+                "submitted_items": 10,
+                "completed_items": 3,
+                "failed_items": 1,
+                "fallback_single_call_items": 0,
+                "submitted_at": datetime(2026, 3, 31, 20, 0, tzinfo=timezone.utc),
+                "created_at": datetime(2026, 3, 31, 19, 58, tzinfo=timezone.utc),
+                "provider_error": None,
+            }]
         if "FROM anthropic_message_batches" in query and "WHERE run_id = $1" in query:
             return [{
                 "id": uuid4(),
@@ -549,6 +566,10 @@ def test_cache_health_rolls_up_exact_prompt_semantic_and_task_reuse(monkeypatch)
     assert body["anthropic_batching"]["submitted_jobs"] == 2
     assert body["anthropic_batching"]["estimated_savings_usd"] == pytest.approx(0.6)
     assert body["anthropic_batching"]["stages"][0]["stage_id"] == "b2b_campaign_generation.content"
+    assert body["anthropic_batching"]["stale_job_threshold_minutes"] == 30
+    assert body["anthropic_batching"]["stale_jobs_count"] == 1
+    assert body["anthropic_batching"]["stale_jobs"][0]["task_name"] == "b2b_campaign_generation"
+    assert body["anthropic_batching"]["stale_jobs"][0]["provider_batch_id"] == "msgbatch_stale_1"
     assert body["semantic_cache"]["active_entries"] == 44
     assert body["semantic_cache"]["pattern_classes"][0]["pattern_class"] == "battle_card_render"
     assert body["evidence_hash_reuse"]["cross_vendor_cached_rows"] == 7

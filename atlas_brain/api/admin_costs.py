@@ -29,6 +29,8 @@ logger = logging.getLogger("atlas.api.admin_costs")
 
 router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
 
+_STALE_BATCH_THRESHOLD_MINUTES = 30
+
 _ACTIVE_REPAIR_POOL_SQL = """
 (
   enrichment_status IN ('enriched', 'no_signal')
@@ -1184,6 +1186,34 @@ async def cache_health(
         since,
         top_n,
     )
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STALE_BATCH_THRESHOLD_MINUTES)
+    stale_batch_rows = await _safe_fetch(
+        pool,
+        """SELECT
+             id,
+             stage_id,
+             task_name,
+             run_id,
+             status,
+             provider_batch_id,
+             total_items,
+             submitted_items,
+             completed_items,
+             failed_items,
+             fallback_single_call_items,
+             submitted_at,
+             created_at,
+             provider_error
+           FROM anthropic_message_batches
+           WHERE provider_batch_id IS NOT NULL
+             AND completed_at IS NULL
+             AND COALESCE(submitted_at, created_at) <= $1
+             AND status NOT IN ('ended', 'prefiltered_only', 'fallback_only')
+           ORDER BY COALESCE(submitted_at, created_at) ASC
+           LIMIT $2""",
+        stale_cutoff,
+        top_n,
+    )
 
     semantic_summary_row = await _safe_fetchrow(
         pool,
@@ -1380,6 +1410,7 @@ async def cache_health(
         },
         "anthropic_batching": {
             "enabled": bool(settings.b2b_churn.anthropic_batch_enabled),
+            "stale_job_threshold_minutes": _STALE_BATCH_THRESHOLD_MINUTES,
             "total_jobs": _safe_int(batch_summary_row.get("total_jobs")),
             "submitted_jobs": _safe_int(batch_summary_row.get("submitted_jobs")),
             "total_items": _safe_int(batch_summary_row.get("total_items")),
@@ -1388,6 +1419,7 @@ async def cache_health(
             "fallback_single_call_items": _safe_int(batch_summary_row.get("fallback_single_call_items")),
             "completed_items": _safe_int(batch_summary_row.get("completed_items")),
             "failed_items": _safe_int(batch_summary_row.get("failed_items")),
+            "stale_jobs_count": len(stale_batch_rows),
             "estimated_sequential_cost_usd": round(
                 _safe_float(batch_summary_row.get("estimated_sequential_cost_usd")),
                 6,
@@ -1436,6 +1468,35 @@ async def cache_health(
                     "last_completed_at": row["last_completed_at"].isoformat() if row["last_completed_at"] else None,
                 }
                 for row in batch_stage_rows
+            ],
+            "stale_jobs": [
+                {
+                    "id": str(row["id"]),
+                    "stage_id": str(row["stage_id"]),
+                    "task_name": str(row["task_name"]),
+                    "run_id": str(row["run_id"]) if row["run_id"] else None,
+                    "status": str(row["status"]),
+                    "provider_batch_id": str(row["provider_batch_id"]),
+                    "total_items": _safe_int(row["total_items"]),
+                    "submitted_items": _safe_int(row["submitted_items"]),
+                    "completed_items": _safe_int(row["completed_items"]),
+                    "failed_items": _safe_int(row["failed_items"]),
+                    "fallback_single_call_items": _safe_int(row["fallback_single_call_items"]),
+                    "submitted_at": row["submitted_at"].isoformat() if row["submitted_at"] else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "provider_error": str(row["provider_error"]) if row["provider_error"] else None,
+                    "stale_minutes": max(
+                        0,
+                        int(
+                            (
+                                datetime.now(timezone.utc)
+                                - (row["submitted_at"] or row["created_at"])
+                            ).total_seconds()
+                            // 60
+                        ),
+                    ),
+                }
+                for row in stale_batch_rows
             ],
         },
         "semantic_cache": {

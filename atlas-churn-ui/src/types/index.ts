@@ -955,6 +955,24 @@ export interface AdminCostBatchStage {
   last_completed_at: string | null
 }
 
+export interface AdminCostStaleBatchJob {
+  id: string
+  stage_id: string
+  task_name: string
+  run_id: string | null
+  status: string
+  provider_batch_id: string
+  total_items: number
+  submitted_items: number
+  completed_items: number
+  failed_items: number
+  fallback_single_call_items: number
+  submitted_at: string | null
+  created_at: string | null
+  provider_error: string | null
+  stale_minutes: number
+}
+
 export interface AdminCostSemanticPatternClass {
   pattern_class: string
   active_entries: number
@@ -993,6 +1011,7 @@ export interface AdminCostCacheHealth {
   }
   anthropic_batching: {
     enabled: boolean
+    stale_job_threshold_minutes: number
     total_jobs: number
     submitted_jobs: number
     total_items: number
@@ -1001,10 +1020,12 @@ export interface AdminCostCacheHealth {
     fallback_single_call_items: number
     completed_items: number
     failed_items: number
+    stale_jobs_count: number
     estimated_sequential_cost_usd: number
     estimated_batch_cost_usd: number
     estimated_savings_usd: number
     stages: AdminCostBatchStage[]
+    stale_jobs: AdminCostStaleBatchJob[]
   }
   semantic_cache: {
     active_entries: number

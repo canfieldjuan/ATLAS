@@ -41,6 +41,7 @@ import type {
   AdminCostRecentCall,
   AdminCostCacheHealth,
   AdminCostBatchStage,
+  AdminCostStaleBatchJob,
   AdminCostExactCacheStage,
   AdminCostPromptCacheSpan,
   AdminCostSemanticPatternClass,
@@ -168,6 +169,14 @@ function formatCompactTokens(value: number | null | undefined): string {
     return `${((value ?? 0) / 1_000).toFixed(1)}K`
   }
   return formatNumber(value)
+}
+
+function formatAgeMinutes(value: number | null | undefined): string {
+  const minutes = Number(value ?? 0)
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0m'
+  if (minutes >= 60 * 24) return `${(minutes / (60 * 24)).toFixed(1)}d`
+  if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h`
+  return `${Math.round(minutes)}m`
 }
 
 function truncateLabel(value: string | null | undefined, max = 38): string {
@@ -1790,6 +1799,65 @@ function CostsTab() {
     },
   ]
 
+  const staleBatchColumns: Column<AdminCostStaleBatchJob>[] = [
+    {
+      key: 'submitted_at',
+      header: 'Age',
+      render: (row) => (
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-amber-300">{formatAgeMinutes(row.stale_minutes)}</p>
+          <p className="text-[11px] text-slate-500">{formatTs(row.submitted_at || row.created_at)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.stale_minutes,
+    },
+    {
+      key: 'stage_id',
+      header: 'Batch',
+      render: (row) => (
+        <div className="max-w-[260px]">
+          <p className="truncate text-sm text-white">{row.task_name}</p>
+          <p className="truncate text-xs text-slate-500">{row.stage_id}</p>
+          {row.run_id ? <p className="truncate text-[11px] text-slate-600">{row.run_id}</p> : null}
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.task_name,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge status={row.status} />,
+      sortable: true,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: 'submitted_items',
+      header: 'Items',
+      render: (row) => (
+        <div className="space-y-1 text-xs text-slate-300">
+          <p>{formatNumber(row.submitted_items)} submitted</p>
+          <p className="text-slate-500">{formatNumber(row.completed_items)} done / {formatNumber(row.failed_items)} failed</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.submitted_items,
+    },
+    {
+      key: 'provider_batch_id',
+      header: 'Provider Ref',
+      render: (row) => (
+        <div className="max-w-[220px]">
+          <p className="truncate text-xs text-slate-400">{truncateLabel(row.provider_batch_id, 30)}</p>
+          {row.provider_error ? <p className="truncate text-[11px] text-rose-300">{truncateLabel(row.provider_error, 40)}</p> : null}
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.provider_batch_id,
+    },
+  ]
+
   const semanticColumns: Column<AdminCostSemanticPatternClass>[] = [
     {
       key: 'pattern_class',
@@ -2683,6 +2751,13 @@ function CostsTab() {
             icon={<DollarSign className="h-4 w-4" />}
             skeleton={unifiedLoading}
           />
+          <StatCard
+            label="Stale Batch Jobs"
+            value={formatNumber(cacheHealth?.anthropic_batching.stale_jobs_count)}
+            sub={cacheHealth ? `${cacheHealth.anthropic_batching.stale_job_threshold_minutes}m threshold` : undefined}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
         </div>
 
         <div className="grid gap-4 p-4 xl:grid-cols-[1.15fr,0.85fr]">
@@ -2756,34 +2831,54 @@ function CostsTab() {
         </div>
 
         <div className="border-t border-slate-700/50 p-4">
-          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
-              <div>
-                <h3 className="text-sm font-medium text-white">Anthropic Batching</h3>
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+                <div>
+                  <h3 className="text-sm font-medium text-white">Anthropic Batching</h3>
+                  <p className="text-xs text-slate-500">
+                    Submitted batch jobs, prefiltered items, fallback singles, and estimated savings by stage.
+                  </p>
+                </div>
+                <span
+                  className={clsx(
+                    'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
+                    cacheHealth?.anthropic_batching.enabled
+                      ? 'bg-green-500/15 text-green-400'
+                      : 'bg-red-500/15 text-red-400',
+                  )}
+                >
+                  Anthropic batching {cacheHealth?.anthropic_batching.enabled ? 'enabled' : 'disabled'}
+                </span>
+              </div>
+              {cacheHealthLoading ? (
+                <DataTable columns={batchStageColumns} data={[]} skeletonRows={4} />
+              ) : (
+                <DataTable
+                  columns={batchStageColumns}
+                  data={cacheHealth?.anthropic_batching.stages ?? []}
+                  emptyMessage="No Anthropic batch jobs in the current window"
+                />
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+              <div className="border-b border-slate-700/50 px-4 py-3">
+                <h3 className="text-sm font-medium text-white">Stale Detached Batches</h3>
                 <p className="text-xs text-slate-500">
-                  Submitted batch jobs, prefiltered items, fallback singles, and estimated savings by stage.
+                  Submitted provider batches with no completion after {cacheHealth?.anthropic_batching.stale_job_threshold_minutes ?? 30} minutes.
                 </p>
               </div>
-              <span
-                className={clsx(
-                  'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-                  cacheHealth?.anthropic_batching.enabled
-                    ? 'bg-green-500/15 text-green-400'
-                    : 'bg-red-500/15 text-red-400',
-                )}
-              >
-                Anthropic batching {cacheHealth?.anthropic_batching.enabled ? 'enabled' : 'disabled'}
-              </span>
+              {cacheHealthLoading ? (
+                <DataTable columns={staleBatchColumns} data={[]} skeletonRows={3} />
+              ) : (
+                <DataTable
+                  columns={staleBatchColumns}
+                  data={cacheHealth?.anthropic_batching.stale_jobs ?? []}
+                  emptyMessage="No stale detached batch jobs in the current window"
+                />
+              )}
             </div>
-            {cacheHealthLoading ? (
-              <DataTable columns={batchStageColumns} data={[]} skeletonRows={4} />
-            ) : (
-              <DataTable
-                columns={batchStageColumns}
-                data={cacheHealth?.anthropic_batching.stages ?? []}
-                emptyMessage="No Anthropic batch jobs in the current window"
-              />
-            )}
           </div>
         </div>
       </div>
