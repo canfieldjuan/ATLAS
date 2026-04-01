@@ -335,6 +335,20 @@ class _FakePool:
                 "created_at": datetime(2026, 3, 31, 19, 58, tzinfo=timezone.utc),
                 "provider_error": None,
             }]
+        if "FROM anthropic_message_batch_items i" in query and "request_metadata->>'applying_at'" in query:
+            return [{
+                "id": uuid4(),
+                "batch_id": uuid4(),
+                "stage_id": "b2b_campaign_generation.content",
+                "task_name": "b2b_campaign_generation",
+                "run_id": "run-batch-1",
+                "custom_id": "campaign:slack:email",
+                "artifact_id": "batch-1:Slack:email",
+                "status": "batch_succeeded",
+                "provider_batch_id": "msgbatch_stale_1",
+                "applying_by": "reconcile:task-1:abc123",
+                "applying_at": datetime(2026, 3, 31, 20, 5, tzinfo=timezone.utc),
+            }]
         if "FROM anthropic_message_batches" in query and "WHERE run_id = $1" in query:
             return [{
                 "id": uuid4(),
@@ -570,6 +584,9 @@ def test_cache_health_rolls_up_exact_prompt_semantic_and_task_reuse(monkeypatch)
     assert body["anthropic_batching"]["stale_jobs_count"] == 1
     assert body["anthropic_batching"]["stale_jobs"][0]["task_name"] == "b2b_campaign_generation"
     assert body["anthropic_batching"]["stale_jobs"][0]["provider_batch_id"] == "msgbatch_stale_1"
+    assert body["anthropic_batching"]["stale_claims_count"] == 1
+    assert body["anthropic_batching"]["stale_claims"][0]["custom_id"] == "campaign:slack:email"
+    assert body["anthropic_batching"]["stale_claims"][0]["applying_by"] == "reconcile:task-1:abc123"
     assert body["semantic_cache"]["active_entries"] == 44
     assert body["semantic_cache"]["pattern_classes"][0]["pattern_class"] == "battle_card_render"
     assert body["evidence_hash_reuse"]["cross_vendor_cached_rows"] == 7

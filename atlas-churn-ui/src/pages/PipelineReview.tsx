@@ -42,6 +42,7 @@ import type {
   AdminCostCacheHealth,
   AdminCostBatchStage,
   AdminCostStaleBatchJob,
+  AdminCostStaleBatchClaim,
   AdminCostExactCacheStage,
   AdminCostPromptCacheSpan,
   AdminCostSemanticPatternClass,
@@ -1885,6 +1886,60 @@ function CostsTab() {
     },
   ]
 
+  const staleClaimColumns: Column<AdminCostStaleBatchClaim>[] = [
+    {
+      key: 'applying_at',
+      header: 'Claim Age',
+      render: (row) => (
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-amber-300">{formatAgeMinutes(row.stale_minutes)}</p>
+          <p className="text-[11px] text-slate-500">{formatTs(row.applying_at)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.stale_minutes,
+    },
+    {
+      key: 'custom_id',
+      header: 'Item',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{truncateLabel(row.custom_id, 42)}</p>
+          {row.artifact_id ? <p className="truncate text-xs text-slate-500">{truncateLabel(row.artifact_id, 48)}</p> : null}
+          <p className="truncate text-[11px] text-slate-600">{row.task_name}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.custom_id,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge status={row.status} />,
+      sortable: true,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: 'applying_by',
+      header: 'Claimed By',
+      render: (row) => (
+        <div className="max-w-[240px]">
+          <p className="truncate text-xs text-slate-300">{truncateLabel(row.applying_by || 'unknown', 36)}</p>
+          {row.run_id ? <p className="truncate text-[11px] text-slate-600">{row.run_id}</p> : null}
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.applying_by || '',
+    },
+    {
+      key: 'provider_batch_id',
+      header: 'Provider Ref',
+      render: (row) => <span className="text-xs text-slate-400">{truncateLabel(row.provider_batch_id || '--', 30)}</span>,
+      sortable: true,
+      sortValue: (row) => row.provider_batch_id || '',
+    },
+  ]
+
   async function handleRunReconciler() {
     if (!reconcilerTask) {
       setReconcileError('Reconciliation task not found')
@@ -2807,6 +2862,13 @@ function CostsTab() {
             icon={<AlertTriangle className="h-4 w-4" />}
             skeleton={unifiedLoading}
           />
+          <StatCard
+            label="Stale Item Claims"
+            value={formatNumber(cacheHealth?.anthropic_batching.stale_claims_count)}
+            sub={cacheHealth ? `${cacheHealth.anthropic_batching.stale_job_threshold_minutes}m threshold` : undefined}
+            icon={<Clock className="h-4 w-4" />}
+            skeleton={unifiedLoading}
+          />
         </div>
 
         <div className="grid gap-4 p-4 xl:grid-cols-[1.15fr,0.85fr]">
@@ -2994,6 +3056,24 @@ function CostsTab() {
                   columns={staleBatchColumns}
                   data={cacheHealth?.anthropic_batching.stale_jobs ?? []}
                   emptyMessage="No stale detached batch jobs in the current window"
+                />
+              )}
+            </div>
+
+            <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+              <div className="border-b border-slate-700/50 px-4 py-3">
+                <h3 className="text-sm font-medium text-white">Stale Item Claims</h3>
+                <p className="text-xs text-slate-500">
+                  Batch items claimed for apply but not marked applied after {cacheHealth?.anthropic_batching.stale_job_threshold_minutes ?? 30} minutes.
+                </p>
+              </div>
+              {cacheHealthLoading ? (
+                <DataTable columns={staleClaimColumns} data={[]} skeletonRows={3} />
+              ) : (
+                <DataTable
+                  columns={staleClaimColumns}
+                  data={cacheHealth?.anthropic_batching.stale_claims ?? []}
+                  emptyMessage="No stale item claims in the current window"
                 />
               )}
             </div>

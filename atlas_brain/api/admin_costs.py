@@ -1214,6 +1214,30 @@ async def cache_health(
         stale_cutoff,
         top_n,
     )
+    stale_claim_rows = await _safe_fetch(
+        pool,
+        """SELECT
+             i.id,
+             i.batch_id,
+             i.custom_id,
+             i.artifact_id,
+             i.status,
+             b.stage_id,
+             b.task_name,
+             b.run_id,
+             b.provider_batch_id,
+             i.request_metadata->>'applying_by' AS applying_by,
+             NULLIF(i.request_metadata->>'applying_at', '')::timestamptz AS applying_at
+           FROM anthropic_message_batch_items i
+           JOIN anthropic_message_batches b ON b.id = i.batch_id
+           WHERE COALESCE(i.request_metadata->>'applied_at', '') = ''
+             AND COALESCE(i.request_metadata->>'applying_at', '') <> ''
+             AND NULLIF(i.request_metadata->>'applying_at', '')::timestamptz <= $1
+           ORDER BY NULLIF(i.request_metadata->>'applying_at', '')::timestamptz ASC
+           LIMIT $2""",
+        stale_cutoff,
+        top_n,
+    )
 
     semantic_summary_row = await _safe_fetchrow(
         pool,
@@ -1420,6 +1444,7 @@ async def cache_health(
             "completed_items": _safe_int(batch_summary_row.get("completed_items")),
             "failed_items": _safe_int(batch_summary_row.get("failed_items")),
             "stale_jobs_count": len(stale_batch_rows),
+            "stale_claims_count": len(stale_claim_rows),
             "estimated_sequential_cost_usd": round(
                 _safe_float(batch_summary_row.get("estimated_sequential_cost_usd")),
                 6,
@@ -1497,6 +1522,31 @@ async def cache_health(
                     ),
                 }
                 for row in stale_batch_rows
+            ],
+            "stale_claims": [
+                {
+                    "id": str(row["id"]),
+                    "batch_id": str(row["batch_id"]),
+                    "stage_id": str(row["stage_id"]),
+                    "task_name": str(row["task_name"]),
+                    "run_id": str(row["run_id"]) if row["run_id"] else None,
+                    "custom_id": str(row["custom_id"]),
+                    "artifact_id": str(row["artifact_id"]) if row["artifact_id"] else None,
+                    "status": str(row["status"]),
+                    "provider_batch_id": str(row["provider_batch_id"]) if row["provider_batch_id"] else None,
+                    "applying_by": str(row["applying_by"]) if row["applying_by"] else None,
+                    "applying_at": row["applying_at"].isoformat() if row["applying_at"] else None,
+                    "stale_minutes": max(
+                        0,
+                        int(
+                            (
+                                datetime.now(timezone.utc) - row["applying_at"]
+                            ).total_seconds()
+                            // 60
+                        ),
+                    ) if row["applying_at"] else 0,
+                }
+                for row in stale_claim_rows
             ],
         },
         "semantic_cache": {
