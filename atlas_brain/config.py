@@ -1617,8 +1617,12 @@ class ModelPricingConfig(BaseModel):
     # Anthropic (per 1M tokens)
     anthropic_sonnet_input: float = 3.00
     anthropic_sonnet_output: float = 15.00
+    anthropic_sonnet_cache_read_input: float = 0.30
+    anthropic_sonnet_cache_write_input: float = 3.75
     anthropic_haiku_input: float = 0.25
     anthropic_haiku_output: float = 1.25
+    anthropic_haiku_cache_read_input: float = 0.03
+    anthropic_haiku_cache_write_input: float = 0.30
 
     # Groq (per 1M tokens -- hosted inference)
     groq_llama70b_input: float = 0.59
@@ -1636,16 +1640,43 @@ class ModelPricingConfig(BaseModel):
     local_input: float = 0.0
     local_output: float = 0.0
 
-    def cost_usd(self, provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
+    def cost_usd(
+        self,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        cached_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        billable_input_tokens: int | None = None,
+    ) -> float:
         """Calculate cost in USD for a given call."""
         p = (provider or "").lower()
         m = (model or "").lower()
+        cache_read = max(int(cached_tokens or 0), 0)
+        cache_write = max(int(cache_write_tokens or 0), 0)
+        base_input = (
+            max(int(billable_input_tokens), 0)
+            if billable_input_tokens is not None
+            else max(int(input_tokens or 0), 0)
+        )
         if p in ("ollama", "vllm", "transformers-flash", "llama-cpp") or "local" in p:
             return 0.0
         if p == "anthropic" or "claude" in m:
             if "haiku" in m:
-                return (input_tokens * self.anthropic_haiku_input + output_tokens * self.anthropic_haiku_output) / 1_000_000
-            return (input_tokens * self.anthropic_sonnet_input + output_tokens * self.anthropic_sonnet_output) / 1_000_000
+                return (
+                    base_input * self.anthropic_haiku_input
+                    + cache_read * self.anthropic_haiku_cache_read_input
+                    + cache_write * self.anthropic_haiku_cache_write_input
+                    + output_tokens * self.anthropic_haiku_output
+                ) / 1_000_000
+            return (
+                base_input * self.anthropic_sonnet_input
+                + cache_read * self.anthropic_sonnet_cache_read_input
+                + cache_write * self.anthropic_sonnet_cache_write_input
+                + output_tokens * self.anthropic_sonnet_output
+            ) / 1_000_000
         if p == "groq":
             return (input_tokens * self.groq_llama70b_input + output_tokens * self.groq_llama70b_output) / 1_000_000
         if p == "openrouter":
@@ -2829,6 +2860,24 @@ class B2BChurnConfig(BaseSettings):
     cross_vendor_synthesis_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor synthesis LLM calls")
     cross_vendor_synthesis_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per cross-vendor packet")
     cross_vendor_synthesis_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back per retry")
+    cross_vendor_llm_max_input_tokens: int = Field(
+        default=12000,
+        ge=512,
+        le=50000,
+        description="Approximate max input tokens allowed for a single cross-vendor synthesis prompt before the run is rejected to control spend",
+    )
+    cross_vendor_category_vendor_summary_limit: int = Field(
+        default=8,
+        ge=1,
+        le=20,
+        description="Max vendor summaries included in a category-council packet",
+    )
+    cross_vendor_category_flow_limit: int = Field(
+        default=10,
+        ge=0,
+        le=50,
+        description="Max displacement flows included in a category-council packet",
+    )
 
     battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
@@ -2851,6 +2900,12 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")
+    battle_card_llm_max_input_tokens: int = Field(
+        default=25000,
+        ge=512,
+        le=50000,
+        description="Approximate max input tokens allowed for a single battle-card sales-copy prompt before the LLM step falls back deterministically",
+    )
     battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
     battle_card_llm_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0, description="Timeout for a single battle card LLM generation attempt")
     battle_card_cache_confidence: float = Field(default=0.95, ge=0.0, le=1.0, description="Confidence assigned to validated battle card sales copy cache entries")
@@ -2946,6 +3001,9 @@ class B2BAlertConfig(BaseSettings):
     )
 
     enabled: bool = Field(default=False, description="Enable churn signal spike alerts")
+    email_enabled: bool = Field(default=True, description="Send churn alerts to tenant owners via email when configured")
+    sender_name: str = Field(default="Atlas Intelligence", description="Display name for churn alert emails")
+    dashboard_base_url: str = Field(default="", description="Optional dashboard URL included in churn alert emails")
     signal_count_threshold: int = Field(default=3, description="New signals to trigger alert")
     urgency_spike_threshold: float = Field(default=1.5, description="Avg urgency increase to trigger alert")
     cooldown_hours: int = Field(default=24, description="Min hours between alerts for same vendor")

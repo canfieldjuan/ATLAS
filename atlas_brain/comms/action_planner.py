@@ -218,6 +218,9 @@ async def generate_action_plan(
             "comms.action_planner",
             input_tokens=_usage["input_tokens"],
             output_tokens=_usage.get("output_tokens", 0),
+            cached_tokens=_trace.get("cached_tokens") or _trace.get("cache_read_tokens"),
+            cache_write_tokens=_trace.get("cache_write_tokens") or _trace.get("cache_creation_tokens"),
+            billable_input_tokens=_trace.get("billable_input_tokens"),
             model=getattr(llm, "model", ""),
             provider=getattr(llm, "name", ""),
             input_data={

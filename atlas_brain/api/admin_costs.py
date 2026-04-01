@@ -5,6 +5,7 @@ Aggregates LLM usage from the local llm_usage table for the cost dashboard.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import time
@@ -30,6 +31,18 @@ def _recent_metadata_value(metadata: dict, key: str) -> str | None:
         if isinstance(nested, str) and nested.strip():
             return nested.strip()
     return None
+
+
+def _normalize_metadata(metadata: object) -> dict:
+    if isinstance(metadata, dict):
+        return metadata
+    if isinstance(metadata, str) and metadata.strip():
+        try:
+            parsed = json.loads(metadata)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _humanize_identifier(value: str | None) -> str:
@@ -75,6 +88,42 @@ def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | No
     return span_name, detail
 
 
+def _build_recent_filters(
+    *,
+    days: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    span_name: str | None = None,
+    operation_type: str | None = None,
+    status: str | None = None,
+    cache_only: bool | None = None,
+) -> tuple[list[str], list[object]]:
+    clauses: list[str] = []
+    args: list[object] = []
+
+    def _add(value: object) -> str:
+        args.append(value)
+        return f"${len(args)}"
+
+    if days is not None:
+        clauses.append(f"created_at >= {_add(datetime.now(timezone.utc) - timedelta(days=days))}")
+    if provider:
+        clauses.append(f"model_provider = {_add(provider)}")
+    if model:
+        clauses.append(f"model_name = {_add(model)}")
+    if span_name:
+        clauses.append(f"span_name = {_add(span_name)}")
+    if operation_type:
+        clauses.append(f"operation_type = {_add(operation_type)}")
+    if status:
+        clauses.append(f"status = {_add(status)}")
+    if cache_only is True:
+        clauses.append("(cached_tokens > 0 OR cache_write_tokens > 0)")
+    elif cache_only is False:
+        clauses.append("(cached_tokens = 0 AND cache_write_tokens = 0)")
+    return clauses, args
+
+
 def _pool_or_503():
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -92,9 +141,14 @@ async def cost_summary(days: int = Query(default=30, ge=1, le=365)):
         """SELECT
              COALESCE(SUM(cost_usd), 0)         AS total_cost,
              COALESCE(SUM(input_tokens), 0)      AS total_input,
+             COALESCE(SUM(billable_input_tokens), 0) AS total_billable_input,
+             COALESCE(SUM(cached_tokens), 0)    AS total_cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens,
              COALESCE(SUM(output_tokens), 0)     AS total_output,
              COALESCE(SUM(total_tokens), 0)      AS total_tokens,
              COUNT(*)                             AS total_calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
              COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0) AS avg_duration_ms,
              COALESCE(
                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tokens_per_second)
@@ -114,9 +168,14 @@ async def cost_summary(days: int = Query(default=30, ge=1, le=365)):
         "period_days": days,
         "total_cost_usd": float(row["total_cost"]),
         "total_input_tokens": int(row["total_input"]),
+        "total_billable_input_tokens": int(row["total_billable_input"]),
+        "total_cached_tokens": int(row["total_cached_tokens"]),
+        "total_cache_write_tokens": int(row["total_cache_write_tokens"]),
         "total_output_tokens": int(row["total_output"]),
         "total_tokens": int(row["total_tokens"]),
         "total_calls": int(row["total_calls"]),
+        "cache_hit_calls": int(row["cache_hit_calls"]),
+        "cache_write_calls": int(row["cache_write_calls"]),
         "avg_duration_ms": round(float(row["avg_duration_ms"]), 1),
         "avg_tokens_per_second": round(float(row["avg_tps"]), 1),
         "today_cost_usd": float(today_row["today_cost"]),
@@ -134,8 +193,13 @@ async def cost_by_provider(days: int = Query(default=30, ge=1, le=365)):
              COALESCE(model_provider, 'unknown') AS provider,
              COALESCE(SUM(cost_usd), 0)          AS cost,
              COALESCE(SUM(input_tokens), 0)       AS input_tokens,
+             COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+             COALESCE(SUM(cached_tokens), 0)      AS cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
              COALESCE(SUM(output_tokens), 0)      AS output_tokens,
-             COUNT(*)                              AS calls
+             COUNT(*)                              AS calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls
            FROM llm_usage
            WHERE created_at >= $1
            GROUP BY model_provider
@@ -149,8 +213,13 @@ async def cost_by_provider(days: int = Query(default=30, ge=1, le=365)):
                 "provider": r["provider"],
                 "cost_usd": float(r["cost"]),
                 "input_tokens": int(r["input_tokens"]),
+                "billable_input_tokens": int(r["billable_input_tokens"]),
+                "cached_tokens": int(r["cached_tokens"]),
+                "cache_write_tokens": int(r["cache_write_tokens"]),
                 "output_tokens": int(r["output_tokens"]),
                 "calls": int(r["calls"]),
+                "cache_hit_calls": int(r["cache_hit_calls"]),
+                "cache_write_calls": int(r["cache_write_calls"]),
             }
             for r in rows
         ],
@@ -167,8 +236,15 @@ async def cost_by_model(days: int = Query(default=30, ge=1, le=365)):
              COALESCE(model_name, 'unknown')      AS model,
              COALESCE(model_provider, 'unknown')   AS provider,
              COALESCE(SUM(cost_usd), 0)            AS cost,
+             COALESCE(SUM(input_tokens), 0)        AS input_tokens,
+             COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+             COALESCE(SUM(cached_tokens), 0)       AS cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0)  AS cache_write_tokens,
+             COALESCE(SUM(output_tokens), 0)       AS output_tokens,
              COALESCE(SUM(total_tokens), 0)        AS tokens,
              COUNT(*)                               AS calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
              COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0) AS avg_duration_ms,
              COALESCE(
                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tokens_per_second)
@@ -188,8 +264,15 @@ async def cost_by_model(days: int = Query(default=30, ge=1, le=365)):
                 "model": r["model"],
                 "provider": r["provider"],
                 "cost_usd": float(r["cost"]),
+                "input_tokens": int(r["input_tokens"]),
+                "billable_input_tokens": int(r["billable_input_tokens"]),
+                "cached_tokens": int(r["cached_tokens"]),
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "output_tokens": int(r["output_tokens"]),
                 "total_tokens": int(r["tokens"]),
                 "calls": int(r["calls"]),
+                "cache_hit_calls": int(r["cache_hit_calls"]),
+                "cache_write_calls": int(r["cache_write_calls"]),
                 "avg_duration_ms": round(float(r["avg_duration_ms"]), 1),
                 "avg_tokens_per_second": round(float(r["avg_tps"]), 1),
             }
@@ -206,13 +289,21 @@ async def cost_by_workflow(days: int = Query(default=30, ge=1, le=365)):
     rows = await pool.fetch(
         """SELECT
              span_name,
+             operation_type,
              COALESCE(SUM(cost_usd), 0)        AS cost,
+             COALESCE(SUM(input_tokens), 0)    AS input_tokens,
+             COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+             COALESCE(SUM(cached_tokens), 0)   AS cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+             COALESCE(SUM(output_tokens), 0)   AS output_tokens,
              COALESCE(SUM(total_tokens), 0)     AS tokens,
              COUNT(*)                            AS calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
              COALESCE(AVG(duration_ms), 0)       AS avg_duration_ms
            FROM llm_usage
            WHERE created_at >= $1
-           GROUP BY span_name
+           GROUP BY span_name, operation_type
            ORDER BY cost DESC""",
         since,
     )
@@ -221,10 +312,93 @@ async def cost_by_workflow(days: int = Query(default=30, ge=1, le=365)):
         "workflows": [
             {
                 "workflow": r["span_name"],
+                "operation_type": r["operation_type"],
                 "cost_usd": float(r["cost"]),
+                "input_tokens": int(r["input_tokens"]),
+                "billable_input_tokens": int(r["billable_input_tokens"]),
+                "cached_tokens": int(r["cached_tokens"]),
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "output_tokens": int(r["output_tokens"]),
                 "total_tokens": int(r["tokens"]),
                 "calls": int(r["calls"]),
+                "cache_hit_calls": int(r["cache_hit_calls"]),
+                "cache_write_calls": int(r["cache_write_calls"]),
                 "avg_duration_ms": round(float(r["avg_duration_ms"]), 1),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/by-operation")
+async def cost_by_operation(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=100, ge=1, le=500),
+    provider: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    span_name: str | None = Query(default=None),
+    operation_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    cache_only: bool | None = Query(default=None),
+):
+    """Detailed cost rollup by operation + provider + model."""
+    pool = _pool_or_503()
+    clauses, args = _build_recent_filters(
+        days=days,
+        provider=provider,
+        model=model,
+        span_name=span_name,
+        operation_type=operation_type,
+        status=status,
+        cache_only=cache_only,
+    )
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    args.append(limit)
+    rows = await pool.fetch(
+        f"""SELECT
+             span_name,
+             operation_type,
+             COALESCE(model_name, 'unknown') AS model_name,
+             COALESCE(model_provider, 'unknown') AS model_provider,
+             COALESCE(SUM(cost_usd), 0) AS cost,
+             COALESCE(SUM(input_tokens), 0) AS input_tokens,
+             COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+             COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+             COALESCE(SUM(output_tokens), 0) AS output_tokens,
+             COALESCE(SUM(total_tokens), 0) AS total_tokens,
+             COUNT(*) AS calls,
+             COUNT(*) FILTER (WHERE cached_tokens > 0) AS cache_hit_calls,
+             COUNT(*) FILTER (WHERE cache_write_tokens > 0) AS cache_write_calls,
+             COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0) AS avg_duration_ms,
+             MAX(created_at) AS latest_created_at
+           FROM llm_usage
+           {where_sql}
+           GROUP BY span_name, operation_type, model_name, model_provider
+           ORDER BY cost DESC, calls DESC
+           LIMIT ${len(args)}""",
+        *args,
+    )
+    return {
+        "period_days": days,
+        "operations": [
+            {
+                "span_name": r["span_name"],
+                "operation_type": r["operation_type"],
+                "model": r["model_name"],
+                "provider": r["model_provider"],
+                "cost_usd": float(r["cost"]),
+                "input_tokens": int(r["input_tokens"]),
+                "billable_input_tokens": int(r["billable_input_tokens"]),
+                "cached_tokens": int(r["cached_tokens"]),
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "output_tokens": int(r["output_tokens"]),
+                "total_tokens": int(r["total_tokens"]),
+                "calls": int(r["calls"]),
+                "cache_hit_calls": int(r["cache_hit_calls"]),
+                "cache_write_calls": int(r["cache_write_calls"]),
+                "avg_duration_ms": round(float(r["avg_duration_ms"]), 1),
+                "latest_created_at": r["latest_created_at"].isoformat() if r["latest_created_at"] else None,
             }
             for r in rows
         ],
@@ -318,35 +492,70 @@ async def cost_daily(days: int = Query(default=30, ge=1, le=365)):
 
 
 @router.get("/recent")
-async def recent_calls(limit: int = Query(default=50, ge=1, le=200)):
+async def recent_calls(
+    limit: int = Query(default=50, ge=1, le=500),
+    days: int | None = Query(default=None, ge=1, le=365),
+    provider: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    span_name: str | None = Query(default=None),
+    operation_type: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    cache_only: bool | None = Query(default=None),
+):
     """Most recent LLM calls for the activity feed."""
     pool = _pool_or_503()
+    clauses, args = _build_recent_filters(
+        days=days,
+        provider=provider,
+        model=model,
+        span_name=span_name,
+        operation_type=operation_type,
+        status=status,
+        cache_only=cache_only,
+    )
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    args.append(limit)
     rows = await pool.fetch(
-        """SELECT span_name, model_name, model_provider,
-                  input_tokens, output_tokens, cost_usd,
-                  duration_ms, tokens_per_second, status,
-                  metadata, created_at
+        f"""SELECT id, span_name, operation_type, model_name, model_provider,
+                  input_tokens, billable_input_tokens, cached_tokens, cache_write_tokens,
+                  output_tokens, total_tokens, cost_usd, duration_ms, ttft_ms,
+                  inference_time_ms, queue_time_ms, tokens_per_second, status,
+                  api_endpoint, provider_request_id, metadata, created_at
            FROM llm_usage
+           {where_sql}
            ORDER BY created_at DESC
-           LIMIT $1""",
-        limit,
+           LIMIT ${len(args)}""",
+        *args,
     )
     calls = []
     for r in rows:
-        metadata = r["metadata"] if isinstance(r["metadata"], dict) else {}
+        metadata = _normalize_metadata(r["metadata"])
         title, detail = _describe_recent_call(r["span_name"], metadata)
         calls.append({
+            "id": str(r["id"]),
             "span_name": r["span_name"],
+            "operation_type": r["operation_type"],
             "title": title,
             "detail": detail,
             "model": r["model_name"],
             "provider": r["model_provider"],
             "input_tokens": r["input_tokens"],
+            "billable_input_tokens": r["billable_input_tokens"],
+            "cached_tokens": r["cached_tokens"],
+            "cache_write_tokens": r["cache_write_tokens"],
             "output_tokens": r["output_tokens"],
+            "total_tokens": r["total_tokens"],
             "cost_usd": float(r["cost_usd"]) if r["cost_usd"] else 0,
             "duration_ms": r["duration_ms"],
+            "ttft_ms": r["ttft_ms"],
+            "inference_time_ms": r["inference_time_ms"],
+            "queue_time_ms": r["queue_time_ms"],
             "tokens_per_second": r["tokens_per_second"],
             "status": r["status"],
+            "cache_hit": bool(r["cached_tokens"]),
+            "cache_write": bool(r["cache_write_tokens"]),
+            "api_endpoint": r["api_endpoint"],
+            "provider_request_id": r["provider_request_id"],
             "metadata": metadata,
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         })

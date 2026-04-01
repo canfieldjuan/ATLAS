@@ -406,6 +406,9 @@ export interface BlogQualityTrends {
 export interface BlogQualityDiagnostics {
   days: number
   top_n: number
+  active_failure_count: number
+  rejected_failure_count: number
+  by_status: { status: string; count: number }[]
   by_boundary: { boundary: string; count: number }[]
   by_cause_type: { cause_type: string; count: number }[]
   top_primary_blockers: { reason: string; count: number }[]
@@ -662,6 +665,72 @@ export interface EnrichmentQuarantine {
   quarantined_at: string
   released_at?: string
   released_by?: string
+}
+
+export interface AdminCostSummary {
+  period_days: number
+  total_cost_usd: number
+  total_input_tokens: number
+  total_billable_input_tokens: number
+  total_cached_tokens: number
+  total_cache_write_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  total_calls: number
+  cache_hit_calls: number
+  cache_write_calls: number
+  avg_duration_ms: number
+  avg_tokens_per_second: number
+  today_cost_usd: number
+  today_calls: number
+}
+
+export interface AdminCostOperation {
+  span_name: string
+  operation_type: string
+  model: string
+  provider: string
+  cost_usd: number
+  input_tokens: number
+  billable_input_tokens: number
+  cached_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+  total_tokens: number
+  calls: number
+  cache_hit_calls: number
+  cache_write_calls: number
+  avg_duration_ms: number
+  latest_created_at: string | null
+}
+
+export interface AdminCostRecentCall {
+  id: string
+  span_name: string
+  operation_type: string
+  title: string
+  detail: string | null
+  model: string | null
+  provider: string | null
+  input_tokens: number
+  billable_input_tokens: number
+  cached_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+  total_tokens: number
+  cost_usd: number
+  duration_ms: number | null
+  ttft_ms: number | null
+  inference_time_ms: number | null
+  queue_time_ms: number | null
+  tokens_per_second: number | null
+  status: string
+  cache_hit: boolean
+  cache_write: boolean
+  api_endpoint: string | null
+  provider_request_id: string | null
+  metadata: Record<string, unknown>
+  created_at: string | null
 }
 
 export type TargetMode = 'vendor_retention' | 'challenger_intel'

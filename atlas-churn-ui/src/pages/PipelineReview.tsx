@@ -8,6 +8,9 @@ import {
   RefreshCw,
   XCircle,
   ChevronRight,
+  DollarSign,
+  Database,
+  Cpu,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -20,6 +23,9 @@ import type {
   ArtifactAttempt,
   EnrichmentQuarantine,
   SynthesisValidationResult,
+  AdminCostSummary,
+  AdminCostOperation,
+  AdminCostRecentCall,
 } from '../types'
 import {
   fetchVisibilitySummary,
@@ -29,9 +35,12 @@ import {
   fetchEnrichmentQuarantines,
   fetchSynthesisValidationResults,
   resolveVisibilityReview,
+  fetchAdminCostSummary,
+  fetchAdminCostByOperation,
+  fetchAdminCostRecent,
 } from '../api/client'
 
-type TabKey = 'queue' | 'failures' | 'quality' | 'audit'
+type TabKey = 'queue' | 'failures' | 'quality' | 'audit' | 'costs'
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -100,6 +109,36 @@ function formatTs(ts: string | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function formatNumber(value: number | null | undefined): string {
+  return new Intl.NumberFormat().format(value ?? 0)
+}
+
+function formatCurrency(value: number | null | undefined): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 4,
+  }).format(value ?? 0)
+}
+
+function formatCompactTokens(value: number | null | undefined): string {
+  const amount = Math.abs(value ?? 0)
+  if (amount >= 1_000_000) {
+    return `${((value ?? 0) / 1_000_000).toFixed(1)}M`
+  }
+  if (amount >= 1_000) {
+    return `${((value ?? 0) / 1_000).toFixed(1)}K`
+  }
+  return formatNumber(value)
+}
+
+function truncateLabel(value: string | null | undefined, max = 38): string {
+  const text = String(value || '').trim()
+  if (!text) return '--'
+  if (text.length <= max) return text
+  return `${text.slice(0, max - 1)}…`
 }
 
 const visibilityCodeLabels: Record<string, string> = {
@@ -923,6 +962,413 @@ function AuditTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Tab: Costs
+// ---------------------------------------------------------------------------
+
+interface CostTabData {
+  summary: AdminCostSummary
+  operations: AdminCostOperation[]
+  recent: AdminCostRecentCall[]
+}
+
+function CostsTab() {
+  const [days, setDays] = useState('30')
+  const [providerFilter, setProviderFilter] = useState('')
+  const [modelFilter, setModelFilter] = useState('')
+  const [spanFilter, setSpanFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [cacheFilter, setCacheFilter] = useState('')
+
+  const {
+    data,
+    loading,
+    error,
+    refresh,
+    refreshing,
+  } = useApiData<CostTabData>(
+    async () => {
+      const numericDays = Number(days)
+      const cacheOnly =
+        cacheFilter === 'cached' ? true : cacheFilter === 'uncached' ? false : undefined
+      const [summary, operationsResponse, recentResponse] = await Promise.all([
+        fetchAdminCostSummary(numericDays),
+        fetchAdminCostByOperation({
+          days: numericDays,
+          limit: 250,
+          provider: providerFilter || undefined,
+          model: modelFilter || undefined,
+          span_name: spanFilter || undefined,
+          status: statusFilter || undefined,
+          cache_only: cacheOnly,
+        }),
+        fetchAdminCostRecent({
+          days: numericDays,
+          limit: 100,
+          provider: providerFilter || undefined,
+          model: modelFilter || undefined,
+          span_name: spanFilter || undefined,
+          status: statusFilter || undefined,
+          cache_only: cacheOnly,
+        }),
+      ])
+      return {
+        summary,
+        operations: operationsResponse.operations,
+        recent: recentResponse.calls,
+      }
+    },
+    [days, providerFilter, modelFilter, spanFilter, statusFilter, cacheFilter],
+  )
+
+  const operations = data?.operations ?? []
+  const recentCalls = data?.recent ?? []
+  const providerOptions = Array.from(
+    new Set(
+      [...operations.map((row) => row.provider), ...recentCalls.map((row) => row.provider || '')]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).sort()
+  const modelOptions = Array.from(
+    new Set(
+      [...operations.map((row) => row.model), ...recentCalls.map((row) => row.model || '')]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).sort()
+  const spanOptions = Array.from(
+    new Set(
+      [...operations.map((row) => row.span_name), ...recentCalls.map((row) => row.span_name)]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).sort()
+  const statusOptions = Array.from(
+    new Set(recentCalls.map((row) => row.status).map((value) => value.trim()).filter(Boolean)),
+  ).sort()
+
+  const operationColumns: Column<AdminCostOperation>[] = [
+    {
+      key: 'span_name',
+      header: 'Operation',
+      render: (row) => (
+        <div className="max-w-[260px]">
+          <p className="truncate text-sm text-white">{row.span_name}</p>
+          <p className="truncate text-xs text-slate-500">{row.provider} · {truncateLabel(row.model, 48)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.span_name,
+    },
+    {
+      key: 'input_tokens',
+      header: 'Raw In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.input_tokens,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'cached_tokens',
+      header: 'Cached Read',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cached_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cached_tokens,
+    },
+    {
+      key: 'cache_write_tokens',
+      header: 'Cache Write',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cache_write_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_write_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+    {
+      key: 'avg_duration_ms',
+      header: 'Avg ms',
+      render: (row) => <span className="text-xs text-slate-400">{formatNumber(Math.round(row.avg_duration_ms))}</span>,
+      sortable: true,
+      sortValue: (row) => row.avg_duration_ms,
+    },
+  ]
+
+  const recentColumns: Column<AdminCostRecentCall>[] = [
+    {
+      key: 'created_at',
+      header: 'Time',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.created_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.created_at || '',
+    },
+    {
+      key: 'span_name',
+      header: 'Call',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{row.title}</p>
+          <p className="truncate text-xs text-slate-500">
+            {[row.provider, row.model, row.detail].filter(Boolean).map((value) => truncateLabel(value as string, 44)).join(' · ') || row.span_name}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.span_name,
+    },
+    {
+      key: 'input_tokens',
+      header: 'Raw In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.input_tokens,
+    },
+    {
+      key: 'cache_mode',
+      header: 'Cache',
+      render: (row) => (
+        <span className="text-xs text-slate-300">
+          {row.cache_write ? 'Write' : row.cache_hit ? 'Read' : 'None'}
+        </span>
+      ),
+      sortable: true,
+      sortValue: (row) => (row.cache_write ? 2 : row.cache_hit ? 1 : 0),
+    },
+    {
+      key: 'cost',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'cached_tokens',
+      header: 'Cached Read',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cached_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cached_tokens,
+    },
+    {
+      key: 'cache_write_tokens',
+      header: 'Cache Write',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.cache_write_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cache_write_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+    {
+      key: 'duration_ms',
+      header: 'ms',
+      render: (row) => <span className="text-xs text-slate-400">{formatNumber(row.duration_ms)}</span>,
+      sortable: true,
+      sortValue: (row) => row.duration_ms || 0,
+    },
+    {
+      key: 'provider_request_id',
+      header: 'Request',
+      render: (row) => (
+        <span className="max-w-[160px] inline-block truncate text-xs text-slate-500">
+          {row.provider_request_id || '--'}
+        </span>
+      ),
+    },
+  ]
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-4">
+        <Filter className="h-4 w-4 text-slate-500" />
+        <FilterSelect
+          label="Window"
+          value={days}
+          onChange={setDays}
+          options={[
+            { value: '7', label: '7 days' },
+            { value: '30', label: '30 days' },
+            { value: '90', label: '90 days' },
+            { value: '365', label: '365 days' },
+          ]}
+        />
+        <FilterSelect
+          label="Provider"
+          value={providerFilter}
+          onChange={setProviderFilter}
+          options={[
+            { value: '', label: 'All providers' },
+            ...providerOptions.map((value) => ({ value, label: value })),
+          ]}
+        />
+        <FilterSelect
+          label="Model"
+          value={modelFilter}
+          onChange={setModelFilter}
+          options={[
+            { value: '', label: 'All models' },
+            ...modelOptions.map((value) => ({ value, label: truncateLabel(value, 52) })),
+          ]}
+        />
+        <FilterSelect
+          label="Operation"
+          value={spanFilter}
+          onChange={setSpanFilter}
+          options={[
+            { value: '', label: 'All operations' },
+            ...spanOptions.map((value) => ({ value, label: truncateLabel(value, 52) })),
+          ]}
+        />
+        <FilterSelect
+          label="Status"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={[
+            { value: '', label: 'All statuses' },
+            ...statusOptions.map((value) => ({ value, label: value })),
+          ]}
+        />
+        <FilterSelect
+          label="Cache"
+          value={cacheFilter}
+          onChange={setCacheFilter}
+          options={[
+            { value: '', label: 'All calls' },
+            { value: 'cached', label: 'Cached only' },
+            { value: 'uncached', label: 'Uncached only' },
+          ]}
+        />
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
+        >
+          <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/40 p-4 text-sm text-slate-400">
+        Provider/model calls only. Local exact-cache hits are intentionally excluded from these tables so per-call economics stay truthful.
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {error.message}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <StatCard
+          label="Total Cost"
+          value={formatCurrency(data?.summary.total_cost_usd)}
+          icon={<DollarSign className="h-4 w-4" />}
+          skeleton={loading}
+        />
+        <StatCard
+          label="Model Calls"
+          value={formatNumber(data?.summary.total_calls)}
+          icon={<Cpu className="h-4 w-4" />}
+          skeleton={loading}
+        />
+        <StatCard
+          label="Billable Input"
+          value={formatCompactTokens(data?.summary.total_billable_input_tokens)}
+          icon={<Database className="h-4 w-4" />}
+          skeleton={loading}
+        />
+        <StatCard
+          label="Cached Reads"
+          value={formatCompactTokens(data?.summary.total_cached_tokens)}
+          icon={<Database className="h-4 w-4" />}
+          skeleton={loading}
+        />
+        <StatCard
+          label="Cache Writes"
+          value={formatCompactTokens(data?.summary.total_cache_write_tokens)}
+          icon={<Database className="h-4 w-4" />}
+          skeleton={loading}
+        />
+        <StatCard
+          label="Cache Hit Calls"
+          value={formatNumber(data?.summary.cache_hit_calls)}
+          icon={<RefreshCw className="h-4 w-4" />}
+          skeleton={loading}
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[1.1fr,0.9fr]">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">Cost By Operation</h2>
+            <p className="text-xs text-slate-500">Rollup by operation, provider, and model</p>
+          </div>
+          {loading ? (
+            <DataTable columns={operationColumns} data={[]} skeletonRows={6} />
+          ) : (
+            <DataTable
+              columns={operationColumns}
+              data={operations}
+              emptyMessage="No model-call cost rows match the current filters"
+            />
+          )}
+        </div>
+
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">Recent Calls</h2>
+            <p className="text-xs text-slate-500">Granular provider-call economics with cache state</p>
+          </div>
+          {loading ? (
+            <DataTable columns={recentColumns} data={[]} skeletonRows={6} />
+          ) : (
+            <DataTable
+              columns={recentColumns}
+              data={recentCalls}
+              emptyMessage="No recent model calls match the current filters"
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -941,6 +1387,7 @@ export default function PipelineReview() {
     { key: 'failures', label: 'Failures' },
     { key: 'quality', label: 'Quality Signals' },
     { key: 'audit', label: 'Audit Trail' },
+    { key: 'costs', label: 'Costs' },
   ]
 
   return (
@@ -949,51 +1396,60 @@ export default function PipelineReview() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Shield className="h-6 w-6 text-cyan-400" />
-          <h1 className="text-2xl font-bold text-white">Pipeline Review</h1>
+          <div>
+            <h1 className="text-2xl font-bold text-white">Operations</h1>
+            <p className="mt-1 text-sm text-slate-400">
+              Review failures, quality signals, audit history, and model-call economics in one place.
+            </p>
+          </div>
         </div>
-        <button
-          onClick={refreshSummary}
-          disabled={summaryRefreshing}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
-        >
-          <RefreshCw className={clsx('h-4 w-4', summaryRefreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        {activeTab !== 'costs' ? (
+          <button
+            onClick={refreshSummary}
+            disabled={summaryRefreshing}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+          >
+            <RefreshCw className={clsx('h-4 w-4', summaryRefreshing && 'animate-spin')} />
+            Refresh Overview
+          </button>
+        ) : null}
       </div>
 
       {/* Summary stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard
-          label="Open Actionable"
-          value={summary?.open_actionable ?? 0}
-          icon={<AlertTriangle className="h-4 w-4" />}
-          skeleton={summaryLoading}
-        />
-        <StatCard
-          label="Failures 30d"
-          value={summary?.failures_period ?? 0}
-          icon={<XCircle className="h-4 w-4" />}
-          skeleton={summaryLoading}
-        />
-        <StatCard
-          label="Quarantines 30d"
-          value={summary?.quarantines_period ?? 0}
-          icon={<Clock className="h-4 w-4" />}
-          skeleton={summaryLoading}
-        />
-        <StatCard
-          label="Rejections 30d"
-          value={summary?.rejections_period ?? 0}
-          icon={<CheckCircle2 className="h-4 w-4" />}
-          skeleton={summaryLoading}
-        />
-        <StatCard
-          label="Recovered Retries 30d"
-          value={summary?.recovered_validation_retries_period ?? 0}
-          icon={<RefreshCw className="h-4 w-4" />}
-          skeleton={summaryLoading}
-        />
-      </div>
+      {activeTab !== 'costs' ? (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <StatCard
+            label="Open Actionable"
+            value={summary?.open_actionable ?? 0}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={summaryLoading}
+          />
+          <StatCard
+            label="Failures 30d"
+            value={summary?.failures_period ?? 0}
+            icon={<XCircle className="h-4 w-4" />}
+            skeleton={summaryLoading}
+          />
+          <StatCard
+            label="Quarantines 30d"
+            value={summary?.quarantines_period ?? 0}
+            icon={<Clock className="h-4 w-4" />}
+            skeleton={summaryLoading}
+          />
+          <StatCard
+            label="Rejections 30d"
+            value={summary?.rejections_period ?? 0}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            skeleton={summaryLoading}
+          />
+          <StatCard
+            label="Recovered Retries 30d"
+            value={summary?.recovered_validation_retries_period ?? 0}
+            icon={<RefreshCw className="h-4 w-4" />}
+            skeleton={summaryLoading}
+          />
+        </div>
+      ) : null}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-slate-700/50">
@@ -1018,6 +1474,7 @@ export default function PipelineReview() {
       {activeTab === 'failures' && <FailuresTab />}
       {activeTab === 'quality' && <QualityTab />}
       {activeTab === 'audit' && <AuditTab />}
+      {activeTab === 'costs' && <CostsTab />}
     </div>
   )
 }

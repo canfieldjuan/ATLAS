@@ -18,6 +18,32 @@ from typing import Any
 logger = logging.getLogger("atlas.pipelines.llm")
 
 
+def _trace_cache_metrics(
+    usage: dict[str, Any],
+    trace_meta: dict[str, Any],
+) -> tuple[int, int, int | None]:
+    """Normalize cache usage metrics across providers."""
+    cached_tokens = int(
+        usage.get("cached_tokens")
+        or trace_meta.get("cached_tokens")
+        or trace_meta.get("cache_read_tokens")
+        or 0
+    )
+    cache_write_tokens = int(
+        usage.get("cache_write_tokens")
+        or trace_meta.get("cache_write_tokens")
+        or trace_meta.get("cache_creation_tokens")
+        or 0
+    )
+    raw_billable = (
+        usage.get("billable_input_tokens")
+        if usage.get("billable_input_tokens") is not None
+        else trace_meta.get("billable_input_tokens")
+    )
+    billable_input_tokens = int(raw_billable) if raw_billable is not None else None
+    return cached_tokens, cache_write_tokens, billable_input_tokens
+
+
 # ------------------------------------------------------------------
 # LLM resolution
 # ------------------------------------------------------------------
@@ -520,22 +546,28 @@ def call_llm_with_skill(
         usage = result.get("usage", {})
         model_name = getattr(llm, "model", getattr(llm, "model_id", ""))
         provider_name = getattr(llm, "name", "")
+        trace_meta = result.get("_trace_meta", {})
+        cached_tokens, cache_write_tokens, billable_input_tokens = _trace_cache_metrics(usage, trace_meta)
 
         # Populate usage_out for callers that want token tracking
         if usage_out is not None:
             usage_out["input_tokens"] = usage.get("input_tokens", 0)
             usage_out["output_tokens"] = usage.get("output_tokens", 0)
+            usage_out["cached_tokens"] = cached_tokens
+            usage_out["cache_write_tokens"] = cache_write_tokens
+            if billable_input_tokens is not None:
+                usage_out["billable_input_tokens"] = billable_input_tokens
             usage_out["model"] = model_name
             usage_out["provider"] = provider_name
-
-        # Extract provider trace metadata
-        trace_meta = result.get("_trace_meta", {})
 
         # Emit FTL trace span with full I/O and provider metadata
         trace_llm_call(
             span_name=call_span_name,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
+            cached_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+            billable_input_tokens=billable_input_tokens,
             model=model_name,
             provider=provider_name,
             duration_ms=(time.monotonic() - t0) * 1000,
@@ -583,6 +615,9 @@ def trace_llm_call(
     *,
     input_tokens: int = 0,
     output_tokens: int = 0,
+    cached_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    billable_input_tokens: int | None = None,
     model: str = "",
     provider: str = "",
     duration_ms: float = 0,
@@ -636,6 +671,9 @@ def trace_llm_call(
         status=status,
         input_tokens=input_tokens if input_tokens else None,
         output_tokens=output_tokens if output_tokens else None,
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        billable_input_tokens=billable_input_tokens,
         input_data=input_data,
         output_data=output_data,
         ttft_ms=ttft_ms,

@@ -295,6 +295,8 @@ class OpenRouterLLM(BaseModelService):
             usage = data.get("usage", {})
             reasoning_tokens = usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
             cached_tokens, cache_write_tokens = self._cache_usage_fields(usage)
+            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            billable_input_tokens = max(prompt_tokens - cached_tokens - cache_write_tokens, 0)
             logger.info(
                 "OpenRouter chat: model=%s tokens=%s reasoning_tokens=%d cached_tokens=%d cache_write_tokens=%d content_len=%d",
                 self.model, usage, reasoning_tokens, cached_tokens, cache_write_tokens, len(content),
@@ -304,9 +306,10 @@ class OpenRouterLLM(BaseModelService):
                 "response": content,
                 "message": {"role": "assistant", "content": content},
                 "usage": {
-                    "input_tokens": usage.get("prompt_tokens", 0),
+                    "input_tokens": prompt_tokens,
                     "output_tokens": usage.get("completion_tokens", 0),
                     "reasoning_tokens": reasoning_tokens,
+                    "billable_input_tokens": billable_input_tokens,
                     "cached_tokens": cached_tokens,
                     "cache_write_tokens": cache_write_tokens,
                 },
@@ -315,6 +318,7 @@ class OpenRouterLLM(BaseModelService):
                     "provider_request_id": response.headers.get("x-request-id") or data.get("id", ""),
                     "finish_reason": choice.get("finish_reason"),
                     "native_finish_reason": choice.get("native_finish_reason"),
+                    "billable_input_tokens": billable_input_tokens,
                     "cached_tokens": cached_tokens,
                     "cache_write_tokens": cache_write_tokens,
                 },

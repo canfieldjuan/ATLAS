@@ -145,6 +145,9 @@ class FTLTracingClient:
         ttft_ms: Optional[float] = None,
         inference_time_ms: Optional[float] = None,
         queue_time_ms: Optional[float] = None,
+        cached_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        billable_input_tokens: Optional[int] = None,
         context_tokens: Optional[int] = None,
         retrieval_latency_ms: Optional[float] = None,
         rag_graph_used: Optional[bool] = None,
@@ -204,14 +207,32 @@ class FTLTracingClient:
             payload["output_tokens"] = int(output_tokens)
         if input_tokens is not None or output_tokens is not None:
             payload["total_tokens"] = int(input_tokens or 0) + int(output_tokens or 0)
+        if cached_tokens is not None:
+            payload["cached_tokens"] = int(cached_tokens)
+        if cache_write_tokens is not None:
+            payload["cache_write_tokens"] = int(cache_write_tokens)
+        if billable_input_tokens is not None:
+            payload["billable_input_tokens"] = int(billable_input_tokens)
 
         # Calculate cost from model pricing
-        if (input_tokens or output_tokens) and ctx.model_provider:
+        if (
+            input_tokens is not None
+            or output_tokens is not None
+            or cached_tokens is not None
+            or cache_write_tokens is not None
+        ) and ctx.model_provider:
             cost = settings.ftl_tracing.pricing.cost_usd(
                 ctx.model_provider or "",
                 ctx.model_name or "",
                 int(input_tokens or 0),
                 int(output_tokens or 0),
+                cached_tokens=int(cached_tokens or 0),
+                cache_write_tokens=int(cache_write_tokens or 0),
+                billable_input_tokens=(
+                    int(billable_input_tokens)
+                    if billable_input_tokens is not None
+                    else None
+                ),
             )
             if cost > 0:
                 payload["cost_usd"] = round(cost, 6)
@@ -263,6 +284,9 @@ class FTLTracingClient:
         status: str = "completed",
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
+        cache_write_tokens: Optional[int] = None,
+        billable_input_tokens: Optional[int] = None,
         input_data: Optional[dict] = None,
         output_data: Optional[dict] = None,
         error_message: Optional[str] = None,
@@ -308,14 +332,32 @@ class FTLTracingClient:
             payload["output_tokens"] = int(output_tokens)
         if input_tokens is not None or output_tokens is not None:
             payload["total_tokens"] = int(input_tokens or 0) + int(output_tokens or 0)
+        if cached_tokens is not None:
+            payload["cached_tokens"] = int(cached_tokens)
+        if cache_write_tokens is not None:
+            payload["cache_write_tokens"] = int(cache_write_tokens)
+        if billable_input_tokens is not None:
+            payload["billable_input_tokens"] = int(billable_input_tokens)
 
         # Calculate cost from parent span's model info
-        if (input_tokens or output_tokens) and parent.model_provider:
+        if (
+            input_tokens is not None
+            or output_tokens is not None
+            or cached_tokens is not None
+            or cache_write_tokens is not None
+        ) and parent.model_provider:
             cost = settings.ftl_tracing.pricing.cost_usd(
                 parent.model_provider or "",
                 parent.model_name or "",
                 int(input_tokens or 0),
                 int(output_tokens or 0),
+                cached_tokens=int(cached_tokens or 0),
+                cache_write_tokens=int(cache_write_tokens or 0),
+                billable_input_tokens=(
+                    int(billable_input_tokens)
+                    if billable_input_tokens is not None
+                    else None
+                ),
             )
             if cost > 0:
                 payload["cost_usd"] = round(cost, 6)
@@ -410,7 +452,16 @@ class FTLTracingClient:
         use_shared_pool: bool = True,
     ) -> None:
         """Insert usage row into local llm_usage table (best-effort)."""
-        if not payload.get("input_tokens") and not payload.get("output_tokens"):
+        if not any(
+            payload.get(key)
+            for key in (
+                "input_tokens",
+                "output_tokens",
+                "cached_tokens",
+                "cache_write_tokens",
+                "billable_input_tokens",
+            )
+        ):
             return
         try:
             from ..storage.database import get_db_pool
@@ -421,9 +472,11 @@ class FTLTracingClient:
             query = """INSERT INTO llm_usage
                        (span_name, operation_type, model_name, model_provider,
                         input_tokens, output_tokens, total_tokens, cost_usd,
-                        duration_ms, ttft_ms, inference_time_ms, tokens_per_second,
+                        duration_ms, ttft_ms, inference_time_ms, queue_time_ms,
+                        tokens_per_second, billable_input_tokens, cached_tokens,
+                        cache_write_tokens, api_endpoint, provider_request_id,
                         status, metadata)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"""
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)"""
             args = (
                 payload.get("span_name", ""),
                 payload.get("operation_type", "llm_call"),
@@ -436,7 +489,13 @@ class FTLTracingClient:
                 payload.get("duration_ms", 0),
                 payload.get("ttft_ms"),
                 payload.get("inference_time_ms"),
+                payload.get("queue_time_ms"),
                 payload.get("tokens_per_second"),
+                payload.get("billable_input_tokens", payload.get("input_tokens", 0)),
+                payload.get("cached_tokens", 0),
+                payload.get("cache_write_tokens", 0),
+                payload.get("api_endpoint"),
+                payload.get("provider_request_id"),
                 payload.get("status", "completed"),
                 json.dumps(payload.get("metadata", {})),
             )

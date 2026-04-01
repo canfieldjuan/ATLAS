@@ -43,12 +43,12 @@ const links: SidebarLink[] = [
 ]
 
 const auditLinks: SidebarLink[] = [
+  { to: '/pipeline-review', icon: Activity, label: 'Operations' },
   { to: '/blog-review', icon: FileSearch, label: 'Blog Review' },
   { to: '/blog-diagnostics', icon: AlertTriangle, label: 'Blog Diagnostics' },
   { to: '/campaign-review', icon: MailSearch, label: 'Campaigns' },
   { to: '/campaign-diagnostics', icon: AlertTriangle, label: 'Campaign Diagnostics' },
   { to: '/briefing-review', icon: MailSearch, label: 'Briefings' },
-  { to: '/pipeline-review', icon: Activity, label: 'Pipeline Review' },
   { to: '/prospects', icon: Users, label: 'Prospects' },
 ]
 
@@ -124,7 +124,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           {/* Audit section */}
           <div className="pt-3 mt-3 border-t border-slate-700/50">
             <span className="px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
-              Audit
+              Operations
             </span>
             <div className="mt-1 space-y-1">
               {auditLinks.map(({ to, icon: Icon, label }) => (

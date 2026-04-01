@@ -198,6 +198,8 @@ class AnthropicLLM(BaseModelService):
             )
 
             request_id = getattr(response, "id", None) or ""
+            cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", None)
+            cache_creation_tokens = getattr(response.usage, "cache_creation_input_tokens", None)
 
             return {
                 "response": content,
@@ -205,12 +207,18 @@ class AnthropicLLM(BaseModelService):
                 "usage": {
                     "input_tokens": response.usage.input_tokens,
                     "output_tokens": response.usage.output_tokens,
+                    "billable_input_tokens": response.usage.input_tokens,
+                    "cached_tokens": int(cache_read_tokens or 0),
+                    "cache_write_tokens": int(cache_creation_tokens or 0),
                 },
                 "_trace_meta": {
                     "api_endpoint": "https://api.anthropic.com/v1/messages",
                     "provider_request_id": request_id,
-                    "cache_read_tokens": getattr(response.usage, "cache_read_input_tokens", None),
-                    "cache_creation_tokens": getattr(response.usage, "cache_creation_input_tokens", None),
+                    "billable_input_tokens": response.usage.input_tokens,
+                    "cache_read_tokens": cache_read_tokens,
+                    "cache_creation_tokens": cache_creation_tokens,
+                    "cached_tokens": int(cache_read_tokens or 0),
+                    "cache_write_tokens": int(cache_creation_tokens or 0),
                 },
             }
         except Exception as e:
@@ -278,6 +286,9 @@ class AnthropicLLM(BaseModelService):
                 "Anthropic response: content_len=%d, tool_calls=%d",
                 len(content), len(normalized_calls),
             )
+            request_id = getattr(response, "id", None) or ""
+            cache_read_tokens = getattr(response.usage, "cache_read_input_tokens", None)
+            cache_creation_tokens = getattr(response.usage, "cache_creation_input_tokens", None)
 
             return {
                 "response": content,
@@ -286,6 +297,18 @@ class AnthropicLLM(BaseModelService):
                 "usage": {
                     "input_tokens": response.usage.input_tokens,
                     "output_tokens": response.usage.output_tokens,
+                    "billable_input_tokens": response.usage.input_tokens,
+                    "cached_tokens": int(cache_read_tokens or 0),
+                    "cache_write_tokens": int(cache_creation_tokens or 0),
+                },
+                "_trace_meta": {
+                    "api_endpoint": "https://api.anthropic.com/v1/messages",
+                    "provider_request_id": request_id,
+                    "billable_input_tokens": response.usage.input_tokens,
+                    "cache_read_tokens": cache_read_tokens,
+                    "cache_creation_tokens": cache_creation_tokens,
+                    "cached_tokens": int(cache_read_tokens or 0),
+                    "cache_write_tokens": int(cache_creation_tokens or 0),
                 },
             }
         except Exception as e:

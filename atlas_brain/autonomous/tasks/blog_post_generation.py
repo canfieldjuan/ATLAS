@@ -1564,6 +1564,9 @@ def _generate_content(
                 _biz_ctx["category"] = str(_dc["category"])[:200]
             trace_llm_call("task.blog_post_generation", input_tokens=_usage["input_tokens"],
                            output_tokens=_usage.get("output_tokens", 0),
+                           cached_tokens=_trace_meta.get("cached_tokens") or _trace_meta.get("cache_read_tokens"),
+                           cache_write_tokens=_trace_meta.get("cache_write_tokens") or _trace_meta.get("cache_creation_tokens"),
+                           billable_input_tokens=_trace_meta.get("billable_input_tokens"),
                            model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
                            input_data={"messages": [{"role": m.role, "content": (m.content or "")[:500]} for m in messages]},
                            output_data={"response": _resp_text[:2000]},

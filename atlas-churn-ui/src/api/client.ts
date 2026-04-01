@@ -35,6 +35,9 @@ import type {
   ArtifactAttempt,
   EnrichmentQuarantine,
   SynthesisValidationResult,
+  AdminCostSummary,
+  AdminCostOperation,
+  AdminCostRecentCall,
   DedupDecision,
   PipelineReviewAction,
 } from '../types'
@@ -638,6 +641,7 @@ export async function bulkRejectBriefings(ids: string[], reason?: string) {
 // Pipeline visibility
 // ---------------------------------------------------------------------------
 const VISIBILITY_BASE = `${API_BASE}/api/v1/pipeline/visibility`
+const ADMIN_COSTS_BASE = `${API_BASE}/api/v1/admin/costs`
 
 export async function fetchVisibilitySummary(hours = 24) {
   return get<{
@@ -713,4 +717,46 @@ export async function fetchVisibilityReviewActions(params?: {
 
 export async function resolveVisibilityReview(reviewId: string, action: string, note?: string) {
   return post<{ status: string }>(VISIBILITY_BASE, `/reviews/${reviewId}/resolve?action=${action}${note ? '&note=' + encodeURIComponent(note) : ''}`)
+}
+
+// ---------------------------------------------------------------------------
+// Admin cost analytics
+// ---------------------------------------------------------------------------
+
+export async function fetchAdminCostSummary(days = 30) {
+  return get<AdminCostSummary>(ADMIN_COSTS_BASE, '/summary', { days })
+}
+
+export async function fetchAdminCostByOperation(params?: {
+  days?: number
+  limit?: number
+  provider?: string
+  model?: string
+  span_name?: string
+  operation_type?: string
+  status?: string
+  cache_only?: boolean
+}) {
+  return get<{ period_days: number; operations: AdminCostOperation[] }>(
+    ADMIN_COSTS_BASE,
+    '/by-operation',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function fetchAdminCostRecent(params?: {
+  limit?: number
+  days?: number
+  provider?: string
+  model?: string
+  span_name?: string
+  operation_type?: string
+  status?: string
+  cache_only?: boolean
+}) {
+  return get<{ calls: AdminCostRecentCall[] }>(
+    ADMIN_COSTS_BASE,
+    '/recent',
+    params as Record<string, string | number | boolean>,
+  )
 }
