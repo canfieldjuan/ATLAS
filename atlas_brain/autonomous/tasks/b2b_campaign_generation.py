@@ -1613,6 +1613,7 @@ async def _generate_churning_company_campaigns(
         return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0, "error": "Skill not found"}
 
     llm_model_name = getattr(llm, "model_id", None) or getattr(llm, "model", "unknown")
+    claimer = f"reconcile:{getattr(task, 'id', None) or 'adhoc'}:{_uuid.uuid4().hex[:10]}"
     batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     generated = 0
     failed = 0
@@ -4594,12 +4595,41 @@ async def _mark_campaign_batch_item_applied(
     await pool.execute(
         """
         UPDATE anthropic_message_batch_items
-        SET request_metadata = COALESCE(request_metadata, '{}'::jsonb) || $2::jsonb
+        SET request_metadata = ((COALESCE(request_metadata, '{}'::jsonb) - 'applying_at' - 'applying_by') || $2::jsonb)
         WHERE id = $1::uuid
         """,
         item_id,
         json.dumps(patch, default=str),
     )
+
+
+async def _claim_campaign_batch_item_for_apply(
+    pool,
+    *,
+    item_id: str,
+    claimer: str,
+    stale_after_minutes: int = 30,
+) -> bool:
+    patch = {
+        "applying_at": datetime.now(timezone.utc).isoformat(),
+        "applying_by": claimer[:120],
+    }
+    row = await pool.fetchrow(
+        f"""
+        UPDATE anthropic_message_batch_items
+        SET request_metadata = ((COALESCE(request_metadata, '{{}}'::jsonb) - 'applying_at' - 'applying_by') || $2::jsonb)
+        WHERE id = $1::uuid
+          AND COALESCE(request_metadata->>'applied_at', '') = ''
+          AND (
+                COALESCE(request_metadata->>'applying_at', '') = ''
+                OR NULLIF(request_metadata->>'applying_at', '')::timestamptz < NOW() - INTERVAL '{int(stale_after_minutes)} minutes'
+              )
+        RETURNING id
+        """,
+        item_id,
+        json.dumps(patch, default=str),
+    )
+    return row is not None
 
 
 def _campaign_generation_specificity(payload: dict[str, Any]) -> dict[str, Any]:
@@ -5073,6 +5103,7 @@ async def reconcile_batches(task: ScheduledTask) -> dict[str, Any]:
     if llm is None or skill is None:
         return {"reconciled_batches": 0, "applied_items": 0, "submitted_followups": 0, "error": "campaign_llm_or_skill_missing"}
     llm_model_name = getattr(llm, "model_id", None) or getattr(llm, "model", "unknown")
+    claimer = f"reconcile:{getattr(task, 'id', None) or 'adhoc'}:{_uuid.uuid4().hex[:10]}"
 
     batch_rows = await pool.fetch(
         """
@@ -5131,6 +5162,13 @@ async def reconcile_batches(task: ScheduledTask) -> dict[str, Any]:
 
             status = str(item_row.get("status") or "")
             if status == "pending":
+                continue
+            claimed = await _claim_campaign_batch_item_for_apply(
+                pool,
+                item_id=str(item_row["id"]),
+                claimer=claimer,
+            )
+            if not claimed:
                 continue
 
             content = await _resolve_campaign_batch_item_content(
