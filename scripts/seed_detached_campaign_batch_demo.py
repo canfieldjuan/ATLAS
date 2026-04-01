@@ -32,6 +32,7 @@ from atlas_brain.storage.database import close_database, get_db_pool, init_datab
 TASK_NAME = "b2b_campaign_generation"
 STAGE_ID = "b2b_campaign_generation.content"
 TASK_DESCRIPTION = "Synthetic detached batch demo seed for Operations -> Costs"
+REPLAY_CONTRACT_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,30 @@ class DemoItem:
 
 def _json(data: dict[str, Any]) -> str:
     return json.dumps(data, default=str)
+
+
+def _replay_contract(
+    *,
+    artifact_id: str,
+    company_name: str,
+    target_mode: str,
+    channel: str = "email",
+) -> dict[str, Any]:
+    return {
+        "contract_version": REPLAY_CONTRACT_VERSION,
+        "entry": {
+            "artifact_id": artifact_id,
+            "campaign_batch_id": "demo-batch-1",
+            "company_name": company_name,
+            "payload": {"channel": channel, "target_mode": target_mode},
+            "best": {"vendor_name": company_name, "opportunity_score": 91},
+            "review_ids": ["demo-review-1"],
+            "vendor_ctx": {"signal_summary": {"pain_distribution": [], "competitor_distribution": []}},
+            "target": {"contact_email": "owner@example.com"},
+            "followup_payload": {"channel": "email_followup", "target_mode": target_mode},
+            "sequence_context": {"recipient_name": "Pat Demo"},
+        },
+    }
 
 
 async def _ensure_task(pool) -> str:
@@ -131,11 +156,11 @@ def _demo_items(now: datetime, *, stale_minutes: int) -> tuple[list[DemoItem], l
                 "target_mode": "vendor_retention",
                 "tier": "report",
                 "replay_handler": "campaign_generation",
-                "replay_entry": {
-                    "artifact_id": "demo:salesforce:email",
-                    "company_name": "Acme Manufacturing",
-                    "payload": {"channel": "email", "target_mode": "vendor_retention"},
-                },
+                "replay_entry": _replay_contract(
+                    artifact_id="demo:salesforce:email",
+                    company_name="Acme Manufacturing",
+                    target_mode="vendor_retention",
+                ),
                 "applied_at": applied_success.isoformat(),
                 "applied_status": "succeeded",
             },
@@ -162,11 +187,11 @@ def _demo_items(now: datetime, *, stale_minutes: int) -> tuple[list[DemoItem], l
                 "target_mode": "vendor_retention",
                 "tier": "report",
                 "replay_handler": "campaign_generation",
-                "replay_entry": {
-                    "artifact_id": "demo:hubspot:email",
-                    "company_name": "Northwind Labs",
-                    "payload": {"channel": "email", "target_mode": "vendor_retention"},
-                },
+                "replay_entry": _replay_contract(
+                    artifact_id="demo:hubspot:email",
+                    company_name="Northwind Labs",
+                    target_mode="vendor_retention",
+                ),
                 "applied_at": applied_success.isoformat(),
                 "applied_status": "succeeded",
             },
@@ -193,11 +218,11 @@ def _demo_items(now: datetime, *, stale_minutes: int) -> tuple[list[DemoItem], l
                 "target_mode": "vendor_retention",
                 "tier": "report",
                 "replay_handler": "campaign_generation",
-                "replay_entry": {
-                    "artifact_id": "demo:shopify:email",
-                    "company_name": "Blue Harbor Retail",
-                    "payload": {"channel": "email", "target_mode": "vendor_retention"},
-                },
+                "replay_entry": _replay_contract(
+                    artifact_id="demo:shopify:email",
+                    company_name="Blue Harbor Retail",
+                    target_mode="vendor_retention",
+                ),
                 "applied_at": applied_success.isoformat(),
                 "applied_status": "succeeded",
             },
@@ -224,11 +249,11 @@ def _demo_items(now: datetime, *, stale_minutes: int) -> tuple[list[DemoItem], l
                 "target_mode": "vendor_retention",
                 "tier": "report",
                 "replay_handler": "campaign_generation",
-                "replay_entry": {
-                    "artifact_id": "demo:clickup:email",
-                    "company_name": "Contour Ops",
-                    "payload": {"channel": "email", "target_mode": "vendor_retention"},
-                },
+                "replay_entry": _replay_contract(
+                    artifact_id="demo:clickup:email",
+                    company_name="Contour Ops",
+                    target_mode="vendor_retention",
+                ),
                 "applied_at": applied_failure.isoformat(),
                 "applied_status": "failed",
                 "applied_error": "batch_errored",
@@ -259,11 +284,11 @@ def _demo_items(now: datetime, *, stale_minutes: int) -> tuple[list[DemoItem], l
                 "target_mode": "vendor_retention",
                 "tier": "report",
                 "replay_handler": "campaign_generation",
-                "replay_entry": {
-                    "artifact_id": "demo:azure:email",
-                    "company_name": "Cobalt Security",
-                    "payload": {"channel": "email", "target_mode": "vendor_retention"},
-                },
+                "replay_entry": _replay_contract(
+                    artifact_id="demo:azure:email",
+                    company_name="Cobalt Security",
+                    target_mode="vendor_retention",
+                ),
                 "applying_at": stale_apply.isoformat(),
                 "applying_by": "reconcile:demo-seed:staleclaim",
             },
