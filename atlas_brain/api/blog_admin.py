@@ -473,6 +473,17 @@ async def blog_quality_diagnostics(
         "WHERE created_at >= NOW() - ($1::int * INTERVAL '1 day') "
         "AND COALESCE(data_context->'latest_quality_audit'->>'status', '') = 'fail'"
     )
+    status_rows = await pool.fetch(
+        f"""
+        SELECT COALESCE(NULLIF(status, ''), 'missing') AS status_value,
+               COUNT(*) AS cnt
+        FROM blog_posts
+        {where}
+        GROUP BY 1
+        ORDER BY cnt DESC, 1 ASC
+        """,
+        days,
+    )
     boundary_rows = await pool.fetch(
         f"""
         SELECT COALESCE(data_context->'latest_quality_audit'->>'boundary', 'missing') AS boundary,
@@ -578,9 +589,19 @@ async def blog_quality_diagnostics(
         top_n,
     )
 
+    by_status = [
+        {"status": str(row["status_value"] or "missing"), "count": int(row["cnt"] or 0)}
+        for row in status_rows
+    ]
+    active_failure_count = sum(item["count"] for item in by_status if item["status"] == "draft")
+    rejected_failure_count = sum(item["count"] for item in by_status if item["status"] == "rejected")
+
     return {
         "days": int(days),
         "top_n": int(top_n),
+        "active_failure_count": int(active_failure_count),
+        "rejected_failure_count": int(rejected_failure_count),
+        "by_status": by_status,
         "by_boundary": [
             {"boundary": str(row["boundary"] or "missing"), "count": int(row["cnt"] or 0)}
             for row in boundary_rows

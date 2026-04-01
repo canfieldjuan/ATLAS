@@ -86,11 +86,12 @@ export default function BlogQualityDiagnosticsPanel({
   }
 
   const diagnostics = data ?? null
+  const activeFailureCount = diagnostics?.active_failure_count ?? 0
+  const rejectedFailureCount = diagnostics?.rejected_failure_count ?? 0
   const topCause = diagnostics?.by_cause_type?.[0] ?? null
   const topBlocker = diagnostics?.top_primary_blockers?.[0] ?? null
-  const topMissingInput = diagnostics?.top_missing_inputs?.[0] ?? null
-  const topSubject = diagnostics?.top_subjects?.[0] ?? null
   const hasAnyData =
+    (diagnostics?.by_status?.length ?? 0) > 0 ||
     (diagnostics?.by_boundary?.length ?? 0) > 0 ||
     (diagnostics?.by_cause_type?.length ?? 0) > 0 ||
     (diagnostics?.top_primary_blockers?.length ?? 0) > 0 ||
@@ -122,28 +123,43 @@ export default function BlogQualityDiagnosticsPanel({
         <>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             <SummaryCard
-              label="Top Cause"
+              label="Active Draft Failures"
+              value={String(activeFailureCount)}
+              caption="Failing drafts still in the review queue"
+            />
+            <SummaryCard
+              label="Rejected Failures"
+              value={String(rejectedFailureCount)}
+              caption="Intentionally retired drafts with failed audits"
+            />
+            <SummaryCard
+              label="Top Cause (All Failed Rows)"
               value={topCause?.cause_type ?? 'None'}
-              caption={topCause ? `${topCause.count} failures` : null}
+              caption={
+                topCause
+                  ? `${topCause.count} failures${activeFailureCount === 0 && rejectedFailureCount > 0 ? ' (rejected only)' : ''}`
+                  : null
+              }
             />
             <SummaryCard
-              label="Top Blocker"
+              label="Top Blocker (All Failed Rows)"
               value={topBlocker?.reason ?? 'None'}
-              caption={topBlocker ? `${topBlocker.count} hits` : null}
-            />
-            <SummaryCard
-              label="Missing Input"
-              value={topMissingInput?.input ?? 'None'}
-              caption={topMissingInput ? `${topMissingInput.count} failures` : null}
-            />
-            <SummaryCard
-              label="Top Subject"
-              value={topSubject?.subject ?? 'None'}
-              caption={topSubject ? `${topSubject.count} failures` : null}
+              caption={
+                topBlocker
+                  ? `${topBlocker.count} hits${activeFailureCount === 0 && rejectedFailureCount > 0 ? ' (rejected only)' : ''}`
+                  : null
+              }
             />
           </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <SectionList
+              title="Failures By Status"
+              items={diagnostics?.by_status ?? []}
+              emptyLabel="No status-split failures yet."
+              labelKey="status"
+              valueKey="count"
+            />
             <SectionList
               title="Failures By Boundary"
               items={diagnostics?.by_boundary ?? []}

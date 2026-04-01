@@ -9,6 +9,12 @@ describe('BlogQualityDiagnosticsPanel', () => {
         data={{
           days: 14,
           top_n: 10,
+          active_failure_count: 1,
+          rejected_failure_count: 2,
+          by_status: [
+            { status: 'draft', count: 1 },
+            { status: 'rejected', count: 2 },
+          ],
           by_boundary: [{ boundary: 'publish', count: 2 }],
           by_cause_type: [{ cause_type: 'unsupported_claim', count: 2 }],
           top_primary_blockers: [{ reason: 'unsupported_data_claim:Magento', count: 2 }],
@@ -20,10 +26,16 @@ describe('BlogQualityDiagnosticsPanel', () => {
     )
 
     expect(screen.getByText('Blog Failure Diagnostics')).toBeInTheDocument()
+    expect(screen.getByText('Active Draft Failures')).toBeInTheDocument()
+    expect(screen.getByText('Rejected Failures')).toBeInTheDocument()
     expect(screen.getAllByText('unsupported_claim').length).toBeGreaterThan(0)
+    expect(screen.getByText('Top Cause (All Failed Rows)')).toBeInTheDocument()
+    expect(screen.getByText('Top Blocker (All Failed Rows)')).toBeInTheDocument()
     expect(screen.getAllByText('unsupported_data_claim:Magento').length).toBeGreaterThan(0)
     expect(screen.getByText('migration_guide')).toBeInTheDocument()
     expect(screen.getAllByText('Shopify').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('draft').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('rejected').length).toBeGreaterThan(0)
   })
 
   it('renders an empty state when no diagnostics exist', () => {

@@ -7,6 +7,7 @@ All endpoints require authentication and scope data to the tenant's tracked vend
 import json
 import logging
 import uuid as _uuid
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,6 +30,12 @@ from ..services.tracked_vendor_sources import (
 )
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
+from .b2b_dashboard import (
+    _load_reasoning_views_for_vendors,
+    _normalize_vendor_name,
+    _overlay_reasoning_detail_from_view,
+    _overlay_reasoning_summary_from_view,
+)
 
 logger = logging.getLogger("atlas.api.b2b_tenant")
 
@@ -639,29 +646,39 @@ async def list_tenant_slow_burn_watchlist(
         *params,
     )
 
+    signals = [
+        {
+            "vendor_name": r["vendor_name"],
+            "product_category": r["product_category"],
+            "total_reviews": r["total_reviews"],
+            "churn_intent_count": r["churn_intent_count"],
+            "avg_urgency_score": _safe_float(r["avg_urgency_score"], 0.0),
+            "avg_rating_normalized": _safe_float(r["avg_rating_normalized"]),
+            "nps_proxy": _safe_float(r["nps_proxy"]),
+            "price_complaint_rate": _safe_float(r["price_complaint_rate"]),
+            "decision_maker_churn_rate": _safe_float(r["decision_maker_churn_rate"]),
+            "support_sentiment": _safe_float(r["support_sentiment"]),
+            "legacy_support_score": _safe_float(r["legacy_support_score"]),
+            "new_feature_velocity": _safe_float(r["new_feature_velocity"]),
+            "employee_growth_rate": _safe_float(r["employee_growth_rate"]),
+            "archetype": r["archetype"],
+            "archetype_confidence": _safe_float(r["archetype_confidence"]),
+            "reasoning_mode": r["reasoning_mode"],
+            "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
+        }
+        for r in rows
+    ]
+    reasoning_views = await _load_reasoning_views_for_vendors(
+        pool,
+        [signal.get("vendor_name", "") for signal in signals],
+    )
+    for signal in signals:
+        view = reasoning_views.get(_normalize_vendor_name(signal.get("vendor_name")))
+        if view is not None:
+            _overlay_reasoning_summary_from_view(signal, view)
+
     return {
-        "signals": [
-            {
-                "vendor_name": r["vendor_name"],
-                "product_category": r["product_category"],
-                "total_reviews": r["total_reviews"],
-                "churn_intent_count": r["churn_intent_count"],
-                "avg_urgency_score": _safe_float(r["avg_urgency_score"], 0.0),
-                "avg_rating_normalized": _safe_float(r["avg_rating_normalized"]),
-                "nps_proxy": _safe_float(r["nps_proxy"]),
-                "price_complaint_rate": _safe_float(r["price_complaint_rate"]),
-                "decision_maker_churn_rate": _safe_float(r["decision_maker_churn_rate"]),
-                "support_sentiment": _safe_float(r["support_sentiment"]),
-                "legacy_support_score": _safe_float(r["legacy_support_score"]),
-                "new_feature_velocity": _safe_float(r["new_feature_velocity"]),
-                "employee_growth_rate": _safe_float(r["employee_growth_rate"]),
-                "archetype": r["archetype"],
-                "archetype_confidence": _safe_float(r["archetype_confidence"]),
-                "reasoning_mode": r["reasoning_mode"],
-                "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
-            }
-            for r in rows
-        ],
+        "signals": signals,
         "count": len(rows),
     }
 
@@ -771,6 +788,17 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
             "timeline_summary": _safe_json(signal_row["timeline_summary"]),
             "last_computed_at": str(signal_row["last_computed_at"]) if signal_row["last_computed_at"] else None,
         }
+        reasoning_views = await _load_reasoning_views_for_vendors(
+            pool,
+            [signal_row["vendor_name"]],
+        )
+        view = reasoning_views.get(_normalize_vendor_name(signal_row["vendor_name"]))
+        if view is not None:
+            _overlay_reasoning_detail_from_view(
+                profile["churn_signal"],
+                view,
+                requested_as_of=date.today(),
+            )
     else:
         profile["churn_signal"] = None
 
