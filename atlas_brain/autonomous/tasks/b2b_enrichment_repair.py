@@ -49,6 +49,11 @@ _DISPLACEMENT_CONTEXT_PATTERNS = (
     "migration", "migrate", "replatform", "vendor", "platform", "tool", "solution",
     "suite", "stack", "versus", " vs ", "competitor",
 )
+_DISPLACEMENT_ALT_CONTEXT_PATTERNS = (
+    "alternative", "alternatives", "replace", "replacement", "migration", "migrate",
+    "replatform", "vendor", "platform", "tool", "solution", "suite", "stack",
+    "provider", "service", "software", "crm", "help desk", "ticketing",
+)
 _EMPLOYMENT_CONTEXT_PATTERNS = (
     "work at", "working at", "employee", "career", "manager", "my manager",
     "our team", "interview", "hiring", "certification", "freelance", "rep at",
@@ -242,13 +247,14 @@ def _has_competitor_trigger(
     competitors: list[dict[str, Any]],
     strong_competitor_signal: bool,
     has_nonpricing_pressure: bool = False,
+    has_alt_context: bool = False,
 ) -> bool:
     if strong_competitor_signal:
         return True
     if base_enrichment._contains_any(review_blob, _DISPLACEMENT_HARD_PATTERNS):
         if competitors:
             return True
-        return has_nonpricing_pressure
+        return has_nonpricing_pressure and has_alt_context
     soft = base_enrichment._contains_any(review_blob, _DISPLACEMENT_SOFT_PATTERNS)
     if not soft:
         return False
@@ -315,7 +321,7 @@ def _has_employment_noise(
     strong_competitor_signal: bool,
 ) -> bool:
     content_type = str(source_row.get("content_type") or "").strip().lower()
-    if content_type not in {"community_discussion", "insider_account"}:
+    if content_type not in {"community_discussion", "insider_account", "comment"}:
         return False
     if not vendor_literal_hit or structured_churn or strong_competitor_signal:
         return False
@@ -377,6 +383,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         )
     )
     pricing_signal = bool(base_enrichment._REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
+    alt_context_signal = base_enrichment._contains_any(review_blob, _DISPLACEMENT_ALT_CONTEXT_PATTERNS)
 
     pricing_span = any(str(span.get("signal_type") or "").strip().lower() == "pricing_backlash" for span in spans)
     strong_competitor_signal = _has_strong_competitor_signal(competitors)
@@ -398,7 +405,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         strong_competitor_signal=strong_competitor_signal,
     )
     discussion_noise = (
-        content_type in {"community_discussion", "insider_account"}
+        content_type in {"community_discussion", "insider_account", "comment"}
         and not structured_churn
         and not effective_reviewer_title
         and not named_company
@@ -451,6 +458,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
             competitors=competitors,
             strong_competitor_signal=strong_competitor_signal,
             has_nonpricing_pressure=nonpricing_pressure_signal,
+            has_alt_context=alt_context_signal,
         )
         and not displacement_framed
         and not discussion_noise

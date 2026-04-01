@@ -903,6 +903,73 @@ def test_strategic_adjudication_keeps_negative_switch_without_named_competitor()
     assert "competitor_without_displacement_framing" in reasons
 
 
+def test_strategic_adjudication_skips_generic_switch_phrase_without_alternative_context():
+    row = {
+        "summary": "Assignment workflow issue",
+        "review_text": "Anyway what Ginger wants is when you simply view the Case, the ownership of the Case is automatically switched to you. This is an impending disaster.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": ["This is an impending disaster"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_skips_comment_switch_noise():
+    row = {
+        "vendor_name": "Fortinet",
+        "product_name": "Fortinet",
+        "summary": "Happy install base note",
+        "review_text": "We have used fortinet firewalls forever. Two years ago we switched to their switches and this year started using some of their cloud software.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "comment",
+        "source": "reddit",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
 def test_strategic_adjudication_skips_reddit_vendor_ambiguity_noise():
     row = {
         "vendor_name": "Copper",

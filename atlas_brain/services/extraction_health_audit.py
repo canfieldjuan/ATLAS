@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+from datetime import date, timedelta
 from typing import Any
 
 _ENRICHED_SCOPE = "enrichment_status = 'enriched'"
@@ -61,6 +62,7 @@ _HARD_GAP = f"""(
   OR {_BLANK_EVIDENCE_MAP_HASH}
 )"""
 _COMMERCIAL_CONTEXT = r"(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)"
+_DISPLACEMENT_ALT_CONTEXT = r"(alternative|alternatives|replace|replacement|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|provider|service|software|crm|help desk|ticketing)"
 _AMBIGUOUS_VENDOR = "(LOWER(vendor_name) IN ('copper', 'close'))"
 _AMBIGUOUS_VENDOR_PRODUCT_CONTEXT = r"(crm|sales|pipeline|lead|leads|deal|deals|account|contact|contacts|prospect|prospects|software|saas)"
 _VENDOR_REFERENCE = """
@@ -161,6 +163,10 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     (
       review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
       AND (
+        {valid_competitor_object}
+        OR review_text ~* '{displacement_alt_context}'
+      )
+      AND (
         COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
         OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
         OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
@@ -195,7 +201,7 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     AND NOT review_text ~* '{commercial_context}'
   )
   AND NOT (
-    content_type IN ('community_discussion', 'insider_account')
+    content_type IN ('community_discussion', 'insider_account', 'comment')
     AND {vendor_reference}
     AND NOT (
       COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
@@ -207,7 +213,7 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     AND NOT review_text ~* '{commercial_context}'
   )
   AND NOT (
-    content_type IN ('community_discussion', 'insider_account')
+    content_type IN ('community_discussion', 'insider_account', 'comment')
     AND NOT (
       COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
       OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
@@ -244,6 +250,7 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
         commercial_context=_COMMERCIAL_CONTEXT,
         ambiguous_vendor_product_context=_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT,
     ),
+    displacement_alt_context=_DISPLACEMENT_ALT_CONTEXT,
     commercial_context=_COMMERCIAL_CONTEXT,
     employment_context=_EMPLOYMENT_CONTEXT,
 )
@@ -317,6 +324,65 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+async def _python_strategic_rollup(pool, *, days: int) -> tuple[dict[str, int], dict[str, int]]:
+    from atlas_brain.autonomous.tasks import b2b_enrichment as base_enrichment
+    from atlas_brain.autonomous.tasks import b2b_enrichment_repair as repair_mod
+
+    rows = await pool.fetch(
+        f"""
+        SELECT
+          vendor_name,
+          source,
+          content_type,
+          reviewer_title,
+          reviewer_company,
+          review_text,
+          summary,
+          pros,
+          cons,
+          product_name,
+          enrichment,
+          COALESCE(enriched_at, imported_at) AS activity_at
+        FROM b2b_reviews
+        WHERE {_ENRICHED_SCOPE}
+        """
+    )
+
+    current_counts = {
+        "strategic_candidate_rows": 0,
+        "money_without_pricing_span": 0,
+        "competitor_without_displacement_framing": 0,
+        "named_company_without_named_account_evidence": 0,
+        "timeline_language_without_timing_anchor": 0,
+        "workflow_language_without_replacement_mode": 0,
+    }
+    vendor_counts: dict[str, int] = {}
+    min_day = date.today() - timedelta(days=max(days - 1, 0))
+
+    for row in rows:
+        source_row = dict(row)
+        result = base_enrichment._coerce_json_dict(source_row.get("enrichment"))
+        reasons = repair_mod._strategic_adjudication_reasons(result, source_row)
+        if not reasons:
+            continue
+
+        vendor_name = str(source_row.get("vendor_name") or "").strip()
+        if vendor_name:
+            vendor_counts[vendor_name] = vendor_counts.get(vendor_name, 0) + 1
+
+        activity_at = source_row.get("activity_at")
+        activity_day = activity_at.date() if activity_at else None
+        if activity_day is None or activity_day < min_day:
+            continue
+
+        current_counts["strategic_candidate_rows"] += 1
+        for reason in reasons:
+            if reason in current_counts:
+                current_counts[reason] += 1
+
+    return current_counts, vendor_counts
 
 
 def _safe_float(value: Any) -> float:
@@ -477,6 +543,11 @@ async def summarize_extraction_health(
         top_n,
     )
 
+    python_current_strategic, python_vendor_strategic = await _python_strategic_rollup(
+        pool,
+        days=days,
+    )
+
     top_vendor_rows = await pool.fetch(
         f"""
         SELECT
@@ -566,35 +637,51 @@ async def summarize_extraction_health(
     span_count = int(current.get("span_count", 0) or 0)
     repair_triggered_rows = int(current.get("repair_triggered_rows", 0) or 0)
     repair_promoted_rows = int(current.get("repair_promoted_rows", 0) or 0)
+    current_snapshot = {
+        "enriched_rows": enriched_rows,
+        "rows_with_spans": int(current.get("rows_with_spans", 0) or 0),
+        "span_count": span_count,
+        "witness_yield_rate": round(span_count / enriched_rows, 4) if enriched_rows > 0 else 0.0,
+        "repair_triggered_rows": repair_triggered_rows,
+        "repair_promoted_rows": repair_promoted_rows,
+        "repair_trigger_rate": round(repair_triggered_rows / enriched_rows, 4) if enriched_rows > 0 else 0.0,
+        "repair_promoted_rate": round(repair_promoted_rows / enriched_rows, 4) if enriched_rows > 0 else 0.0,
+        "secondary_write_hits_window": secondary_write_hits_window,
+        "hard_gap_rows": int(current.get("hard_gap_rows", 0) or 0),
+        "phrase_arrays_without_spans": int(current.get("phrase_arrays_without_spans", 0) or 0),
+        "blank_replacement_mode": int(current.get("blank_replacement_mode", 0) or 0),
+        "blank_operating_model_shift": int(current.get("blank_operating_model_shift", 0) or 0),
+        "blank_productivity_delta_claim": int(current.get("blank_productivity_delta_claim", 0) or 0),
+        "blank_org_pressure_type": int(current.get("blank_org_pressure_type", 0) or 0),
+        "missing_or_empty_evidence_spans": int(current.get("missing_or_empty_evidence_spans", 0) or 0),
+        "blank_evidence_map_hash": int(current.get("blank_evidence_map_hash", 0) or 0),
+        "empty_salience_flags": int(current.get("empty_salience_flags", 0) or 0),
+        "strategic_candidate_rows": int(python_current_strategic.get("strategic_candidate_rows", 0) or 0),
+        "money_without_pricing_span": int(python_current_strategic.get("money_without_pricing_span", 0) or 0),
+        "competitor_without_displacement_framing": int(python_current_strategic.get("competitor_without_displacement_framing", 0) or 0),
+        "named_company_without_named_account_evidence": int(python_current_strategic.get("named_company_without_named_account_evidence", 0) or 0),
+        "timeline_language_without_timing_anchor": int(python_current_strategic.get("timeline_language_without_timing_anchor", 0) or 0),
+        "workflow_language_without_replacement_mode": int(python_current_strategic.get("workflow_language_without_replacement_mode", 0) or 0),
+    }
+    top_vendors = []
+    for row in top_vendor_rows:
+        payload = dict(row)
+        payload["strategic_candidate_rows"] = int(
+            python_vendor_strategic.get(str(payload.get("vendor_name") or ""), 0)
+        )
+        top_vendors.append(payload)
+    top_vendors.sort(
+        key=lambda row: (
+            -_safe_int(row.get("hard_gap_rows")),
+            -_safe_int(row.get("strategic_candidate_rows")),
+            -_safe_int(row.get("empty_salience_flags")),
+            str(row.get("vendor_name") or ""),
+        )
+    )
     return {
         "days": days,
         "top_n": top_n,
-        "current_snapshot": {
-            "enriched_rows": enriched_rows,
-            "rows_with_spans": int(current.get("rows_with_spans", 0) or 0),
-            "span_count": span_count,
-            "witness_yield_rate": round(span_count / enriched_rows, 4) if enriched_rows > 0 else 0.0,
-            "repair_triggered_rows": repair_triggered_rows,
-            "repair_promoted_rows": repair_promoted_rows,
-            "repair_trigger_rate": round(repair_triggered_rows / enriched_rows, 4) if enriched_rows > 0 else 0.0,
-            "repair_promoted_rate": round(repair_promoted_rows / enriched_rows, 4) if enriched_rows > 0 else 0.0,
-            "secondary_write_hits_window": secondary_write_hits_window,
-            "hard_gap_rows": int(current.get("hard_gap_rows", 0) or 0),
-            "phrase_arrays_without_spans": int(current.get("phrase_arrays_without_spans", 0) or 0),
-            "blank_replacement_mode": int(current.get("blank_replacement_mode", 0) or 0),
-            "blank_operating_model_shift": int(current.get("blank_operating_model_shift", 0) or 0),
-            "blank_productivity_delta_claim": int(current.get("blank_productivity_delta_claim", 0) or 0),
-            "blank_org_pressure_type": int(current.get("blank_org_pressure_type", 0) or 0),
-            "missing_or_empty_evidence_spans": int(current.get("missing_or_empty_evidence_spans", 0) or 0),
-            "blank_evidence_map_hash": int(current.get("blank_evidence_map_hash", 0) or 0),
-            "empty_salience_flags": int(current.get("empty_salience_flags", 0) or 0),
-            "strategic_candidate_rows": int(current.get("strategic_candidate_rows", 0) or 0),
-            "money_without_pricing_span": int(current.get("money_without_pricing_span", 0) or 0),
-            "competitor_without_displacement_framing": int(current.get("competitor_without_displacement_framing", 0) or 0),
-            "named_company_without_named_account_evidence": int(current.get("named_company_without_named_account_evidence", 0) or 0),
-            "timeline_language_without_timing_anchor": int(current.get("timeline_language_without_timing_anchor", 0) or 0),
-            "workflow_language_without_replacement_mode": int(current.get("workflow_language_without_replacement_mode", 0) or 0),
-        },
+        "current_snapshot": current_snapshot,
         "daily_trend": [
             {
                 **dict(row),
@@ -611,7 +698,7 @@ async def summarize_extraction_health(
             }
             for row in daily_rows
         ],
-        "top_vendors": [dict(row) for row in top_vendor_rows],
+        "top_vendors": top_vendors[:top_n],
         "top_sources": [
             {
                 **dict(row),
