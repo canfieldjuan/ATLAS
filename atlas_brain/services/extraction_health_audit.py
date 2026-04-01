@@ -247,12 +247,12 @@ _NAMED_COMPANY_WITHOUT_ACCOUNT_EVIDENCE = """
 """
 _TIMELINE_WITHOUT_ANCHOR = """
 (
-  (
-    COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-    OR review_text ~* '(renewal|contract end|contract expires|deadline)'
-    OR (
-      review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
-      AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
+(
+  NULLIF(enrichment->'churn_signals'->>'renewal_timing', '') IS NOT NULL
+  OR review_text ~* '(renewal|contract end|contract expires|deadline)'
+  OR (
+    review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+    AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
     )
   )
   AND NOT (

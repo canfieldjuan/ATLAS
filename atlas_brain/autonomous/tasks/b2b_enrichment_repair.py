@@ -207,8 +207,13 @@ def _is_synthetic_reviewer_title(value: Any) -> bool:
     return title.startswith("repeat churn signal")
 
 
-def _has_timeline_trigger(review_blob: str, *, structured_churn: bool) -> bool:
-    if structured_churn:
+def _has_timeline_trigger(
+    review_blob: str,
+    *,
+    structured_churn: bool,
+    renewal_timing: Any = None,
+) -> bool:
+    if str(renewal_timing or "").strip():
         return True
     if base_enrichment._contains_any(review_blob, _TIMELINE_HARD_PATTERNS):
         return True
@@ -435,7 +440,11 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         reasons.append("competitor_without_displacement_framing")
     if named_company and not named_account_evidence:
         reasons.append("named_company_without_named_account_evidence")
-    if _has_timeline_trigger(review_blob, structured_churn=structured_churn) and not timing_anchor and not discussion_noise:
+    if _has_timeline_trigger(
+        review_blob,
+        structured_churn=structured_churn,
+        renewal_timing=churn.get("renewal_timing"),
+    ) and not timing_anchor and not discussion_noise:
         reasons.append("timeline_language_without_timing_anchor")
     if (
         base_enrichment._contains_any(
@@ -1140,7 +1149,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       COALESCE(jsonb_array_length(enrichment->'event_mentions'), 0) = 0
                       AND COALESCE(enrichment->'timeline'->>'decision_timeline', 'unknown') = 'unknown'
                       AND (
-                        review_text ~* '(renewal|contract end|contract expires|deadline)'
+                        NULLIF(enrichment->'churn_signals'->>'renewal_timing', '') IS NOT NULL
+                        OR review_text ~* '(renewal|contract end|contract expires|deadline)'
                         OR (
                           review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
                           AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
@@ -1288,7 +1298,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                     OR (
                       (
-                        COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                        NULLIF(enrichment->'churn_signals'->>'renewal_timing', '') IS NOT NULL
                         OR review_text ~* '(renewal|contract end|contract expires|deadline)'
                         OR (
                           review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'

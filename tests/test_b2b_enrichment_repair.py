@@ -1161,6 +1161,40 @@ def test_strategic_adjudication_keeps_real_timeline_churn_gap():
     assert "timeline_language_without_timing_anchor" in reasons
 
 
+def test_strategic_adjudication_skips_contract_renewal_without_explicit_timing_cue():
+    row = {
+        "summary": "Auto-renew complaint",
+        "review_text": "They automatically renewed the contract and refused to refund us.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "reviewer_title": "",
+        "content_type": "review",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": "",
+        },
+        "specific_complaints": ["automatically renewed the contract"],
+        "pricing_phrases": ["refused to refund us"],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "timeline_language_without_timing_anchor" not in reasons
+
+
 @pytest.mark.asyncio
 async def test_repair_single_shadows_with_adjudication_markers_when_no_llm_targets(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
