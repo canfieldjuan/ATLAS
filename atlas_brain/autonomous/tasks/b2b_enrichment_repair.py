@@ -55,6 +55,47 @@ _EMPLOYMENT_CONTEXT_PATTERNS = (
     "joined", "left my role", "leaving my full time", "promotion", "salary",
 )
 _AMBIGUOUS_VENDOR_TOKENS = {"copper", "close"}
+_NON_COMPETITOR_NAME_PATTERNS = (
+    "integration",
+    "app builder",
+    "template",
+    "cert",
+    "certification",
+    "course",
+    "academy",
+    "private app",
+    "custom-built",
+    "custom built",
+    "our own ",
+    "api ",
+)
+_VALID_COMPETITOR_OBJECT_SQL = """
+EXISTS (
+  SELECT 1
+  FROM jsonb_array_elements(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)) comp
+  WHERE NULLIF(BTRIM(comp->>'name'), '') IS NOT NULL
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(vendor_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(product_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) !~ '(integration|app builder|template|cert(?:ification)?|course|academy|private app|custom-built|custom built|our own |api )'
+)
+"""
+_STRONG_VALID_COMPETITOR_OBJECT_SQL = """
+EXISTS (
+  SELECT 1
+  FROM jsonb_array_elements(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)) comp
+  WHERE NULLIF(BTRIM(comp->>'name'), '') IS NOT NULL
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(vendor_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(product_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) !~ '(integration|app builder|template|cert(?:ification)?|course|academy|private app|custom-built|custom built|our own |api )'
+    AND (
+      COALESCE(comp->>'evidence_type', '') IN ('explicit_switch', 'active_evaluation')
+      OR COALESCE(comp->>'displacement_confidence', '') IN ('high', 'medium')
+      OR NULLIF(comp->>'reason', '') IS NOT NULL
+      OR NULLIF(comp->>'reason_category', '') IS NOT NULL
+      OR NULLIF(comp->>'reason_detail', '') IS NOT NULL
+    )
+)
+"""
 _AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS = (
     "crm", "sales", "pipeline", "lead", "leads", "deal", "deals", "account",
     "contact", "contacts", "prospect", "prospects", "software", "saas",
@@ -138,6 +179,27 @@ def _has_strong_competitor_signal(competitors: list[dict[str, Any]]) -> bool:
         or str(comp.get("reason") or "").strip()
         for comp in competitors
     )
+
+
+def _is_valid_competitor_name(name: Any, source_row: dict[str, Any]) -> bool:
+    candidate = str(name or "").strip()
+    if not candidate:
+        return False
+    candidate_norm = base_enrichment._normalize_compare_text(candidate)
+    if not candidate_norm:
+        return False
+    vendor_norm = base_enrichment._normalize_compare_text(source_row.get("vendor_name"))
+    product_norm = base_enrichment._normalize_compare_text(source_row.get("product_name"))
+    if candidate_norm in {vendor_norm, product_norm}:
+        return False
+    return not any(pattern in candidate_norm for pattern in _NON_COMPETITOR_NAME_PATTERNS)
+
+
+def _filtered_competitors(competitors: list[dict[str, Any]], source_row: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        comp for comp in competitors
+        if isinstance(comp, dict) and _is_valid_competitor_name(comp.get("name"), source_row)
+    ]
 
 
 def _is_synthetic_reviewer_title(value: Any) -> bool:
@@ -276,6 +338,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         comp for comp in (result.get("competitors_mentioned") or [])
         if isinstance(comp, dict) and str(comp.get("name") or "").strip()
     ]
+    competitors = _filtered_competitors(competitors, source_row)
     source = str(source_row.get("source") or "").strip().lower()
     replacement_mode = str(result.get("replacement_mode") or "").strip().lower()
     structured_churn = (
@@ -300,10 +363,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         or str(span.get("competitor") or "").strip()
         for span in spans
     ) or replacement_mode == "competitor_switch"
-    named_company = (
-        str(source_row.get("reviewer_company") or "").strip()
-        or str(reviewer.get("company_name") or "").strip()
-    )
+    named_company = str(reviewer.get("company_name") or "").strip()
     vendor_literal_hit = _has_vendor_literal_reference(source_row, review_blob)
     vendor_hit = _has_vendor_reference(source_row, review_blob)
     commercial_context = base_enrichment._has_commercial_context(base_enrichment._normalize_compare_text(review_blob))
@@ -1018,7 +1078,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     while rounds < max_rounds:
         trusted_sources = list(base_enrichment._trusted_repair_sources())
         rows = await pool.fetch(
-            """
+            f"""
             WITH batch AS (
                 SELECT id
                 FROM b2b_reviews
@@ -1049,7 +1109,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       AND review_text ~* '(cancel|cancellation|billing dispute|refund denied|runaround|automatic renewal|auto renew|renewed without notice|charged|invoiced|price increase|overcharg)'
                     )
                     OR (
-                      COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) = 0
+                      NOT ({_VALID_COMPETITOR_OBJECT_SQL})
                       AND review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
                     )
                     OR (
@@ -1135,7 +1195,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
                         OR (
                           review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-                          AND COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
+                          AND ({_VALID_COMPETITOR_OBJECT_SQL})
                         )
                         OR jsonb_path_exists(
                           COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
@@ -1214,7 +1274,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         )
                       )
                       AND NOT (
-                        jsonb_path_exists(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb), '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium")')
+                        ({_STRONG_VALID_COMPETITOR_OBJECT_SQL})
                         OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
                         OR lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'competitor_switch'
                       )

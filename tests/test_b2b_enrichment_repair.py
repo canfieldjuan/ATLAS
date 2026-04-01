@@ -367,7 +367,7 @@ async def test_run_claim_query_requires_pressure_signal(monkeypatch):
     assert "review_text ~* '(cancel|cancellation|billing dispute|refund denied" in query
     assert "review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'" in query
     assert "review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'" in query
-    assert "COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0" in query
+    assert "jsonb_array_elements(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb))" in query
 
 
 @pytest.mark.asyncio
@@ -867,6 +867,98 @@ def test_strategic_adjudication_skips_reddit_vendor_ambiguity_noise():
     reasons = repair_mod._strategic_adjudication_reasons(result, row)
 
     assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_skips_self_referential_competitor_objects():
+    row = {
+        "vendor_name": "Salesforce",
+        "product_name": "Salesforce",
+        "summary": "Admin workflow complaint",
+        "review_text": "We are evaluating options because Salesforce setup is too heavy.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"actively_evaluating": True},
+        "specific_complaints": ["setup is too heavy"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [
+            {"name": "Salesforce", "evidence_type": "implied_preference", "reason_category": ""}
+        ],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_skips_integration_artifact_competitor_objects():
+    row = {
+        "vendor_name": "Salesforce",
+        "product_name": "Salesforce",
+        "summary": "Outlook sync issues",
+        "review_text": "We are considering alternatives because the Outlook sync is painful.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"actively_evaluating": True},
+        "specific_complaints": ["Outlook sync is painful"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [
+            {"name": "Outlook Integration", "evidence_type": "implied_preference", "reason_category": "integration"}
+        ],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_skips_raw_reviewer_company_without_trusted_company_context():
+    row = {
+        "vendor_name": "ActiveCampaign",
+        "product_name": "ActiveCampaign",
+        "summary": "Support complaint",
+        "review_text": "Slow and frustrating support.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "Univera",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "reviewer_context": {"company_name": ""},
+        "churn_signals": {},
+        "specific_complaints": ["Slow and frustrating support"],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "named_company_without_named_account_evidence" not in reasons
 
 
 def test_strategic_adjudication_skips_vendor_employment_noise():

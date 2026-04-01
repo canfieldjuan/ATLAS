@@ -83,6 +83,33 @@ _VENDOR_REFERENCE = """
 )
 """
 _EMPLOYMENT_CONTEXT = r"(work(?:ing)? at|employee|career|manager|my manager|our team|interview|hiring|certification|freelance|rep at|joined|left my role|leaving my full time|promotion|salary)"
+_VALID_COMPETITOR_OBJECT = """
+EXISTS (
+  SELECT 1
+  FROM jsonb_array_elements(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)) comp
+  WHERE NULLIF(BTRIM(comp->>'name'), '') IS NOT NULL
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(vendor_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(product_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) !~ '(integration|app builder|template|cert(?:ification)?|course|academy|private app|custom-built|custom built|our own |api )'
+)
+"""
+_STRONG_VALID_COMPETITOR_OBJECT = """
+EXISTS (
+  SELECT 1
+  FROM jsonb_array_elements(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)) comp
+  WHERE NULLIF(BTRIM(comp->>'name'), '') IS NOT NULL
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(vendor_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) <> LOWER(COALESCE(product_name, ''))
+    AND LOWER(BTRIM(comp->>'name')) !~ '(integration|app builder|template|cert(?:ification)?|course|academy|private app|custom-built|custom built|our own |api )'
+    AND (
+      COALESCE(comp->>'evidence_type', '') IN ('explicit_switch', 'active_evaluation')
+      OR COALESCE(comp->>'displacement_confidence', '') IN ('high', 'medium')
+      OR NULLIF(comp->>'reason', '') IS NOT NULL
+      OR NULLIF(comp->>'reason_category', '') IS NOT NULL
+      OR NULLIF(comp->>'reason_detail', '') IS NOT NULL
+    )
+)
+"""
 _MONEY_WITHOUT_PRICING_SPAN = """
 (
   ({money_signal})
@@ -134,7 +161,7 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
     OR (
       review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-      AND {competitors_len} > 0
+      AND {valid_competitor_object}
     )
     OR jsonb_path_exists(
       COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
@@ -190,13 +217,14 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     )
   )
   AND NOT (
-    jsonb_path_exists(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb), '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium")')
+    {strong_valid_competitor_object}
     OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
     OR lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'competitor_switch'
   )
 )
 """.format(
-    competitors_len=_ARRAY_LEN.format(field="'competitors_mentioned'"),
+    valid_competitor_object=_VALID_COMPETITOR_OBJECT,
+    strong_valid_competitor_object=_STRONG_VALID_COMPETITOR_OBJECT,
     specific_complaints_len=_ARRAY_LEN.format(field="'specific_complaints'"),
     pricing_phrases_len=_ARRAY_LEN.format(field="'pricing_phrases'"),
     feature_gaps_len=_ARRAY_LEN.format(field="'feature_gaps'"),
@@ -210,7 +238,7 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
 )
 _NAMED_COMPANY_WITHOUT_ACCOUNT_EVIDENCE = """
 (
-  COALESCE(NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NOT NULL
+  NULLIF(enrichment->'reviewer_context'->>'company_name', '') IS NOT NULL
   AND NOT (
     COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'named_account'
     OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.company_name != null && @.company_name != "")')
