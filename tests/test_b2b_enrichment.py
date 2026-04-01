@@ -41,6 +41,71 @@ def test_normalize_pain_category_accepts_new_specific_buckets():
     assert b2b_enrichment._normalize_pain_category("integration_debt") == "integration_debt"
 
 
+def test_derive_competitor_annotations_prunes_generic_provider_labels():
+    row = {
+        "vendor_name": "Amazon Web Services",
+        "summary": "AWS Failed Me",
+        "review_text": "We may need a competing provider after this outage.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "churn_signals": {"intent_to_leave": True, "actively_evaluating": False},
+        "competitors_mentioned": [{"name": "competing provider"}],
+    }
+
+    derived = b2b_enrichment._derive_competitor_annotations(result, row)
+
+    assert derived == []
+
+
+def test_derive_competitor_annotations_prunes_weak_neutral_mentions_without_named_context():
+    row = {
+        "vendor_name": "ActiveCampaign",
+        "summary": "Pricing and support issues",
+        "review_text": "Their pricing is outrageous and support is nonexistent. We need a better answer fast.",
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "churn_signals": {"intent_to_leave": True, "actively_evaluating": False},
+        "competitors_mentioned": [{"name": "HubSpot"}],
+    }
+
+    derived = b2b_enrichment._derive_competitor_annotations(result, row)
+
+    assert derived == []
+
+
+def test_repair_target_fields_skips_roundup_style_competitor_repair_without_named_displacement():
+    row = {
+        "source": "reddit",
+        "enrichment_status": "enriched",
+        "summary": "I went through hundreds of user reviews of project management tools, here's what actually matters.",
+        "review_text": (
+            "Asana is strong for structured teams and workflows. Monday.com has great UI. "
+            "Notion is loved for docs plus project hybrid use. Trello falls short for growing teams."
+        ),
+        "pros": "",
+        "cons": "",
+    }
+    result = {
+        "pain_category": "overall_dissatisfaction",
+        "salience_flags": [],
+        "competitors_mentioned": [],
+        "specific_complaints": ["limited customization compared to others"],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "feature_gaps": ["limited customization compared to others"],
+        "event_mentions": [],
+        "timeline": {"decision_timeline": "unknown"},
+    }
+
+    targets = b2b_enrichment._repair_target_fields(result, row)
+
+    assert "competitors_mentioned" not in targets
+
+
 def test_is_no_signal_result_accepts_empty_community_discussion_without_rating():
     result = {
         "churn_signals": {

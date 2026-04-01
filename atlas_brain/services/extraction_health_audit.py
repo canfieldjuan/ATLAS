@@ -69,7 +69,7 @@ _MONEY_WITHOUT_PRICING_SPAN = """
 _COMPETITOR_WITHOUT_DISPLACEMENT = """
 (
   (
-    review_text ~* '(switched to|moved to|replaced with|evaluating|looking at|considering|alternative to|[[:<:]]vs[[:>:]])'
+    review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
     OR {competitors_len} > 0
   )
   AND (

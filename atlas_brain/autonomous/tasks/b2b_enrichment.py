@@ -11,9 +11,11 @@ runner does not double-synthesize.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,6 +31,7 @@ from ._b2b_witnesses import (
     derive_replacement_mode,
     derive_salience_flags,
 )
+from ._execution_progress import task_run_id as _task_run_id
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
@@ -99,7 +102,7 @@ async def _lookup_cached_json_response(
     temperature: float,
     response_format: dict[str, Any] | None = None,
     guided_json: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
     """Lookup a cached structured response and return the envelope either way."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
     from ...services.b2b.cache_runner import (
@@ -122,13 +125,87 @@ async def _lookup_cached_json_response(
     )
     cached = await lookup_b2b_exact_stage_text(request)
     if cached is None:
-        return None, request.request_envelope
+        return None, request.request_envelope, False
 
     text = clean_llm_output(cached["response_text"])
     parsed = parse_json_response(text, recover_truncated=True)
     if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-        return parsed, request.request_envelope
-    return None, request.request_envelope
+        return parsed, request.request_envelope, True
+    return None, request.request_envelope, False
+
+
+def _unpack_cached_lookup_result(
+    result: tuple[Any, ...],
+) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
+    if len(result) == 3:
+        cached, request_envelope, cache_hit = result
+        return cached, request_envelope, bool(cache_hit)
+    if len(result) == 2:
+        cached, request_envelope = result
+        return cached, request_envelope, cached is not None
+    raise ValueError(f"Unexpected cached lookup result shape: {len(result)}")
+
+
+def _unpack_stage_result(
+    result: tuple[Any, ...],
+) -> tuple[dict[str, Any] | None, str | None, bool]:
+    if len(result) == 3:
+        parsed, model_id, cache_hit = result
+        return parsed, model_id, bool(cache_hit)
+    if len(result) == 2:
+        parsed, model_id = result
+        return parsed, model_id, False
+    raise ValueError(f"Unexpected stage result shape: {len(result)}")
+
+
+def _pack_stage_result(
+    parsed: dict[str, Any] | None,
+    model_id: str | None,
+    cache_hit: bool,
+    *,
+    include_cache_hit: bool,
+) -> tuple[dict[str, Any] | None, str | None] | tuple[dict[str, Any] | None, str | None, bool]:
+    if include_cache_hit:
+        return parsed, model_id, cache_hit
+    return parsed, model_id
+
+
+def _trace_enrichment_llm_call(
+    span_name: str,
+    *,
+    provider: str,
+    model: str | None,
+    messages: list[dict[str, str]],
+    usage: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+    duration_ms: float,
+    api_endpoint: str | None = None,
+    provider_request_id: str | None = None,
+) -> None:
+    from ...pipelines.llm import _trace_cache_metrics, trace_llm_call
+
+    usage_dict = usage if isinstance(usage, dict) else {}
+    normalized_usage = {
+        "input_tokens": usage_dict.get("input_tokens", usage_dict.get("prompt_tokens", 0)),
+        "output_tokens": usage_dict.get("output_tokens", usage_dict.get("completion_tokens", 0)),
+        "billable_input_tokens": usage_dict.get("billable_input_tokens", usage_dict.get("prompt_tokens")),
+    }
+    cached_tokens, cache_write_tokens, billable_input_tokens = _trace_cache_metrics(normalized_usage, {})
+    trace_llm_call(
+        span_name,
+        input_tokens=int(normalized_usage.get("input_tokens") or 0),
+        output_tokens=int(normalized_usage.get("output_tokens") or 0),
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        billable_input_tokens=billable_input_tokens,
+        model=str(model or ""),
+        provider=provider,
+        duration_ms=duration_ms,
+        metadata=metadata or {},
+        input_data={"messages": [{"role": msg["role"], "content": (msg["content"] or "")[:500]} for msg in messages]},
+        api_endpoint=api_endpoint,
+        provider_request_id=provider_request_id,
+    )
 
 
 async def _store_cached_json_response(
@@ -159,22 +236,34 @@ async def _store_cached_json_response(
     )
 
 
-async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None, str | None]:
+async def _call_vllm_tier1(
+    payload_json: str,
+    cfg,
+    client,
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     """Tier 1 extraction: deterministic fields via local vLLM.
 
-    Returns (result_dict, model_id) or (None, None) on failure.
+    Returns (result_dict, model_id, cache_hit) or (None, None, False) on failure.
     """
     from ...skills import get_skill_registry
 
     skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     model_id = cfg.enrichment_tier1_model
     request_envelope: dict[str, Any] | None = None
+    messages = [
+        {"role": "system", "content": skill.content},
+        {"role": "user", "content": payload_json},
+    ]
     try:
-        cached, request_envelope = await _lookup_cached_json_response(
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
             "b2b_enrichment.tier1",
             provider="vllm",
             model=model_id,
@@ -184,18 +273,17 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
             temperature=0.0,
             response_format={"type": "json_object"},
             guided_json=_TIER1_JSON_SCHEMA,
+            )
         )
         if cached is not None:
-            return cached, model_id
+            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
 
+        call_started = time.monotonic()
         resp = await client.post(
             "/v1/chat/completions",
             json={
                 "model": cfg.enrichment_tier1_model,
-                "messages": [
-                    {"role": "system", "content": skill.content},
-                    {"role": "user", "content": payload_json},
-                ],
+                "messages": messages,
                 "max_tokens": cfg.enrichment_tier1_max_tokens,
                 "temperature": 0.0,
                 "guided_json": _TIER1_JSON_SCHEMA,
@@ -203,9 +291,20 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
             },
         )
         resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        _trace_enrichment_llm_call(
+            "task.b2b_enrichment.tier1",
+            provider="vllm",
+            model=model_id,
+            messages=messages,
+            usage=body.get("usage", {}),
+            metadata=trace_metadata,
+            duration_ms=(time.monotonic() - call_started) * 1000,
+            api_endpoint=f"{str(getattr(client, 'base_url', '')).rstrip('/')}/v1/chat/completions",
+        )
+        text = body["choices"][0]["message"]["content"].strip()
         if not text:
-            return None, model_id
+            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
 
         from ...pipelines.llm import clean_llm_output, parse_json_response
         text = clean_llm_output(text)
@@ -220,17 +319,23 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
                     response_text=text,
                     metadata={"tier": 1, "backend": "vllm"},
                 )
-            return parsed, model_id
-        return None, model_id
+            return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
+        return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
     except (json.JSONDecodeError, ValueError):
         logger.warning("Tier 1 vLLM returned invalid JSON")
-        return None, model_id
+        return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
     except Exception:
         logger.exception("Tier 1 vLLM call failed")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
-async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, str | None]:
+async def _call_openrouter_tier1(
+    payload_json: str,
+    cfg,
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     """Tier 1 extraction via OpenRouter (cloud model, no guided_json)."""
     import httpx
     from ...skills import get_skill_registry
@@ -238,17 +343,22 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
     skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     api_key = cfg.openrouter_api_key
     if not api_key:
         logger.warning("OpenRouter API key not configured for enrichment")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     model_id = cfg.enrichment_openrouter_model or "openai/gpt-oss-120b"
     request_envelope: dict[str, Any] | None = None
+    messages = [
+        {"role": "system", "content": skill.content},
+        {"role": "user", "content": payload_json},
+    ]
     try:
-        cached, request_envelope = await _lookup_cached_json_response(
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
             "b2b_enrichment.tier1",
             provider="openrouter",
             model=model_id,
@@ -257,11 +367,13 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
             max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
             temperature=0.0,
             response_format={"type": "json_object"},
+            )
         )
         if cached is not None:
-            return cached, model_id
+            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
+            call_started = time.monotonic()
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -270,10 +382,7 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
                 },
                 json={
                     "model": model_id,
-                    "messages": [
-                        {"role": "system", "content": skill.content},
-                        {"role": "user", "content": payload_json},
-                    ],
+                    "messages": messages,
                     "max_tokens": max(cfg.enrichment_tier1_max_tokens, 4096),
                     "temperature": 0.0,
                     "response_format": {"type": "json_object"},
@@ -281,10 +390,21 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
             )
             resp.raise_for_status()
             body = resp.json()
+            _trace_enrichment_llm_call(
+                "task.b2b_enrichment.tier1",
+                provider="openrouter",
+                model=model_id,
+                messages=messages,
+                usage=body.get("usage", {}),
+                metadata=trace_metadata,
+                duration_ms=(time.monotonic() - call_started) * 1000,
+                api_endpoint="https://openrouter.ai/api/v1/chat/completions",
+                provider_request_id=resp.headers.get("x-request-id") or body.get("id"),
+            )
             choices = body.get("choices") or []
             if not choices:
                 logger.warning("OpenRouter returned no choices")
-                return None, model_id
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
             msg = choices[0].get("message") or {}
             text = msg.get("content") or ""
             # Reasoning models (o1/o3/gpt-oss) may put output in reasoning field
@@ -298,7 +418,7 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
             text = text.strip()
             if not text:
                 logger.warning("OpenRouter returned empty content")
-                return None, model_id
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
 
             from ...pipelines.llm import clean_llm_output, parse_json_response
             text = clean_llm_output(text)
@@ -313,12 +433,12 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
                         response_text=text,
                         metadata={"tier": 1, "backend": "openrouter"},
                     )
-                return parsed, model_id
+                return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
             logger.warning("OpenRouter tier 1 returned unparseable JSON")
-            return None, model_id
+            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
     except Exception:
         logger.exception("OpenRouter tier 1 call failed")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
 def _tier1_has_extraction_gaps(tier1: dict) -> bool:
@@ -350,19 +470,22 @@ async def _call_vllm_tier2(
     cfg: Any,
     client: Any,
     truncate_length: int,
-) -> tuple[dict | None, str | None]:
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     """Tier 2 extraction: classify + extract via local vLLM.
 
     Receives Tier 1 output as context so it can reference extracted complaints
     and quotes when classifying pain and detecting indicators.
-    Returns (result_dict, model_id) or (None, None) on failure.
+    Returns (result_dict, model_id, cache_hit) or (None, None, False) on failure.
     """
     from ...skills import get_skill_registry
 
     skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     tier2_model = cfg.enrichment_tier2_model or cfg.enrichment_tier1_model
     payload = _build_classify_payload(row, truncate_length)
@@ -370,10 +493,15 @@ async def _call_vllm_tier2(
     payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
     payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
     payload_json = json.dumps(payload)
+    messages = [
+        {"role": "system", "content": skill.content},
+        {"role": "user", "content": payload_json},
+    ]
 
     try:
         request_envelope: dict[str, Any] | None
-        cached, request_envelope = await _lookup_cached_json_response(
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
             "b2b_enrichment.tier2",
             provider="vllm",
             model=tier2_model,
@@ -382,27 +510,37 @@ async def _call_vllm_tier2(
             max_tokens=cfg.enrichment_tier2_max_tokens,
             temperature=0.0,
             response_format={"type": "json_object"},
+            )
         )
         if cached is not None:
-            return cached, tier2_model
+            return _pack_stage_result(cached, tier2_model, cache_hit, include_cache_hit=include_cache_hit)
 
+        call_started = time.monotonic()
         resp = await client.post(
             "/v1/chat/completions",
             json={
                 "model": tier2_model,
-                "messages": [
-                    {"role": "system", "content": skill.content},
-                    {"role": "user", "content": payload_json},
-                ],
+                "messages": messages,
                 "max_tokens": cfg.enrichment_tier2_max_tokens,
                 "temperature": 0.0,
                 "response_format": {"type": "json_object"},
             },
         )
         resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        _trace_enrichment_llm_call(
+            "task.b2b_enrichment.tier2",
+            provider="vllm",
+            model=tier2_model,
+            messages=messages,
+            usage=body.get("usage", {}),
+            metadata=trace_metadata,
+            duration_ms=(time.monotonic() - call_started) * 1000,
+            api_endpoint=f"{str(getattr(client, 'base_url', '')).rstrip('/')}/v1/chat/completions",
+        )
+        text = body["choices"][0]["message"]["content"].strip()
         if not text:
-            return None, tier2_model
+            return _pack_stage_result(None, tier2_model, False, include_cache_hit=include_cache_hit)
 
         from ...pipelines.llm import clean_llm_output, parse_json_response
         text = clean_llm_output(text)
@@ -417,11 +555,11 @@ async def _call_vllm_tier2(
                     response_text=text,
                     metadata={"tier": 2, "backend": "vllm"},
                 )
-            return parsed, tier2_model
-        return None, tier2_model
+            return _pack_stage_result(parsed, tier2_model, False, include_cache_hit=include_cache_hit)
+        return _pack_stage_result(None, tier2_model, False, include_cache_hit=include_cache_hit)
     except Exception:
         logger.warning("Tier 2 vLLM call failed", exc_info=True)
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
 def _get_tier2_client(cfg: Any) -> Any:
@@ -440,7 +578,10 @@ async def _call_openrouter_tier2(
     row: dict,
     cfg: Any,
     truncate_length: int,
-) -> tuple[dict | None, str | None]:
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     """Tier 2 extraction via OpenRouter (cloud model).
 
     Mirrors _call_openrouter_tier1 but uses the tier2 skill and injects
@@ -453,12 +594,12 @@ async def _call_openrouter_tier2(
     skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found for OpenRouter tier 2")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     api_key = cfg.openrouter_api_key
     if not api_key:
         logger.warning("OpenRouter API key not configured for tier 2 enrichment")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     model_id = (
         cfg.enrichment_tier2_openrouter_model
@@ -469,10 +610,15 @@ async def _call_openrouter_tier2(
     payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
     payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
     payload_json = json.dumps(payload)
+    messages = [
+        {"role": "system", "content": skill.content},
+        {"role": "user", "content": payload_json},
+    ]
 
     try:
         request_envelope: dict[str, Any] | None
-        cached, request_envelope = await _lookup_cached_json_response(
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
             "b2b_enrichment.tier2",
             provider="openrouter",
             model=model_id,
@@ -481,11 +627,13 @@ async def _call_openrouter_tier2(
             max_tokens=cfg.enrichment_tier2_max_tokens,
             temperature=0.0,
             response_format={"type": "json_object"},
+            )
         )
         if cached is not None:
-            return cached, model_id
+            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.enrichment_tier2_timeout_seconds, connect=10.0)) as client:
+            call_started = time.monotonic()
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -494,10 +642,7 @@ async def _call_openrouter_tier2(
                 },
                 json={
                     "model": model_id,
-                    "messages": [
-                        {"role": "system", "content": skill.content},
-                        {"role": "user", "content": payload_json},
-                    ],
+                    "messages": messages,
                     "max_tokens": cfg.enrichment_tier2_max_tokens,
                     "temperature": 0.0,
                     "response_format": {"type": "json_object"},
@@ -505,15 +650,26 @@ async def _call_openrouter_tier2(
             )
             resp.raise_for_status()
             body = resp.json()
+            _trace_enrichment_llm_call(
+                "task.b2b_enrichment.tier2",
+                provider="openrouter",
+                model=model_id,
+                messages=messages,
+                usage=body.get("usage", {}),
+                metadata=trace_metadata,
+                duration_ms=(time.monotonic() - call_started) * 1000,
+                api_endpoint="https://openrouter.ai/api/v1/chat/completions",
+                provider_request_id=resp.headers.get("x-request-id") or body.get("id"),
+            )
             choices = body.get("choices") or []
             if not choices:
                 logger.warning("OpenRouter tier 2 returned no choices")
-                return None, model_id
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
             text = (choices[0].get("message") or {}).get("content") or ""
             text = text.strip()
             if not text:
                 logger.warning("OpenRouter tier 2 returned empty content")
-                return None, model_id
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
             from ...pipelines.llm import clean_llm_output, parse_json_response
             text = clean_llm_output(text)
             parsed = parse_json_response(text, recover_truncated=True)
@@ -527,12 +683,12 @@ async def _call_openrouter_tier2(
                         response_text=text,
                         metadata={"tier": 2, "backend": "openrouter"},
                     )
-                return parsed, model_id
+                return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
             logger.warning("OpenRouter tier 2 returned unparseable JSON")
-            return None, model_id
+            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
     except Exception:
         logger.warning("OpenRouter tier 2 call failed", exc_info=True)
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
 def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
@@ -709,13 +865,53 @@ _COMPETITOR_RECOVERY_BLOCKLIST = {
     "a", "an", "the", "another tool", "another vendor", "other tool", "other vendor",
     "new tool", "new vendor", "options", "alternative", "alternatives",
     "alternative platform", "alternative platforms", "crm",
+    "provider", "providers", "competing provider", "competing providers",
 }
 
 _GENERIC_COMPETITOR_TOKENS = {
     "alternative", "alternatives", "platform", "platforms", "tool", "tools",
     "vendor", "vendors", "software", "solutions", "solution", "service",
     "services", "system", "systems", "crm", "suite", "app", "apps",
+    "provider", "providers", "competing",
 }
+
+_COMPETITOR_CONTEXT_PATTERNS = (
+    "switched to", "moved to", "replaced with", "migrating to", "migration to",
+    "evaluating", "looking at", "considering", "shortlisting", "shortlisted",
+    "poc with", "proof of concept with", "instead of", "compared to", "versus", " vs ",
+)
+
+
+def _is_generic_competitor_name(name: str) -> bool:
+    normalized = normalize_company_name(name) or str(name or "").strip().lower()
+    if not normalized:
+        return True
+    if normalized in _COMPETITOR_RECOVERY_BLOCKLIST:
+        return True
+    tokens = [
+        token.lower()
+        for token in re.findall(r"[A-Za-z0-9]+", str(name or ""))
+        if token
+    ]
+    return bool(tokens) and all(token in _GENERIC_COMPETITOR_TOKENS for token in tokens)
+
+
+def _has_named_competitor_context(name: str, source_row: dict[str, Any]) -> bool:
+    candidate = str(name or "").strip()
+    if not candidate:
+        return False
+    review_blob = " ".join(
+        str(source_row.get(field) or "")
+        for field in ("summary", "review_text", "pros", "cons")
+    ).lower()
+    name_lower = candidate.lower()
+    for match in re.finditer(re.escape(name_lower), review_blob):
+        start = max(0, match.start() - 96)
+        end = min(len(review_blob), match.end() + 96)
+        window = review_blob[start:end]
+        if any(pattern in window for pattern in _COMPETITOR_CONTEXT_PATTERNS):
+            return True
+    return False
 
 
 def _recover_competitor_mentions(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -773,11 +969,14 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
             continue
         merged = dict(comp)
         name = str(comp.get("name") or "").strip()
+        if _is_generic_competitor_name(name):
+            continue
         comp_blob = " ".join(
             [name]
             + _normalize_text_list(comp.get("features"))
             + [str(comp.get("reason_detail") or "")]
         ).lower()
+        named_context = _has_named_competitor_context(name, source_row)
         switch_patterns = (
             f"switched to {name.lower()}",
             f"moved to {name.lower()}",
@@ -803,6 +1002,8 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
             evidence_type = "active_evaluation"
         elif merged.get("reason_detail") or merged.get("features"):
             evidence_type = "implied_preference"
+        elif named_context:
+            evidence_type = "implied_preference"
         else:
             evidence_type = "neutral_mention"
         confidence = "low"
@@ -818,6 +1019,15 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
             str(merged.get("reason_detail") or ""),
             comp_blob,
         )
+        if (
+            merged["evidence_type"] == "neutral_mention"
+            and merged["displacement_confidence"] == "low"
+            and not str(merged.get("reason_detail") or "").strip()
+            and not str(merged.get("reason_category") or "").strip()
+            and not _normalize_text_list(merged.get("features"))
+            and not named_context
+        ):
+            continue
         comps.append(merged)
     return comps
 
@@ -1301,23 +1511,79 @@ def _coerce_int_override(
     return max(min_value, min(max_value, coerced))
 
 
+def _empty_exact_cache_usage() -> dict[str, int]:
+    return {
+        "exact_cache_hits": 0,
+        "tier1_exact_cache_hits": 0,
+        "tier2_exact_cache_hits": 0,
+        "generated": 0,
+        "tier1_generated_calls": 0,
+        "tier2_generated_calls": 0,
+    }
+
+
+def _accumulate_exact_cache_usage(
+    totals: dict[str, int],
+    usage: dict[str, Any] | None,
+) -> None:
+    if not usage:
+        return
+    for key in (
+        "exact_cache_hits",
+        "tier1_exact_cache_hits",
+        "tier2_exact_cache_hits",
+        "generated",
+        "tier1_generated_calls",
+        "tier2_generated_calls",
+    ):
+        totals[key] = int(totals.get(key, 0) or 0) + int(usage.get(key, 0) or 0)
+
+
 async def _enrich_rows(
     rows,
     cfg,
     pool,
     *,
     concurrency_override: int | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Enrich a list of claimed rows concurrently."""
     max_attempts = cfg.enrichment_max_attempts
 
     effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_concurrency))
     sem = asyncio.Semaphore(effective_concurrency)
+    enrich_single_params = inspect.signature(_enrich_single).parameters
+    supports_usage_out = "usage_out" in enrich_single_params
+    supports_run_id = "run_id" in enrich_single_params
 
     async def _bounded_enrich(row):
         async with sem:
-            return await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
-                                        cfg.enrichment_max_tokens, cfg.review_truncate_length)
+            usage = _empty_exact_cache_usage()
+            kwargs: dict[str, Any] = {}
+            if supports_run_id:
+                kwargs["run_id"] = run_id
+            if supports_usage_out:
+                await _enrich_single(
+                    pool,
+                    row,
+                    max_attempts,
+                    cfg.enrichment_local_only,
+                    cfg.enrichment_max_tokens,
+                    cfg.review_truncate_length,
+                    usage_out=usage,
+                    **kwargs,
+                )
+            else:
+                await _enrich_single(
+                    pool,
+                    row,
+                    max_attempts,
+                    cfg.enrichment_local_only,
+                    cfg.enrichment_max_tokens,
+                    cfg.review_truncate_length,
+                    **kwargs,
+                )
+            return usage
 
     results = await asyncio.gather(
         *[_bounded_enrich(row) for row in rows],
@@ -1327,6 +1593,13 @@ async def _enrich_rows(
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
             logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
+
+    cache_usage = _empty_exact_cache_usage()
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        if isinstance(result, dict):
+            _accumulate_exact_cache_usage(cache_usage, result)
 
     batch_ids = [row["id"] for row in rows]
     status_rows = await pool.fetch(
@@ -1355,6 +1628,7 @@ async def _enrich_rows(
         "quarantined": quarantined,
         "no_signal": no_signal or 0,
         "failed": failed,
+        **cache_usage,
     }
 
 
@@ -1569,11 +1843,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         for source in str(cfg.enrichment_priority_sources or "").split(",")
         if source.strip()
     ]
+    run_id = _task_run_id(task)
 
     total_enriched = 0
     total_failed = 0
     total_no_signal = 0
     total_quarantined = 0
+    cache_usage = _empty_exact_cache_usage()
     rounds = 0
 
     while rounds < max_rounds:
@@ -1615,12 +1891,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             cfg,
             pool,
             concurrency_override=effective_concurrency,
+            run_id=run_id,
         )
         total_enriched += result.get("enriched", 0)
         batch_failed = result.get("failed", 0)
         total_failed += batch_failed
         total_no_signal += result.get("no_signal", 0)
         total_quarantined += result.get("quarantined", 0)
+        _accumulate_exact_cache_usage(cache_usage, result)
         rounds += 1
 
         # If most of the batch failed, vLLM is likely overwhelmed -- stop the loop
@@ -1640,6 +1918,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "quarantined": total_quarantined,
         "failed": total_failed,
         "no_signal": total_no_signal,
+        **cache_usage,
         "rounds": rounds,
         "orphaned_requeued": orphaned,
         "exhausted_marked_failed": exhausted,
@@ -1653,7 +1932,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     total_processed = total_enriched + total_quarantined + total_failed + total_no_signal
     await record_attempt(
         pool, artifact_type="enrichment", artifact_id="batch",
-        run_id=str(task.id), stage="enrichment",
+        run_id=run_id, stage="enrichment",
         status="succeeded" if total_failed == 0 else "failed",
         score=total_enriched,
         blocker_count=total_failed,
@@ -1667,7 +1946,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             summary=f"Enrichment: {total_enriched} enriched, {total_failed} failed, {total_quarantined} quarantined",
             severity="warning" if total_failed > 0 else "info",
             actionable=total_failed > 5,
-            run_id=str(task.id),
+            run_id=run_id,
             reason_code="enrichment_failures" if total_failed > 0 else "enrichment_quarantines",
             detail={"enriched": total_enriched, "failed": total_failed,
                     "quarantined": total_quarantined, "no_signal": total_no_signal},
@@ -1682,9 +1961,18 @@ _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 
 
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
-                         max_tokens: int, truncate_length: int = 3000) -> bool:
-    """Enrich a single B2B review with churn signals. Returns True on success."""
+                         max_tokens: int, truncate_length: int = 3000,
+                         run_id: str | None = None,
+                         usage_out: dict[str, int] | None = None) -> bool | str:
+    """Enrich a single B2B review and optionally report exact-cache usage."""
     review_id = row["id"]
+    cache_usage = _empty_exact_cache_usage()
+
+    def _finish(status: bool | str) -> bool | str:
+        if usage_out is not None:
+            usage_out.clear()
+            usage_out.update(cache_usage)
+        return status
 
     # Skip reviews with insufficient text -- title-only scrapes can't yield 47 fields
     review_text = row.get("review_text") or ""
@@ -1693,7 +1981,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             "UPDATE b2b_reviews SET enrichment_status = 'not_applicable' WHERE id = $1",
             review_id,
         )
-        return False
+        return _finish(False)
 
     source = str(row.get("source") or "").strip().lower()
     skip_sources = {
@@ -1718,13 +2006,19 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             source,
             review_id,
         )
-        return False
+        return _finish(False)
 
     try:
         cfg = settings.b2b_churn
         full_extraction_timeout = cfg.enrichment_full_extraction_timeout_seconds
         payload = _build_classify_payload(row, truncate_length)
         payload_json = json.dumps(payload)
+        trace_metadata = {
+            "run_id": run_id,
+            "vendor_name": str(row.get("vendor_name") or ""),
+            "review_id": str(review_id),
+            "source": str(row.get("source") or ""),
+        }
         client = _get_tier1_client(cfg)
 
         # Tier 1: deterministic extraction (base fields)
@@ -1735,35 +2029,74 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             and bool(cfg.openrouter_api_key)
         )
         if use_openrouter:
-            tier1, tier1_model = await asyncio.wait_for(
-                _call_openrouter_tier1(payload_json, cfg),
+            tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_openrouter_tier1(
+                    payload_json,
+                    cfg,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata | {"tier": "tier1"},
+                ),
                 timeout=full_extraction_timeout,
-            )
+            ))
         else:
-            tier1, tier1_model = await asyncio.wait_for(
-                _call_vllm_tier1(payload_json, cfg, client),
+            tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_vllm_tier1(
+                    payload_json,
+                    cfg,
+                    client,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata | {"tier": "tier1"},
+                ),
                 timeout=full_extraction_timeout,
-            )
+            ))
+        if tier1_cache_hit:
+            cache_usage["tier1_exact_cache_hits"] += 1
+            cache_usage["exact_cache_hits"] += 1
+        elif tier1_model is not None:
+            cache_usage["tier1_generated_calls"] += 1
+            cache_usage["generated"] += 1
         if tier1 is None:
             logger.debug("Tier 1 returned None for %s, deferring to next cycle", review_id)
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-            return False
+            return _finish(False)
 
         # Tier 2: conditional -- only fire when tier 1 left extraction gaps
         tier2 = None
         tier2_model = None
+        tier2_cache_hit = False
         if _tier1_has_extraction_gaps(tier1):
             if use_openrouter:
-                tier2, tier2_model = await asyncio.wait_for(
-                    _call_openrouter_tier2(tier1, row, cfg, truncate_length),
+                tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                    _call_openrouter_tier2(
+                        tier1,
+                        row,
+                        cfg,
+                        truncate_length,
+                        include_cache_hit=True,
+                        trace_metadata=trace_metadata | {"tier": "tier2"},
+                    ),
                     timeout=full_extraction_timeout,
-                )
+                ))
             else:
                 tier2_client = _get_tier2_client(cfg)
-                tier2, tier2_model = await asyncio.wait_for(
-                    _call_vllm_tier2(tier1, row, cfg, tier2_client, truncate_length),
+                tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                    _call_vllm_tier2(
+                        tier1,
+                        row,
+                        cfg,
+                        tier2_client,
+                        truncate_length,
+                        include_cache_hit=True,
+                        trace_metadata=trace_metadata | {"tier": "tier2"},
+                    ),
                     timeout=full_extraction_timeout,
-                )
+                ))
+        if tier2_cache_hit:
+            cache_usage["tier2_exact_cache_hits"] += 1
+            cache_usage["exact_cache_hits"] += 1
+        elif tier2_model is not None:
+            cache_usage["tier2_generated_calls"] += 1
+            cache_usage["generated"] += 1
         if tier2 is not None:
             model_id = f"hybrid:{tier1_model}+{tier2_model}"
         else:
@@ -1802,8 +2135,9 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                     severity="error",
                     actionable=True,
                     summary=f"Evidence engine failed for {row.get('vendor_name')} review",
+                    run_id=run_id,
                 )
-                return "quarantined"
+                return _finish("quarantined")
 
         if result:
             # Extract sentiment_trajectory subfields for indexed columns
@@ -1862,6 +2196,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                     severity="warning",
                     summary=f"Low-fidelity: {', '.join(low_fidelity_reasons[:3])}",
                     evidence={"reasons": low_fidelity_reasons, "source": row.get("source")},
+                    run_id=run_id,
                 )
 
             # Fire ntfy notification for high-urgency signals (must never
@@ -1897,11 +2232,11 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
 
             if target_status == "quarantined":
-                return "quarantined"
-            return True
+                return _finish("quarantined")
+            return _finish(True)
         else:
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-            return False
+            return _finish(False)
 
     except Exception:
         logger.exception("Failed to enrich B2B review %s", review_id)
@@ -1919,7 +2254,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             )
         except Exception:
             pass
-        return False
+        return _finish(False)
 
 
 def _smart_truncate(text: str, max_len: int = 3000) -> str:
@@ -2457,7 +2792,7 @@ _REPAIR_NEGATIVE_PATTERNS = (
 )
 _REPAIR_COMPETITOR_PATTERNS = (
     "switched to", "moved to", "replaced with", "evaluating", "looking at",
-    "considering", "alternative to", " vs ",
+    "considering", "shortlisting", "shortlisted", "poc with", "proof of concept with",
 )
 _REPAIR_PRICING_PATTERNS = (
     "billing", "invoice", "invoiced", "charged", "refund", "renewal",

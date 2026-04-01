@@ -327,7 +327,7 @@ async def test_run_claim_query_requires_pressure_signal(monkeypatch):
     query = pool.fetch.await_args.args[0]
     assert "COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction')" in query
     assert "review_text ~* '(cancel|cancellation|billing dispute|refund denied" in query
-    assert "review_text ~* '(switched to|moved to|replaced with|evaluating|looking at|considering" in query
+    assert "review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering" in query
 
 
 @pytest.mark.asyncio
@@ -525,6 +525,39 @@ def test_strategic_adjudication_skips_neutral_competitor_comparisons_without_pre
         "pricing_phrases": [],
         "feature_gaps": [],
         "competitors_mentioned": [{"name": "GitHub", "evidence_type": "neutral_mention"}],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_skips_roundup_style_comparisons_without_named_displacement():
+    row = {
+        "summary": "I went through hundreds of user reviews of project management tools, here's what actually matters.",
+        "review_text": (
+            "Asana is strong for structured teams and workflows. Monday.com has great UI. "
+            "Notion is loved for docs plus project hybrid use. Trello falls short for growing teams."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "workflow_substitution",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": ["limited customization compared to others"],
+        "pricing_phrases": [],
+        "feature_gaps": ["limited customization compared to others"],
+        "competitors_mentioned": [],
         "evidence_spans": [],
     }
 

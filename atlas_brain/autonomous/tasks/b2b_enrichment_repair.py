@@ -11,6 +11,7 @@ from ...pipelines.llm import call_llm_with_skill, get_pipeline_llm, parse_json_r
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from . import b2b_enrichment as base_enrichment
+from ._execution_progress import task_run_id as _task_run_id
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment_repair")
 
@@ -34,6 +35,11 @@ _COMPETITOR_PRESSURE_PATTERNS = (
     "cancel", "cancellation", "refund", "billing dispute", "renewal", "price increase",
     "overcharged", "not worth", "switch", "switched to", "moved to", "replaced with",
     "evaluating", "considering", "alternative", "frustrated", "pain", "issue", "problem",
+)
+_DISPLACEMENT_COMPETITOR_PATTERNS = (
+    "switched to", "moved to", "replaced with", "migrating to", "migration to",
+    "evaluating", "looking at", "considering", "shortlisting", "shortlisted",
+    "poc with", "proof of concept with",
 )
 _HARD_GAP_SQL = """
 (
@@ -156,7 +162,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         reasons.append("money_without_pricing_span")
     if (
         pressure_signal
-        and (base_enrichment._contains_any(review_blob, base_enrichment._REPAIR_COMPETITOR_PATTERNS) or competitors)
+        and (base_enrichment._contains_any(review_blob, _DISPLACEMENT_COMPETITOR_PATTERNS) or competitors)
         and not displacement_framed
     ):
         reasons.append("competitor_without_displacement_framing")
@@ -299,6 +305,7 @@ async def _repair_single(
     row: dict[str, Any],
     cfg,
     max_attempts: int,
+    run_id: str | None = None,
     usage_out: dict[str, int] | None = None,
 ) -> str:
     review_id = row["id"]
@@ -330,7 +337,19 @@ async def _repair_single(
     try:
         payload = _build_repair_payload(row, baseline, cfg.review_truncate_length)
         repair_result, model_id, repair_cache_hit = base_enrichment._unpack_stage_result(await asyncio.wait_for(
-            _call_repair_extractor(payload, repair_model, cfg, include_cache_hit=True),
+            _call_repair_extractor(
+                payload,
+                repair_model,
+                cfg,
+                include_cache_hit=True,
+                trace_metadata={
+                    "run_id": run_id,
+                    "vendor_name": str(row.get("vendor_name") or ""),
+                    "review_id": str(review_id),
+                    "source": str(row.get("source") or ""),
+                    "stage": "repair_extraction",
+                },
+            ),
             timeout=cfg.enrichment_full_extraction_timeout_seconds,
         ))
     except Exception:
@@ -437,7 +456,14 @@ async def _repair_single(
     return _finish(status)
 
 
-async def _repair_rows(rows, cfg, pool, *, concurrency_override: int | None = None) -> dict[str, int]:
+async def _repair_rows(
+    rows,
+    cfg,
+    pool,
+    *,
+    concurrency_override: int | None = None,
+    run_id: str | None = None,
+) -> dict[str, int]:
     max_attempts = cfg.enrichment_repair_max_attempts
     effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_repair_concurrency))
     sem = asyncio.Semaphore(effective_concurrency)
@@ -445,7 +471,7 @@ async def _repair_rows(rows, cfg, pool, *, concurrency_override: int | None = No
     async def _bounded(row: dict[str, Any]) -> dict[str, int | str]:
         async with sem:
             usage = {"exact_cache_hits": 0, "generated": 0}
-            status = await _repair_single(pool, row, cfg, max_attempts, usage_out=usage)
+            status = await _repair_single(pool, row, cfg, max_attempts, run_id=run_id, usage_out=usage)
             return {
                 "status": status,
                 **usage,
@@ -589,6 +615,7 @@ async def _call_repair_extractor(
     cfg,
     *,
     include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
 ) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     from ...services.b2b.cache_runner import (
         lookup_b2b_exact_stage_text,
@@ -659,6 +686,8 @@ async def _call_repair_extractor(
             workload="openrouter",
             try_openrouter=True,
             openrouter_model=model_id,
+            span_name="task.b2b_enrichment_repair.extraction",
+            trace_metadata=trace_metadata,
         )
         if not response:
             return base_enrichment._pack_stage_result(
@@ -730,6 +759,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         min_value=1,
         max_value=100,
     )
+    run_id = _task_run_id(task)
     scoped_vendors = _normalize_test_vendors(task_metadata.get("test_vendors") or task_metadata.get("vendor_names"))
     stale_no_signal_demoted = await _demote_stale_no_signal_rows(
         pool,
@@ -781,7 +811,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                     OR (
                       COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) = 0
-                      AND review_text ~* '(switched to|moved to|replaced with|evaluating|looking at|considering|alternative to|[[:<:]]vs[[:>:]])'
+                      AND review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
                     )
                     OR (
                       COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) = 0
@@ -817,7 +847,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                     OR (
                       (
-                        review_text ~* '(switched to|moved to|replaced with|evaluating|looking at|considering|alternative to|[[:<:]]vs[[:>:]])'
+                        review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
                         OR COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
                       )
                       AND (
@@ -897,6 +927,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             cfg,
             pool,
             concurrency_override=concurrency,
+            run_id=run_id,
         )
         promoted += result.get("promoted", 0)
         shadowed += result.get("shadowed", 0)
