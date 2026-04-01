@@ -775,6 +775,66 @@ def test_strategic_adjudication_keeps_soft_evaluation_with_displacement_context(
     assert "competitor_without_displacement_framing" in reasons
 
 
+def test_strategic_adjudication_skips_reddit_vendor_ambiguity_noise():
+    row = {
+        "vendor_name": "Copper",
+        "product_name": "Copper CRM",
+        "summary": "General discussion",
+        "review_text": "I am considering switching to a hormonal one because the copper one is causing issues.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "community_discussion",
+        "source": "reddit",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"intent_to_leave": True, "actively_evaluating": True},
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_skips_vendor_employment_noise():
+    row = {
+        "vendor_name": "Salesforce",
+        "product_name": "Salesforce",
+        "summary": "Career discussion",
+        "review_text": "I currently work at Salesforce and I am thinking about leaving my role for a smaller company.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "community_discussion",
+        "source": "reddit",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"intent_to_leave": True},
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
 def test_strategic_adjudication_skips_low_signal_community_discussion_competitor_noise():
     row = {
         "summary": "HubSpot vs. Salesforce vs. Pipedrive: Which CRM is Best for Small Teams?",

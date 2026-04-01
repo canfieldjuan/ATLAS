@@ -1,4 +1,4 @@
-"""Shadow repair pass for structurally weak enriched B2B reviews."""
+"""Strategic adjudication pass for weak or high-salience enriched B2B reviews."""
 
 import asyncio
 import inspect
@@ -48,6 +48,16 @@ _DISPLACEMENT_CONTEXT_PATTERNS = (
     "alternative", "alternatives", "replace", "replacement", "switch", "switching",
     "migration", "migrate", "replatform", "vendor", "platform", "tool", "solution",
     "suite", "stack", "versus", " vs ", "competitor",
+)
+_EMPLOYMENT_CONTEXT_PATTERNS = (
+    "work at", "working at", "employee", "career", "manager", "my manager",
+    "our team", "interview", "hiring", "certification", "freelance", "rep at",
+    "joined", "left my role", "leaving my full time", "promotion", "salary",
+)
+_AMBIGUOUS_VENDOR_TOKENS = {"copper", "close"}
+_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS = (
+    "crm", "sales", "pipeline", "lead", "leads", "deal", "deals", "account",
+    "contact", "contacts", "prospect", "prospects", "software", "saas",
 )
 _TIMELINE_HARD_PATTERNS = (
     "renewal", "contract end", "contract expires", "deadline",
@@ -175,6 +185,76 @@ def _has_competitor_trigger(
     return bool(competitors) or base_enrichment._contains_any(review_blob, _DISPLACEMENT_CONTEXT_PATTERNS)
 
 
+def _has_vendor_literal_reference(source_row: dict[str, Any], review_blob: str) -> bool:
+    combined_norm = base_enrichment._normalize_compare_text(review_blob)
+    if not combined_norm:
+        return False
+    return any(
+        base_enrichment._text_mentions_name(combined_norm, source_row.get(field))
+        for field in ("vendor_name", "product_name")
+        if source_row.get(field)
+    )
+
+
+def _has_exact_name_reference(review_blob: str, name: Any) -> bool:
+    combined_norm = base_enrichment._normalize_compare_text(review_blob)
+    target = base_enrichment._normalize_compare_text(name)
+    if not combined_norm or not target:
+        return False
+    if f" {target} " in f" {combined_norm} ":
+        return True
+    return target.replace(" ", "") in combined_norm.replace(" ", "")
+
+
+def _has_vendor_reference(source_row: dict[str, Any], review_blob: str) -> bool:
+    combined_norm = base_enrichment._normalize_compare_text(review_blob)
+    if not combined_norm:
+        return False
+    vendor_norm = base_enrichment._normalize_compare_text(source_row.get("vendor_name"))
+    product_norm = base_enrichment._normalize_compare_text(source_row.get("product_name"))
+    product_hit = (
+        bool(source_row.get("product_name"))
+        and product_norm != vendor_norm
+        and _has_exact_name_reference(review_blob, source_row.get("product_name"))
+    )
+    if product_hit:
+        return True
+    vendor_hit = (
+        bool(source_row.get("vendor_name"))
+        and base_enrichment._text_mentions_name(combined_norm, source_row.get("vendor_name"))
+    )
+    if not vendor_hit:
+        return False
+    if vendor_norm in _AMBIGUOUS_VENDOR_TOKENS:
+        return (
+            (
+                base_enrichment._has_commercial_context(combined_norm)
+                or base_enrichment._has_strong_commercial_context(combined_norm)
+            )
+            and base_enrichment._contains_any(review_blob, _AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS)
+        )
+    return True
+
+
+def _has_employment_noise(
+    source_row: dict[str, Any],
+    review_blob: str,
+    *,
+    vendor_literal_hit: bool,
+    structured_churn: bool,
+    strong_competitor_signal: bool,
+) -> bool:
+    content_type = str(source_row.get("content_type") or "").strip().lower()
+    if content_type not in {"community_discussion", "insider_account"}:
+        return False
+    if not vendor_literal_hit or structured_churn or strong_competitor_signal:
+        return False
+    combined_norm = base_enrichment._normalize_compare_text(review_blob)
+    if base_enrichment._has_strong_commercial_context(combined_norm):
+        return False
+    return base_enrichment._contains_any(review_blob, _EMPLOYMENT_CONTEXT_PATTERNS)
+
+
 def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
     review_blob = base_enrichment._repair_text_blob(source_row)
     if not review_blob.strip():
@@ -196,6 +276,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         comp for comp in (result.get("competitors_mentioned") or [])
         if isinstance(comp, dict) and str(comp.get("name") or "").strip()
     ]
+    source = str(source_row.get("source") or "").strip().lower()
     replacement_mode = str(result.get("replacement_mode") or "").strip().lower()
     structured_churn = (
         bool(churn.get("intent_to_leave"))
@@ -223,13 +304,24 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         str(source_row.get("reviewer_company") or "").strip()
         or str(reviewer.get("company_name") or "").strip()
     )
+    vendor_literal_hit = _has_vendor_literal_reference(source_row, review_blob)
+    vendor_hit = _has_vendor_reference(source_row, review_blob)
+    commercial_context = base_enrichment._has_commercial_context(base_enrichment._normalize_compare_text(review_blob))
+    ambiguous_noise = source == "reddit" and not vendor_hit
+    employment_noise = _has_employment_noise(
+        source_row,
+        review_blob,
+        vendor_literal_hit=vendor_literal_hit,
+        structured_churn=structured_churn,
+        strong_competitor_signal=strong_competitor_signal,
+    )
     discussion_noise = (
         content_type in {"community_discussion", "insider_account"}
         and not structured_churn
         and not effective_reviewer_title
         and not named_company
         and not strong_competitor_signal
-    )
+    ) or ambiguous_noise or employment_noise
     named_account_evidence = bool(named_company) and (
         "named_account" in salience_flags
         or any(
@@ -1057,6 +1149,46 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         OR COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) > 0
                         OR COALESCE(jsonb_array_length(enrichment->'feature_gaps'), 0) > 0
                         OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
+                      )
+                      AND NOT (
+                        source = 'reddit'
+                        AND NOT (
+                          (
+                            review_text ILIKE ('%' || vendor_name || '%')
+                            AND (
+                              lower(vendor_name) NOT IN ('copper', 'close')
+                              OR (
+                                review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
+                                AND review_text ~* '(crm|sales|pipeline|lead|leads|deal|deals|account|contact|contacts|prospect|prospects|software|saas)'
+                              )
+                            )
+                          )
+                          OR (
+                            COALESCE(product_name, '') <> ''
+                            AND lower(COALESCE(product_name, '')) <> lower(COALESCE(vendor_name, ''))
+                            AND review_text ILIKE ('%' || product_name || '%')
+                          )
+                        )
+                        AND NOT review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
+                      )
+                      AND NOT (
+                        content_type IN ('community_discussion', 'insider_account')
+                        AND (
+                          review_text ILIKE ('%' || vendor_name || '%')
+                          OR (
+                            COALESCE(product_name, '') <> ''
+                            AND lower(COALESCE(product_name, '')) <> lower(COALESCE(vendor_name, ''))
+                            AND review_text ILIKE ('%' || product_name || '%')
+                          )
+                        )
+                        AND NOT (
+                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                        )
+                        AND review_text ~* '(work(?:ing)? at|employee|career|manager|my manager|our team|interview|hiring|certification|freelance|rep at|joined|left my role|leaving my full time|promotion|salary)'
+                        AND NOT review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
                       )
                       AND NOT (
                         content_type IN ('community_discussion', 'insider_account')

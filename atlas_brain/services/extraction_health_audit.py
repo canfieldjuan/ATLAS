@@ -60,6 +60,29 @@ _HARD_GAP = f"""(
   OR {_MISSING_OR_EMPTY_SPANS}
   OR {_BLANK_EVIDENCE_MAP_HASH}
 )"""
+_COMMERCIAL_CONTEXT = r"(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)"
+_AMBIGUOUS_VENDOR = "(LOWER(vendor_name) IN ('copper', 'close'))"
+_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT = r"(crm|sales|pipeline|lead|leads|deal|deals|account|contact|contacts|prospect|prospects|software|saas)"
+_VENDOR_REFERENCE = """
+(
+  (
+    review_text ILIKE ('%%' || vendor_name || '%%')
+    AND (
+      NOT {ambiguous_vendor}
+      OR (
+        review_text ~* '{commercial_context}'
+        AND review_text ~* '{ambiguous_vendor_product_context}'
+      )
+    )
+  )
+  OR (
+    COALESCE(product_name, '') <> ''
+    AND LOWER(COALESCE(product_name, '')) <> LOWER(COALESCE(vendor_name, ''))
+    AND review_text ILIKE ('%%' || product_name || '%%')
+  )
+)
+"""
+_EMPLOYMENT_CONTEXT = r"(work(?:ing)? at|employee|career|manager|my manager|our team|interview|hiring|certification|freelance|rep at|joined|left my role|leaving my full time|promotion|salary)"
 _MONEY_WITHOUT_PRICING_SPAN = """
 (
   ({money_signal})
@@ -71,19 +94,18 @@ _MONEY_WITHOUT_PRICING_SPAN = """
     OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
   )
   AND NOT (
-    content_type IN ('community_discussion', 'insider_account')
-    AND NOT (
-      COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-      OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-      OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-      OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-    )
-    AND NOT review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+    source = 'reddit'
+    AND NOT {vendor_reference}
   )
   AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "pricing_backlash")')
 )
 """.format(
-    money_signal=r"(review_text ~* '\$\s?\d' OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar')"
+    money_signal=r"(review_text ~* '\$\s?\d' OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar')",
+    vendor_reference=_VENDOR_REFERENCE.format(
+        ambiguous_vendor=_AMBIGUOUS_VENDOR,
+        commercial_context=_COMMERCIAL_CONTEXT,
+        ambiguous_vendor_product_context=_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT,
+    ),
 )
 _COMPETITOR_WITHOUT_DISPLACEMENT = """
 (
@@ -110,6 +132,23 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     OR {pricing_phrases_len} > 0
     OR {feature_gaps_len} > 0
     OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
+  )
+  AND NOT (
+    source = 'reddit'
+    AND NOT {vendor_reference}
+    AND NOT review_text ~* '{commercial_context}'
+  )
+  AND NOT (
+    content_type IN ('community_discussion', 'insider_account')
+    AND {vendor_reference}
+    AND NOT (
+      COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+      OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+    )
+    AND review_text ~* '{employment_context}'
+    AND NOT review_text ~* '{commercial_context}'
   )
   AND NOT (
     content_type IN ('community_discussion', 'insider_account')
@@ -143,6 +182,13 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     specific_complaints_len=_ARRAY_LEN.format(field="'specific_complaints'"),
     pricing_phrases_len=_ARRAY_LEN.format(field="'pricing_phrases'"),
     feature_gaps_len=_ARRAY_LEN.format(field="'feature_gaps'"),
+    vendor_reference=_VENDOR_REFERENCE.format(
+        ambiguous_vendor=_AMBIGUOUS_VENDOR,
+        commercial_context=_COMMERCIAL_CONTEXT,
+        ambiguous_vendor_product_context=_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT,
+    ),
+    commercial_context=_COMMERCIAL_CONTEXT,
+    employment_context=_EMPLOYMENT_CONTEXT,
 )
 _NAMED_COMPANY_WITHOUT_ACCOUNT_EVIDENCE = """
 (
@@ -164,6 +210,10 @@ _TIMELINE_WITHOUT_ANCHOR = """
     )
   )
   AND NOT (
+    source = 'reddit'
+    AND NOT {vendor_reference}
+  )
+  AND NOT (
     content_type IN ('community_discussion', 'insider_account')
     AND NOT (
       COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
@@ -182,7 +232,13 @@ _TIMELINE_WITHOUT_ANCHOR = """
   )
   AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? ((@.time_anchor != null && @.time_anchor != "") || @.flags[*] == "deadline")')
 )
-"""
+""".format(
+    vendor_reference=_VENDOR_REFERENCE.format(
+        ambiguous_vendor=_AMBIGUOUS_VENDOR,
+        commercial_context=_COMMERCIAL_CONTEXT,
+        ambiguous_vendor_product_context=_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT,
+    )
+)
 _WORKFLOW_WITHOUT_REPLACEMENT = """
 (
   review_text ~* '(async|docs|documentation|notion|confluence|bundle|workspace|microsoft 365|google workspace|internal tool|homegrown|home-grown|custom tool)'
