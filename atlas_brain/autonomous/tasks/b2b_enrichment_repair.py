@@ -30,6 +30,28 @@ _REPAIR_JSON_SCHEMA: dict[str, Any] = {
 
 _GENERIC_PAIN_BUCKETS = ("other", "general_dissatisfaction", "overall_dissatisfaction")
 _ADJUDICATION_PREFIX = "adjudication:"
+_COMPETITOR_PRESSURE_PATTERNS = (
+    "cancel", "cancellation", "refund", "billing dispute", "renewal", "price increase",
+    "overcharged", "not worth", "switch", "switched to", "moved to", "replaced with",
+    "evaluating", "considering", "alternative", "frustrated", "pain", "issue", "problem",
+)
+
+
+def _normalize_test_vendors(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+        return [value for value in values if value]
+    if isinstance(raw, (list, tuple, set)):
+        normalized: list[str] = []
+        for item in raw:
+            value = str(item or "").strip()
+            if value:
+                normalized.append(value)
+        return normalized
+    value = str(raw).strip()
+    return [value] if value else []
 
 
 def _normalized_spans(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -58,6 +80,16 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         if isinstance(comp, dict) and str(comp.get("name") or "").strip()
     ]
     replacement_mode = str(result.get("replacement_mode") or "").strip().lower()
+    pressure_signal = (
+        bool(churn.get("intent_to_leave"))
+        or bool(churn.get("actively_evaluating"))
+        or bool(churn.get("migration_in_progress"))
+        or bool(churn.get("contract_renewal_mentioned"))
+        or bool(result.get("specific_complaints"))
+        or bool(result.get("pricing_phrases"))
+        or bool(result.get("feature_gaps"))
+        or base_enrichment._contains_any(review_blob, _COMPETITOR_PRESSURE_PATTERNS)
+    )
 
     pricing_span = any(str(span.get("signal_type") or "").strip().lower() == "pricing_backlash" for span in spans)
     displacement_framed = any(
@@ -112,7 +144,8 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
     ):
         reasons.append("money_without_pricing_span")
     if (
-        (base_enrichment._contains_any(review_blob, base_enrichment._REPAIR_COMPETITOR_PATTERNS) or competitors)
+        pressure_signal
+        and (base_enrichment._contains_any(review_blob, base_enrichment._REPAIR_COMPETITOR_PATTERNS) or competitors)
         and not displacement_framed
     ):
         reasons.append("competitor_without_displacement_framing")
@@ -176,6 +209,14 @@ def _shadow_quarantine_reasons(row: dict[str, Any]) -> list[str]:
     return []
 
 
+def _empty_repair_result(status: str) -> dict[str, int | str]:
+    return {
+        "status": status,
+        "exact_cache_hits": 0,
+        "generated": 0,
+    }
+
+
 async def _persist_shadow_result(
     pool,
     *,
@@ -185,44 +226,92 @@ async def _persist_shadow_result(
     model_id: str | None,
     applied_fields: list[str],
     repaired_at: datetime,
+    persisted_enrichment: dict[str, Any] | None = None,
+    shadow_reasons: list[str] | None = None,
 ) -> str:
-    shadow_reasons = _shadow_quarantine_reasons(row)
-    target_status = "quarantined" if shadow_reasons else row.get("enrichment_status") or "enriched"
-    await pool.execute(
-        """
-        UPDATE b2b_reviews
-        SET enrichment_repair = $2::jsonb,
-            enrichment_repair_status = 'shadowed',
-            enrichment_repair_attempts = enrichment_repair_attempts + 1,
-            enrichment_repair_model = COALESCE($3, enrichment_repair_model),
-            enrichment_repaired_at = $4,
-            enrichment_repair_applied_fields = $5::jsonb,
-            enrichment_status = $6,
-            low_fidelity = $7,
-            low_fidelity_reasons = $8::jsonb,
-            low_fidelity_detected_at = $9
-        WHERE id = $1
-        """,
-        review_id,
-        json.dumps(repair_result or {}),
-        model_id,
-        repaired_at,
-        json.dumps(applied_fields),
-        target_status,
-        bool(shadow_reasons),
-        json.dumps(shadow_reasons),
-        repaired_at if shadow_reasons else None,
+    combined_shadow_reasons = base_enrichment._dedupe_reason_codes(
+        list(shadow_reasons or []) + _shadow_quarantine_reasons(row)
     )
+    target_status = "quarantined" if combined_shadow_reasons else row.get("enrichment_status") or "enriched"
+    if persisted_enrichment is not None:
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment_baseline = COALESCE(enrichment_baseline, enrichment),
+                enrichment = $2::jsonb,
+                enrichment_repair = $3::jsonb,
+                enrichment_repair_status = 'shadowed',
+                enrichment_repair_attempts = enrichment_repair_attempts + 1,
+                enrichment_repair_model = COALESCE($4, enrichment_repair_model),
+                enrichment_repaired_at = $5,
+                enrichment_repair_applied_fields = $6::jsonb,
+                enrichment_status = $7,
+                low_fidelity = $8,
+                low_fidelity_reasons = $9::jsonb,
+                low_fidelity_detected_at = $10
+            WHERE id = $1
+            """,
+            review_id,
+            json.dumps(persisted_enrichment),
+            json.dumps(repair_result or {}),
+            model_id,
+            repaired_at,
+            json.dumps(applied_fields),
+            target_status,
+            False,
+            json.dumps(combined_shadow_reasons),
+            repaired_at if combined_shadow_reasons else None,
+        )
+    else:
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment_repair = $2::jsonb,
+                enrichment_repair_status = 'shadowed',
+                enrichment_repair_attempts = enrichment_repair_attempts + 1,
+                enrichment_repair_model = COALESCE($3, enrichment_repair_model),
+                enrichment_repaired_at = $4,
+                enrichment_repair_applied_fields = $5::jsonb,
+                enrichment_status = $6,
+                low_fidelity = $7,
+                low_fidelity_reasons = $8::jsonb,
+                low_fidelity_detected_at = $9
+            WHERE id = $1
+            """,
+            review_id,
+            json.dumps(repair_result or {}),
+            model_id,
+            repaired_at,
+            json.dumps(applied_fields),
+            target_status,
+            False,
+            json.dumps(combined_shadow_reasons),
+            repaired_at if combined_shadow_reasons else None,
+        )
     return "shadowed"
 
 
-async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> str:
+async def _repair_single(
+    pool,
+    row: dict[str, Any],
+    cfg,
+    max_attempts: int,
+    usage_out: dict[str, int] | None = None,
+) -> str:
     review_id = row["id"]
     baseline = base_enrichment._coerce_json_dict(row.get("enrichment"))
     strategic_reasons = _strategic_adjudication_reasons(baseline, row) if baseline else []
     target_fields = _repair_target_fields(baseline, row) if baseline else []
+    usage = {"exact_cache_hits": 0, "generated": 0}
+
+    def _finish(status: str) -> str:
+        if usage_out is not None:
+            usage_out.clear()
+            usage_out.update(usage)
+        return status
+
     if not baseline or not target_fields:
-        return await _persist_shadow_result(
+        status = await _persist_shadow_result(
             pool,
             review_id=review_id,
             row=row,
@@ -231,17 +320,25 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
             applied_fields=_adjudication_markers(strategic_reasons),
             repaired_at=datetime.now(timezone.utc),
         )
+        return _finish(status)
 
     repair_model = str(cfg.enrichment_repair_model or "").strip()
+    repair_cache_hit = False
     try:
         payload = _build_repair_payload(row, baseline, cfg.review_truncate_length)
-        repair_result, model_id = await asyncio.wait_for(
-            _call_repair_extractor(payload, repair_model, cfg),
+        repair_result, model_id, repair_cache_hit = base_enrichment._unpack_stage_result(await asyncio.wait_for(
+            _call_repair_extractor(payload, repair_model, cfg, include_cache_hit=True),
             timeout=cfg.enrichment_full_extraction_timeout_seconds,
-        )
+        ))
     except Exception:
         logger.exception("Repair call failed for review %s", review_id)
         repair_result, model_id = None, None
+        repair_cache_hit = False
+
+    if repair_cache_hit:
+        usage["exact_cache_hits"] += 1
+    elif model_id is not None:
+        usage["generated"] += 1
 
     if repair_result is None:
         await pool.execute(
@@ -257,7 +354,7 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
             model_id,
             datetime.now(timezone.utc),
         )
-        return "failed"
+        return _finish("failed")
 
     promoted, applied_fields = base_enrichment._apply_field_repair(
         baseline,
@@ -272,11 +369,25 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
     if applied_fields:
         promoted = base_enrichment._compute_derived_fields(promoted, row)
     if applied_fields and base_enrichment._validate_enrichment(promoted, row):
+        unresolved_strategic_reasons = _strategic_adjudication_reasons(promoted, row)
         low_fidelity_reasons = (
             base_enrichment._detect_low_fidelity_reasons(row, promoted)
             if getattr(cfg, "enrichment_low_fidelity_enabled", False)
             else []
         )
+        if unresolved_strategic_reasons:
+            status = await _persist_shadow_result(
+                pool,
+                review_id=review_id,
+                row=row,
+                repair_result=repair_result,
+                model_id=model_id,
+                applied_fields=persisted_applied_fields,
+                repaired_at=repaired_at,
+                persisted_enrichment=promoted,
+                shadow_reasons=unresolved_strategic_reasons,
+            )
+            return _finish(status)
         if not low_fidelity_reasons and base_enrichment._is_no_signal_result(promoted, row):
             target_status = "no_signal"
         else:
@@ -309,9 +420,9 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
             json.dumps(low_fidelity_reasons),
             repaired_at if low_fidelity_reasons else None,
         )
-        return "promoted"
+        return _finish("promoted")
 
-    return await _persist_shadow_result(
+    status = await _persist_shadow_result(
         pool,
         review_id=review_id,
         row=row,
@@ -320,6 +431,7 @@ async def _repair_single(pool, row: dict[str, Any], cfg, max_attempts: int) -> s
         applied_fields=persisted_applied_fields,
         repaired_at=repaired_at,
     )
+    return _finish(status)
 
 
 async def _repair_rows(rows, cfg, pool, *, concurrency_override: int | None = None) -> dict[str, int]:
@@ -327,18 +439,26 @@ async def _repair_rows(rows, cfg, pool, *, concurrency_override: int | None = No
     effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_repair_concurrency))
     sem = asyncio.Semaphore(effective_concurrency)
 
-    async def _bounded(row: dict[str, Any]) -> str:
+    async def _bounded(row: dict[str, Any]) -> dict[str, int | str]:
         async with sem:
-            return await _repair_single(pool, row, cfg, max_attempts)
+            usage = {"exact_cache_hits": 0, "generated": 0}
+            status = await _repair_single(pool, row, cfg, max_attempts, usage_out=usage)
+            return {
+                "status": status,
+                **usage,
+            }
 
     results = await asyncio.gather(*[_bounded(row) for row in rows], return_exceptions=True)
-    counts = {"promoted": 0, "shadowed": 0, "failed": 0}
+    counts = {"promoted": 0, "shadowed": 0, "failed": 0, "exact_cache_hits": 0, "generated": 0}
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
             logger.error("Unexpected repair error for %s: %s", row["id"], result, exc_info=result)
             counts["failed"] += 1
             continue
-        counts[result] = counts.get(result, 0) + 1
+        status = str(result.get("status") or "failed")
+        counts[status] = counts.get(status, 0) + 1
+        counts["exact_cache_hits"] += int(result.get("exact_cache_hits", 0) or 0)
+        counts["generated"] += int(result.get("generated", 0) or 0)
     return counts
 
 
@@ -430,7 +550,13 @@ def _build_repair_payload(row: dict[str, Any], baseline: dict[str, Any], review_
     }
 
 
-async def _call_repair_extractor(payload: dict[str, Any], model_id: str, cfg) -> tuple[dict | None, str | None]:
+async def _call_repair_extractor(
+    payload: dict[str, Any],
+    model_id: str,
+    cfg,
+    *,
+    include_cache_hit: bool = False,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     from ...services.b2b.cache_runner import (
         lookup_b2b_exact_stage_text,
         prepare_b2b_exact_skill_stage_request,
@@ -482,7 +608,12 @@ async def _call_repair_extractor(payload: dict[str, Any], model_id: str, cfg) ->
                     recover_truncated=True,
                 )
                 if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-                    return parsed, str(cached.get("model") or model_id)
+                    return base_enrichment._pack_stage_result(
+                        parsed,
+                        str(cached.get("model") or model_id),
+                        True,
+                        include_cache_hit=include_cache_hit,
+                    )
 
         response = await asyncio.to_thread(
             call_llm_with_skill,
@@ -497,7 +628,12 @@ async def _call_repair_extractor(payload: dict[str, Any], model_id: str, cfg) ->
             openrouter_model=model_id,
         )
         if not response:
-            return None, model_id
+            return base_enrichment._pack_stage_result(
+                None,
+                model_id,
+                False,
+                include_cache_hit=include_cache_hit,
+            )
         parsed = parse_json_response(response, recover_truncated=True)
         if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
             if request is not None:
@@ -506,11 +642,26 @@ async def _call_repair_extractor(payload: dict[str, Any], model_id: str, cfg) ->
                     response_text=response,
                     metadata={"requested_model": model_id},
                 )
-            return parsed, resolved_model or model_id
-        return None, model_id
+            return base_enrichment._pack_stage_result(
+                parsed,
+                resolved_model or model_id,
+                False,
+                include_cache_hit=include_cache_hit,
+            )
+        return base_enrichment._pack_stage_result(
+            None,
+            model_id,
+            False,
+            include_cache_hit=include_cache_hit,
+        )
     except Exception:
         logger.exception("Repair extractor call failed")
-        return None, None
+        return base_enrichment._pack_stage_result(
+            None,
+            None,
+            False,
+            include_cache_hit=include_cache_hit,
+        )
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -546,6 +697,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         min_value=1,
         max_value=100,
     )
+    scoped_vendors = _normalize_test_vendors(task_metadata.get("test_vendors") or task_metadata.get("vendor_names"))
     stale_no_signal_demoted = await _demote_stale_no_signal_rows(
         pool,
         limit=max_batch,
@@ -554,6 +706,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     promoted = 0
     shadowed = 0
     failed = 0
+    exact_cache_hits = 0
+    generated = 0
     rounds = 0
     while rounds < max_rounds:
         trusted_sources = list(base_enrichment._trusted_repair_sources())
@@ -566,7 +720,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                   AND COALESCE(low_fidelity, false) = false
                   AND enrichment IS NOT NULL
                   AND enrichment_repair_attempts < $1
-                  AND (enrichment_repair_status IS NULL OR enrichment_repair_status = 'failed')
+                  AND (
+                    enrichment_repair_status IS NULL
+                    OR enrichment_repair_status = 'failed'
+                    OR enrichment_repair_status = 'promoted'
+                    OR (
+                      enrichment_repair_status = 'shadowed'
+                      AND enrichment_status = 'quarantined'
+                      AND jsonb_path_exists(
+                        COALESCE(enrichment_repair_applied_fields, '[]'::jsonb),
+                        '$[*] ? (@ like_regex "^adjudication:")'
+                      )
+                    )
+                  )
+                  AND (
+                    cardinality($4::text[]) = 0
+                    OR lower(vendor_name) = ANY($4::text[])
+                  )
                   AND (
                     (
                       COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction')
@@ -613,6 +783,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         review_text ~* '(switched to|moved to|replaced with|evaluating|looking at|considering|alternative to|[[:<:]]vs[[:>:]])'
                         OR COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
                       )
+                      AND (
+                        COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                        OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                        OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                        OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                        OR COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) > 0
+                        OR COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) > 0
+                        OR COALESCE(jsonb_array_length(enrichment->'feature_gaps'), 0) > 0
+                        OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
+                      )
                       AND NOT (
                         jsonb_path_exists(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb), '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium")')
                         OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
@@ -656,6 +836,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             cfg.enrichment_repair_max_attempts,
             max_batch,
             trusted_sources,
+            [vendor.lower() for vendor in scoped_vendors],
         )
         if not rows:
             break
@@ -668,6 +849,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         promoted += result.get("promoted", 0)
         shadowed += result.get("shadowed", 0)
         failed += result.get("failed", 0)
+        exact_cache_hits += result.get("exact_cache_hits", 0)
+        generated += result.get("generated", 0)
         rounds += 1
         await asyncio.sleep(1)
 
@@ -677,9 +860,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "promoted": promoted,
         "shadowed": shadowed,
         "failed": failed,
+        "exact_cache_hits": exact_cache_hits,
+        "generated": generated,
         "rounds": rounds,
         "stale_no_signal_demoted": stale_no_signal_demoted,
         "orphaned_recovered": orphaned,
+        "scoped_vendors": scoped_vendors,
         "_skip_synthesis": "B2B enrichment repair complete",
     }
 

@@ -72,13 +72,28 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
     review_text ~* '(switched to|moved to|replaced with|evaluating|looking at|considering|alternative to|[[:<:]]vs[[:>:]])'
     OR {competitors_len} > 0
   )
+  AND (
+    COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+    OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+    OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+    OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+    OR {specific_complaints_len} > 0
+    OR {pricing_phrases_len} > 0
+    OR {feature_gaps_len} > 0
+    OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
+  )
   AND NOT (
     jsonb_path_exists(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb), '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium")')
     OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
     OR lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'competitor_switch'
   )
 )
-""".format(competitors_len=_ARRAY_LEN.format(field="'competitors_mentioned'"))
+""".format(
+    competitors_len=_ARRAY_LEN.format(field="'competitors_mentioned'"),
+    specific_complaints_len=_ARRAY_LEN.format(field="'specific_complaints'"),
+    pricing_phrases_len=_ARRAY_LEN.format(field="'pricing_phrases'"),
+    feature_gaps_len=_ARRAY_LEN.format(field="'feature_gaps'"),
+)
 _NAMED_COMPANY_WITHOUT_ACCOUNT_EVIDENCE = """
 (
   COALESCE(NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NOT NULL

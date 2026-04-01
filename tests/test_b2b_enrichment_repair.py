@@ -78,14 +78,18 @@ async def test_repair_single_promotes_structural_fields(monkeypatch):
     monkeypatch.setattr(
         repair_mod,
         "_call_repair_extractor",
-        AsyncMock(return_value=({
-            "buyer_authority": {
-                "role_type": "economic_buyer",
-                "buying_stage": "renewal_decision",
+        AsyncMock(return_value=(
+            {
+                "buyer_authority": {
+                    "role_type": "economic_buyer",
+                    "buying_stage": "renewal_decision",
+                },
+                "timeline": {"decision_timeline": "within_quarter"},
+                "contract_context": {"contract_value_signal": "mid_market"},
             },
-            "timeline": {"decision_timeline": "within_quarter"},
-            "contract_context": {"contract_value_signal": "mid_market"},
-        }, "google/gemini-3.1-flash-lite-preview")),
+            "google/gemini-3.1-flash-lite-preview",
+            False,
+        )),
     )
     monkeypatch.setattr(
         repair_mod.base_enrichment,
@@ -147,14 +151,16 @@ async def test_call_repair_extractor_uses_exact_cache_hit(monkeypatch):
 
     monkeypatch.setattr(repair_mod, "call_llm_with_skill", _unexpected_llm_call)
 
-    parsed, model = await repair_mod._call_repair_extractor(
+    parsed, model, cache_hit = await repair_mod._call_repair_extractor(
         {"vendor_name": "Zendesk"},
         "google/gemini-3.1-flash-lite-preview",
         SimpleNamespace(enrichment_repair_max_tokens=512),
+        include_cache_hit=True,
     )
 
     assert parsed == {"competitors_mentioned": ["HubSpot"]}
     assert model == "google/gemini-3.1-flash-lite-preview"
+    assert cache_hit is True
 
 
 @pytest.mark.asyncio
@@ -198,7 +204,7 @@ async def test_repair_single_shadows_when_nothing_promotable(monkeypatch):
     monkeypatch.setattr(
         repair_mod,
         "_call_repair_extractor",
-        AsyncMock(return_value=({"event_mentions": []}, "google/gemini-3.1-flash-lite-preview")),
+        AsyncMock(return_value=({"event_mentions": []}, "google/gemini-3.1-flash-lite-preview", False)),
     )
     monkeypatch.setattr(
         repair_mod.base_enrichment,
@@ -254,11 +260,15 @@ async def test_repair_single_quarantines_shadowed_technical_source(monkeypatch):
     monkeypatch.setattr(
         repair_mod,
         "_call_repair_extractor",
-        AsyncMock(return_value=({
-            "buyer_authority": {"role_type": "end_user", "buying_stage": "unknown"},
-            "timeline": {"decision_timeline": "unknown"},
-            "contract_context": {"contract_value_signal": "unknown"},
-        }, "google/gemini-3.1-flash-lite-preview")),
+        AsyncMock(return_value=(
+            {
+                "buyer_authority": {"role_type": "end_user", "buying_stage": "unknown"},
+                "timeline": {"decision_timeline": "unknown"},
+                "contract_context": {"contract_value_signal": "unknown"},
+            },
+            "google/gemini-3.1-flash-lite-preview",
+            False,
+        )),
     )
     monkeypatch.setattr(
         repair_mod.base_enrichment,
@@ -278,7 +288,7 @@ async def test_repair_single_quarantines_shadowed_technical_source(monkeypatch):
     args = pool.execute.await_args.args
     assert "enrichment_status = $6" in query
     assert args[6] == "quarantined"
-    assert args[7] is True
+    assert args[7] is False
     assert json.loads(args[8]) == ["repair_shadowed_technical_source"]
 
 
@@ -470,6 +480,36 @@ def test_build_repair_payload_includes_strategic_targets():
     assert "money_without_pricing_span" in payload["strategic_adjudication_reasons"]
 
 
+def test_strategic_adjudication_skips_neutral_competitor_comparisons_without_pressure():
+    row = {
+        "summary": "Should I use Azure DevOps or stick to GitHub?",
+        "review_text": "Azure DevOps has higher limits than GitHub, but I do not want to waste the free Azure credits.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+        },
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "competitors_mentioned": [{"name": "GitHub", "evidence_type": "neutral_mention"}],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
 @pytest.mark.asyncio
 async def test_repair_single_shadows_with_adjudication_markers_when_no_llm_targets(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
@@ -552,3 +592,122 @@ async def test_run_query_includes_strategic_adjudication_conditions(monkeypatch)
     assert "jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == \"pricing_backlash\")')" in query
     assert "COALESCE(NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NOT NULL" in query
     assert "lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'none'" in query
+    assert "enrichment_repair_status = 'shadowed'" in query
+    assert "enrichment_repair_status = 'promoted'" in query
+    assert 'like_regex "^adjudication:"' in query
+
+
+@pytest.mark.asyncio
+async def test_repair_single_persists_shadowed_enrichment_when_strategic_gap_remains(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    row = {
+        "id": uuid4(),
+        "vendor_name": "Copper",
+        "review_text": "We are considering HubSpot because Copper is not worth the money.",
+        "summary": "Considering HubSpot",
+        "source": "reddit",
+        "rating": 2.0,
+        "rating_max": 5,
+        "product_name": "Copper",
+        "product_category": "CRM",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "enrichment_status": "enriched",
+        "enrichment": {
+            "churn_signals": {"intent_to_leave": True},
+            "urgency_score": 8,
+            "competitors_mentioned": [{"name": "HubSpot"}],
+            "evidence_spans": [],
+            "replacement_mode": "none",
+            "salience_flags": [],
+        },
+    }
+    cfg = SimpleNamespace(
+        enrichment_repair_model="google/gemini-3.1-flash-lite-preview",
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+        enrichment_full_extraction_timeout_seconds=30,
+        enrichment_low_fidelity_enabled=False,
+    )
+
+    monkeypatch.setattr(
+        repair_mod,
+        "_call_repair_extractor",
+        AsyncMock(return_value=(
+            {"competitors_mentioned": [{"name": "HubSpot"}]},
+            "google/gemini-3.1-flash-lite-preview",
+            False,
+        )),
+    )
+    monkeypatch.setattr(
+        repair_mod.base_enrichment,
+        "_apply_field_repair",
+        lambda baseline, repair_result: ({**baseline, "specific_complaints": ["not worth the money"]}, ["specific_complaints"]),
+    )
+    monkeypatch.setattr(
+        repair_mod.base_enrichment,
+        "_compute_derived_fields",
+        lambda result, source_row: dict(result),
+    )
+    monkeypatch.setattr(
+        repair_mod.base_enrichment,
+        "_validate_enrichment",
+        lambda result, source_row=None: True,
+    )
+
+    calls = {"n": 0}
+
+    def _strategic(result, source_row):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ["competitor_without_displacement_framing"]
+        return ["competitor_without_displacement_framing"]
+
+    monkeypatch.setattr(repair_mod, "_strategic_adjudication_reasons", _strategic)
+
+    result = await repair_mod._repair_single(pool, row, cfg, max_attempts=2)
+
+    assert result == "shadowed"
+    query = pool.execute.await_args.args[0]
+    args = pool.execute.await_args.args
+    assert "enrichment = $2::jsonb" in query
+    assert "enrichment_repair_status = 'shadowed'" in query
+    assert args[7] == "quarantined"
+    assert json.loads(args[9]) == ["competitor_without_displacement_framing"]
+
+
+@pytest.mark.asyncio
+async def test_run_scopes_rows_to_test_vendors(monkeypatch):
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(return_value="UPDATE 0"),
+        fetch=AsyncMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(repair_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_enabled",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_model",
+        "google/gemini-3.1-flash-lite-preview",
+        raising=False,
+    )
+
+    task = type("Task", (), {"metadata": {"test_vendors": ["Zendesk", "Freshdesk"]}})()
+    result = await repair_mod.run(task)
+
+    assert result["_skip_synthesis"] == "No enriched reviews need repair"
+    args = pool.fetch.await_args.args
+    assert args[4] == ["zendesk", "freshdesk"]
