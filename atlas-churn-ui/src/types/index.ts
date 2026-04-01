@@ -667,6 +667,55 @@ export interface EnrichmentQuarantine {
   released_by?: string
 }
 
+export interface ExtractionHealthSnapshot {
+  enriched_rows: number
+  hard_gap_rows: number
+  phrase_arrays_without_spans: number
+  blank_replacement_mode: number
+  blank_operating_model_shift: number
+  blank_productivity_delta_claim: number
+  blank_org_pressure_type: number
+  missing_or_empty_evidence_spans: number
+  blank_evidence_map_hash: number
+  empty_salience_flags: number
+  strategic_candidate_rows: number
+  money_without_pricing_span: number
+  competitor_without_displacement_framing: number
+  named_company_without_named_account_evidence: number
+  timeline_language_without_timing_anchor: number
+  workflow_language_without_replacement_mode: number
+}
+
+export interface ExtractionHealthDailyRow {
+  day: string
+  hard_gap_rows: number
+  phrase_arrays_without_spans: number
+  blank_replacement_mode: number
+  blank_operating_model_shift: number
+  missing_or_empty_evidence_spans: number
+  strategic_candidate_rows: number
+}
+
+export interface ExtractionHealthVendorRow {
+  vendor_name: string
+  hard_gap_rows: number
+  phrase_arrays_without_spans: number
+  blank_replacement_mode: number
+  blank_operating_model_shift: number
+  missing_or_empty_evidence_spans: number
+  empty_salience_flags: number
+  strategic_candidate_rows: number
+  enriched_rows: number
+}
+
+export interface ExtractionHealthAudit {
+  days: number
+  top_n: number
+  current_snapshot: ExtractionHealthSnapshot
+  daily_trend: ExtractionHealthDailyRow[]
+  top_vendors: ExtractionHealthVendorRow[]
+}
+
 export interface AdminCostSummary {
   period_days: number
   total_cost_usd: number

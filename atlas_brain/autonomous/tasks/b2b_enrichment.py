@@ -102,9 +102,13 @@ async def _lookup_cached_json_response(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Lookup a cached structured response and return the envelope either way."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
-    from ...services.b2b.llm_exact_cache import build_request_envelope, lookup_cached_text
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+    )
 
-    request_envelope = build_request_envelope(
+    request = prepare_b2b_exact_stage_request(
+        namespace,
         provider=provider,
         model=model,
         messages=[
@@ -116,15 +120,15 @@ async def _lookup_cached_json_response(
         response_format=response_format,
         guided_json=guided_json,
     )
-    cached = await lookup_cached_text(namespace, request_envelope)
+    cached = await lookup_b2b_exact_stage_text(request)
     if cached is None:
-        return None, request_envelope
+        return None, request.request_envelope
 
     text = clean_llm_output(cached["response_text"])
     parsed = parse_json_response(text, recover_truncated=True)
     if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-        return parsed, request_envelope
-    return None, request_envelope
+        return parsed, request.request_envelope
+    return None, request.request_envelope
 
 
 async def _store_cached_json_response(
@@ -137,13 +141,19 @@ async def _store_cached_json_response(
     metadata: dict[str, Any] | None = None,
 ) -> None:
     """Store a validated structured response for later exact reuse."""
-    from ...services.b2b.llm_exact_cache import store_cached_text
+    from ...services.b2b.cache_runner import (
+        bind_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
+    )
 
-    await store_cached_text(
+    request = bind_b2b_exact_stage_request(
         namespace,
-        request_envelope,
         provider=provider,
         model=model,
+        request_envelope=request_envelope,
+    )
+    await store_b2b_exact_stage_text(
+        request,
         response_text=response_text,
         metadata=metadata,
     )
@@ -1135,6 +1145,63 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     return result
 
 
+def _missing_witness_primitives(result: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+
+    if str(result.get("replacement_mode") or "").strip() not in _KNOWN_REPLACEMENT_MODES:
+        missing.append("replacement_mode")
+    if str(result.get("operating_model_shift") or "").strip() not in _KNOWN_OPERATING_MODEL_SHIFTS:
+        missing.append("operating_model_shift")
+    if str(result.get("productivity_delta_claim") or "").strip() not in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS:
+        missing.append("productivity_delta_claim")
+    if str(result.get("org_pressure_type") or "").strip() not in _KNOWN_ORG_PRESSURE_TYPES:
+        missing.append("org_pressure_type")
+
+    salience_flags = result.get("salience_flags")
+    if not isinstance(salience_flags, list):
+        missing.append("salience_flags")
+
+    evidence_spans = result.get("evidence_spans")
+    if not isinstance(evidence_spans, list):
+        missing.append("evidence_spans")
+
+    if not str(result.get("evidence_map_hash") or "").strip():
+        missing.append("evidence_map_hash")
+
+    return missing
+
+
+def _schema_version(result: dict[str, Any]) -> int:
+    try:
+        return int(result.get("enrichment_schema_version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _finalize_enrichment_for_persist(
+    result: dict[str, Any],
+    source_row: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(result, dict):
+        return None, "invalid_payload"
+
+    payload = json.loads(json.dumps(result))
+    try:
+        payload = _compute_derived_fields(payload, source_row)
+    except Exception:
+        logger.warning(
+            "Evidence engine compute failed while finalizing enrichment for %s",
+            source_row.get("id"),
+            exc_info=True,
+        )
+        return None, "compute_failed"
+
+    if not _validate_enrichment(payload, source_row):
+        return None, "validation_failed"
+
+    return payload, None
+
+
 async def _notify_high_urgency(
     vendor_name: str,
     reviewer_company: str,
@@ -1707,9 +1774,8 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         # Layer 3: compute derived fields from indicators (urgency, pain, recommend, etc.)
         # Hard-fail if compute breaks -- do NOT fall back to model-dependent output.
         if result:
-            try:
-                result = _compute_derived_fields(result, row)
-            except Exception:
+            result, finalize_error = _finalize_enrichment_for_persist(result, row)
+            if finalize_error == "compute_failed":
                 logger.warning(
                     "Evidence engine compute failed for %s -- quarantining to prevent model-dependent output",
                     review_id, exc_info=True,
@@ -1739,7 +1805,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
                 )
                 return "quarantined"
 
-        if result and _validate_enrichment(result, row):
+        if result:
             # Extract sentiment_trajectory subfields for indexed columns
             st = result.get("sentiment_trajectory") or {}
             st_direction = st.get("direction") if isinstance(st, dict) else None
@@ -2933,6 +2999,30 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
     if cc_val and cc_val not in _KNOWN_CONTENT_TYPES:
         result["content_classification"] = "review"
 
+    if _schema_version(result) >= 3:
+        missing_fields = _missing_witness_primitives(result)
+        if missing_fields:
+            if source_row is None:
+                logger.warning(
+                    "schema v3 enrichment missing witness primitives without source row: %s",
+                    ", ".join(missing_fields),
+                )
+                return False
+            try:
+                recomputed = _compute_derived_fields(
+                    json.loads(json.dumps(result)),
+                    source_row,
+                )
+            except Exception:
+                logger.warning(
+                    "schema v3 witness primitive recompute failed for %s",
+                    source_row.get("id"),
+                    exc_info=True,
+                )
+                return False
+            result.clear()
+            result.update(recomputed)
+
     # witness-oriented deterministic evidence fields
     replacement_mode = str(result.get("replacement_mode") or "").strip()
     if replacement_mode not in _KNOWN_REPLACEMENT_MODES:
@@ -2994,6 +3084,15 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
                     "productivity_delta_claim": productivity if productivity in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS else result.get("productivity_delta_claim"),
                 })
             result["evidence_spans"] = cleaned_spans
+
+    if _schema_version(result) >= 3:
+        remaining_missing = _missing_witness_primitives(result)
+        if remaining_missing:
+            logger.warning(
+                "schema v3 enrichment still missing witness primitives after normalization: %s",
+                ", ".join(remaining_missing),
+            )
+            return False
 
     # insider_signals: validate structure if present
     insider = result.get("insider_signals")

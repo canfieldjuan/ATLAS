@@ -787,13 +787,14 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
 
     try:
         from ...pipelines.llm import clean_llm_output
-        from ...services.b2b.llm_exact_cache import (
-            build_request_envelope,
-            lookup_cached_text,
-            store_cached_text,
+        from ...services.b2b.cache_runner import (
+            lookup_b2b_exact_stage_text,
+            prepare_b2b_exact_stage_request,
+            store_b2b_exact_stage_text,
         )
 
-        request_envelope = build_request_envelope(
+        request = prepare_b2b_exact_stage_request(
+            "b2b_vendor_briefing.analyst_summary",
             provider="openrouter",
             model=settings.b2b_churn.briefing_analyst_model,
             messages=[
@@ -805,7 +806,7 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
             extra={"reasoning": {"effort": "low"}},
         )
         content: str | None = None
-        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        cached = await lookup_b2b_exact_stage_text(request)
         if cached is not None:
             try:
                 cleaned_cached = clean_llm_output(cached["response_text"])
@@ -856,11 +857,8 @@ async def _enrich_with_analyst_summary(briefing: dict[str, Any]) -> None:
         if result.get("account_persona_context"):
             briefing["account_persona_context"] = result["account_persona_context"]
 
-        await store_cached_text(
-            cache_namespace,
-            request_envelope,
-            provider="openrouter",
-            model=settings.b2b_churn.briefing_analyst_model,
+        await store_b2b_exact_stage_text(
+            request,
             response_text=content,
             metadata={
                 "vendor_name": briefing.get("vendor_name"),
@@ -1106,28 +1104,27 @@ async def _llm_call(
 ) -> dict[str, Any] | None:
     """Single LLM call returning parsed JSON or None."""
     from ...services.protocols import Message
-    from ...services.b2b.llm_exact_cache import (
-        build_request_envelope,
-        llm_identity,
-        lookup_cached_text,
-        store_cached_text,
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
     )
 
     messages = [
         Message(role="system", content=system_prompt),
         Message(role="user", content=user_prompt),
     ]
-    provider_name, model_name = llm_identity(llm)
-    request_envelope = build_request_envelope(
-        provider=provider_name,
-        model=model_name,
+    request = prepare_b2b_exact_stage_request(
+        cache_namespace,
+        llm=llm,
         messages=messages,
         max_tokens=max_tokens,
         temperature=0.3,
     )
+    model_name = request.model
 
     try:
-        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        cached = await lookup_b2b_exact_stage_text(request)
         text: str | None = None
         usage: dict[str, int] = {}
         if cached is not None:
@@ -1193,11 +1190,8 @@ async def _llm_call(
             text = re.sub(r"\n?```$", "", text)
             text = text.strip()
             data = json.loads(text)
-        await store_cached_text(
-            cache_namespace,
-            request_envelope,
-            provider=provider_name,
-            model=model_name,
+        await store_b2b_exact_stage_text(
+            request,
             response_text=text,
             usage=usage,
             metadata=cache_metadata,

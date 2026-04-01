@@ -1171,7 +1171,10 @@ async def _store_blog_generation_cache(
     content_obj: dict[str, Any] | None,
 ) -> None:
     """Persist the final approved blog generation result in the exact cache."""
-    from ...services.b2b.llm_exact_cache import store_cached_text
+    from ...services.b2b.cache_runner import (
+        bind_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
+    )
 
     if not isinstance(content_obj, dict):
         return
@@ -1180,11 +1183,14 @@ async def _store_blog_generation_cache(
     model_name = str(content_obj.get("_cache_model") or "")
     if not isinstance(request_envelope, dict) or not provider_name or not model_name:
         return
-    await store_cached_text(
+    request = bind_b2b_exact_stage_request(
         "b2b_blog_post_generation.content",
-        request_envelope,
         provider=provider_name,
         model=model_name,
+        request_envelope=request_envelope,
+    )
+    await store_b2b_exact_stage_text(
+        request,
         response_text=json.dumps(
             _finalize_blog_generation_content(content_obj),
             separators=(",", ":"),
@@ -6185,11 +6191,6 @@ async def _generate_content_async(
 ) -> dict[str, Any] | None:
     """Single LLM call: blueprint in, {title, description, content} out."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
-    from ...services.b2b.llm_exact_cache import (
-        build_request_envelope,
-        llm_identity,
-        lookup_cached_text,
-    )
     from ...skills.registry import get_skill_registry
 
     skill = get_skill_registry().get("digest/b2b_blog_post_generation")
@@ -6252,25 +6253,28 @@ async def _generate_content_async(
         payload["quality_feedback"] = quality_feedback[:10]
 
     from ...services.protocols import Message
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+    )
 
     messages = [
         Message(role="system", content=skill.content),
         Message(role="user", content=json.dumps(payload, separators=(",", ":"), default=str)),
     ]
-    provider_name, model_name = llm_identity(llm)
-    request_envelope = build_request_envelope(
-        provider=provider_name,
-        model=model_name,
+    request = prepare_b2b_exact_stage_request(
+        "b2b_blog_post_generation.content",
+        llm=llm,
         messages=messages,
         max_tokens=max_tokens,
         temperature=0.7,
     )
+    provider_name = request.provider
+    model_name = request.model
+    request_envelope = request.request_envelope
 
     try:
-        cached = await lookup_cached_text(
-            "b2b_blog_post_generation.content",
-            request_envelope,
-        )
+        cached = await lookup_b2b_exact_stage_text(request)
         result = None
         text = cached["response_text"] if cached is not None else None
         if text is None:

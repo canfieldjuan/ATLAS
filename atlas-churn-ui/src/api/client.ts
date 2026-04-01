@@ -34,6 +34,7 @@ import type {
   VisibilityEvent,
   ArtifactAttempt,
   EnrichmentQuarantine,
+  ExtractionHealthAudit,
   SynthesisValidationResult,
   AdminCostSummary,
   AdminCostOperation,
@@ -685,6 +686,17 @@ export async function fetchEnrichmentQuarantines(params?: {
 }) {
   return get<{ quarantines: EnrichmentQuarantine[]; limit: number; offset: number }>(
     VISIBILITY_BASE, '/quarantines', params as Record<string, string | number | boolean>
+  )
+}
+
+export async function fetchExtractionHealth(params?: {
+  days?: number
+  top_n?: number
+}) {
+  return get<ExtractionHealthAudit>(
+    VISIBILITY_BASE,
+    '/extraction-health',
+    params as Record<string, string | number>,
   )
 }
 

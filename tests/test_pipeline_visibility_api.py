@@ -126,6 +126,43 @@ def test_synthesis_validation_retry_only_joins_attempts(monkeypatch):
     assert "a_succeeded.status = 'succeeded'" in query
 
 
+def test_extraction_health_endpoint_returns_audit_payload(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    summary = {
+        "days": 30,
+        "top_n": 10,
+        "current_snapshot": {
+            "enriched_rows": 25277,
+            "hard_gap_rows": 0,
+            "phrase_arrays_without_spans": 0,
+            "blank_replacement_mode": 0,
+            "blank_operating_model_shift": 0,
+            "blank_productivity_delta_claim": 0,
+            "blank_org_pressure_type": 0,
+            "missing_or_empty_evidence_spans": 0,
+            "blank_evidence_map_hash": 0,
+            "empty_salience_flags": 10624,
+        },
+        "daily_trend": [],
+        "top_vendors": [],
+    }
+    summarize = AsyncMock(return_value=summary)
+    monkeypatch.setattr(visibility_api, "summarize_extraction_health", summarize)
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: MagicMock())
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/extraction-health?days=30&top_n=12")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_snapshot"]["enriched_rows"] == 25277
+    assert body["current_snapshot"]["empty_salience_flags"] == 10624
+    assert summarize.await_args.kwargs["days"] == 30
+    assert summarize.await_args.kwargs["top_n"] == 12
+
+
 def test_resolve_review_records_actor_identity(monkeypatch):
     app = _make_app()
     user = _auth_user()

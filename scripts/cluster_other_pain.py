@@ -117,6 +117,7 @@ async def main():
     from atlas_brain.config import settings
     from atlas_brain.storage.database import init_database, get_db_pool, close_database
     from atlas_brain.pipelines.llm import clean_llm_output, parse_json_response
+    from atlas_brain.autonomous.tasks.b2b_enrichment import _finalize_enrichment_for_persist
 
     api_key = (
         os.environ.get("ANTHROPIC_API_KEY")
@@ -141,6 +142,9 @@ async def main():
         rows = await pool.fetch(
             f"""
             SELECT id, vendor_name,
+                   source, raw_metadata, rating, rating_max, summary,
+                   pros, reviewer_title, reviewer_company, company_size_raw,
+                   reviewer_industry, content_type,
                    enrichment->>'specific_complaints' AS specific_complaints_raw,
                    enrichment->>'quotable_phrases'    AS quotable_phrases_raw,
                    enrichment->>'pain_categories'     AS pain_categories_raw,
@@ -160,6 +164,9 @@ async def main():
         rows = await pool.fetch(
             f"""
             SELECT id, vendor_name,
+                   source, raw_metadata, rating, rating_max, summary,
+                   pros, reviewer_title, reviewer_company, company_size_raw,
+                   reviewer_industry, content_type,
                    enrichment->>'specific_complaints' AS specific_complaints_raw,
                    enrichment->>'quotable_phrases'    AS quotable_phrases_raw,
                    enrichment->>'pain_categories'     AS pain_categories_raw,
@@ -317,6 +324,11 @@ async def main():
             # Patch pain_cluster in existing enrichment
             updated_enrichment = dict(existing_enrichment)
             updated_enrichment["pain_cluster"] = cluster
+            finalized, _ = _finalize_enrichment_for_persist(updated_enrichment, dict(row))
+            if not finalized:
+                parse_errors += 1
+                done += 1
+                return
 
             # Do NOT touch enriched_at -- pain_cluster is a derived label added
             # on top of existing enrichment; updating enriched_at would make
@@ -328,7 +340,7 @@ async def main():
                 SET enrichment = $1
                 WHERE id = $2
                 """,
-                json.dumps(updated_enrichment),
+                json.dumps(finalized),
                 review_id,
             )
 

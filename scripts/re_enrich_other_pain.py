@@ -95,6 +95,7 @@ async def main():
     from atlas_brain.config import settings
     from atlas_brain.storage.database import init_database, get_db_pool, close_database
     from atlas_brain.pipelines.llm import clean_llm_output, parse_json_response
+    from atlas_brain.autonomous.tasks.b2b_enrichment import _finalize_enrichment_for_persist
 
     cfg = settings.b2b_churn
 
@@ -368,6 +369,11 @@ async def main():
             updated_enrichment = dict(existing_enrichment)
             updated_enrichment["pain_categories"] = valid_cats
             updated_enrichment["pain_category"] = primary_category
+            finalized, _ = _finalize_enrichment_for_persist(updated_enrichment, dict(row))
+            if not finalized:
+                parse_errors += 1
+                done += 1
+                return
 
             await pool.execute(
                 """
@@ -376,7 +382,7 @@ async def main():
                     enriched_at = $2
                 WHERE id = $3
                 """,
-                json.dumps(updated_enrichment),
+                json.dumps(finalized),
                 datetime.now(timezone.utc),
                 review_id,
             )

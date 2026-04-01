@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..autonomous.visibility import emit_event, record_review_action
 from ..auth.dependencies import AuthUser, require_auth
+from ..services.extraction_health_audit import summarize_extraction_health
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.pipeline_visibility")
@@ -41,6 +42,20 @@ def _serialize_row(row) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+@router.get("/extraction-health")
+async def get_extraction_health(
+    days: int = Query(30, ge=1, le=365),
+    top_n: int = Query(10, ge=1, le=50),
+    _user: AuthUser = Depends(require_auth),
+):
+    pool = get_db_pool()
+    return await summarize_extraction_health(
+        pool,
+        days=days,
+        top_n=top_n,
+    )
 
 
 # ---------------------------------------------------------------------------

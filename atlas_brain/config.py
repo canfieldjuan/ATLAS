@@ -2563,6 +2563,10 @@ class B2BChurnConfig(BaseSettings):
         default="openai/gpt-oss-120b",
         description="OpenRouter model for product profile synthesis",
     )
+    product_profile_cache_trace_enabled: bool = Field(
+        default=False,
+        description="Emit info-level exact-cache fingerprint logs for product profile synthesis debugging",
+    )
 
     # Blog post generation
     blog_post_enabled: bool = Field(default=False, description="Enable B2B blog post generation")

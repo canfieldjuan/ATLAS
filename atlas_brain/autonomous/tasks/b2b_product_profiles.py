@@ -358,8 +358,20 @@ def _build_strengths_weaknesses(
             strengths.append(item)
         else:
             weaknesses.append(item)
-    strengths.sort(key=lambda x: x["score"], reverse=True)
-    weaknesses.sort(key=lambda x: x["score"])
+    strengths.sort(
+        key=lambda x: (
+            -_safe_float(x.get("score")),
+            -int(x.get("evidence_count") or 0),
+            str(x.get("area") or ""),
+        )
+    )
+    weaknesses.sort(
+        key=lambda x: (
+            _safe_float(x.get("score")),
+            -int(x.get("evidence_count") or 0),
+            str(x.get("area") or ""),
+        )
+    )
     return strengths[:10], weaknesses[:10]
 
 
@@ -368,7 +380,14 @@ def _build_use_cases(use_case_data: list[dict], total_reviews: int) -> list[dict
     if not use_case_data or total_reviews == 0:
         return []
     result = []
-    for uc in use_case_data[:10]:
+    ranked = sorted(
+        use_case_data,
+        key=lambda uc: (
+            -int(uc.get("count") or 0),
+            str(uc.get("use_case") or ""),
+        ),
+    )
+    for uc in ranked[:10]:
         fit_score = round(min(uc["count"] / total_reviews, 1.0), 2)
         result.append({"use_case": uc["use_case"], "fit_score": fit_score})
     return result
@@ -402,7 +421,12 @@ def _build_competitive_positioning(comp_data: dict) -> tuple[list[dict], list[di
             "vendor": comp_name,
             "mentions": mentions,
         })
-    compared_to.sort(key=lambda x: x["mentions"], reverse=True)
+    compared_to.sort(
+        key=lambda x: (
+            -int(x.get("mentions") or 0),
+            str(x.get("vendor") or ""),
+        )
+    )
 
     switched_from = []
     for comp_name, data in comp_data.get("switched_from", {}).items():
@@ -412,14 +436,26 @@ def _build_competitive_positioning(comp_data: dict) -> tuple[list[dict], list[di
             "count": data["count"],
             "top_reason": top_reason,
         })
-    switched_from.sort(key=lambda x: x["count"], reverse=True)
+    switched_from.sort(
+        key=lambda x: (
+            -int(x.get("count") or 0),
+            str(x.get("vendor") or ""),
+            str(x.get("top_reason") or ""),
+        )
+    )
 
     return compared_to[:10], switched_from[:10]
 
 
 def _build_top_integrations(integration_data: dict[str, int]) -> list[str]:
     """Top integrations sorted by frequency."""
-    sorted_items = sorted(integration_data.items(), key=lambda x: x[1], reverse=True)
+    sorted_items = sorted(
+        integration_data.items(),
+        key=lambda x: (
+            -int(x[1] or 0),
+            str(x[0] or ""),
+        ),
+    )
     return [name for name, _ in sorted_items[:15]]
 
 
@@ -506,6 +542,40 @@ async def _call_openrouter(messages: list[dict], max_tokens: int, cfg, client: h
     return data["choices"][0]["message"]["content"].strip()
 
 
+def _log_product_profile_cache_trace(
+    *,
+    cfg,
+    phase: str,
+    request,
+    vendor_name: str,
+    payload: dict[str, Any],
+    cached: dict[str, Any] | None = None,
+    response_text: str | None = None,
+) -> None:
+    """Emit targeted exact-cache trace logs for product profile synthesis."""
+    if not bool(getattr(cfg, "product_profile_cache_trace_enabled", False)):
+        return
+
+    from ...services.b2b import llm_exact_cache
+
+    envelope_hash = llm_exact_cache.compute_cache_key("__trace__", request.request_envelope)
+    cache_key = llm_exact_cache.compute_cache_key(request.namespace, request.request_envelope)
+    payload_hash = llm_exact_cache.canonicalize_for_cache(payload)
+    logger.info(
+        "product_profile_cache_trace phase=%s vendor=%s namespace=%s key=%s env=%s payload=%s hit_count=%s response_len=%s provider=%s model=%s",
+        phase,
+        vendor_name,
+        request.namespace,
+        cache_key[:16],
+        envelope_hash[:16],
+        payload_hash[:16],
+        cached.get("hit_count") if isinstance(cached, dict) else None,
+        len(str(response_text or "")) if response_text is not None else None,
+        request.provider,
+        request.model,
+    )
+
+
 async def _synthesize_profile(
     vendor_name: str,
     metrics: dict,
@@ -522,10 +592,10 @@ async def _synthesize_profile(
 
     Returns (summary, pain_addressed).
     """
-    from ...services.b2b.llm_exact_cache import (
-        build_request_envelope,
-        lookup_cached_text,
-        store_cached_text,
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
     )
     from ...skills import get_skill_registry
 
@@ -571,15 +641,24 @@ async def _synthesize_profile(
     _owns_client = client is None
 
     try:
-        cache_namespace = "b2b_product_profiles.synthesis"
-        request_envelope = build_request_envelope(
+        request = prepare_b2b_exact_stage_request(
+            "b2b_product_profiles.synthesis",
             provider=backend,
             model=model_id,
             messages=messages,
             max_tokens=max_tokens,
             temperature=0.3,
         )
-        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        cached = await lookup_b2b_exact_stage_text(request)
+        _log_product_profile_cache_trace(
+            cfg=cfg,
+            phase="lookup_hit" if cached is not None else "lookup_miss",
+            request=request,
+            vendor_name=vendor_name,
+            payload=payload,
+            cached=cached,
+        )
+        cache_hit = cached is not None
         text: str | None = None
         if cached is not None:
             candidate = str(cached["response_text"] or "").strip()
@@ -628,17 +707,23 @@ async def _synthesize_profile(
             else:
                 validated_pain[cat] = pain_heuristic.get(cat, 0.5)
 
-        await store_cached_text(
-            cache_namespace,
-            request_envelope,
-            provider=backend,
-            model=model_id,
-            response_text=text,
-            metadata={
-                "vendor_name": vendor_name,
-                "product_category": metrics.get("product_category"),
-            },
-        )
+        if not cache_hit:
+            await store_b2b_exact_stage_text(
+                request,
+                response_text=text,
+                metadata={
+                    "vendor_name": vendor_name,
+                    "product_category": metrics.get("product_category"),
+                },
+            )
+            _log_product_profile_cache_trace(
+                cfg=cfg,
+                phase="store",
+                request=request,
+                vendor_name=vendor_name,
+                payload=payload,
+                response_text=text,
+            )
         return summary, validated_pain
 
     except json.JSONDecodeError:
@@ -935,7 +1020,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     weaknesses=weaknesses,
                     use_cases=use_cases,
                     integrations=integrations,
-                    competitive=competitive_data.get(raw_vendor, {}),
+                    competitive={
+                        "compared_to": compared_to,
+                        "switched_from": switched_from,
+                    },
                     pain_heuristic=pain_heuristic,
                     max_tokens=max_tokens,
                     client=_http_client,

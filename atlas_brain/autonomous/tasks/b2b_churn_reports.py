@@ -1325,17 +1325,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         get_pipeline_llm,
         parse_json_response,
     )
-    from ...services.b2b.llm_exact_cache import (
-        CacheUnavailable,
-        build_skill_request_envelope,
-        llm_identity,
-        lookup_cached_text,
-        store_cached_text,
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_skill_stage_request,
+        store_b2b_exact_stage_text,
     )
+    from ...services.b2b.llm_exact_cache import CacheUnavailable, llm_identity
 
     _llm_workload = "synthesis"
     _llm_max_tokens = _scorecard_narrative_max_tokens()
-    _cache_namespace = "b2b_churn_reports.scorecard_narrative"
+    _cache_stage_id = "b2b_churn_reports.scorecard_narrative"
     _resolved_llm = get_pipeline_llm(workload=_llm_workload)
     _provider, _model = llm_identity(_resolved_llm)
     scorecard_llm_failures = 0
@@ -1357,11 +1356,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     sc,
                     reasoning_lookup=reasoning_lookup,
                 )
-                request_envelope: dict[str, Any] | None = None
+                request: Any | None = None
                 if _provider and _model:
                     try:
-                        _, request_envelope, _ = build_skill_request_envelope(
-                            namespace=_cache_namespace,
+                        request, _ = prepare_b2b_exact_skill_stage_request(
+                            _cache_stage_id,
                             skill_name="digest/vendor_deep_dive_narrative",
                             payload=json.dumps(llm_input, default=str),
                             provider=_provider,
@@ -1371,10 +1370,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             response_format={"type": "json_object"},
                         )
                     except CacheUnavailable:
-                        request_envelope = None
+                        request = None
 
-                if request_envelope is not None:
-                    cached = await lookup_cached_text(_cache_namespace, request_envelope)
+                if request is not None:
+                    cached = await lookup_b2b_exact_stage_text(request)
                     if cached is not None:
                         parsed_narrative = parse_json_response(cached["response_text"])
                         from ._b2b_shared import _normalize_scorecard_expert_take
@@ -1412,10 +1411,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 else:
                     sc["expert_take"] = expert_take
                     parsed_narrative["expert_take"] = expert_take
-                    if request_envelope is None:
+                    if request is None:
                         try:
-                            _, request_envelope, _ = build_skill_request_envelope(
-                                namespace=_cache_namespace,
+                            request, _ = prepare_b2b_exact_skill_stage_request(
+                                _cache_stage_id,
                                 skill_name="digest/vendor_deep_dive_narrative",
                                 payload=json.dumps(llm_input, default=str),
                                 provider=_provider,
@@ -1425,13 +1424,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                                 response_format={"type": "json_object"},
                             )
                         except CacheUnavailable:
-                            request_envelope = None
-                    if request_envelope is not None:
-                        await store_cached_text(
-                            _cache_namespace,
-                            request_envelope,
-                            provider=_provider,
-                            model=_model,
+                            request = None
+                    if request is not None:
+                        await store_b2b_exact_stage_text(
+                            request,
                             response_text=json.dumps(parsed_narrative, separators=(",", ":")),
                             metadata={
                                 "task": "b2b_churn_reports",

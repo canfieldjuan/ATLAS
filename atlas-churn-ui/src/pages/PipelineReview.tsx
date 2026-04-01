@@ -11,6 +11,10 @@ import {
   DollarSign,
   Database,
   Cpu,
+  Building2,
+  CalendarClock,
+  GitCompareArrows,
+  Workflow,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -22,6 +26,8 @@ import type {
   VisibilityEvent,
   ArtifactAttempt,
   EnrichmentQuarantine,
+  ExtractionHealthDailyRow,
+  ExtractionHealthVendorRow,
   SynthesisValidationResult,
   AdminCostSummary,
   AdminCostOperation,
@@ -33,6 +39,7 @@ import {
   fetchVisibilityEvents,
   fetchArtifactAttempts,
   fetchEnrichmentQuarantines,
+  fetchExtractionHealth,
   fetchSynthesisValidationResults,
   resolveVisibilityReview,
   fetchAdminCostSummary,
@@ -557,6 +564,7 @@ function QualityTab() {
   const [unreleasedOnly, setUnreleasedOnly] = useState(true)
   const [severityFilter, setSeverityFilter] = useState('')
   const [retryOnly, setRetryOnly] = useState(false)
+  const [healthDays, setHealthDays] = useState('30')
 
   const {
     data: quarantineData,
@@ -571,6 +579,21 @@ function QualityTab() {
         limit: 100,
       }),
     [unreleasedOnly],
+  )
+
+  const {
+    data: extractionHealth,
+    loading: extractionHealthLoading,
+    error: extractionHealthError,
+    refresh: refreshExtractionHealth,
+    refreshing: extractionHealthRefreshing,
+  } = useApiData(
+    () =>
+      fetchExtractionHealth({
+        days: Number(healthDays),
+        top_n: 12,
+      }),
+    [healthDays],
   )
 
   const {
@@ -722,13 +745,107 @@ function QualityTab() {
 
   const quarantines = quarantineData?.quarantines ?? []
   const validations = validationData?.results ?? []
-  const loading = quarantinesLoading || validationsLoading
-  const refreshing = quarantinesRefreshing || validationsRefreshing
-  const error = quarantinesError || validationsError
+  const trendColumns: Column<ExtractionHealthDailyRow>[] = [
+    {
+      key: 'day',
+      header: 'Day',
+      render: (r) => <span className="text-sm text-white">{r.day}</span>,
+      sortable: true,
+      sortValue: (r) => r.day,
+    },
+    {
+      key: 'hard_gap_rows',
+      header: 'Hard Gaps',
+      render: (r) => <span className="text-sm text-slate-200">{formatNumber(r.hard_gap_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.hard_gap_rows,
+    },
+    {
+      key: 'phrase_arrays_without_spans',
+      header: 'Phrase Arrays / No Spans',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.phrase_arrays_without_spans)}</span>,
+      sortable: true,
+      sortValue: (r) => r.phrase_arrays_without_spans,
+    },
+    {
+      key: 'blank_replacement_mode',
+      header: 'Blank Replacement',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.blank_replacement_mode)}</span>,
+      sortable: true,
+      sortValue: (r) => r.blank_replacement_mode,
+    },
+    {
+      key: 'blank_operating_model_shift',
+      header: 'Blank Operating Shift',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.blank_operating_model_shift)}</span>,
+      sortable: true,
+      sortValue: (r) => r.blank_operating_model_shift,
+    },
+    {
+      key: 'strategic_candidate_rows',
+      header: 'Strategic Candidates',
+      render: (r) => <span className="text-xs text-amber-300">{formatNumber(r.strategic_candidate_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.strategic_candidate_rows,
+    },
+  ]
+
+  const vendorColumns: Column<ExtractionHealthVendorRow>[] = [
+    {
+      key: 'vendor_name',
+      header: 'Vendor',
+      render: (r) => <span className="text-sm text-white">{r.vendor_name}</span>,
+      sortable: true,
+      sortValue: (r) => r.vendor_name,
+    },
+    {
+      key: 'hard_gap_rows',
+      header: 'Hard Gaps',
+      render: (r) => <span className="text-sm text-slate-200">{formatNumber(r.hard_gap_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.hard_gap_rows,
+    },
+    {
+      key: 'phrase_arrays_without_spans',
+      header: 'Phrase Arrays / No Spans',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.phrase_arrays_without_spans)}</span>,
+      sortable: true,
+      sortValue: (r) => r.phrase_arrays_without_spans,
+    },
+    {
+      key: 'empty_salience_flags',
+      header: 'Empty Salience',
+      render: (r) => <span className="text-xs text-slate-300">{formatNumber(r.empty_salience_flags)}</span>,
+      sortable: true,
+      sortValue: (r) => r.empty_salience_flags,
+    },
+    {
+      key: 'strategic_candidate_rows',
+      header: 'Strategic Candidates',
+      render: (r) => <span className="text-xs text-amber-300">{formatNumber(r.strategic_candidate_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.strategic_candidate_rows,
+    },
+    {
+      key: 'enriched_rows',
+      header: 'Enriched Rows',
+      render: (r) => <span className="text-xs text-slate-400">{formatNumber(r.enriched_rows)}</span>,
+      sortable: true,
+      sortValue: (r) => r.enriched_rows,
+    },
+  ]
+
+  const loading = quarantinesLoading || validationsLoading || extractionHealthLoading
+  const refreshing = quarantinesRefreshing || validationsRefreshing || extractionHealthRefreshing
+  const error = quarantinesError || validationsError || extractionHealthError
+  const snapshot = extractionHealth?.current_snapshot
+  const extractionTrend = extractionHealth?.daily_trend ?? []
+  const extractionVendors = extractionHealth?.top_vendors ?? []
 
   const refresh = () => {
     refreshQuarantines()
     refreshValidations()
+    refreshExtractionHealth()
   }
 
   return (
@@ -752,6 +869,18 @@ function QualityTab() {
             { value: '', label: 'All validation findings' },
             { value: 'error', label: 'Error only' },
             { value: 'warning', label: 'Warning only' },
+          ]}
+        />
+        <FilterSelect
+          label="Health Window"
+          value={healthDays}
+          onChange={setHealthDays}
+          options={[
+            { value: '7', label: '7d' },
+            { value: '14', label: '14d' },
+            { value: '30', label: '30d' },
+            { value: '60', label: '60d' },
+            { value: '90', label: '90d' },
           ]}
         />
         <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
@@ -778,6 +907,126 @@ function QualityTab() {
           {error.message}
         </div>
       )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-medium text-white">Extraction Health</h2>
+            <p className="text-xs text-slate-500">
+              Current witness-primitive gap counts plus recent daily backlog trend.
+            </p>
+          </div>
+          <div className="text-xs text-slate-500">
+            Enriched corpus: <span className="text-slate-300">{formatNumber(snapshot?.enriched_rows)}</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 xl:grid-cols-5 gap-4">
+          <StatCard
+            label="Hard Gaps"
+            value={snapshot?.hard_gap_rows ?? 0}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Phrase Arrays / No Spans"
+            value={snapshot?.phrase_arrays_without_spans ?? 0}
+            icon={<XCircle className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Blank Replacement"
+            value={snapshot?.blank_replacement_mode ?? 0}
+            icon={<ChevronRight className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Blank Operating Shift"
+            value={snapshot?.blank_operating_model_shift ?? 0}
+            icon={<RefreshCw className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Empty Salience"
+            value={snapshot?.empty_salience_flags ?? 0}
+            icon={<Clock className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+          <StatCard
+            label="Strategic Candidates"
+            value={snapshot?.strategic_candidate_rows ?? 0}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Money / No Pricing Span"
+            value={snapshot?.money_without_pricing_span ?? 0}
+            icon={<DollarSign className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Competitor / No Framing"
+            value={snapshot?.competitor_without_displacement_framing ?? 0}
+            icon={<GitCompareArrows className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Named Company / No Evidence"
+            value={snapshot?.named_company_without_named_account_evidence ?? 0}
+            icon={<Building2 className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Timeline / No Anchor"
+            value={snapshot?.timeline_language_without_timing_anchor ?? 0}
+            icon={<CalendarClock className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+          <StatCard
+            label="Workflow / No Replacement"
+            value={snapshot?.workflow_language_without_replacement_mode ?? 0}
+            icon={<Workflow className="h-4 w-4" />}
+            skeleton={extractionHealthLoading}
+          />
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="border border-slate-700/50 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700/50">
+              <h3 className="text-sm font-medium text-white">Daily Trend</h3>
+              <p className="text-xs text-slate-500">Backlog shape by enrichment day</p>
+            </div>
+            {loading ? (
+              <DataTable columns={trendColumns} data={[]} skeletonRows={6} />
+            ) : (
+              <DataTable
+                columns={trendColumns}
+                data={extractionTrend}
+                emptyMessage="No extraction health rows in the selected window"
+              />
+            )}
+          </div>
+
+          <div className="border border-slate-700/50 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-700/50">
+              <h3 className="text-sm font-medium text-white">Top Vendors</h3>
+              <p className="text-xs text-slate-500">Current vendors with the most remaining gaps</p>
+            </div>
+            {loading ? (
+              <DataTable columns={vendorColumns} data={[]} skeletonRows={6} />
+            ) : (
+              <DataTable
+                columns={vendorColumns}
+                data={extractionVendors}
+                emptyMessage="No vendors currently show extraction-health gaps"
+              />
+            )}
+          </div>
+        </div>
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">

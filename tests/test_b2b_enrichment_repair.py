@@ -195,6 +195,17 @@ async def test_repair_single_shadows_when_nothing_promotable(monkeypatch):
         enrichment_full_extraction_timeout_seconds=30,
     )
 
+    monkeypatch.setattr(
+        repair_mod,
+        "_call_repair_extractor",
+        AsyncMock(return_value=({"event_mentions": []}, "google/gemini-3.1-flash-lite-preview")),
+    )
+    monkeypatch.setattr(
+        repair_mod.base_enrichment,
+        "_apply_field_repair",
+        lambda baseline, repair_result: (baseline, []),
+    )
+
     result = await repair_mod._repair_single(pool, row, cfg, max_attempts=2)
 
     assert result == "shadowed"
@@ -393,3 +404,151 @@ async def test_run_returns_demotion_result_when_no_repair_rows(monkeypatch):
     assert result["_skip_synthesis"] == "B2B enrichment repair complete"
     assert result["stale_no_signal_demoted"] == 3
     assert result["rounds"] == 0
+
+
+def test_strategic_adjudication_reasons_detects_missing_witness_interfaces():
+    row = {
+        "summary": "Renewal is coming up and we're considering HubSpot for our team docs workflow.",
+        "review_text": (
+            "Acme Corp was quoted $29 per seat at renewal. We're considering HubSpot "
+            "next quarter because we want docs instead of chat."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "Acme Corp",
+    }
+    result = {
+        "salience_flags": ["explicit_dollar"],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"contract_renewal_mentioned": True},
+        "reviewer_context": {"company_name": "Acme Corp"},
+        "competitors_mentioned": [{"name": "HubSpot"}],
+        "evidence_spans": [
+            {
+                "signal_type": "complaint",
+                "text": "quoted $29 per seat at renewal",
+                "flags": [],
+                "company_name": "",
+                "time_anchor": "",
+            }
+        ],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "money_without_pricing_span" in reasons
+    assert "competitor_without_displacement_framing" in reasons
+    assert "named_company_without_named_account_evidence" in reasons
+    assert "timeline_language_without_timing_anchor" in reasons
+    assert "workflow_language_without_replacement_mode" in reasons
+
+
+def test_build_repair_payload_includes_strategic_targets():
+    row = {
+        "vendor_name": "Slack",
+        "summary": "Renewal pricing issue",
+        "review_text": "Acme was quoted $29 and is evaluating Teams next quarter.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "Acme",
+    }
+    baseline = {
+        "salience_flags": ["explicit_dollar"],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"contract_renewal_mentioned": True},
+        "competitors_mentioned": [{"name": "Teams"}],
+        "evidence_spans": [],
+    }
+
+    payload = repair_mod._build_repair_payload(row, baseline, 500)
+
+    assert "pricing_phrases" in payload["target_fields"]
+    assert "competitors_mentioned" in payload["target_fields"]
+    assert "event_mentions" in payload["target_fields"]
+    assert "money_without_pricing_span" in payload["strategic_adjudication_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_repair_single_shadows_with_adjudication_markers_when_no_llm_targets(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    row = {
+        "id": uuid4(),
+        "vendor_name": "Notion",
+        "review_text": "Acme Corp wants docs instead of chat, but the extraction still missed that shift.",
+        "summary": "Acme Corp wants docs instead of chat",
+        "source": "reddit",
+        "rating": 3.0,
+        "rating_max": 5,
+        "product_name": "Notion",
+        "product_category": "Knowledge Base",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "Acme Corp",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "enrichment": {
+            "salience_flags": ["named_account"],
+            "replacement_mode": "none",
+            "timeline": {"decision_timeline": "unknown"},
+            "churn_signals": {"contract_renewal_mentioned": False},
+            "competitors_mentioned": [],
+            "evidence_spans": [{"signal_type": "review_context", "company_name": "Acme Corp", "flags": ["named_org"]}],
+        },
+    }
+    cfg = SimpleNamespace(
+        enrichment_repair_model="google/gemini-3.1-flash-lite-preview",
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+        enrichment_full_extraction_timeout_seconds=30,
+    )
+
+    monkeypatch.setattr(
+        repair_mod.base_enrichment,
+        "_repair_target_fields",
+        lambda baseline, row=None: [],
+    )
+
+    result = await repair_mod._repair_single(pool, row, cfg, max_attempts=2)
+
+    assert result == "shadowed"
+    query = pool.execute.await_args.args[0]
+    args = pool.execute.await_args.args
+    assert "enrichment_repair_applied_fields = $5::jsonb" in query
+    assert json.loads(args[5]) == ["adjudication:workflow_language_without_replacement_mode"]
+
+
+@pytest.mark.asyncio
+async def test_run_query_includes_strategic_adjudication_conditions(monkeypatch):
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(return_value="UPDATE 0"),
+        fetch=AsyncMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(repair_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_enabled",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_model",
+        "google/gemini-3.1-flash-lite-preview",
+        raising=False,
+    )
+
+    result = await repair_mod.run(_task())
+
+    assert result["_skip_synthesis"] == "No enriched reviews need repair"
+    query = pool.fetch.await_args.args[0]
+    assert "jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == \"pricing_backlash\")')" in query
+    assert "COALESCE(NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NOT NULL" in query
+    assert "lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'none'" in query

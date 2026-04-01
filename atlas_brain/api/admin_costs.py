@@ -5,15 +5,19 @@ Aggregates LLM usage from the local llm_usage table for the cost dashboard.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import psutil
 from fastapi import APIRouter, HTTPException, Query
 
+from ..config import settings
+from ..services.b2b.cache_strategy import iter_core_b2b_cache_strategies
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.admin_costs")
@@ -49,6 +53,27 @@ def _humanize_identifier(value: str | None) -> str:
     if not value:
         return ""
     return value.replace("/", " ").replace(".", " ").replace("_", " ").strip().title()
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_task_result_payload(result_text: str | None) -> dict[str, Any]:
+    text = str(result_text or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        try:
+            parsed = ast.literal_eval(text)
+        except Exception:
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | None]:

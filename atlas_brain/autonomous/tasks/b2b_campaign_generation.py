@@ -3522,12 +3522,12 @@ async def _generate_content(
 ) -> dict[str, Any] | None:
     """Call LLM, validate output, retry once if word count exceeded."""
     from ...pipelines.llm import clean_llm_output
-    from ...services.b2b.llm_exact_cache import (
-        build_request_envelope,
-        llm_identity,
-        lookup_cached_text,
-        store_cached_text,
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
     )
+    from ...services.b2b.llm_exact_cache import llm_identity
 
     request_payload = payload
     working_payload = dict(payload)
@@ -3579,7 +3579,8 @@ async def _generate_content(
                         f"format.\n\n{user_content}"
                     )
 
-        request_envelope = build_request_envelope(
+        request = prepare_b2b_exact_stage_request(
+            cache_namespace,
             provider=provider_name,
             model=model_name,
             messages=[
@@ -3589,7 +3590,7 @@ async def _generate_content(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        cached = await lookup_cached_text(cache_namespace, request_envelope)
+        cached = await lookup_b2b_exact_stage_text(request)
         text = cached["response_text"] if cached is not None else None
         if text is None:
             text = await _call_llm(llm, system_prompt, user_content, max_tokens, temperature)
@@ -3755,11 +3756,8 @@ async def _generate_content(
             "validation_issues": issues,
             "specificity": specificity,
         }
-        await store_cached_text(
-            cache_namespace,
-            request_envelope,
-            provider=provider_name,
-            model=model_name,
+        await store_b2b_exact_stage_text(
+            request,
             response_text=json.dumps(validated, separators=(",", ":"), default=str),
             metadata={
                 "channel": channel,

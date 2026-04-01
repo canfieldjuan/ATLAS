@@ -76,7 +76,9 @@ async def _fetch_rows(pool, args) -> list[dict[str, Any]]:
     return await pool.fetch(
         f"""
         SELECT id, vendor_name, source, content_type, summary, review_text,
-               pros, cons, reviewer_title, enrichment, enriched_at
+               pros, cons, reviewer_title, reviewer_company, company_size_raw,
+               reviewer_industry, rating, rating_max, raw_metadata,
+               enrichment, enriched_at
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
         {' '.join(clauses)}
@@ -101,7 +103,7 @@ async def _apply_updates(pool, updates: list[tuple[str, Any]]) -> None:
 
 
 async def run(args) -> None:
-    from atlas_brain.autonomous.tasks.b2b_enrichment import _validate_enrichment
+    from atlas_brain.autonomous.tasks.b2b_enrichment import _finalize_enrichment_for_persist
     from atlas_brain.storage.database import close_database, get_db_pool, init_database
 
     await init_database()
@@ -124,9 +126,11 @@ async def run(args) -> None:
             _as_dict(enrichment.get("reviewer_context")).get("role_level") or "unknown"
         ).strip() or "unknown"
         original_dm = _as_dict(enrichment.get("reviewer_context")).get("decision_maker")
-        if not _validate_enrichment(enrichment, dict(row)):
+        finalized, _ = _finalize_enrichment_for_persist(enrichment, dict(row))
+        if not finalized:
             skipped_unknown += 1
             continue
+        enrichment = finalized
         updated_role = str(
             _as_dict(enrichment.get("buyer_authority")).get("role_type") or "unknown"
         ).strip() or "unknown"

@@ -843,23 +843,22 @@ async def _run_tenant_synthesis_llm(
         get_pipeline_llm,
         parse_json_response,
     )
-    from ...services.b2b.llm_exact_cache import (
-        CacheUnavailable,
-        build_skill_request_envelope,
-        llm_identity,
-        lookup_cached_text,
-        store_cached_text,
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_skill_stage_request,
+        store_b2b_exact_stage_text,
     )
+    from ...services.b2b.llm_exact_cache import CacheUnavailable, llm_identity
 
     llm_usage: dict[str, Any] = {}
-    cache_namespace = "b2b_tenant_report.synthesis_chunk"
-    request_envelope: dict[str, Any] | None = None
+    cache_stage_id = "b2b_tenant_report.synthesis_chunk"
+    request: Any | None = None
     resolved_llm = get_pipeline_llm(workload="synthesis")
     provider, model = llm_identity(resolved_llm)
     if provider and model:
         try:
-            _, request_envelope, _ = build_skill_request_envelope(
-                namespace=cache_namespace,
+            request, _ = prepare_b2b_exact_skill_stage_request(
+                cache_stage_id,
                 skill_name="digest/b2b_churn_intelligence",
                 payload=payload,
                 provider=provider,
@@ -869,10 +868,10 @@ async def _run_tenant_synthesis_llm(
                 response_format={"type": "json_object"},
             )
         except CacheUnavailable:
-            request_envelope = None
+            request = None
 
-    if request_envelope is not None:
-        cached = await lookup_cached_text(cache_namespace, request_envelope)
+    if request is not None:
+        cached = await lookup_b2b_exact_stage_text(request)
         if cached is not None:
             parsed_cached = parse_json_response(
                 cached["response_text"],
@@ -907,13 +906,13 @@ async def _run_tenant_synthesis_llm(
         raise ValueError("tenant report llm returned no analysis")
     parsed = parse_json_response(analysis, recover_truncated=True)
 
-    if request_envelope is None:
+    if request is None:
         provider = str(llm_usage.get("provider") or "")
         model = str(llm_usage.get("model") or "")
         if provider and model:
             try:
-                _, request_envelope, _ = build_skill_request_envelope(
-                    namespace=cache_namespace,
+                request, _ = prepare_b2b_exact_skill_stage_request(
+                    cache_stage_id,
                     skill_name="digest/b2b_churn_intelligence",
                     payload=payload,
                     provider=provider,
@@ -923,14 +922,11 @@ async def _run_tenant_synthesis_llm(
                     response_format={"type": "json_object"},
                 )
             except CacheUnavailable:
-                request_envelope = None
+                request = None
 
-    if request_envelope is not None and not parsed.get("_parse_fallback"):
-        await store_cached_text(
-            cache_namespace,
-            request_envelope,
-            provider=str(llm_usage.get("provider") or provider),
-            model=str(llm_usage.get("model") or model),
+    if request is not None and not parsed.get("_parse_fallback"):
+        await store_b2b_exact_stage_text(
+            request,
             response_text=analysis,
             usage=llm_usage,
             metadata={"task": "tenant_report", "cache_stage": "synthesis_chunk"},

@@ -64,7 +64,7 @@ async def main():
 
     from atlas_brain.autonomous.tasks.b2b_enrichment import (
         _build_classify_payload,
-        _validate_enrichment,
+        _finalize_enrichment_for_persist,
         _MIN_REVIEW_TEXT_LENGTH,
     )
     from atlas_brain.config import settings
@@ -226,7 +226,8 @@ async def main():
                 return
 
             parsed = parse_json(ext_result["content"])
-            if parsed and _validate_enrichment(parsed, row):
+            finalized, _ = _finalize_enrichment_for_persist(parsed, row) if parsed else (None, "invalid_payload")
+            if finalized:
                 await pool.execute(
                     """
                     UPDATE b2b_reviews
@@ -237,7 +238,7 @@ async def main():
                         enrichment_model = $3
                     WHERE id = $4
                     """,
-                    json.dumps(parsed),
+                    json.dumps(finalized),
                     datetime.now(timezone.utc),
                     args.model,
                     review_id,

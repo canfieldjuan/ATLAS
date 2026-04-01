@@ -765,3 +765,104 @@ def test_repair_target_fields_flags_semantic_pricing_and_timeline_gaps():
     assert "specific_complaints" in targets
     assert "pricing_phrases" in targets
     assert "event_mentions" in targets
+
+
+def _witness_ready_row_and_result():
+    row = {
+        "id": "review-1",
+        "vendor_name": "Slack",
+        "source": "g2",
+        "content_type": "review",
+        "summary": "Renewal pushed us away from Slack",
+        "review_text": (
+            "Slack wanted $200k/year at renewal. We became more productive using docs "
+            "and async updates instead."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Operations",
+        "reviewer_company": "Hack Club",
+        "rating": 2,
+        "rating_max": 5,
+        "raw_metadata": {"source_weight": 0.9},
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": True,
+            "actively_evaluating": True,
+            "migration_in_progress": False,
+            "support_escalation": False,
+            "contract_renewal_mentioned": True,
+        },
+        "reviewer_context": {
+            "role_level": "executive",
+            "decision_maker": True,
+            "company_name": "Hack Club",
+        },
+        "budget_signals": {
+            "annual_spend_estimate": 200000,
+            "price_per_seat": None,
+            "seat_count": None,
+            "price_increase_mentioned": True,
+        },
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": ["Slack wanted $200k/year at renewal"],
+        "quotable_phrases": ["We became more productive using docs and async updates instead"],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": ["I would not recommend this"],
+        "pricing_phrases": ["$200k/year at renewal"],
+        "event_mentions": [{"event": "renewal", "timeframe": "next quarter"}],
+        "timeline": {"contract_end": "next quarter", "evaluation_deadline": None},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+    return row, result
+
+
+def test_finalize_enrichment_for_persist_populates_witness_primitives():
+    row, result = _witness_ready_row_and_result()
+
+    finalized, error = b2b_enrichment._finalize_enrichment_for_persist(result, row)
+
+    assert error is None
+    assert finalized is not None
+    assert finalized["replacement_mode"] == "workflow_substitution"
+    assert finalized["operating_model_shift"] == "sync_to_async"
+    assert finalized["productivity_delta_claim"] == "more_productive"
+    assert finalized["org_pressure_type"] == "none"
+    assert finalized["salience_flags"]
+    assert finalized["evidence_spans"]
+    assert finalized["evidence_map_hash"]
+
+
+def test_validate_enrichment_schema_v3_recomputes_missing_witness_primitives():
+    row, result = _witness_ready_row_and_result()
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+    for key in (
+        "replacement_mode",
+        "operating_model_shift",
+        "productivity_delta_claim",
+        "org_pressure_type",
+        "salience_flags",
+        "evidence_spans",
+        "evidence_map_hash",
+    ):
+        derived.pop(key, None)
+
+    assert b2b_enrichment._validate_enrichment(derived, row)
+    assert derived["replacement_mode"] == "workflow_substitution"
+    assert derived["evidence_spans"]
+    assert derived["evidence_map_hash"]
+
+
+def test_validate_enrichment_schema_v3_rejects_missing_witness_primitives_without_source_row():
+    row, result = _witness_ready_row_and_result()
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+    derived.pop("evidence_spans", None)
+    derived.pop("evidence_map_hash", None)
+
+    assert not b2b_enrichment._validate_enrichment(derived)
