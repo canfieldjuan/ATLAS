@@ -34,14 +34,33 @@ _INTERNAL_TOOL_PATTERNS = (
 )
 _PRODUCTIVITY_POSITIVE_PATTERNS = (
     "more productive", "faster without", "better without", "easier without",
-    "more efficient",
+    "more efficient", "save time", "saves time", "time savings", "sped up",
+    "streamlined workflow", "reduced manual work", "less manual work",
 )
 _PRODUCTIVITY_NEGATIVE_PATTERNS = (
     "less productive", "slower now", "harder to work", "lost productivity",
+    "slowed us down", "time consuming", "takes too long", "waste of time",
+    "more manual work", "too many manual steps",
 )
-_PROCUREMENT_PATTERNS = ("procurement", "vendor standardization", "approved vendor")
-_STANDARDIZATION_PATTERNS = ("standardized on", "standardisation", "standardization")
-_BUDGET_FREEZE_PATTERNS = ("budget freeze", "spend freeze", "cost cutting", "cost-cutting")
+_PROCUREMENT_PATTERNS = (
+    "procurement", "vendor standardization", "approved vendor", "approved software",
+    "approved list", "security review", "legal review", "vendor review",
+)
+_STANDARDIZATION_PATTERNS = (
+    "standardized on", "standardisation", "standardization", "preferred vendor",
+    "company standard", "it standard", "standard tool",
+)
+_BUDGET_FREEZE_PATTERNS = (
+    "budget freeze", "spend freeze", "cost cutting", "cost-cutting",
+    "budget cuts", "spend reduction",
+)
+_PRICING_CONTEXT_PATTERNS = (
+    "pricing", "price", "priced", "cost", "costs", "costly", "expensive",
+    "cheaper", "budget", "billing", "invoice", "refund", "overcharg",
+    "renewal", "quoted", "quote", "per seat", "per user", "subscription",
+    "license", "licensed", "plan", "monthly", "annually", "/mo", "/month",
+    "/yr", "/year", "seat", "user",
+)
 _QUOTA_ORDER: tuple[tuple[str, int], ...] = (
     ("common_pattern", 2),
     ("named_account", 2),
@@ -123,6 +142,19 @@ def _normalize_list(values: Any) -> list[str]:
 def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     lowered = text.lower()
     return any(needle in lowered for needle in needles)
+
+
+def _has_pricing_currency_signal(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if not lowered:
+        return False
+    for match in _CURRENCY_RE.finditer(lowered):
+        start = max(0, match.start() - 48)
+        end = min(len(lowered), match.end() + 48)
+        window = lowered[start:end]
+        if _contains_any(window, _PRICING_CONTEXT_PATTERNS):
+            return True
+    return False
 
 
 def _normalize_key(value: Any) -> str:
@@ -236,10 +268,12 @@ def derive_salience_flags(result: dict[str, Any], source_row: dict[str, Any]) ->
     churn = _coerce_json_dict(result.get("churn_signals"))
     budget = _coerce_json_dict(result.get("budget_signals"))
     reviewer = _coerce_json_dict(result.get("reviewer_context"))
+    timeline = _coerce_json_dict(result.get("timeline"))
     review_blob = " ".join(
         str(source_row.get(field) or "")
         for field in ("summary", "review_text", "pros", "cons")
     )
+    price_text = " ".join(_normalize_list(result.get("pricing_phrases")))
     flags: list[str] = []
 
     def _add(flag: str, condition: bool) -> None:
@@ -249,9 +283,22 @@ def derive_salience_flags(result: dict[str, Any], source_row: dict[str, Any]) ->
     _add("explicit_cancel", bool(churn.get("intent_to_leave")))
     _add("active_evaluation", bool(churn.get("actively_evaluating")))
     _add("migration_in_progress", bool(churn.get("migration_in_progress")))
-    _add("renewal_window", bool(churn.get("contract_renewal_mentioned")) or _contains_any(review_blob, _TIMING_PATTERNS))
-    _add("explicit_dollar", bool(budget.get("annual_spend_estimate") or budget.get("price_per_seat")) or bool(_CURRENCY_RE.search(review_blob)))
-    _add("named_account", bool(source_row.get("reviewer_company")))
+    _add(
+        "renewal_window",
+        bool(churn.get("contract_renewal_mentioned"))
+        or (
+            str(timeline.get("decision_timeline") or "").strip().lower()
+            not in {"", "unknown", "none"}
+        )
+        or _contains_any(review_blob, _TIMING_PATTERNS),
+    )
+    _add(
+        "explicit_dollar",
+        bool(budget.get("annual_spend_estimate") or budget.get("price_per_seat"))
+        or _has_pricing_currency_signal(price_text)
+        or _has_pricing_currency_signal(review_blob),
+    )
+    _add("named_account", bool(source_row.get("reviewer_company") or reviewer.get("company_name")))
     _add("decision_maker", bool(reviewer.get("decision_maker")))
     _add("named_competitor", bool(result.get("competitors_mentioned")))
     _add("productivity_claim", derive_productivity_delta_claim(source_row) != "unknown")
@@ -283,6 +330,11 @@ def derive_evidence_spans(
     default_time_anchor = (
         str(timeline.get("evaluation_deadline") or "").strip()
         or str(timeline.get("contract_end") or "").strip()
+        or (
+            str(timeline.get("decision_timeline") or "").strip()
+            if str(timeline.get("decision_timeline") or "").strip().lower() not in {"", "unknown", "none"}
+            else ""
+        )
         or str(_coerce_json_dict(result.get("churn_signals")).get("renewal_timing") or "").strip()
         or None
     )
@@ -345,7 +397,7 @@ def derive_evidence_spans(
             phrase,
         )
         flags: list[str] = []
-        if _CURRENCY_RE.search(excerpt):
+        if _has_pricing_currency_signal(excerpt):
             flags.append("explicit_dollar")
         if company_name:
             flags.append("named_org")
