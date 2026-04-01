@@ -37,10 +37,17 @@ _COMPETITOR_PRESSURE_PATTERNS = (
     "overcharged", "not worth", "switch", "switched to", "moved to", "replaced with",
     "evaluating", "considering", "alternative", "frustrated", "pain", "issue", "problem",
 )
-_DISPLACEMENT_COMPETITOR_PATTERNS = (
+_DISPLACEMENT_HARD_PATTERNS = (
     "switched to", "moved to", "replaced with", "migrating to", "migration to",
+)
+_DISPLACEMENT_SOFT_PATTERNS = (
     "evaluating", "looking at", "considering", "shortlisting", "shortlisted",
     "poc with", "proof of concept with",
+)
+_DISPLACEMENT_CONTEXT_PATTERNS = (
+    "alternative", "alternatives", "replace", "replacement", "switch", "switching",
+    "migration", "migrate", "replatform", "vendor", "platform", "tool", "solution",
+    "suite", "stack", "versus", " vs ", "competitor",
 )
 _TIMELINE_HARD_PATTERNS = (
     "renewal", "contract end", "contract expires", "deadline",
@@ -152,6 +159,22 @@ def _has_pricing_trigger(
     return base_enrichment._contains_any(review_blob, _PRICING_CONTEXT_PATTERNS)
 
 
+def _has_competitor_trigger(
+    review_blob: str,
+    *,
+    competitors: list[dict[str, Any]],
+    strong_competitor_signal: bool,
+) -> bool:
+    if strong_competitor_signal:
+        return True
+    if base_enrichment._contains_any(review_blob, _DISPLACEMENT_HARD_PATTERNS):
+        return True
+    soft = base_enrichment._contains_any(review_blob, _DISPLACEMENT_SOFT_PATTERNS)
+    if not soft:
+        return False
+    return bool(competitors) or base_enrichment._contains_any(review_blob, _DISPLACEMENT_CONTEXT_PATTERNS)
+
+
 def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
     review_blob = base_enrichment._repair_text_blob(source_row)
     if not review_blob.strip():
@@ -249,7 +272,11 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         reasons.append("money_without_pricing_span")
     if (
         pressure_signal
-        and (base_enrichment._contains_any(review_blob, _DISPLACEMENT_COMPETITOR_PATTERNS) or competitors)
+        and _has_competitor_trigger(
+            review_blob,
+            competitors=competitors,
+            strong_competitor_signal=strong_competitor_signal,
+        )
         and not displacement_framed
         and not discussion_noise
     ):
@@ -931,7 +958,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                     OR (
                       COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) = 0
-                      AND review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
+                      AND (
+                        review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
+                        OR (
+                          review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
+                          AND review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'
+                        )
+                      )
                     )
                     OR (
                       COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) = 0
@@ -1002,8 +1035,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                     OR (
                       (
-                        review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-                        OR COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
+                        review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
+                        OR (
+                          review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
+                          AND (
+                            COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
+                            OR review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'
+                          )
+                        )
+                        OR jsonb_path_exists(
+                          COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+                          '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+                        )
                       )
                       AND (
                         COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)

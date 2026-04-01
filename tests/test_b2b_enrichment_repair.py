@@ -365,7 +365,9 @@ async def test_run_claim_query_requires_pressure_signal(monkeypatch):
     query = pool.fetch.await_args.args[0]
     assert "COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction')" in query
     assert "review_text ~* '(cancel|cancellation|billing dispute|refund denied" in query
-    assert "review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering" in query
+    assert "review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'" in query
+    assert "review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'" in query
+    assert "review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'" in query
 
 
 @pytest.mark.asyncio
@@ -717,6 +719,60 @@ def test_strategic_adjudication_skips_roundup_style_comparisons_without_named_di
     reasons = repair_mod._strategic_adjudication_reasons(result, row)
 
     assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_skips_soft_evaluation_without_displacement_context():
+    row = {
+        "summary": "Storage design question",
+        "review_text": "I am re-evaluating my storage design philosophy for my next build.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "community_discussion",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"actively_evaluating": True},
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" not in reasons
+
+
+def test_strategic_adjudication_keeps_soft_evaluation_with_displacement_context():
+    row = {
+        "summary": "CRM evaluation at renewal",
+        "review_text": "We are evaluating alternative CRM platforms at renewal because Salesforce is too expensive.",
+        "pros": "",
+        "cons": "",
+        "reviewer_company": "",
+        "content_type": "review",
+        "reviewer_title": "",
+    }
+    result = {
+        "salience_flags": [],
+        "replacement_mode": "none",
+        "timeline": {"decision_timeline": "unknown"},
+        "churn_signals": {"actively_evaluating": True, "contract_renewal_mentioned": True},
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "pricing_phrases": [],
+        "feature_gaps": [],
+        "evidence_spans": [],
+    }
+
+    reasons = repair_mod._strategic_adjudication_reasons(result, row)
+
+    assert "competitor_without_displacement_framing" in reasons
 
 
 def test_strategic_adjudication_skips_low_signal_community_discussion_competitor_noise():

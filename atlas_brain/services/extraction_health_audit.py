@@ -88,8 +88,18 @@ _MONEY_WITHOUT_PRICING_SPAN = """
 _COMPETITOR_WITHOUT_DISPLACEMENT = """
 (
   (
-    review_text ~* '(switched to|moved to|replaced with|migrating to|migration to|evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-    OR {competitors_len} > 0
+    review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
+    OR (
+      review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
+      AND (
+        {competitors_len} > 0
+        OR review_text ~* '(alternative|alternatives|replace|replacement|switch|switching|migration|migrate|replatform|vendor|platform|tool|solution|suite|stack|versus| vs |competitor)'
+      )
+    )
+    OR jsonb_path_exists(
+      COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+      '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+    )
   )
   AND (
     COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
