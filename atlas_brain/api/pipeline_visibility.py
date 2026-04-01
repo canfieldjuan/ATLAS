@@ -15,11 +15,23 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..autonomous.visibility import emit_event, record_review_action
 from ..auth.dependencies import AuthUser, require_auth
+from ..config import settings
 from ..services.extraction_health_audit import summarize_extraction_health
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.pipeline_visibility")
 router = APIRouter(prefix="/pipeline/visibility", tags=["pipeline-visibility"])
+
+_DETACHED_BATCH_STALE_MINUTES = 30
+_RECON_TASK_NAME = "b2b_campaign_batch_reconciliation"
+_MANAGED_HEALTH_REASON_CODES = {
+    "detached_batch_stale",
+    "detached_batch_reconciliation_missing",
+    "detached_batch_reconciliation_disabled",
+    "detached_batch_reconciliation_never_ran",
+    "detached_batch_reconciliation_stale",
+    "detached_batch_reconciliation_failed",
+}
 
 
 def _serialize_row(row) -> dict[str, Any]:
@@ -42,6 +54,332 @@ def _serialize_row(row) -> dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _managed_health_key(
+    *,
+    stage: str,
+    event_type: str,
+    entity_type: str,
+    entity_id: str,
+    reason_code: str,
+) -> tuple[str, str, str, str, str]:
+    return (stage, event_type, entity_type, entity_id, reason_code)
+
+
+async def _resolve_inactive_managed_health_reviews(
+    pool,
+    *,
+    active_keys: set[tuple[str, str, str, str, str]],
+) -> None:
+    rows = await pool.fetch(
+        """
+        SELECT r.id, e.stage, e.event_type, e.entity_type, e.entity_id, e.reason_code
+        FROM pipeline_visibility_reviews r
+        JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+        WHERE r.status = 'open'
+          AND e.reason_code = ANY($1::text[])
+        """,
+        list(_MANAGED_HEALTH_REASON_CODES),
+    )
+    for row in rows:
+        key = _managed_health_key(
+            stage=str(row["stage"] or ""),
+            event_type=str(row["event_type"] or ""),
+            entity_type=str(row["entity_type"] or ""),
+            entity_id=str(row["entity_id"] or ""),
+            reason_code=str(row["reason_code"] or ""),
+        )
+        if key in active_keys:
+            continue
+        await pool.execute(
+            """
+            UPDATE pipeline_visibility_reviews
+            SET status = 'resolved',
+                resolution_note = 'Auto-resolved: detached batch health recovered',
+                resolved_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+              AND status = 'open'
+            """,
+            str(row["id"]),
+        )
+
+
+async def _emit_managed_health_issue(
+    pool,
+    *,
+    stage: str,
+    event_type: str,
+    entity_type: str,
+    entity_id: str,
+    reason_code: str,
+    summary: str,
+    severity: str,
+    detail: dict[str, Any],
+) -> None:
+    existing = await pool.fetchrow(
+        """
+        SELECT r.id, r.last_seen_at, e.summary
+        FROM pipeline_visibility_reviews r
+        JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+        WHERE r.status = 'open'
+          AND e.stage = $1
+          AND e.event_type = $2
+          AND e.entity_type = $3
+          AND e.entity_id = $4
+          AND e.reason_code = $5
+        ORDER BY r.last_seen_at DESC
+        LIMIT 1
+        """,
+        stage,
+        event_type,
+        entity_type,
+        entity_id,
+        reason_code,
+    )
+    if existing and str(existing["summary"] or "") == summary:
+        return
+    await emit_event(
+        pool,
+        stage=stage,
+        event_type=event_type,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        summary=summary,
+        severity=severity,
+        actionable=True,
+        artifact_type="campaign_batch",
+        reason_code=reason_code,
+        detail=detail,
+        source_table="anthropic_message_batches" if entity_type == "batch_job" else "scheduled_tasks",
+        source_id=entity_id,
+    )
+
+
+def _reconciliation_task_stale_seconds(task_row: dict[str, Any]) -> int:
+    interval_seconds = int(task_row.get("interval_seconds") or 0)
+    if interval_seconds > 0:
+        return max(interval_seconds * 3, _DETACHED_BATCH_STALE_MINUTES * 60)
+    return 6 * 60 * 60
+
+
+async def _sync_detached_batch_health(pool) -> None:
+    if not bool(getattr(settings.b2b_campaign, "anthropic_batch_detached_enabled", False)):
+        await _resolve_inactive_managed_health_reviews(pool, active_keys=set())
+        return
+
+    active_keys: set[tuple[str, str, str, str, str]] = set()
+
+    stale_batches = await pool.fetch(
+        """
+        SELECT
+            id,
+            run_id,
+            status,
+            provider_batch_id,
+            submitted_items,
+            completed_items,
+            failed_items,
+            fallback_single_call_items,
+            COALESCE(submitted_at, created_at) AS stale_since
+        FROM anthropic_message_batches
+        WHERE provider_batch_id IS NOT NULL
+          AND completed_at IS NULL
+          AND COALESCE(submitted_at, created_at) <= NOW() - make_interval(mins => $1)
+          AND status NOT IN ('ended', 'prefiltered_only', 'fallback_only')
+        ORDER BY COALESCE(submitted_at, created_at) ASC
+        LIMIT 25
+        """,
+        _DETACHED_BATCH_STALE_MINUTES,
+    )
+    for row in stale_batches:
+        batch_id = str(row["id"])
+        key = _managed_health_key(
+            stage="task_execution",
+            event_type="detached_batch_health",
+            entity_type="batch_job",
+            entity_id=batch_id,
+            reason_code="detached_batch_stale",
+        )
+        active_keys.add(key)
+        stale_since = row["stale_since"]
+        stale_minutes = max(
+            0,
+            int((datetime.now(timezone.utc) - stale_since).total_seconds() // 60),
+        ) if stale_since else _DETACHED_BATCH_STALE_MINUTES
+        await _emit_managed_health_issue(
+            pool,
+            stage="task_execution",
+            event_type="detached_batch_health",
+            entity_type="batch_job",
+            entity_id=batch_id,
+            reason_code="detached_batch_stale",
+            summary=f"Detached campaign batch has been stuck for {stale_minutes} minutes",
+            severity="error",
+            detail={
+                "provider_batch_id": str(row["provider_batch_id"] or ""),
+                "run_id": str(row["run_id"] or "") or None,
+                "status": str(row["status"] or ""),
+                "submitted_items": int(row["submitted_items"] or 0),
+                "completed_items": int(row["completed_items"] or 0),
+                "failed_items": int(row["failed_items"] or 0),
+                "fallback_single_call_items": int(row["fallback_single_call_items"] or 0),
+                "stale_minutes": stale_minutes,
+            },
+        )
+
+    task_row = await pool.fetchrow(
+        """
+        SELECT
+            t.id,
+            t.name,
+            t.enabled,
+            t.interval_seconds,
+            t.last_run_at,
+            t.next_run_at,
+            latest.status AS last_status,
+            latest.error AS last_error,
+            latest.started_at AS last_started_at
+        FROM scheduled_tasks t
+        LEFT JOIN LATERAL (
+            SELECT e.status, e.error, e.started_at
+            FROM task_executions e
+            WHERE e.task_id = t.id
+            ORDER BY e.started_at DESC
+            LIMIT 1
+        ) latest ON TRUE
+        WHERE t.name = $1
+        LIMIT 1
+        """,
+        _RECON_TASK_NAME,
+    )
+
+    if task_row is None:
+        key = _managed_health_key(
+            stage="task_execution",
+            event_type="scheduler_health",
+            entity_type="task",
+            entity_id=_RECON_TASK_NAME,
+            reason_code="detached_batch_reconciliation_missing",
+        )
+        active_keys.add(key)
+        await _emit_managed_health_issue(
+            pool,
+            stage="task_execution",
+            event_type="scheduler_health",
+            entity_type="task",
+            entity_id=_RECON_TASK_NAME,
+            reason_code="detached_batch_reconciliation_missing",
+            summary="Detached batch reconciliation task is missing",
+            severity="critical",
+            detail={"task_name": _RECON_TASK_NAME},
+        )
+        await _resolve_inactive_managed_health_reviews(pool, active_keys=active_keys)
+        return
+
+    if not bool(task_row["enabled"]):
+        key = _managed_health_key(
+            stage="task_execution",
+            event_type="scheduler_health",
+            entity_type="task",
+            entity_id=_RECON_TASK_NAME,
+            reason_code="detached_batch_reconciliation_disabled",
+        )
+        active_keys.add(key)
+        await _emit_managed_health_issue(
+            pool,
+            stage="task_execution",
+            event_type="scheduler_health",
+            entity_type="task",
+            entity_id=_RECON_TASK_NAME,
+            reason_code="detached_batch_reconciliation_disabled",
+            summary="Detached batch reconciliation task is disabled",
+            severity="error",
+            detail={"task_name": _RECON_TASK_NAME},
+        )
+    else:
+        last_run_at = task_row["last_run_at"]
+        last_status = str(task_row["last_status"] or "")
+        if last_run_at is None:
+            key = _managed_health_key(
+                stage="task_execution",
+                event_type="scheduler_health",
+                entity_type="task",
+                entity_id=_RECON_TASK_NAME,
+                reason_code="detached_batch_reconciliation_never_ran",
+            )
+            active_keys.add(key)
+            await _emit_managed_health_issue(
+                pool,
+                stage="task_execution",
+                event_type="scheduler_health",
+                entity_type="task",
+                entity_id=_RECON_TASK_NAME,
+                reason_code="detached_batch_reconciliation_never_ran",
+                summary="Detached batch reconciliation task has never run",
+                severity="warning",
+                detail={"task_name": _RECON_TASK_NAME},
+            )
+        else:
+            stale_seconds = _reconciliation_task_stale_seconds(dict(task_row))
+            age_seconds = max(
+                0,
+                int((datetime.now(timezone.utc) - last_run_at).total_seconds()),
+            )
+            if age_seconds > stale_seconds:
+                key = _managed_health_key(
+                    stage="task_execution",
+                    event_type="scheduler_health",
+                    entity_type="task",
+                    entity_id=_RECON_TASK_NAME,
+                    reason_code="detached_batch_reconciliation_stale",
+                )
+                active_keys.add(key)
+                await _emit_managed_health_issue(
+                    pool,
+                    stage="task_execution",
+                    event_type="scheduler_health",
+                    entity_type="task",
+                    entity_id=_RECON_TASK_NAME,
+                    reason_code="detached_batch_reconciliation_stale",
+                    summary="Detached batch reconciliation task is not running on schedule",
+                    severity="error",
+                    detail={
+                        "task_name": _RECON_TASK_NAME,
+                        "last_run_at": last_run_at.isoformat(),
+                        "next_run_at": task_row["next_run_at"].isoformat() if task_row["next_run_at"] else None,
+                        "age_minutes": age_seconds // 60,
+                        "stale_threshold_minutes": stale_seconds // 60,
+                    },
+                )
+            if last_status and last_status != "completed":
+                key = _managed_health_key(
+                    stage="task_execution",
+                    event_type="scheduler_health",
+                    entity_type="task",
+                    entity_id=_RECON_TASK_NAME,
+                    reason_code="detached_batch_reconciliation_failed",
+                )
+                active_keys.add(key)
+                await _emit_managed_health_issue(
+                    pool,
+                    stage="task_execution",
+                    event_type="scheduler_health",
+                    entity_type="task",
+                    entity_id=_RECON_TASK_NAME,
+                    reason_code="detached_batch_reconciliation_failed",
+                    summary="Detached batch reconciliation task last run did not complete",
+                    severity="error",
+                    detail={
+                        "task_name": _RECON_TASK_NAME,
+                        "last_status": last_status,
+                        "last_error": str(task_row["last_error"] or "") or None,
+                        "last_started_at": task_row["last_started_at"].isoformat() if task_row["last_started_at"] else None,
+                    },
+                )
+
+    await _resolve_inactive_managed_health_reviews(pool, active_keys=active_keys)
 
 
 @router.get("/extraction-health")
@@ -69,6 +407,7 @@ async def get_visibility_summary(
 ):
     """Top-level counts for the Pipeline Review summary strip."""
     pool = get_db_pool()
+    await _sync_detached_batch_health(pool)
     row = await pool.fetchrow(
         """
         SELECT
@@ -119,6 +458,7 @@ async def get_visibility_queue(
 ):
     """Unresolved actionable items for operator triage."""
     pool = get_db_pool()
+    await _sync_detached_batch_health(pool)
     conditions = ["r.status = 'open'", "e.actionable = TRUE"]
     params: list[Any] = []
     idx = 0
@@ -182,6 +522,7 @@ async def get_visibility_events(
 ):
     """Filterable event history."""
     pool = get_db_pool()
+    await _sync_detached_batch_health(pool)
     conditions: list[str] = []
     params: list[Any] = []
     idx = 0

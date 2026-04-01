@@ -1,6 +1,7 @@
 """Focused API tests for pipeline visibility auth and audit behavior."""
 
 from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -58,7 +59,10 @@ def test_visibility_summary_accepts_30_day_window(monkeypatch):
             },
         ]
     )
+    pool.fetch = AsyncMock(return_value=[])
+    pool.execute = AsyncMock(return_value="UPDATE 0")
     monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(settings.b2b_campaign, "anthropic_batch_detached_enabled", False, raising=False)
 
     with TestClient(app) as client:
         response = client.get("/pipeline/visibility/summary?hours=720")
@@ -135,6 +139,14 @@ def test_extraction_health_endpoint_returns_audit_payload(monkeypatch):
         "top_n": 10,
         "current_snapshot": {
             "enriched_rows": 25277,
+            "rows_with_spans": 21000,
+            "span_count": 50554,
+            "witness_yield_rate": 2.0,
+            "repair_triggered_rows": 3200,
+            "repair_promoted_rows": 1400,
+            "repair_trigger_rate": 0.1266,
+            "repair_promoted_rate": 0.0554,
+            "secondary_write_hits_window": 12,
             "hard_gap_rows": 0,
             "phrase_arrays_without_spans": 0,
             "blank_replacement_mode": 0,
@@ -147,6 +159,8 @@ def test_extraction_health_endpoint_returns_audit_payload(monkeypatch):
         },
         "daily_trend": [],
         "top_vendors": [],
+        "top_sources": [],
+        "recent_runs": [],
     }
     summarize = AsyncMock(return_value=summary)
     monkeypatch.setattr(visibility_api, "summarize_extraction_health", summarize)
@@ -161,6 +175,94 @@ def test_extraction_health_endpoint_returns_audit_payload(monkeypatch):
     assert body["current_snapshot"]["empty_salience_flags"] == 10624
     assert summarize.await_args.kwargs["days"] == 30
     assert summarize.await_args.kwargs["top_n"] == 12
+
+
+def test_visibility_queue_runs_detached_batch_health_sync(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    pool.fetchrow = AsyncMock(return_value=None)
+    pool.execute = AsyncMock(return_value="UPDATE 0")
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+    sync = AsyncMock(return_value=None)
+    monkeypatch.setattr(visibility_api, "_sync_detached_batch_health", sync)
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/queue")
+
+    assert response.status_code == 200
+    assert sync.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_detached_batch_health_emits_stale_batch_and_scheduler_events(monkeypatch):
+    class _Pool:
+        def __init__(self):
+            self.executed = []
+
+        async def fetch(self, query, *args):
+            if "FROM anthropic_message_batches" in query and "completed_at IS NULL" in query:
+                return [
+                    {
+                        "id": str(uuid4()),
+                        "run_id": "run-batch-1",
+                        "status": "in_progress",
+                        "provider_batch_id": "msgbatch_123",
+                        "submitted_items": 10,
+                        "completed_items": 2,
+                        "failed_items": 1,
+                        "fallback_single_call_items": 0,
+                        "stale_since": datetime.now(timezone.utc) - timedelta(minutes=61),
+                    }
+                ]
+            if "FROM pipeline_visibility_reviews r" in query and "e.reason_code = ANY" in query:
+                return []
+            raise AssertionError(f"Unexpected fetch query: {query}")
+
+        async def fetchrow(self, query, *args):
+            if "FROM scheduled_tasks t" in query:
+                return {
+                    "id": str(uuid4()),
+                    "name": "b2b_campaign_batch_reconciliation",
+                    "enabled": True,
+                    "interval_seconds": 300,
+                    "last_run_at": datetime.now(timezone.utc) - timedelta(minutes=25),
+                    "next_run_at": datetime.now(timezone.utc) - timedelta(minutes=15),
+                    "last_status": "failed",
+                    "last_error": "network timeout",
+                    "last_started_at": datetime.now(timezone.utc) - timedelta(minutes=26),
+                }
+            if "FROM pipeline_visibility_reviews r" in query and "e.stage = $1" in query:
+                return None
+            raise AssertionError(f"Unexpected fetchrow query: {query}")
+
+        async def execute(self, query, *args):
+            self.executed.append((query, args))
+            return "UPDATE 0"
+
+    pool = _Pool()
+    emitted = []
+
+    async def _fake_emit_event(*args, **kwargs):
+        emitted.append(kwargs)
+        return str(uuid4())
+
+    monkeypatch.setattr(settings.b2b_campaign, "anthropic_batch_detached_enabled", True, raising=False)
+    monkeypatch.setattr(visibility_api, "emit_event", _fake_emit_event)
+
+    await visibility_api._sync_detached_batch_health(pool)
+
+    reason_codes = {item["reason_code"] for item in emitted}
+    assert "detached_batch_stale" in reason_codes
+    assert "detached_batch_reconciliation_failed" in reason_codes
+    stale_event = next(item for item in emitted if item["reason_code"] == "detached_batch_stale")
+    assert stale_event["entity_type"] == "batch_job"
+    assert stale_event["severity"] == "error"
+    scheduler_event = next(item for item in emitted if item["reason_code"] == "detached_batch_reconciliation_failed")
+    assert scheduler_event["entity_type"] == "task"
+    assert scheduler_event["detail"]["last_error"] == "network timeout"
 
 
 def test_resolve_review_records_actor_identity(monkeypatch):
