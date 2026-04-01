@@ -44,8 +44,7 @@ _FILTER_QUERIES = {
         SELECT id, enrichment, rating, rating_max, raw_metadata, content_type,
                summary, review_text, pros, cons, reviewer_title, reviewer_company
         FROM b2b_reviews
-        WHERE enrichment_status = 'enriched'
-          AND (enrichment->>'enrichment_schema_version') IS NULL
+        WHERE enrichment_status IN ('enriched', 'quarantined')
         ORDER BY enriched_at DESC
     """,
     "urgency_compressed": """
@@ -76,6 +75,15 @@ _FILTER_QUERIES = {
           AND rating IS NOT NULL
         ORDER BY enriched_at DESC
     """,
+    "competitor_mentions": """
+        SELECT id, enrichment, rating, rating_max, raw_metadata, content_type,
+               summary, review_text, pros, cons, reviewer_title, reviewer_company,
+               vendor_name, source, enrichment_status
+        FROM b2b_reviews
+        WHERE enrichment_status IN ('enriched', 'quarantined')
+          AND COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
+        ORDER BY enriched_at DESC NULLS LAST, imported_at DESC NULLS LAST
+    """,
 }
 
 
@@ -94,6 +102,7 @@ def _compute_for_row(row) -> tuple[dict, dict | None]:
         "would_recommend": enrichment.get("would_recommend"),
         "replacement_mode": enrichment.get("replacement_mode"),
         "evidence_spans": enrichment.get("evidence_spans"),
+        "competitors_mentioned": enrichment.get("competitors_mentioned"),
     }
     finalized, _ = _finalize_enrichment_for_persist(enrichment, dict(row))
     return old_values, finalized
@@ -113,7 +122,7 @@ async def _run(args):
 
     updated = 0
     skipped = 0
-    changes = {"urgency_score": 0, "pain_category": 0, "would_recommend": 0}
+    changes = {"urgency_score": 0, "pain_category": 0, "would_recommend": 0, "competitors_mentioned": 0}
 
     for row in rows:
         try:
@@ -142,6 +151,9 @@ async def _run(args):
             changed = True
         if old["evidence_spans"] != new_enrichment.get("evidence_spans"):
             changed = True
+        if old["competitors_mentioned"] != new_enrichment.get("competitors_mentioned"):
+            changes["competitors_mentioned"] += 1
+            changed = True
 
         if not changed:
             skipped += 1
@@ -149,7 +161,7 @@ async def _run(args):
 
         if args.dry_run:
             logger.info(
-                "DRY RUN %s: urgency %.1f->%.1f, pain %s->%s, recommend %s->%s",
+                "DRY RUN %s: urgency %.1f->%.1f, pain %s->%s, recommend %s->%s, competitors %s->%s",
                 row["id"],
                 old["urgency_score"] or 0,
                 new_enrichment.get("urgency_score", 0),
@@ -157,6 +169,8 @@ async def _run(args):
                 new_enrichment.get("pain_category"),
                 old["would_recommend"],
                 new_enrichment.get("would_recommend"),
+                len(old.get("competitors_mentioned") or []),
+                len(new_enrichment.get("competitors_mentioned") or []),
             )
             updated += 1
             continue
@@ -170,9 +184,9 @@ async def _run(args):
 
     prefix = "DRY RUN: Would update" if args.dry_run else "Updated"
     logger.info(
-        "%s %d reviews, skipped %d unchanged. Changes: urgency=%d, pain=%d, recommend=%d",
+        "%s %d reviews, skipped %d unchanged. Changes: urgency=%d, pain=%d, recommend=%d, competitors=%d",
         prefix, updated, skipped,
-        changes["urgency_score"], changes["pain_category"], changes["would_recommend"],
+        changes["urgency_score"], changes["pain_category"], changes["would_recommend"], changes["competitors_mentioned"],
     )
 
 

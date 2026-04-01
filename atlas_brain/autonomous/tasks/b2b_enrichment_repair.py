@@ -1,6 +1,7 @@
 """Shadow repair pass for structurally weak enriched B2B reviews."""
 
 import asyncio
+import inspect
 import json
 import logging
 from datetime import datetime, timezone
@@ -76,6 +77,22 @@ def _normalized_spans(result: dict[str, Any]) -> list[dict[str, Any]]:
         span for span in (result.get("evidence_spans") or [])
         if isinstance(span, dict)
     ]
+
+
+def _has_hard_gap_payload(result: dict[str, Any] | None) -> bool:
+    payload = base_enrichment._coerce_json_dict(result)
+    if not payload:
+        return True
+    spans = payload.get("evidence_spans")
+    return (
+        not isinstance(spans, list)
+        or not spans
+        or not str(payload.get("replacement_mode") or "").strip()
+        or not str(payload.get("operating_model_shift") or "").strip()
+        or not str(payload.get("productivity_delta_claim") or "").strip()
+        or not str(payload.get("org_pressure_type") or "").strip()
+        or not str(payload.get("evidence_map_hash") or "").strip()
+    )
 
 
 def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
@@ -241,7 +258,12 @@ async def _persist_shadow_result(
     combined_shadow_reasons = base_enrichment._dedupe_reason_codes(
         list(shadow_reasons or []) + _shadow_quarantine_reasons(row)
     )
-    target_status = "quarantined" if combined_shadow_reasons else row.get("enrichment_status") or "enriched"
+    hard_gap_payload = persisted_enrichment if persisted_enrichment is not None else row.get("enrichment")
+    target_status = (
+        "quarantined"
+        if combined_shadow_reasons or _has_hard_gap_payload(hard_gap_payload)
+        else row.get("enrichment_status") or "enriched"
+    )
     if persisted_enrichment is not None:
         await pool.execute(
             """
@@ -467,11 +489,16 @@ async def _repair_rows(
     max_attempts = cfg.enrichment_repair_max_attempts
     effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_repair_concurrency))
     sem = asyncio.Semaphore(effective_concurrency)
+    repair_single_params = inspect.signature(_repair_single).parameters
+    supports_run_id = "run_id" in repair_single_params
 
     async def _bounded(row: dict[str, Any]) -> dict[str, int | str]:
         async with sem:
             usage = {"exact_cache_hits": 0, "generated": 0}
-            status = await _repair_single(pool, row, cfg, max_attempts, run_id=run_id, usage_out=usage)
+            kwargs: dict[str, Any] = {"usage_out": usage}
+            if supports_run_id:
+                kwargs["run_id"] = run_id
+            status = await _repair_single(pool, row, cfg, max_attempts, **kwargs)
             return {
                 "status": status,
                 **usage,
@@ -939,7 +966,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     if rounds == 0 and stale_no_signal_demoted == 0 and shadowed_hard_gap_quarantined == 0:
         return {"_skip_synthesis": "No enriched reviews need repair"}
-    return {
+    result = {
         "promoted": promoted,
         "shadowed": shadowed,
         "failed": failed,
@@ -952,6 +979,65 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "scoped_vendors": scoped_vendors,
         "_skip_synthesis": "B2B enrichment repair complete",
     }
+    from ..visibility import emit_event, record_attempt
+
+    warning_count = int(shadowed) + int(shadowed_hard_gap_quarantined)
+    error_message = None
+    if failed or shadowed or shadowed_hard_gap_quarantined:
+        error_message = (
+            f"{failed} failed, {shadowed} shadowed, "
+            f"{shadowed_hard_gap_quarantined} hard-gap quarantined"
+        )
+    await record_attempt(
+        pool,
+        artifact_type="enrichment_repair",
+        artifact_id="batch",
+        run_id=run_id,
+        stage="repair",
+        status="succeeded" if failed == 0 else "failed",
+        score=promoted,
+        blocker_count=failed,
+        warning_count=warning_count,
+        error_message=error_message,
+    )
+    await emit_event(
+        pool,
+        stage="enrichment_repair",
+        event_type="repair_run_summary",
+        entity_type="pipeline",
+        entity_id="enrichment_repair",
+        artifact_type="enrichment_repair",
+        summary=(
+            f"Repair: {promoted} promoted, {shadowed} shadowed, "
+            f"{failed} failed, {shadowed_hard_gap_quarantined} hard-gap quarantined"
+        ),
+        severity="warning" if failed > 0 or shadowed_hard_gap_quarantined > 0 else "info",
+        actionable=failed > 0 or shadowed_hard_gap_quarantined > 0 or shadowed > 5,
+        run_id=run_id,
+        reason_code=(
+            "enrichment_repair_failures"
+            if failed > 0
+            else "enrichment_repair_quarantines"
+            if shadowed_hard_gap_quarantined > 0
+            else "enrichment_repair_shadowed"
+            if shadowed > 0
+            else "enrichment_repair_completed"
+        ),
+        detail={
+            "promoted": promoted,
+            "shadowed": shadowed,
+            "failed": failed,
+            "exact_cache_hits": exact_cache_hits,
+            "generated": generated,
+            "rounds": rounds,
+            "stale_no_signal_demoted": stale_no_signal_demoted,
+            "shadowed_hard_gap_quarantined": shadowed_hard_gap_quarantined,
+            "orphaned_recovered": orphaned,
+            "scoped_vendors": scoped_vendors,
+        },
+        update_review_state=False,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -293,6 +294,43 @@ async def test_repair_single_quarantines_shadowed_technical_source(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_persist_shadow_result_quarantines_hard_gap_payload_without_explicit_shadow_reason():
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
+    review_id = uuid4()
+    row = {
+        "id": review_id,
+        "source": "reddit",
+        "enrichment_status": "enriched",
+        "enrichment": {
+            "replacement_mode": "",
+            "operating_model_shift": "",
+            "productivity_delta_claim": "",
+            "org_pressure_type": "",
+            "evidence_map_hash": "ab1aab98d2178a6d",
+            "evidence_spans": None,
+        },
+    }
+
+    result = await repair_mod._persist_shadow_result(
+        pool,
+        review_id=review_id,
+        row=row,
+        repair_result={"competitors_mentioned": []},
+        model_id="google/gemini-3.1-flash-lite-preview",
+        applied_fields=[],
+        repaired_at=datetime.now(timezone.utc),
+    )
+
+    assert result == "shadowed"
+    query = pool.execute.await_args.args[0]
+    args = pool.execute.await_args.args
+    assert "enrichment_repair_status = 'shadowed'" in query
+    assert args[6] == "quarantined"
+    assert args[7] is False
+    assert json.loads(args[8]) == []
+
+
+@pytest.mark.asyncio
 async def test_run_claim_query_requires_pressure_signal(monkeypatch):
     pool = SimpleNamespace(
         is_initialized=True,
@@ -437,6 +475,71 @@ async def test_run_returns_demotion_result_when_no_repair_rows(monkeypatch):
     assert result["stale_no_signal_demoted"] == 3
     assert result["shadowed_hard_gap_quarantined"] == 4
     assert result["rounds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_records_attempt_and_summary_event_for_non_clean_repair_run(monkeypatch):
+    execution_id = str(uuid4())
+    task = _task()
+    task.metadata = {
+        "builtin_handler": "b2b_enrichment_repair",
+        "_execution_id": execution_id,
+    }
+    rows = [{
+        "id": uuid4(),
+        "vendor_name": "Smartsheet",
+        "enrichment_repair_attempts": 0,
+    }]
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(return_value="UPDATE 0"),
+        fetch=AsyncMock(side_effect=[rows, []]),
+    )
+
+    monkeypatch.setattr(repair_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_enabled", True, raising=False)
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_model",
+        "google/gemini-3.1-flash-lite-preview",
+        raising=False,
+    )
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_attempts", 3, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_per_batch", 5, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_rounds_per_run", 1, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_concurrency", 1, raising=False)
+    monkeypatch.setattr(repair_mod, "_demote_stale_no_signal_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_quarantine_shadowed_hard_gap_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_recover_orphaned_repairing", AsyncMock(return_value=0))
+    monkeypatch.setattr(
+        repair_mod,
+        "_repair_rows",
+        AsyncMock(return_value={
+            "promoted": 0,
+            "shadowed": 1,
+            "failed": 0,
+            "exact_cache_hits": 0,
+            "generated": 1,
+        }),
+    )
+    record_attempt = AsyncMock()
+    emit_event = AsyncMock()
+    monkeypatch.setattr("atlas_brain.autonomous.visibility.record_attempt", record_attempt)
+    monkeypatch.setattr("atlas_brain.autonomous.visibility.emit_event", emit_event)
+
+    result = await repair_mod.run(task)
+
+    assert result["shadowed"] == 1
+    assert record_attempt.await_count == 1
+    assert emit_event.await_count == 1
+    assert record_attempt.await_args.kwargs["run_id"] == execution_id
+    assert record_attempt.await_args.kwargs["artifact_type"] == "enrichment_repair"
+    assert record_attempt.await_args.kwargs["warning_count"] == 1
+    assert emit_event.await_args.kwargs["run_id"] == execution_id
+    assert emit_event.await_args.kwargs["event_type"] == "repair_run_summary"
+    assert emit_event.await_args.kwargs["reason_code"] == "enrichment_repair_shadowed"
+    assert emit_event.await_args.kwargs["update_review_state"] is False
 
 
 def test_strategic_adjudication_reasons_detects_missing_witness_interfaces():
