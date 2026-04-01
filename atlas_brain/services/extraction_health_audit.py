@@ -92,7 +92,14 @@ _COMPETITOR_WITHOUT_DISPLACEMENT = """
       OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
       OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
     )
-    AND COALESCE(NULLIF(reviewer_title, ''), NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NULL
+    AND COALESCE(
+      CASE
+        WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+        ELSE NULLIF(reviewer_title, '')
+      END,
+      NULLIF(reviewer_company, ''),
+      NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+    ) IS NULL
     AND NOT jsonb_path_exists(
       COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
       '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
@@ -182,6 +189,26 @@ async def summarize_extraction_health(
         f"""
         SELECT
           COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE}) AS enriched_rows,
+          COUNT(*) FILTER (
+            WHERE {_ENRICHED_SCOPE}
+              AND enrichment->'evidence_spans' IS NOT NULL
+              AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+              AND jsonb_array_length(enrichment->'evidence_spans') > 0
+          ) AS rows_with_spans,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN {_ENRICHED_SCOPE}
+                  AND enrichment->'evidence_spans' IS NOT NULL
+                  AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+                THEN jsonb_array_length(enrichment->'evidence_spans')
+                ELSE 0
+              END
+            ),
+            0
+          ) AS span_count,
+          COUNT(*) FILTER (WHERE enrichment_repair_attempts > 0) AS repair_triggered_rows,
+          COUNT(*) FILTER (WHERE enrichment_repair_status = 'promoted') AS repair_promoted_rows,
           COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_HARD_GAP}) AS hard_gap_rows,
           COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_PHRASE_ARRAYS_NO_SPANS}) AS phrase_arrays_without_spans,
           COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_BLANK_REPLACEMENT_MODE}) AS blank_replacement_mode,
@@ -205,6 +232,24 @@ async def summarize_extraction_health(
         f"""
         SELECT
           {_TREND_DAY} AS day,
+          COUNT(*) AS enriched_rows,
+          COUNT(*) FILTER (
+            WHERE enrichment->'evidence_spans' IS NOT NULL
+              AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+              AND jsonb_array_length(enrichment->'evidence_spans') > 0
+          ) AS rows_with_spans,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN enrichment->'evidence_spans' IS NOT NULL
+                  AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+                THEN jsonb_array_length(enrichment->'evidence_spans')
+                ELSE 0
+              END
+            ),
+            0
+          ) AS span_count,
+          COUNT(*) FILTER (WHERE enrichment_repair_attempts > 0) AS repair_triggered_rows,
           COUNT(*) FILTER (WHERE {_HARD_GAP}) AS hard_gap_rows,
           COUNT(*) FILTER (WHERE {_PHRASE_ARRAYS_NO_SPANS}) AS phrase_arrays_without_spans,
           COUNT(*) FILTER (WHERE {_BLANK_REPLACEMENT_MODE}) AS blank_replacement_mode,
@@ -218,6 +263,54 @@ async def summarize_extraction_health(
         ORDER BY day DESC
         """,
         days,
+    )
+
+    top_source_rows = await pool.fetch(
+        f"""
+        SELECT
+          source,
+          COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE}) AS enriched_rows,
+          COUNT(*) FILTER (WHERE enrichment_repair_attempts > 0) AS repair_triggered_rows,
+          COUNT(*) FILTER (WHERE enrichment_repair_status = 'promoted') AS repair_promoted_rows,
+          COUNT(*) FILTER (
+            WHERE {_ENRICHED_SCOPE}
+              AND enrichment->'evidence_spans' IS NOT NULL
+              AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+              AND jsonb_array_length(enrichment->'evidence_spans') > 0
+          ) AS rows_with_spans,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN {_ENRICHED_SCOPE}
+                  AND enrichment->'evidence_spans' IS NOT NULL
+                  AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+                THEN jsonb_array_length(enrichment->'evidence_spans')
+                ELSE 0
+              END
+            ),
+            0
+          ) AS span_count
+        FROM b2b_reviews
+        GROUP BY source
+        HAVING COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE}) > 0
+        ORDER BY
+          COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE}) DESC,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN {_ENRICHED_SCOPE}
+                  AND enrichment->'evidence_spans' IS NOT NULL
+                  AND jsonb_typeof(enrichment->'evidence_spans') = 'array'
+                THEN jsonb_array_length(enrichment->'evidence_spans')
+                ELSE 0
+              END
+            ),
+            0
+          ) DESC,
+          source ASC
+        LIMIT $1
+        """,
+        top_n,
     )
 
     top_vendor_rows = await pool.fetch(
@@ -246,12 +339,82 @@ async def summarize_extraction_health(
         top_n,
     )
 
+    run_rows = await pool.fetch(
+        """
+        SELECT
+          e.id AS run_id,
+          t.name AS task_name,
+          e.started_at,
+          e.result_text
+        FROM task_executions e
+        JOIN scheduled_tasks t ON t.id = e.task_id
+        WHERE e.started_at >= NOW() - make_interval(days => $1)
+          AND e.status = 'completed'
+          AND t.name = ANY($2::text[])
+        ORDER BY e.started_at DESC
+        LIMIT $3
+        """,
+        days,
+        ["b2b_enrichment", "b2b_enrichment_repair"],
+        top_n,
+    )
+
     current = dict(current_row or {})
+    secondary_write_hits_window = 0
+    recent_runs = []
+    for row in run_rows:
+        payload = _parse_result_payload(row.get("result_text"))
+        reviews_processed = _safe_int(payload.get("reviews_processed"))
+        if reviews_processed == 0:
+            if str(row.get("task_name") or "") == "b2b_enrichment":
+                reviews_processed = sum(
+                    _safe_int(payload.get(key))
+                    for key in ("enriched", "quarantined", "failed", "no_signal")
+                )
+            else:
+                reviews_processed = sum(
+                    _safe_int(payload.get(key))
+                    for key in ("promoted", "shadowed", "failed")
+                )
+        witness_count = _safe_int(payload.get("witness_count"))
+        witness_rows = _safe_int(payload.get("witness_rows"))
+        secondary_write_hits = _safe_int(payload.get("secondary_write_hits"))
+        secondary_write_hits_window += secondary_write_hits
+        witness_yield_rate = (
+            round(witness_count / reviews_processed, 4)
+            if reviews_processed > 0
+            else 0.0
+        )
+        recent_runs.append({
+            "run_id": str(row.get("run_id") or ""),
+            "task_name": str(row.get("task_name") or ""),
+            "started_at": row.get("started_at").isoformat() if row.get("started_at") else None,
+            "reviews_processed": reviews_processed,
+            "witness_rows": witness_rows,
+            "witness_count": witness_count,
+            "witness_yield_rate": witness_yield_rate,
+            "secondary_write_hits": secondary_write_hits,
+            "exact_cache_hits": _safe_int(payload.get("exact_cache_hits")),
+            "generated": _safe_int(payload.get("generated")),
+        })
+
+    enriched_rows = int(current.get("enriched_rows", 0) or 0)
+    span_count = int(current.get("span_count", 0) or 0)
+    repair_triggered_rows = int(current.get("repair_triggered_rows", 0) or 0)
+    repair_promoted_rows = int(current.get("repair_promoted_rows", 0) or 0)
     return {
         "days": days,
         "top_n": top_n,
         "current_snapshot": {
-            "enriched_rows": int(current.get("enriched_rows", 0) or 0),
+            "enriched_rows": enriched_rows,
+            "rows_with_spans": int(current.get("rows_with_spans", 0) or 0),
+            "span_count": span_count,
+            "witness_yield_rate": round(span_count / enriched_rows, 4) if enriched_rows > 0 else 0.0,
+            "repair_triggered_rows": repair_triggered_rows,
+            "repair_promoted_rows": repair_promoted_rows,
+            "repair_trigger_rate": round(repair_triggered_rows / enriched_rows, 4) if enriched_rows > 0 else 0.0,
+            "repair_promoted_rate": round(repair_promoted_rows / enriched_rows, 4) if enriched_rows > 0 else 0.0,
+            "secondary_write_hits_window": secondary_write_hits_window,
             "hard_gap_rows": int(current.get("hard_gap_rows", 0) or 0),
             "phrase_arrays_without_spans": int(current.get("phrase_arrays_without_spans", 0) or 0),
             "blank_replacement_mode": int(current.get("blank_replacement_mode", 0) or 0),
@@ -268,6 +431,43 @@ async def summarize_extraction_health(
             "timeline_language_without_timing_anchor": int(current.get("timeline_language_without_timing_anchor", 0) or 0),
             "workflow_language_without_replacement_mode": int(current.get("workflow_language_without_replacement_mode", 0) or 0),
         },
-        "daily_trend": [dict(row) for row in daily_rows],
+        "daily_trend": [
+            {
+                **dict(row),
+                "witness_yield_rate": (
+                    round(_safe_int(row.get("span_count")) / _safe_int(row.get("enriched_rows")), 4)
+                    if _safe_int(row.get("enriched_rows")) > 0
+                    else 0.0
+                ),
+                "repair_trigger_rate": (
+                    round(_safe_int(row.get("repair_triggered_rows")) / _safe_int(row.get("enriched_rows")), 4)
+                    if _safe_int(row.get("enriched_rows")) > 0
+                    else 0.0
+                ),
+            }
+            for row in daily_rows
+        ],
         "top_vendors": [dict(row) for row in top_vendor_rows],
+        "top_sources": [
+            {
+                **dict(row),
+                "witness_yield_rate": (
+                    round(_safe_int(row.get("span_count")) / _safe_int(row.get("enriched_rows")), 4)
+                    if _safe_int(row.get("enriched_rows")) > 0
+                    else 0.0
+                ),
+                "repair_trigger_rate": (
+                    round(_safe_int(row.get("repair_triggered_rows")) / _safe_int(row.get("enriched_rows")), 4)
+                    if _safe_int(row.get("enriched_rows")) > 0
+                    else 0.0
+                ),
+                "repair_promoted_rate": (
+                    round(_safe_int(row.get("repair_promoted_rows")) / _safe_int(row.get("enriched_rows")), 4)
+                    if _safe_int(row.get("enriched_rows")) > 0
+                    else 0.0
+                ),
+            }
+            for row in top_source_rows
+        ],
+        "recent_runs": recent_runs,
     }

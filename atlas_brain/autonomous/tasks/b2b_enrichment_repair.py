@@ -106,6 +106,11 @@ def _has_strong_competitor_signal(competitors: list[dict[str, Any]]) -> bool:
     )
 
 
+def _is_synthetic_reviewer_title(value: Any) -> bool:
+    title = str(value or "").strip().lower()
+    return title.startswith("repeat churn signal")
+
+
 def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str, Any]) -> list[str]:
     review_blob = base_enrichment._repair_text_blob(source_row)
     if not review_blob.strip():
@@ -122,6 +127,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
     timeline = base_enrichment._coerce_json_dict(result.get("timeline"))
     content_type = str(source_row.get("content_type") or "").strip().lower()
     reviewer_title = str(source_row.get("reviewer_title") or "").strip()
+    effective_reviewer_title = "" if _is_synthetic_reviewer_title(reviewer_title) else reviewer_title
     competitors = [
         comp for comp in (result.get("competitors_mentioned") or [])
         if isinstance(comp, dict) and str(comp.get("name") or "").strip()
@@ -155,7 +161,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
     discussion_noise = (
         content_type == "community_discussion"
         and not structured_churn
-        and not reviewer_title
+        and not effective_reviewer_title
         and not named_company
         and not strong_competitor_signal
     )
@@ -941,7 +947,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                           OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
                           OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
                         )
-                        AND COALESCE(NULLIF(reviewer_title, ''), NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NULL
+                        AND COALESCE(
+                          CASE
+                            WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+                            ELSE NULLIF(reviewer_title, '')
+                          END,
+                          NULLIF(reviewer_company, ''),
+                          NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+                        ) IS NULL
                         AND NOT jsonb_path_exists(
                           COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
                           '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
