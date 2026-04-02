@@ -41,11 +41,7 @@ ENRICHMENT_NESTED_RE = re.compile(
 def _is_exempt(rel_path: str) -> bool:
     """Mirror the exemption logic in test_b2b_field_governance.py."""
     from atlas_brain.autonomous.tasks._b2b_field_contracts import EXEMPT_MODULES
-    if rel_path in EXEMPT_MODULES:
-        return True
-    if rel_path.startswith("scripts/backfill_") or rel_path.startswith("scripts/re_enrich_"):
-        return True
-    return False
+    return rel_path in EXEMPT_MODULES
 
 
 def scan_file(path: Path) -> list[dict]:

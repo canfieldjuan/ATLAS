@@ -49,6 +49,8 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
             "_b2b_shared._fetch_vendor_churn_scores",
             "_b2b_shared._fetch_high_intent_companies",
             "_b2b_shared._fetch_vendor_witness_reviews",
+            "backfill_derived_fields",
+            "backfill_company_names",
         ),
         "migration_target": "read_high_intent_companies",
     },
@@ -58,6 +60,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_vendor_churn_scores",
+            "backfill_witness_primitives",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -68,6 +71,9 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "approved_consumers": (
             "_b2b_shared._fetch_vendor_pain_lookup",
             "_b2b_shared._fetch_vendor_churn_scores",
+            "backfill_derived_fields",
+            "cluster_other_pain",
+            "re_enrich_other_pain",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -77,6 +83,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_vendor_pain_lookup",
+            "cluster_other_pain",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -86,6 +93,8 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_displacement_flows",
+            "b2b_churn_intelligence._fetch_company_signal_review_context",
+            "backfill_derived_fields",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -95,6 +104,8 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_review_text_aggregates",
+            "b2b_churn_intelligence._fetch_company_signal_review_context",
+            "cluster_other_pain",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -104,6 +115,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_review_text_aggregates",
+            "cluster_other_pain",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -113,6 +125,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_review_text_aggregates",
+            "b2b_churn_intelligence._fetch_company_signal_review_context",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -149,6 +162,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_vendor_churn_scores",
+            "backfill_derived_fields",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -176,6 +190,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_vendor_pain_lookup",
+            "cluster_other_pain",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -202,6 +217,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
             "b2b_account_resolution._fetch_unresolved_reviews",
             # live_overlay: intelligence reads for witness/report context
             "b2b_churn_intelligence._fetch_company_signal_review_context",
+            "backfill_witness_primitives",
         ),
         "migration_target": "read_review_details",
     },
@@ -211,6 +227,8 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_buyer_authority_summary",
+            "backfill_buyer_authority_roles",
+            "backfill_witness_primitives",
         ),
         "migration_target": "read_review_details",
     },
@@ -220,6 +238,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_budget_signals",
+            "backfill_witness_primitives",
         ),
         "migration_target": "read_review_details",
     },
@@ -238,6 +257,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_budget_signals",
+            "b2b_churn_intelligence._fetch_company_signal_review_context",
         ),
         "migration_target": "read_review_details",
     },
@@ -260,6 +280,8 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_timeline_entries",
+            "b2b_churn_intelligence._fetch_company_signal_review_context",
+            "backfill_witness_primitives",
         ),
         "migration_target": "read_review_details",
     },
@@ -281,6 +303,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "approved_consumers": (
             "_b2b_witnesses.derive_evidence_spans",
             "_b2b_shared._fetch_vendor_witness_reviews",
+            "backfill_witness_primitives",
         ),
         "migration_target": None,
     },
@@ -290,6 +313,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_witnesses._witness_salience",
+            "backfill_witness_primitives",
         ),
         "migration_target": None,
     },
@@ -299,6 +323,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_witnesses._candidate_types",
+            "backfill_witness_primitives",
         ),
         "migration_target": None,
     },
@@ -308,6 +333,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_witnesses._candidate_types",
+            "backfill_witness_primitives",
         ),
         "migration_target": None,
     },
@@ -317,6 +343,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_witnesses._candidate_types",
+            "backfill_witness_primitives",
         ),
         "migration_target": None,
     },
@@ -326,6 +353,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_witnesses._candidate_types",
+            "backfill_witness_primitives",
         ),
         "migration_target": None,
     },
@@ -335,14 +363,18 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "owner_path": "enrichment_internal",
         "owner_pool": None,
         "stranded": False,
-        "approved_consumers": (),
+        "approved_consumers": (
+            "backfill_derived_fields",
+        ),
         "migration_target": None,
     },
     "evidence_map_hash": {
         "owner_path": "enrichment_internal",
         "owner_pool": None,
         "stranded": False,
-        "approved_consumers": (),
+        "approved_consumers": (
+            "backfill_witness_primitives",
+        ),
         "migration_target": None,
     },
 

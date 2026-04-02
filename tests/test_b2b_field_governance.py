@@ -43,9 +43,12 @@ ENRICHMENT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Matches marker lines and captures the field list
+# Matches marker lines and captures the type and field list
 MARKER_WITH_FIELDS_RE = re.compile(
     r"#\s*(?:APPROVED|DEPRECATED)-ENRICHMENT-READ:\s*(.+)",
+)
+APPROVED_MARKER_RE = re.compile(
+    r"#\s*APPROVED-ENRICHMENT-READ:\s*(.+)",
 )
 
 
@@ -63,14 +66,14 @@ def _relative(path: Path) -> str:
 
 
 def _is_exempt(rel_path: str) -> bool:
-    if rel_path in EXEMPT_MODULES:
-        return True
-    # Backfill/migration scripts need direct enrichment access by nature.
-    # They are governed by APPROVED markers but not held to the 60-line
-    # window since their SQL can span 100+ lines.
-    if rel_path.startswith("scripts/backfill_") or rel_path.startswith("scripts/re_enrich_"):
-        return True
-    return False
+    return rel_path in EXEMPT_MODULES
+
+
+def _marker_window(rel_path: str) -> int:
+    """Wider window for scripts with large SQL blocks."""
+    if rel_path.startswith("scripts/"):
+        return 150
+    return 60
 
 
 def _extract_enrichment_reads(path: Path) -> list[tuple[int, str]]:
@@ -190,8 +193,9 @@ def test_non_exempt_reads_are_marked():
             lines = pyfile.read_text(encoding="utf-8", errors="replace").splitlines()
         except Exception:
             continue
+        window = _marker_window(rel)
         for lineno, field in reads:
-            if not _find_covering_marker(lines, lineno, field):
+            if not _find_covering_marker(lines, lineno, field, window=window):
                 unmarked.append(f"{rel}:{lineno} reads '{field}' without covering marker")
     assert not unmarked, (
         "Enrichment reads without covering APPROVED/DEPRECATED markers:\n"
@@ -212,6 +216,44 @@ def test_stranded_fields_have_zero_consumers():
                 violations.append(f"{rel}:{lineno} reads stranded field '{field}'")
     assert not violations, (
         "Stranded fields have consumers (update contract or remove stranded flag):\n"
+        + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
+def test_approved_markers_match_contract():
+    """APPROVED-ENRICHMENT-READ markers must correspond to approved_consumers
+    in the contract. A module cannot self-label as APPROVED without being
+    listed in the contract for that field."""
+    violations: list[str] = []
+    for pyfile in _scan_py_files():
+        rel = _relative(pyfile)
+        if _is_exempt(rel):
+            continue
+        # Derive module stem from file path (e.g. "b2b_churn_intelligence" from
+        # "atlas_brain/autonomous/tasks/b2b_churn_intelligence.py")
+        module_stem = Path(rel).stem
+        try:
+            lines = pyfile.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+        for lineno, line in enumerate(lines, 1):
+            m = APPROVED_MARKER_RE.search(line)
+            if not m:
+                continue
+            marker_fields = [f.strip().split(".")[0] for f in m.group(1).split(",")]
+            for field in marker_fields:
+                contract = FIELD_CONTRACTS.get(field)
+                if not contract:
+                    continue
+                # Check if any approved_consumer references this module
+                approved = contract.get("approved_consumers", ())
+                if not any(module_stem in c for c in approved):
+                    violations.append(
+                        f"{rel}:{lineno} APPROVED marker for '{field}' "
+                        f"but {module_stem} is not in approved_consumers"
+                    )
+    assert not violations, (
+        "APPROVED markers not backed by contract approved_consumers:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )
 
