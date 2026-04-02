@@ -225,124 +225,48 @@ async def list_high_intent_companies(
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context, pain_category, competitors_mentioned, contract_context, budget_signals, use_case, timeline, buyer_authority
-        # Migrate to: read_high_intent_companies() from _b2b_shared
-        conditions = [
-            "r.enrichment_status = 'enriched'",
-            "(r.enrichment->>'urgency_score')::numeric >= $1",
-            "r.reviewer_company IS NOT NULL AND r.reviewer_company != ''",
-            "r.enriched_at > NOW() - make_interval(days => $2)",
-        ]
-        params: list = [min_urgency, window_days]
-        idx = 3
-
-        if vendor_name:
-            conditions.append(f"r.vendor_name ILIKE '%' || ${idx} || '%'")
-            params.append(vendor_name)
-            idx += 1
-
-        conditions.append(_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='r.vendor_name'))
-        capped = min(limit, 100)
-        params.append(capped)
-        where = " AND ".join(conditions)
-
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, industry
-        # Migrate to: read_high_intent_companies() from _b2b_shared
-        rows = await pool.fetch(
-            f"""
-            SELECT
-                COALESCE(
-                    CASE
-                        WHEN ar.confidence_label IN ('high', 'medium')
-                        THEN ar.resolved_company_name
-                        ELSE NULL
-                    END,
-                    r.reviewer_company
-                ) AS company,
-                r.reviewer_company AS raw_company,
-                ar.confidence_label AS resolution_confidence,
-                r.vendor_name, r.product_category,
-                r.enrichment->'reviewer_context'->>'role_level' AS role_level,
-                (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
-                (r.enrichment->>'urgency_score')::numeric AS urgency,
-                r.enrichment->>'pain_category' AS pain,
-                r.enrichment->'competitors_mentioned' AS alternatives,
-                r.enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
-                CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                 THEN (r.enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
-                r.enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
-                r.enrichment->'timeline'->>'contract_end' AS contract_end,
-                r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
-                r.reviewer_title, r.company_size_raw,
-                COALESCE(poc.industry, r.reviewer_industry,
-                         r.enrichment->'reviewer_context'->>'industry') AS industry,
-                poc.employee_count AS verified_employee_count,
-                poc.country AS company_country,
-                poc.domain AS company_domain,
-                poc.annual_revenue_range AS revenue_range,
-                poc.founded_year,
-                poc.total_funding,
-                poc.latest_funding_stage,
-                poc.headcount_growth_6m,
-                poc.headcount_growth_12m,
-                poc.headcount_growth_24m,
-                poc.publicly_traded_exchange,
-                poc.publicly_traded_symbol,
-                poc.short_description AS company_description
-            FROM b2b_reviews r
-            LEFT JOIN b2b_account_resolution ar
-                ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
-            LEFT JOIN prospect_org_cache poc
-                ON poc.company_name_norm = CASE
-                    WHEN ar.confidence_label IN ('high', 'medium')
-                    THEN ar.normalized_company_name
-                    ELSE NULL
-                END
-            WHERE {where}
-            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
-            LIMIT ${idx}
-            """,
-            *params,
+        from atlas_brain.autonomous.tasks._b2b_shared import read_high_intent_companies
+        results = await read_high_intent_companies(
+            pool,
+            min_urgency=min_urgency,
+            window_days=window_days,
+            vendor_name=vendor_name,
+            limit=limit,
         )
-
         companies = []
-        for r in rows:
-            try:
-                urgency = float(r["urgency"]) if r["urgency"] is not None else 0
-            except (ValueError, TypeError):
-                urgency = 0
+        for r in results:
             companies.append({
-                "company": r["company"],
-                "raw_company": r["raw_company"],
-                "resolution_confidence": r["resolution_confidence"],
-                "vendor": r["vendor_name"],
-                "category": r["product_category"],
-                "role_level": r["role_level"],
-                "decision_maker": r["is_dm"],
-                "urgency": urgency,
-                "pain": r["pain"],
-                "alternatives": _safe_json(r["alternatives"]),
-                "contract_signal": r["value_signal"],
-                "seat_count": r["seat_count"],
-                "lock_in_level": r["lock_in_level"],
-                "contract_end": r["contract_end"],
-                "buying_stage": r["buying_stage"],
-                "reviewer_title": r["reviewer_title"],
-                "company_size": r["company_size_raw"],
-                "industry": r["industry"],
-                "verified_employee_count": r["verified_employee_count"],
-                "company_country": r["company_country"],
-                "company_domain": r["company_domain"],
-                "revenue_range": r["revenue_range"],
-                "founded_year": r["founded_year"],
-                "total_funding": r["total_funding"],
-                "funding_stage": r["latest_funding_stage"],
-                "headcount_growth_6m": float(r["headcount_growth_6m"]) if r["headcount_growth_6m"] is not None else None,
-                "headcount_growth_12m": float(r["headcount_growth_12m"]) if r["headcount_growth_12m"] is not None else None,
-                "headcount_growth_24m": float(r["headcount_growth_24m"]) if r["headcount_growth_24m"] is not None else None,
-                "publicly_traded": r["publicly_traded_exchange"] or None,
-                "ticker": r["publicly_traded_symbol"] or None,
-                "company_description": r["company_description"],
+                "company": r.get("company"),
+                "raw_company": r.get("raw_company"),
+                "resolution_confidence": r.get("resolution_confidence"),
+                "vendor": r.get("vendor"),
+                "category": r.get("category"),
+                "role_level": r.get("role_level"),
+                "decision_maker": r.get("decision_maker"),
+                "urgency": r.get("urgency", 0),
+                "pain": r.get("pain"),
+                "alternatives": r.get("alternatives"),
+                "contract_signal": r.get("contract_signal"),
+                "seat_count": r.get("seat_count"),
+                "lock_in_level": r.get("lock_in_level"),
+                "contract_end": r.get("contract_end"),
+                "buying_stage": r.get("buying_stage"),
+                "reviewer_title": r.get("title"),
+                "company_size": r.get("company_size"),
+                "industry": r.get("industry"),
+                "verified_employee_count": r.get("verified_employee_count"),
+                "company_country": r.get("company_country"),
+                "company_domain": r.get("company_domain"),
+                "revenue_range": r.get("revenue_range"),
+                "founded_year": r.get("founded_year"),
+                "total_funding": r.get("total_funding"),
+                "funding_stage": r.get("funding_stage"),
+                "headcount_growth_6m": r.get("headcount_growth_6m"),
+                "headcount_growth_12m": r.get("headcount_growth_12m"),
+                "headcount_growth_24m": r.get("headcount_growth_24m"),
+                "publicly_traded": r.get("publicly_traded"),
+                "ticker": r.get("ticker"),
+                "company_description": r.get("company_description"),
             })
 
         return json.dumps({"companies": companies, "count": len(companies)}, default=str)
@@ -396,55 +320,14 @@ async def get_vendor_profile(vendor_name: str) -> str:
             vname,
         )
 
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, reviewer_context
-        # Migrate to: read_high_intent_companies() from _b2b_shared
-        # Top 5 high-intent companies
-        hi_rows = await pool.fetch(
-            f"""
-            SELECT COALESCE(
-                       CASE
-                           WHEN ar.confidence_label IN ('high', 'medium')
-                           THEN ar.resolved_company_name
-                           ELSE NULL
-                       END,
-                       r.reviewer_company
-                   ) AS reviewer_company,
-                   (r.enrichment->>'urgency_score')::numeric AS urgency,
-                   r.enrichment->>'pain_category' AS pain,
-                   r.reviewer_title, r.company_size_raw,
-                   COALESCE(poc.industry, r.reviewer_industry,
-                            r.enrichment->'reviewer_context'->>'industry') AS industry,
-                   poc.employee_count AS verified_employee_count,
-                   poc.country AS company_country,
-                   poc.domain AS company_domain,
-                   poc.annual_revenue_range AS revenue_range,
-                   poc.founded_year,
-                   poc.total_funding,
-                   poc.latest_funding_stage,
-                   poc.headcount_growth_6m,
-                   poc.headcount_growth_12m,
-                   poc.headcount_growth_24m,
-                   poc.publicly_traded_exchange,
-                   poc.publicly_traded_symbol,
-                   poc.short_description AS company_description
-            FROM b2b_reviews r
-            LEFT JOIN b2b_account_resolution ar
-                ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
-            LEFT JOIN prospect_org_cache poc
-                ON poc.company_name_norm = CASE
-                    WHEN ar.confidence_label IN ('high', 'medium')
-                    THEN ar.normalized_company_name
-                    ELSE NULL
-                END
-            WHERE r.vendor_name ILIKE '%' || $1 || '%'
-              AND r.enrichment_status = 'enriched'
-              AND (r.enrichment->>'urgency_score')::numeric >= 7
-              AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
-              AND {_suppress_predicate('review', id_expr='r.id', source_expr='r.source', vendor_expr='r.vendor_name')}
-            ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
-            LIMIT 5
-            """,
-            vname,
+        # Top 5 high-intent companies via shared adapter
+        from atlas_brain.autonomous.tasks._b2b_shared import read_high_intent_companies
+        hi_results = await read_high_intent_companies(
+            pool,
+            min_urgency=7.0,
+            window_days=90,
+            vendor_name=vname,
+            limit=5,
         )
 
         # DEPRECATED-ENRICHMENT-READ: pain_category
@@ -517,27 +400,27 @@ async def get_vendor_profile(vendor_name: str) -> str:
 
         profile["high_intent_companies"] = [
             {
-                "company": r["reviewer_company"],
-                "urgency": float(r["urgency"]) if r["urgency"] is not None else 0,
-                "pain": r["pain"],
-                "title": r["reviewer_title"],
-                "company_size": r["company_size_raw"],
-                "industry": r["industry"],
-                "verified_employee_count": r["verified_employee_count"],
-                "company_country": r["company_country"],
-                "company_domain": r["company_domain"],
-                "revenue_range": r["revenue_range"],
-                "founded_year": r["founded_year"],
-                "total_funding": r["total_funding"],
-                "funding_stage": r["latest_funding_stage"],
-                "headcount_growth_6m": float(r["headcount_growth_6m"]) if r["headcount_growth_6m"] is not None else None,
-                "headcount_growth_12m": float(r["headcount_growth_12m"]) if r["headcount_growth_12m"] is not None else None,
-                "headcount_growth_24m": float(r["headcount_growth_24m"]) if r["headcount_growth_24m"] is not None else None,
-                "publicly_traded": r["publicly_traded_exchange"] or None,
-                "ticker": r["publicly_traded_symbol"] or None,
-                "company_description": r["company_description"],
+                "company": r.get("company"),
+                "urgency": r.get("urgency", 0),
+                "pain": r.get("pain"),
+                "title": r.get("title"),
+                "company_size": r.get("company_size"),
+                "industry": r.get("industry"),
+                "verified_employee_count": r.get("verified_employee_count"),
+                "company_country": r.get("company_country"),
+                "company_domain": r.get("company_domain"),
+                "revenue_range": r.get("revenue_range"),
+                "founded_year": r.get("founded_year"),
+                "total_funding": r.get("total_funding"),
+                "funding_stage": r.get("funding_stage"),
+                "headcount_growth_6m": r.get("headcount_growth_6m"),
+                "headcount_growth_12m": r.get("headcount_growth_12m"),
+                "headcount_growth_24m": r.get("headcount_growth_24m"),
+                "publicly_traded": r.get("publicly_traded"),
+                "ticker": r.get("ticker"),
+                "company_description": r.get("company_description"),
             }
-            for r in hi_rows
+            for r in hi_results
         ]
 
         profile["pain_distribution"] = [

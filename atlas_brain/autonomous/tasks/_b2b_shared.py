@@ -475,6 +475,12 @@ def _executive_source_list() -> list[str]:
     )
 
 
+def _eligible_review_timestamp_expr(*, alias: str = "") -> str:
+    """Stable review-occurrence timestamp for intelligence windows."""
+    p = f"{alias}." if alias else ""
+    return f"COALESCE({p}reviewed_at, {p}imported_at, {p}enriched_at)"
+
+
 def _eligible_review_filters(*, window_param: int | None = 1, source_param: int = 2, alias: str = "") -> str:
     """Build a reusable SQL predicate for eligible intelligence review rows.
 
@@ -482,9 +488,10 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
     with the table alias so the predicate works inside JOINed queries.
     """
     p = f"{alias}." if alias else ""
+    time_expr = _eligible_review_timestamp_expr(alias=alias)
     parts = [f"{p}enrichment_status = 'enriched'"]
     if window_param is not None:
-        parts.append(f"{p}enriched_at > NOW() - make_interval(days => ${window_param})")
+        parts.append(f"{time_expr} > NOW() - make_interval(days => ${window_param})")
     parts.append(f"{p}source = ANY(${source_param}::text[])")
     parts.append(f"COALESCE({p}raw_metadata->>'extraction_method', '') != 'jsonld_aggregate'")
     parts.append(
@@ -3461,6 +3468,7 @@ async def _fetch_vendor_provenance(pool, window_days: int) -> dict[str, dict]:
     """
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=2)
+    time_expr = _eligible_review_timestamp_expr()
 
     # Source distribution per vendor
     dist_rows = await pool.fetch(
@@ -3483,8 +3491,8 @@ async def _fetch_vendor_provenance(pool, window_days: int) -> dict[str, dict]:
         SELECT vendor_name,
             (ARRAY_AGG(id ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST))[1:50]
                 AS sample_ids,
-            MIN(enriched_at) AS window_start,
-            MAX(enriched_at) AS window_end
+            MIN({time_expr}) AS window_start,
+            MAX({time_expr}) AS window_end
         FROM b2b_reviews
         WHERE {filters}
         GROUP BY vendor_name
@@ -3733,7 +3741,14 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
     rows = await pool.fetch(
         f"""
         SELECT r.id AS review_id, r.source,
-            COALESCE(ar.resolved_company_name, r.reviewer_company) AS reviewer_company,
+            COALESCE(
+                CASE
+                    WHEN ar.confidence_label IN ('high', 'medium')
+                    THEN ar.resolved_company_name
+                    ELSE NULL
+                END,
+                r.reviewer_company
+            ) AS reviewer_company,
             r.reviewer_company AS raw_reviewer_company,
             ar.confidence_label AS resolution_confidence,
             r.vendor_name, r.product_category,
@@ -3762,6 +3777,7 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             r.enrichment->'quotable_phrases' AS quotes,
             r.enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
             r.enrichment->'budget_signals'->>'seat_count' AS seat_count,
+            r.enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
             r.enrichment->'timeline'->>'contract_end' AS contract_end,
             r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
             r.relevance_score,
@@ -3775,7 +3791,11 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
-            ON poc.company_name_norm = ar.normalized_company_name
+            ON poc.company_name_norm = CASE
+                WHEN ar.confidence_label IN ('high', 'medium')
+                THEN ar.normalized_company_name
+                ELSE NULL
+            END
         WHERE {filters}
           AND (r.enrichment->>'urgency_score')::numeric >= $1
           AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
@@ -3844,6 +3864,7 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
             "review_id": str(r["review_id"]) if r["review_id"] else None,
             "source": r["source"],
             "seat_count": seat_count,
+            "lock_in_level": r["lock_in_level"],
             "contract_end": r["contract_end"],
             "buying_stage": r["buying_stage"],
             "relevance_score": float(r["relevance_score"]) if r["relevance_score"] is not None else None,
@@ -5056,30 +5077,41 @@ async def fetch_all_pool_layers(
         review_rows = await pool.fetch(
             """
                 SELECT
-                    vendor_name,
-                    id,
-                    source,
+                    r.vendor_name,
+                    r.id,
+                    r.source,
                 rating,
                 rating_max,
                 summary,
                 review_text,
                 pros,
                 cons,
-                reviewer_title,
-                reviewer_company,
-                reviewed_at,
-                imported_at,
-                raw_metadata,
-                enrichment
-                FROM b2b_reviews
-                WHERE enrichment_status = 'enriched'
-                  AND COALESCE(reviewed_at, imported_at) <= ($1::date + INTERVAL '1 day')
-                  AND COALESCE(reviewed_at, imported_at) >= ($1::date - ($2::int * INTERVAL '1 day'))
+                r.reviewer_title,
+                COALESCE(
+                    r.reviewer_company,
+                    CASE
+                        WHEN ar.confidence_label IN ('high', 'medium')
+                        THEN ar.resolved_company_name
+                        ELSE NULL
+                    END
+                ) AS reviewer_company,
+                r.reviewer_company AS raw_reviewer_company,
+                ar.confidence_label AS resolution_confidence,
+                r.reviewed_at,
+                r.imported_at,
+                r.raw_metadata,
+                r.enrichment
+                FROM b2b_reviews r
+                LEFT JOIN b2b_account_resolution ar
+                  ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+                WHERE r.enrichment_status = 'enriched'
+                  AND COALESCE(r.reviewed_at, r.imported_at) <= ($1::date + INTERVAL '1 day')
+                  AND COALESCE(r.reviewed_at, r.imported_at) >= ($1::date - ($2::int * INTERVAL '1 day'))
                 ORDER BY
-                    vendor_name,
-                    COALESCE(reviewed_at, imported_at) DESC,
-                imported_at DESC,
-                id DESC
+                    r.vendor_name,
+                    COALESCE(r.reviewed_at, r.imported_at) DESC,
+                r.imported_at DESC,
+                r.id DESC
             """,
             as_of,
             analysis_window_days,
@@ -5099,6 +5131,8 @@ async def fetch_all_pool_layers(
                 "cons": row.get("cons"),
                 "reviewer_title": row.get("reviewer_title"),
                 "reviewer_company": row.get("reviewer_company"),
+                "raw_reviewer_company": row.get("raw_reviewer_company"),
+                "resolution_confidence": row.get("resolution_confidence"),
                 "reviewed_at": row.get("reviewed_at"),
                 "imported_at": row.get("imported_at"),
                 "raw_metadata": _safe_json(row.get("raw_metadata"), default={}),
@@ -8662,6 +8696,45 @@ def build_account_intelligence(
             "with_seat_count": with_seat_count,
         },
     }
+
+
+async def read_high_intent_companies(
+    pool,
+    *,
+    min_urgency: float = 7.0,
+    window_days: int = 30,
+    vendor_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Shared adapter for high-intent company reads.
+
+    Replaces direct enrichment reads in:
+      - api.b2b_dashboard.list_high_intent / export_high_intent
+      - api.b2b_tenant_dashboard.list_leads
+      - mcp.b2b.signals.list_high_intent_companies
+
+    Returns dicts with keys: company, raw_company, resolution_confidence,
+    vendor, category, title, company_size, industry, verified_employee_count,
+    company_country, company_domain, revenue_range, founded_year,
+    total_funding, funding_stage, headcount_growth_6m/12m/24m,
+    publicly_traded, ticker, company_description, role_level, decision_maker,
+    urgency, pain, alternatives, quotes, contract_signal, review_id, source,
+    seat_count, lock_in_level, contract_end, buying_stage, relevance_score,
+    author_churn_score, intent_signals.
+    """
+    results = await _fetch_high_intent_companies(
+        pool,
+        urgency_threshold=int(min_urgency),
+        window_days=window_days,
+    )
+    if vendor_name:
+        vn_lower = vendor_name.lower()
+        results = [r for r in results if vn_lower in (r.get("vendor") or "").lower()]
+    if scoped_vendors:
+        scope = {v.lower() for v in scoped_vendors}
+        results = [r for r in results if (r.get("vendor") or "").lower() in scope]
+    return results[:limit]
 
 
 def _battle_card_weaknesses_from_evidence_vault(
