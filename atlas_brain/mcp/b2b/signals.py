@@ -325,7 +325,7 @@ async def get_vendor_profile(vendor_name: str) -> str:
         hi_results = await read_high_intent_companies(
             pool,
             min_urgency=7.0,
-            window_days=90,
+            window_days=3650,
             vendor_name=vname,
             limit=5,
         )

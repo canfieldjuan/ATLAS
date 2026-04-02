@@ -177,6 +177,54 @@ def _make_review_row(**kwargs) -> dict:
     }
 
 
+def _make_adapter_high_intent_result(**kwargs) -> dict:
+    """Result shape returned by read_high_intent_companies() adapter."""
+    return {
+        "company": kwargs.get("company", "Acme Corp"),
+        "raw_company": kwargs.get("raw_company", "Acme Corp"),
+        "resolution_confidence": kwargs.get("resolution_confidence", "high"),
+        "vendor": kwargs.get("vendor", "Zendesk"),
+        "category": "Customer Support",
+        "title": "VP Operations",
+        "company_size": "201-500",
+        "industry": "SaaS",
+        "verified_employee_count": 320,
+        "company_country": "US",
+        "company_domain": "acme.example",
+        "revenue_range": "$50M-$100M",
+        "founded_year": 2015,
+        "total_funding": 25000000,
+        "funding_stage": "Series B",
+        "headcount_growth_6m": 0.12,
+        "headcount_growth_12m": 0.25,
+        "headcount_growth_24m": 0.50,
+        "publicly_traded": None,
+        "ticker": None,
+        "company_description": "B2B SaaS operations platform.",
+        "role_level": "vp",
+        "decision_maker": True,
+        "urgency": 8.5,
+        "pain": "pricing",
+        "alternatives": [{"name": "Freshdesk"}],
+        "quotes": [],
+        "contract_signal": "mid_market",
+        "review_id": None,
+        "source": "g2",
+        "seat_count": None,
+        "lock_in_level": None,
+        "contract_end": None,
+        "buying_stage": None,
+        "relevance_score": 0.8,
+        "author_churn_score": None,
+        "intent_signals": {
+            "cancel": False,
+            "migration": False,
+            "evaluation": True,
+            "completed_switch": False,
+        },
+    }
+
+
 def _make_high_intent_row(**kwargs) -> dict:
     return {
         "company": kwargs.get("company", "Acme Corp"),
@@ -392,10 +440,12 @@ class TestB2BChurnMCPTools:
     async def test_list_high_intent_companies_found(self):
         from atlas_brain.mcp.b2b.signals import list_high_intent_companies
 
-        row = _make_high_intent_row()
-        pool = _mock_pool(fetch_return=[row])
+        adapter_result = [_make_adapter_high_intent_result()]
+        pool = _mock_pool()
 
-        with _patch_pool(pool):
+        with _patch_pool(pool), \
+             patch("atlas_brain.autonomous.tasks._b2b_shared.read_high_intent_companies",
+                   new=AsyncMock(return_value=adapter_result)):
             raw = await list_high_intent_companies()
 
         data = json.loads(raw)
@@ -406,15 +456,20 @@ class TestB2BChurnMCPTools:
     async def test_list_high_intent_companies_with_vendor(self):
         from atlas_brain.mcp.b2b.signals import list_high_intent_companies
 
-        pool = _mock_pool(fetch_return=[_make_high_intent_row()])
+        adapter_result = [_make_adapter_high_intent_result()]
+        pool = _mock_pool()
+        mock_adapter = AsyncMock(return_value=adapter_result)
 
-        with _patch_pool(pool):
+        with _patch_pool(pool), \
+             patch("atlas_brain.autonomous.tasks._b2b_shared.read_high_intent_companies",
+                   new=mock_adapter):
             raw = await list_high_intent_companies(vendor_name="Zendesk")
 
         data = json.loads(raw)
         assert data["count"] == 1
-        call_args = pool.fetch.call_args
-        assert "ILIKE" in call_args[0][0]
+        mock_adapter.assert_called_once()
+        call_kwargs = mock_adapter.call_args[1]
+        assert call_kwargs["vendor_name"] == "Zendesk"
 
     async def test_list_high_intent_companies_error(self):
         from atlas_brain.mcp.b2b.signals import list_high_intent_companies
@@ -462,10 +517,14 @@ class TestB2BChurnMCPTools:
 
         pool = _mock_pool()
         pool.fetchrow = AsyncMock(side_effect=[signal, counts_row])
-        # side_effect order: hi_rows fetch, pain_rows fetch, _apply_field_overrides fetch
-        pool.fetch = AsyncMock(side_effect=[[hi_row], [pain_row], []])
+        # side_effect order: pain_rows fetch, _apply_field_overrides fetch
+        pool.fetch = AsyncMock(side_effect=[[pain_row], []])
 
-        with _patch_pool(pool):
+        adapter_result = [_make_adapter_high_intent_result()]
+
+        with _patch_pool(pool), \
+             patch("atlas_brain.autonomous.tasks._b2b_shared.read_high_intent_companies",
+                   new=AsyncMock(return_value=adapter_result)):
             raw = await get_vendor_profile(vendor_name="Zendesk")
 
         data = json.loads(raw)
@@ -476,6 +535,7 @@ class TestB2BChurnMCPTools:
         assert profile["review_counts"]["total"] == 120
         assert profile["review_counts"]["enriched"] == 115
         assert len(profile["high_intent_companies"]) == 1
+        assert profile["high_intent_companies"][0]["company"] == "Acme Corp"
         assert len(profile["pain_distribution"]) == 1
 
     async def test_get_vendor_profile_no_signal(self):

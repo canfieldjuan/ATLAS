@@ -3734,10 +3734,34 @@ async def _fetch_vendor_churn_scores_from_signals(
     return filtered
 
 
-async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days: int) -> list[dict[str, Any]]:
+async def _fetch_high_intent_companies(
+    pool,
+    urgency_threshold: float,
+    window_days: int,
+    *,
+    vendor_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     """Companies showing high churn intent -- the money feed."""
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=2, source_param=3, alias="r")
+    params: list = [urgency_threshold, window_days, sources]
+    extra_where = ""
+    idx = 4
+    if vendor_name:
+        extra_where += f"\n          AND r.vendor_name ILIKE '%' || ${idx} || '%'"
+        params.append(vendor_name)
+        idx += 1
+    if scoped_vendors:
+        extra_where += f"\n          AND r.vendor_name = ANY(${idx}::text[])"
+        params.append(scoped_vendors)
+        idx += 1
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = f"\n        LIMIT ${idx}"
+        params.append(limit)
+        idx += 1
     rows = await pool.fetch(
         f"""
         SELECT r.id AS review_id, r.source,
@@ -3796,16 +3820,14 @@ async def _fetch_high_intent_companies(pool, urgency_threshold: int, window_days
                 THEN ar.normalized_company_name
                 ELSE NULL
             END
-        WHERE {filters}
+        WHERE {filters}{extra_where}
           AND (r.enrichment->>'urgency_score')::numeric >= $1
           AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
           AND COALESCE(r.relevance_score, 0.5) >= 0.3
         ORDER BY (r.enrichment->>'urgency_score')::numeric
-                 * (0.7 + 0.3 * COALESCE(r.relevance_score, 0.5)) DESC
+                 * (0.7 + 0.3 * COALESCE(r.relevance_score, 0.5)) DESC{limit_clause}
         """,
-        urgency_threshold,
-        window_days,
-        sources,
+        *params,
     )
     results = []
     for r in rows:
@@ -8723,18 +8745,14 @@ async def read_high_intent_companies(
     seat_count, lock_in_level, contract_end, buying_stage, relevance_score,
     author_churn_score, intent_signals.
     """
-    results = await _fetch_high_intent_companies(
+    return await _fetch_high_intent_companies(
         pool,
-        urgency_threshold=int(min_urgency),
+        urgency_threshold=min_urgency,
         window_days=window_days,
+        vendor_name=vendor_name,
+        scoped_vendors=scoped_vendors,
+        limit=limit,
     )
-    if vendor_name:
-        vn_lower = vendor_name.lower()
-        results = [r for r in results if vn_lower in (r.get("vendor") or "").lower()]
-    if scoped_vendors:
-        scope = {v.lower() for v in scoped_vendors}
-        results = [r for r in results if (r.get("vendor") or "").lower() in scope]
-    return results[:limit]
 
 
 def _battle_card_weaknesses_from_evidence_vault(
