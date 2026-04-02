@@ -135,29 +135,40 @@ def test_all_enrichment_reads_declared_in_contract():
     )
 
 
+def _extract_written_fields() -> set[str]:
+    """Scan b2b_enrichment.py for result["field"] assignments.
+
+    Derives the set of enrichment fields from the actual writer, not a
+    hand-maintained duplicate list.
+    """
+    enrichment_py = (
+        REPO_ROOT / "atlas_brain" / "autonomous" / "tasks" / "b2b_enrichment.py"
+    )
+    # Matches result["field_name"] and result.setdefault("field_name", ...)
+    pattern = re.compile(r'''result\["([a-z_]+)"\]|result\.setdefault\("([a-z_]+)"''')
+    fields: set[str] = set()
+    for line in enrichment_py.read_text(encoding="utf-8").splitlines():
+        for m in pattern.finditer(line):
+            field = m.group(1) or m.group(2)
+            if field:
+                fields.add(field)
+    return fields
+
+
 def test_contract_covers_all_extracted_fields():
     """The contract must declare every field the enrichment pipeline writes.
 
     Prevents extracted fields from being invisible to the governance system.
-    This is the authoritative list from b2b_enrichment.py _merge_tier1_tier2
-    plus _compute_derived_fields.
+    Derives the field list by scanning b2b_enrichment.py for result["..."]
+    assignments rather than maintaining a hard-coded duplicate.
     """
-    # All fields written to the enrichment JSONB by the pipeline
-    ALL_ENRICHMENT_FIELDS = {
-        "churn_signals", "reviewer_context", "budget_signals", "use_case",
-        "content_classification", "competitors_mentioned", "specific_complaints",
-        "quotable_phrases", "positive_aspects", "feature_gaps",
-        "recommendation_language", "pricing_phrases", "event_mentions",
-        "urgency_indicators", "sentiment_trajectory", "buyer_authority",
-        "timeline", "contract_context", "insider_signals",
-        "pain_categories", "urgency_score", "pain_category", "would_recommend",
-        "replacement_mode", "operating_model_shift", "productivity_delta_claim",
-        "org_pressure_type", "salience_flags", "evidence_spans",
-        "enrichment_schema_version", "evidence_map_hash",
-        "support_escalation", "pain_cluster", "churn_intent",
-    }
+    written_fields = _extract_written_fields()
+    # Filter out internal/transient keys that are not persisted to JSONB
+    transient = {"version_upgrade_requeued"}
+    written_fields -= transient
+
     contracted = set(FIELD_CONTRACTS.keys())
-    missing = ALL_ENRICHMENT_FIELDS - contracted
+    missing = written_fields - contracted
     assert not missing, (
         "Enrichment pipeline writes these fields but they are not in the contract:\n"
         + "\n".join(f"  - {f}" for f in sorted(missing))

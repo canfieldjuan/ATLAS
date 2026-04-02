@@ -198,6 +198,10 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
             "_b2b_shared._fetch_department_distribution",
             "_b2b_shared._fetch_company_size_distribution",
             "_b2b_shared._fetch_buyer_authority_summary",
+            # live_overlay: account resolution reads company_name for identity matching
+            "b2b_account_resolution._fetch_unresolved_reviews",
+            # live_overlay: intelligence reads for witness/report context
+            "b2b_churn_intelligence._fetch_company_signal_review_context",
         ),
         "migration_target": "read_review_details",
     },

@@ -20,6 +20,7 @@ from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 SCAN_ROOTS = [REPO_ROOT / "atlas_brain", REPO_ROOT / "scripts"]
 OUTPUT_DIR = REPO_ROOT / "docs"
 
@@ -37,12 +38,14 @@ ENRICHMENT_NESTED_RE = re.compile(
     re.IGNORECASE,
 )
 
-EXEMPT_MODULES = {
-    "atlas_brain/autonomous/tasks/b2b_enrichment.py",
-    "atlas_brain/autonomous/tasks/b2b_enrichment_repair.py",
-    "atlas_brain/services/extraction_health_audit.py",
-    "atlas_brain/autonomous/tasks/_b2b_shared.py",
-}
+def _is_exempt(rel_path: str) -> bool:
+    """Mirror the exemption logic in test_b2b_field_governance.py."""
+    from atlas_brain.autonomous.tasks._b2b_field_contracts import EXEMPT_MODULES
+    if rel_path in EXEMPT_MODULES:
+        return True
+    if rel_path.startswith("scripts/backfill_") or rel_path.startswith("scripts/re_enrich_"):
+        return True
+    return False
 
 
 def scan_file(path: Path) -> list[dict]:
@@ -115,7 +118,7 @@ def main():
     exempt_count = 0
     non_exempt_count = 0
     for rel, hits in all_files.items():
-        if rel in EXEMPT_MODULES:
+        if _is_exempt(rel):
             exempt_count += len(hits)
         else:
             non_exempt_count += len(hits)
@@ -157,7 +160,7 @@ def main():
 
     for rel in sorted(all_files, key=lambda r: -len(all_files[r])):
         hits = all_files[rel]
-        is_exempt = rel in EXEMPT_MODULES
+        is_exempt = _is_exempt(rel)
         status = "EXEMPT" if is_exempt else "NON-EXEMPT"
         lines.append(f"### `{rel}` ({len(hits)} reads) [{status}]")
         lines.append("")
