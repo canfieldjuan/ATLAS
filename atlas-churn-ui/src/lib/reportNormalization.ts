@@ -1,6 +1,6 @@
 import type { ReportDetail, VendorProfile } from '../types'
 
-const JSONISH_PATTERN = /^\s*[\[{].*[\]}]\s*$/s
+const JSONISH_PATTERN = /^\s*[[{].*[\]}]\s*$/s
 const LIST_STRING_KEYS = new Set([
   'integration_stack',
   'archetype_key_signals',

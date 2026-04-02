@@ -9,10 +9,8 @@ import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import { useAuth } from '../auth/AuthContext'
 import { StructuredReportData } from '../components/report-renderers/StructuredReportData'
-import {
-  isSpecializedReportType,
-  SpecializedReportData,
-} from '../components/report-renderers/SpecializedReportData'
+import { isSpecializedReportType } from '../lib/reportConstants'
+import { SpecializedReportData } from '../components/report-renderers/SpecializedReportData'
 import { normalizeReportObject } from '../lib/reportNormalization'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''

@@ -34,23 +34,6 @@ import type {
   WeaknessAnalysisItemViewModel,
 } from '../../types/reportViewModels'
 
-export const SPECIALIZED_REPORT_TYPES = [
-  'challenger_brief',
-  'accounts_in_motion',
-  'battle_card',
-  'vendor_comparison',
-  'account_comparison',
-  'weekly_churn_feed',
-  'vendor_scorecard',
-  'displacement_report',
-  'category_overview',
-  'vendor_deep_dive',
-] as const
-
-export function isSpecializedReportType(reportType: string): boolean {
-  return SPECIALIZED_REPORT_TYPES.includes(reportType as (typeof SPECIALIZED_REPORT_TYPES)[number])
-}
-
 function SectionCard({ title, icon, children }: { title: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden [overflow-wrap:anywhere]">

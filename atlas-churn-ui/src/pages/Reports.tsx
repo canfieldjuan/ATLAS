@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import { useNavigate } from 'react-router-dom'
 import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -8,23 +7,8 @@ import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport } from '../api/client'
 import { useState, useEffect, useMemo } from 'react'
+import { REPORT_TYPE_COLORS } from '../lib/reportConstants'
 import type { Report } from '../types'
-
-export const REPORT_TYPE_COLORS: Record<string, string> = {
-  weekly_churn_feed: 'bg-cyan-500/20 text-cyan-400',
-  vendor_scorecard: 'bg-violet-500/20 text-violet-400',
-  displacement_report: 'bg-amber-500/20 text-amber-400',
-  category_overview: 'bg-emerald-500/20 text-emerald-400',
-  exploratory_overview: 'bg-slate-500/20 text-slate-300',
-  vendor_comparison: 'bg-fuchsia-500/20 text-fuchsia-300',
-  account_comparison: 'bg-rose-500/20 text-rose-300',
-  account_deep_dive: 'bg-pink-500/20 text-pink-300',
-  vendor_retention: 'bg-orange-500/20 text-orange-400',
-  challenger_intel: 'bg-purple-500/20 text-purple-400',
-  challenger_brief: 'bg-purple-500/20 text-purple-400',
-  battle_card: 'bg-red-500/20 text-red-400',
-  vendor_deep_dive: 'bg-sky-500/20 text-sky-400',
-}
 
 const QUALITY_STATUS_COLORS: Record<string, string> = {
   sales_ready: 'bg-emerald-500/20 text-emerald-300',
@@ -93,7 +77,7 @@ export default function Reports() {
   const [page, setPage] = useState(0)
   const [perPage, setPerPage] = useState<number>(PAGE_SIZES[0])
 
-  const reports = data?.reports ?? []
+  const reports = useMemo(() => data?.reports ?? [], [data])
   const filteredReports = useMemo(
     () => reports.filter((report) => {
       if (!qualityFilter) return true

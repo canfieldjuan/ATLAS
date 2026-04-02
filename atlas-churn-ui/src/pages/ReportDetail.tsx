@@ -3,17 +3,13 @@ import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import {
-  REPORT_SCALAR_KEYS,
   StructuredReportData,
   StructuredReportValue,
 } from '../components/report-renderers/StructuredReportData'
-import {
-  isSpecializedReportType,
-  SpecializedReportData,
-} from '../components/report-renderers/SpecializedReportData'
+import { SpecializedReportData } from '../components/report-renderers/SpecializedReportData'
+import { REPORT_SCALAR_KEYS, isSpecializedReportType, REPORT_TYPE_COLORS } from '../lib/reportConstants'
 import useApiData from '../hooks/useApiData'
 import { fetchReport } from '../api/client'
-import { REPORT_TYPE_COLORS } from './Reports'
 import type { ReportDetail as ReportDetailType } from '../types'
 
 function formatInlineValue(value: unknown): string {

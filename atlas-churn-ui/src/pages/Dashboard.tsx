@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Building2, AlertTriangle, MessageSquareText, Zap, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -84,8 +85,9 @@ export default function Dashboard() {
   const lastEnrichmentAt = toIso(pipeline?.last_enrichment_at)
   const lastScrapeAt = toIso(pipeline?.last_scrape_at)
   const freshnessAnchor = maxIso([latestSignalComputedAt, lastEnrichmentAt, lastScrapeAt])
+  const [now] = useState(() => Date.now())
   const freshnessAgeHours = freshnessAnchor
-    ? (Date.now() - new Date(freshnessAnchor).getTime()) / (1000 * 60 * 60)
+    ? (now - new Date(freshnessAnchor).getTime()) / (1000 * 60 * 60)
     : null
   const freshnessState = freshnessAgeHours === null
     ? 'unknown'

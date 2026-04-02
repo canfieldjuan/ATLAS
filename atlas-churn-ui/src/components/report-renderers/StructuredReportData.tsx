@@ -1,5 +1,6 @@
 import { clsx } from 'clsx'
 import ArchetypeBadge from '../ArchetypeBadge'
+import { REPORT_SCALAR_KEYS, humanLabel } from '../../lib/reportConstants'
 import {
   isRecord,
   toCrossVendorBattles,
@@ -22,35 +23,9 @@ import type {
 
 type AnyObject = Record<string, unknown>
 
-export const REPORT_SCALAR_KEYS = new Set([
-  'vendor_name', 'challenger_name', 'primary_vendor', 'comparison_vendor', 'report_date', 'window_days',
-  'signal_count', 'high_urgency_count', 'medium_urgency_count',
-  'scope', 'llm_model', 'model_analysis', 'parse_fallback',
-])
-
 const QUOTE_KEYS = new Set([
   'anonymized_quotes', 'quotable_evidence', 'quotes', 'top_pain_quotes',
 ])
-
-const FIELD_LABELS: Record<string, string> = {
-  avg_urgency: 'Avg Urgency',
-  budget_context: 'Budget Signals',
-  churn_signal_density: 'Churn Signal Density',
-  customer_pain_quotes: 'Customer Pain Quotes',
-  decision_timeline: 'Decision Timeline',
-  dm_churn_rate: 'DM Churn Rate',
-  ecosystem_context: 'Ecosystem',
-  key_insights: 'Key Insights',
-  market_structure: 'Market Structure',
-  objection_data: 'Objection Data',
-  price_complaint_rate: 'Price Complaint Rate',
-  sentiment_direction: 'Sentiment Direction',
-  source_distribution: 'Source Distribution',
-  top_feature_gaps: 'Feature Gaps',
-  total_reviews: 'Total Reviews',
-  vulnerability_window: 'Vulnerability Window',
-  weakness_analysis: 'Weakness Analysis',
-}
 
 const SUMMARY_LABEL_KEYS = [
   'label', 'name', 'title', 'company', 'vendor', 'competitor', 'opponent',
@@ -80,10 +55,6 @@ function formatValue(value: unknown): string {
   }
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   return String(value)
-}
-
-export function humanLabel(key: string): string {
-  return FIELD_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
 function getRenderableColumns(rows: AnyObject[]): string[] {
