@@ -363,6 +363,8 @@ def _extract_pain_quotes_from_reviews(
     return deduped
 
 
+# DEPRECATED-ENRICHMENT-READ: quotable_phrases, pain_category, urgency_score, reviewer_context
+# Migrate to: read_vendor_evidence() from _b2b_shared
 async def _fetch_review_pain_quotes(
     pool,
     vendor: str,
@@ -378,6 +380,8 @@ async def _fetch_review_pain_quotes(
     Reads ``enrichment->'quotable_phrases'`` plus pain metadata from b2b_reviews.
     Used as fallback when no battle card quotes are available.
     """
+    # DEPRECATED-ENRICHMENT-READ: reviewer_context.role_level, pain_category, quotable_phrases, urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name, source, reviewer_company, reviewer_title,

@@ -688,6 +688,8 @@ async def get_draft_evidence(
     # enrichment JSONB contains urgency_score and pain_category,
     # source (not source_site), reviewed_at (not review_date)
     report_date = row.get("source_report_date")
+    # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score, reviewer_context.industry
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     if report_date:
         reviews = await pool.fetch(
             """
@@ -706,6 +708,8 @@ async def get_draft_evidence(
             vendor_name, report_date, limit,
         )
     else:
+        # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score, reviewer_context.industry
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         reviews = await pool.fetch(
             """
             SELECT id, vendor_name, reviewer_company, summary, review_text,

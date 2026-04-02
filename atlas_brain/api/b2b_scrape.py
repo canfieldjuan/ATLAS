@@ -24,8 +24,8 @@ from ..services.scraping.target_provisioning import (
     fetch_coverage_inputs,
     provision_vendor_onboarding_targets,
 )
-from ..services.scraping.target_validation import is_source_allowed, validate_target_input
-from ..services.scraping.sources import parse_source_allowlist
+from ..services.scraping.target_validation import validate_target_input
+from ..services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -148,7 +148,12 @@ def _normalize_filters(values: list[str]) -> set[str]:
 
 
 def _current_allowed_sources() -> list[str]:
-    return sorted(parse_source_allowlist(settings.b2b_scrape.source_allowlist))
+    return sorted(
+        filter_deprecated_sources(
+            parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+            settings.b2b_scrape.deprecated_sources,
+        )
+    )
 
 
 def _matches_filters(
@@ -365,6 +370,8 @@ async def _build_probation_telemetry(
     review_rows = []
     company_signal_rows = []
     if target_ids:
+        # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave, urgency_score, competitors_mentioned
+        # Migrate to: read_review_details() from _b2b_shared
         review_rows = await pool.fetch(
             """
             SELECT raw_metadata->>'scrape_target_id' AS target_id,
@@ -764,7 +771,7 @@ async def coverage_plan(
     plan = build_scrape_coverage_plan(
         inventory_rows,
         existing_targets,
-        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+        allowed_sources=_current_allowed_sources(),
     )
     plan["missing_core_targets"] = plan["missing_core_targets"][:limit]
     plan["conditional_opportunities"] = plan["conditional_opportunities"][:limit]
@@ -804,7 +811,7 @@ async def seed_missing_core_targets(body: SeedMissingCoreRequest) -> dict:
     plan = build_scrape_coverage_plan(
         inventory_rows,
         existing_targets,
-        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+        allowed_sources=_current_allowed_sources(),
     )
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
@@ -844,7 +851,7 @@ async def disable_poor_fit_targets(body: DisablePoorFitRequest) -> dict:
     plan = build_scrape_coverage_plan(
         inventory_rows,
         existing_targets,
-        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+        allowed_sources=_current_allowed_sources(),
     )
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
@@ -888,7 +895,7 @@ async def seed_conditional_probation_targets(body: SeedConditionalProbationReque
     plan = build_scrape_coverage_plan(
         inventory_rows,
         existing_targets,
-        allowed_sources=parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+        allowed_sources=_current_allowed_sources(),
     )
     vendors = _normalize_filters(body.vendors)
     sources = _normalize_filters(body.sources)
@@ -1018,13 +1025,14 @@ async def create_target(body: ScrapeTargetCreate) -> dict:
     from ..services.scraping.parsers import get_all_parsers
 
     source = body.source.strip().lower()
+    allowed_sources = set(_current_allowed_sources())
     valid_sources = set(get_all_parsers().keys())
     if source not in valid_sources:
         raise HTTPException(status_code=400, detail=f"Invalid source. Must be one of: {valid_sources}")
-    if not is_source_allowed(source, settings.b2b_scrape.source_allowlist):
+    if source not in allowed_sources:
         raise HTTPException(
             status_code=400,
-            detail=f"Source '{source}' is currently disabled by ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST",
+            detail=f"Source '{source}' is currently disabled by B2B scrape source governance",
         )
 
     try:
@@ -1167,13 +1175,10 @@ async def trigger_scrape(target_id: UUID) -> dict:
     )
     if not row:
         raise HTTPException(status_code=404, detail="Target not found")
-    if not is_source_allowed(row["source"], settings.b2b_scrape.source_allowlist):
+    if str(row["source"] or "").strip().lower() not in set(_current_allowed_sources()):
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Source '{row['source']}' is currently disabled by "
-                "ATLAS_B2B_SCRAPE_SOURCE_ALLOWLIST"
-            ),
+            detail=f"Source '{row['source']}' is currently disabled by B2B scrape source governance",
         )
 
     # Import and run inline

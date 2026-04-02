@@ -458,6 +458,8 @@ async def _fetch_company_signal_review_context(
     """Enrich pooled company signals with targeted review-context lookups by id."""
     if not review_ids:
         return {}
+    # APPROVED-ENRICHMENT-READ: competitors_mentioned, quotable_phrases, feature_gaps, timeline.evaluation_deadline, timeline.decision_timeline, contract_context.contract_value_signal, reviewer_context.industry
+    # Reason: Feeds pool builders for company signal context; reads by review ID, not ad-hoc scan
     rows = await pool.fetch(
         """
         SELECT id, vendor_name, product_category,
@@ -3631,6 +3633,8 @@ async def generate_vendor_report(
     filters = _eligible_review_filters(window_param=1, source_param=3, alias="r")
 
     # Fetch signals for this vendor
+    # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, timeline.contract_end, timeline.decision_timeline, competitors_mentioned, pain_categories, quotable_phrases, feature_gaps, reviewer_context.industry
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         f"""
         SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,
@@ -4885,6 +4889,8 @@ async def generate_challenger_report(
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=1, source_param=3, alias="r")
 
+    # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, competitors_mentioned, pain_categories, quotable_phrases, feature_gaps, reviewer_context.industry
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         f"""
         SELECT r.id AS review_id, r.vendor_name, r.reviewer_company, r.product_category,

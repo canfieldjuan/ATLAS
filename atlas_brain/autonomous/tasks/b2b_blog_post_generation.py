@@ -28,7 +28,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...services.scraping.sources import VERIFIED_SOURCES, parse_source_allowlist
+from ...services.scraping.sources import VERIFIED_SOURCES, filter_deprecated_sources, parse_source_allowlist
 from ._b2b_shared import (
     _fetch_latest_evidence_vault,
     _segment_targeting_summary,
@@ -196,7 +196,10 @@ def _find_unsupported_data_claims(
 
 def _blog_source_allowlist() -> list[str]:
     """Return the configured source allowlist as a list for SQL ANY() binding."""
-    return parse_source_allowlist(settings.b2b_churn.blog_source_allowlist)
+    return filter_deprecated_sources(
+        parse_source_allowlist(settings.b2b_churn.blog_source_allowlist),
+        settings.b2b_churn.deprecated_review_sources,
+    )
 
 
 # -- dataclasses (same structure as consumer blog pipeline) --------
@@ -2852,6 +2855,8 @@ async def _find_migration_guide_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_pricing_reality_check_candidates(pool) -> list[dict[str, Any]]:
     """Vendors where users complain about pricing -- bait-and-switch, hidden costs, etc."""
+    # DEPRECATED-ENRICHMENT-READ: pain_categories, urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     sources = _blog_source_allowlist()
     rows = await pool.fetch(
         """
@@ -2890,6 +2895,8 @@ async def _find_pricing_reality_check_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_switching_story_candidates(pool) -> list[dict[str, Any]]:
     """Vendors users are actively leaving -- real switching stories from reviews."""
+    # DEPRECATED-ENRICHMENT-READ: urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     sources = _blog_source_allowlist()
     rows = await pool.fetch(
         """
@@ -2938,6 +2945,8 @@ async def _find_switching_story_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_pain_point_roundup_candidates(pool) -> list[dict[str, Any]]:
     """Categories with enough vendors to do a cross-vendor complaint comparison."""
+    # DEPRECATED-ENRICHMENT-READ: urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     sources = _blog_source_allowlist()
     rows = await pool.fetch(
         """
@@ -3638,6 +3647,8 @@ async def _gather_data(
             evidence_vault_lookup.get(vendor),
         )
         # Pull actual pricing complaint reviews directly
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_categories
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         sources = _blog_source_allowlist()
         pricing_reviews = await pool.fetch(
             """
@@ -3717,6 +3728,8 @@ async def _gather_data(
             evidence_vault_lookup.get(vendor),
         )
         # Pull actual switching reviews
+        # DEPRECATED-ENRICHMENT-READ: urgency_score
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         sources = _blog_source_allowlist()
         switch_reviews = await pool.fetch(
             """
@@ -3760,6 +3773,8 @@ async def _gather_data(
     elif topic_type == "pain_point_roundup":
         category = topic_ctx["category"]
         # Per-vendor pain breakdown from raw reviews
+        # DEPRECATED-ENRICHMENT-READ: pain_categories, urgency_score
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         sources = _blog_source_allowlist()
         vendor_pains = await pool.fetch(
             """
@@ -3914,6 +3929,8 @@ async def _gather_data(
         )
         vendor_names = [r["vendor_name"] for r in cat_rows]
 
+    # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     if vendor_names:
         ctx_row = await pool.fetchrow(
             """
@@ -3929,6 +3946,8 @@ async def _gather_data(
             vendor_names, ctx_sources,
         )
     else:
+        # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         ctx_row = await pool.fetchrow(
             """
             SELECT
@@ -4088,6 +4107,8 @@ async def _fetch_vendor_extended_context(pool, vendor_name: str) -> dict[str, An
 
 async def _fetch_pain_category_urgency(pool, vendor_name: str) -> dict[str, float]:
     """Query per-category average urgency directly from b2b_reviews."""
+    # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT enrichment->>'pain_category' AS pain_cat,
@@ -4222,11 +4243,20 @@ async def _fetch_negative_quotes(
     sources: list[str], limit: int = 9,
 ) -> list[dict[str, Any]]:
     """High-urgency enriched reviews (negative signal)."""
+    # DEPRECATED-ENRICHMENT-READ: urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     _quote_cols = """
         r.review_text, r.vendor_name, r.reviewer_title, r.rating,
         r.enrichment->>'urgency_score' AS urgency,
         r.source,
-        COALESCE(ar.resolved_company_name, r.reviewer_company) AS company,
+        COALESCE(
+            CASE
+                WHEN ar.confidence_label IN ('high', 'medium')
+                THEN ar.resolved_company_name
+                ELSE NULL
+            END,
+            r.reviewer_company
+        ) AS company,
         r.company_size_raw,
         COALESCE(poc.industry, r.reviewer_industry) AS industry,
         poc.employee_count AS verified_employee_count,
@@ -4236,8 +4266,14 @@ async def _fetch_negative_quotes(
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
-            ON poc.company_name_norm = ar.normalized_company_name
+            ON poc.company_name_norm = CASE
+                WHEN ar.confidence_label IN ('high', 'medium')
+                THEN ar.normalized_company_name
+                ELSE NULL
+            END
     """
+    # DEPRECATED-ENRICHMENT-READ: urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     if vendor_name:
         rows = await pool.fetch(
             f"""
@@ -4252,6 +4288,8 @@ async def _fetch_negative_quotes(
             vendor_name, sources, limit,
         )
     elif category:
+        # DEPRECATED-ENRICHMENT-READ: urgency_score
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         rows = await pool.fetch(
             f"""
             SELECT {_quote_cols}
@@ -4298,7 +4336,14 @@ async def _fetch_positive_quotes(
     _pos_cols = """
         COALESCE(r.pros, r.review_text) AS text, r.vendor_name,
         r.reviewer_title, r.rating, r.source,
-        COALESCE(ar.resolved_company_name, r.reviewer_company) AS company,
+        COALESCE(
+            CASE
+                WHEN ar.confidence_label IN ('high', 'medium')
+                THEN ar.resolved_company_name
+                ELSE NULL
+            END,
+            r.reviewer_company
+        ) AS company,
         r.company_size_raw,
         COALESCE(poc.industry, r.reviewer_industry) AS industry,
         poc.employee_count AS verified_employee_count,
@@ -4308,7 +4353,11 @@ async def _fetch_positive_quotes(
         LEFT JOIN b2b_account_resolution ar
             ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
         LEFT JOIN prospect_org_cache poc
-            ON poc.company_name_norm = ar.normalized_company_name
+            ON poc.company_name_norm = CASE
+                WHEN ar.confidence_label IN ('high', 'medium')
+                THEN ar.normalized_company_name
+                ELSE NULL
+            END
     """
     if vendor_name:
         rows = await pool.fetch(
@@ -6718,6 +6767,8 @@ _KNOWN_TOPIC_TYPES = {
 
 async def _fetch_vendor_stats(pool, vendor_name: str) -> dict[str, Any]:
     """Return review counts and urgency for a single vendor."""
+    # DEPRECATED-ENRICHMENT-READ: urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     row = await pool.fetchrow(
         """
         SELECT

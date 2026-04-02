@@ -272,6 +272,8 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
         company_sources[norm] = source
 
     # 1. Proactive: named customer companies showing strong complaint signals.
+    # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave, urgency_score
+    # Migrate to: read_review_details() from _b2b_shared
     complaint_rows = await pool.fetch(
         """
         SELECT MIN(reviewer_company) AS reviewer_company,
@@ -310,6 +312,8 @@ async def _discover_companies(pool, cfg) -> list[dict[str, str]]:
         _add_company(r["reviewer_company"], "reviewer_company")
 
     # 2. Proactive: vendors with significant churn signal volume
+    # DEPRECATED-ENRICHMENT-READ: urgency_score
+    # Migrate to: read_review_details() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name, COUNT(*) AS signal_count

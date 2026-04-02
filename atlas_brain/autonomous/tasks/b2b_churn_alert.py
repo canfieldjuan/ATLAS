@@ -61,6 +61,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vendors_checked += 1
 
         # Current metrics for this vendor
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, competitors_mentioned
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         current = await pool.fetchrow(
             """
             SELECT

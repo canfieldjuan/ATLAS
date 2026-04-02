@@ -2191,6 +2191,8 @@ async def _compute_vendor_trend(
 
     Returns 'increasing', 'stable', 'decreasing', or None on error.
     """
+    # DEPRECATED-ENRICHMENT-READ: urgency_score
+    # Migrate to: read_campaign_opportunities() from _b2b_shared
     try:
         # Build vendor name match condition
         names = [vendor_name]
@@ -3578,9 +3580,13 @@ async def _fetch_opportunities(
         params.append(company_filter)
         idx += 1
 
+    # DEPRECATED-ENRICHMENT-READ: reviewer_context.decision_maker
+    # Migrate to: read_campaign_opportunities() from _b2b_shared
     if dm_only:
         extra_conditions += " AND (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true"
 
+    # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, timeline.contract_end, timeline.decision_timeline, competitors_mentioned, pain_categories, quotable_phrases, feature_gaps, use_case.primary_workflow, use_case.integration_stack, reviewer_context.industry
+    # Migrate to: read_campaign_opportunities() from _b2b_shared
     rows = await pool.fetch(
         f"""
         SELECT r.id AS review_id,

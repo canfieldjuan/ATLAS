@@ -115,6 +115,8 @@ async def _fetch_satisfaction_by_area(pool, window_days: int) -> dict[str, list[
     Returns {vendor_name: [{"area": str, "score": float, "evidence_count": int}, ...]}.
     Strengths = high-rated areas, Weaknesses = low-rated areas.
     """
+    # DEPRECATED-ENRICHMENT-READ: pain_category
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name,
@@ -145,6 +147,8 @@ async def _fetch_satisfaction_by_area(pool, window_days: int) -> dict[str, list[
 
 async def _fetch_pain_distribution(pool, window_days: int) -> dict[str, dict[str, int]]:
     """Pain frequency per vendor: {vendor: {pain_cat: count}}."""
+    # DEPRECATED-ENRICHMENT-READ: pain_category
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name,
@@ -167,6 +171,8 @@ async def _fetch_pain_distribution(pool, window_days: int) -> dict[str, dict[str
 
 async def _fetch_use_case_distribution(pool, window_days: int) -> dict[str, list[dict]]:
     """Primary workflows per vendor."""
+    # DEPRECATED-ENRICHMENT-READ: use_case.primary_workflow
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name,
@@ -192,6 +198,8 @@ async def _fetch_use_case_distribution(pool, window_days: int) -> dict[str, list
 
 async def _fetch_company_size_distribution(pool, window_days: int) -> dict[str, dict[str, int]]:
     """Company size segments per vendor."""
+    # DEPRECATED-ENRICHMENT-READ: reviewer_context.company_size_segment
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name,
@@ -218,6 +226,8 @@ async def _fetch_competitive_flows(pool, window_days: int) -> dict[str, dict]:
 
     Returns {vendor: {"compared_to": [...], "switched_from": [...]}}.
     """
+    # DEPRECATED-ENRICHMENT-READ: competitors_mentioned
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name,
@@ -259,6 +269,8 @@ async def _fetch_competitive_flows(pool, window_days: int) -> dict[str, dict]:
 
 async def _fetch_integration_stacks(pool, window_days: int) -> dict[str, dict[str, int]]:
     """Top integrations per vendor."""
+    # DEPRECATED-ENRICHMENT-READ: use_case.integration_stack
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name,
@@ -286,6 +298,8 @@ async def _fetch_aggregate_metrics(pool, window_days: int, min_reviews: int) -> 
     per vendor. The most common product_category is selected via MODE().
     Also collects provenance: sample_review_ids, review_window_start/end.
     """
+    # DEPRECATED-ENRICHMENT-READ: would_recommend, urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT vendor_name,

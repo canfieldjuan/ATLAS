@@ -1,0 +1,373 @@
+"""B2B enrichment field ownership contract.
+
+Declares every field in b2b_reviews.enrichment JSONB, its authoritative
+owner path, and approved consumers.  The governance test suite
+(tests/test_b2b_field_governance.py) enforces this contract.
+
+Owner paths
+-----------
+pool             Field is aggregated by _b2b_shared.py into a pool table.
+live_overlay     Field is read directly from enrichment JSONB by an
+                 approved module (not migrated to pools).
+witness          Field is produced/consumed by the witness system.
+enrichment_internal  Field is consumed only during enrichment itself
+                 (validation, derivation, content_type fallback).
+"""
+
+from __future__ import annotations
+
+from typing import TypedDict
+
+
+class FieldContract(TypedDict):
+    owner_path: str                     # pool | live_overlay | witness | enrichment_internal
+    owner_pool: str | None              # pool table name when owner_path == "pool"
+    stranded: bool                      # True = zero downstream consumers
+    approved_consumers: tuple[str, ...] # module-qualified references with approved access
+    migration_target: str | None        # adapter function name for deprecated reads
+
+
+# Modules that may read enrichment JSONB directly without markers.
+# These are producers, repairers, validators, or the approved wiring layer.
+EXEMPT_MODULES: frozenset[str] = frozenset({
+    "atlas_brain/autonomous/tasks/b2b_enrichment.py",
+    "atlas_brain/autonomous/tasks/b2b_enrichment_repair.py",
+    "atlas_brain/services/extraction_health_audit.py",
+    "atlas_brain/autonomous/tasks/_b2b_shared.py",
+    "atlas_brain/services/b2b/enrichment_repair_policy.py",
+})
+
+
+FIELD_CONTRACTS: dict[str, FieldContract] = {
+    # ---- Pool-owned: evidence_vault ----
+    "urgency_score": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_churn_scores",
+            "_b2b_shared._fetch_high_intent_companies",
+            "_b2b_shared._fetch_vendor_witness_reviews",
+        ),
+        "migration_target": "read_high_intent_companies",
+    },
+    "churn_signals": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_churn_scores",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "pain_category": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_pain_lookup",
+            "_b2b_shared._fetch_vendor_churn_scores",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "pain_categories": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_pain_lookup",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "competitors_mentioned": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_displacement_dynamics",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_displacement_flows",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "quotable_phrases": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_review_text_aggregates",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "specific_complaints": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_review_text_aggregates",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "feature_gaps": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_review_text_aggregates",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "positive_aspects": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_review_text_aggregates",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "pricing_phrases": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_review_text_aggregates",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "recommendation_language": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_churn_scores",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "would_recommend": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_churn_scores",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "urgency_indicators": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_churn_scores",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "insider_signals": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_insider_aggregates",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "pain_cluster": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_pain_lookup",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+    "churn_intent": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_evidence_vault",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_vendor_churn_scores",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+
+    # ---- Pool-owned: segment_intelligence ----
+    "reviewer_context": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_segment_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_department_distribution",
+            "_b2b_shared._fetch_company_size_distribution",
+            "_b2b_shared._fetch_buyer_authority_summary",
+        ),
+        "migration_target": "read_review_details",
+    },
+    "buyer_authority": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_segment_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_buyer_authority_summary",
+        ),
+        "migration_target": "read_review_details",
+    },
+    "budget_signals": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_segment_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_budget_signals",
+        ),
+        "migration_target": "read_review_details",
+    },
+    "use_case": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_segment_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_use_case_distribution",
+        ),
+        "migration_target": "read_review_details",
+    },
+    "contract_context": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_segment_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_budget_signals",
+        ),
+        "migration_target": "read_review_details",
+    },
+
+    # ---- Pool-owned: temporal_intelligence ----
+    "timeline": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_temporal_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_timeline_entries",
+        ),
+        "migration_target": "read_review_details",
+    },
+    "event_mentions": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_temporal_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_sentiment_turning_points",
+        ),
+        "migration_target": "read_vendor_evidence",
+    },
+
+    # ---- Witness-owned ----
+    "evidence_spans": {
+        "owner_path": "witness",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_witnesses.derive_evidence_spans",
+            "_b2b_shared._fetch_vendor_witness_reviews",
+        ),
+        "migration_target": None,
+    },
+    "salience_flags": {
+        "owner_path": "witness",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_witnesses._witness_salience",
+        ),
+        "migration_target": None,
+    },
+    "replacement_mode": {
+        "owner_path": "witness",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_witnesses._candidate_types",
+        ),
+        "migration_target": None,
+    },
+    "operating_model_shift": {
+        "owner_path": "witness",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_witnesses._candidate_types",
+        ),
+        "migration_target": None,
+    },
+    "productivity_delta_claim": {
+        "owner_path": "witness",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_witnesses._candidate_types",
+        ),
+        "migration_target": None,
+    },
+    "org_pressure_type": {
+        "owner_path": "witness",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_witnesses._candidate_types",
+        ),
+        "migration_target": None,
+    },
+
+    # ---- Enrichment-internal (metadata / consumed at write time) ----
+    "enrichment_schema_version": {
+        "owner_path": "enrichment_internal",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (),
+        "migration_target": None,
+    },
+    "evidence_map_hash": {
+        "owner_path": "enrichment_internal",
+        "owner_pool": None,
+        "stranded": False,
+        "approved_consumers": (),
+        "migration_target": None,
+    },
+
+    # ---- Stranded (zero downstream consumers) ----
+    "content_classification": {
+        "owner_path": "enrichment_internal",
+        "owner_pool": None,
+        "stranded": True,
+        "approved_consumers": (),
+        "migration_target": None,
+    },
+    "support_escalation": {
+        "owner_path": "enrichment_internal",
+        "owner_pool": None,
+        "stranded": True,
+        "approved_consumers": (),
+        "migration_target": None,
+    },
+}
+
+
+STRANDED_FIELDS: frozenset[str] = frozenset(
+    name for name, c in FIELD_CONTRACTS.items() if c["stranded"]
+)
+
+
+VALID_OWNER_PATHS: frozenset[str] = frozenset({
+    "pool", "live_overlay", "witness", "enrichment_internal",
+})
+
+
+def validate_contracts() -> list[str]:
+    """Return list of validation errors (empty = valid)."""
+    errors: list[str] = []
+    for name, c in FIELD_CONTRACTS.items():
+        if c["owner_path"] not in VALID_OWNER_PATHS:
+            errors.append(f"{name}: invalid owner_path '{c['owner_path']}'")
+        if c["owner_path"] == "pool" and not c["owner_pool"]:
+            errors.append(f"{name}: owner_path is 'pool' but owner_pool is None")
+        if c["owner_path"] != "pool" and c["owner_pool"]:
+            errors.append(f"{name}: owner_path is '{c['owner_path']}' but owner_pool is set")
+        if c["stranded"] and c["approved_consumers"]:
+            errors.append(f"{name}: stranded=True but has approved_consumers")
+    return errors

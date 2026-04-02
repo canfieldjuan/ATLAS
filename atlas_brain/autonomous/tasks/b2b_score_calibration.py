@@ -26,6 +26,8 @@ SAMPLE_WINDOW_DAYS = 90
 
 # Maps scoring dimensions to SQL expressions that extract the dimension
 # value from the step-1 b2b_campaigns row joined to its sequence outcome.
+# DEPRECATED-ENRICHMENT-READ: budget_signals.seat_count, competitors_mentioned.context
+# Migrate to: read_vendor_evidence() from _b2b_shared
 _DIMENSION_SQL = {
     "role_type": "bc.role_type",
     "buying_stage": "bc.buying_stage",

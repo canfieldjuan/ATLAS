@@ -225,6 +225,8 @@ async def list_high_intent_companies(
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, role_level, decision_maker, pain_category, competitors_mentioned, contract_value_signal, seat_count, lock_in_level, contract_end, buying_stage, industry
+        # Migrate to: read_high_intent_companies() from _b2b_shared
         conditions = [
             "r.enrichment_status = 'enriched'",
             "(r.enrichment->>'urgency_score')::numeric >= $1",
@@ -244,10 +246,19 @@ async def list_high_intent_companies(
         params.append(capped)
         where = " AND ".join(conditions)
 
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, industry
+        # Migrate to: read_high_intent_companies() from _b2b_shared
         rows = await pool.fetch(
             f"""
             SELECT
-                COALESCE(ar.resolved_company_name, r.reviewer_company) AS company,
+                COALESCE(
+                    CASE
+                        WHEN ar.confidence_label IN ('high', 'medium')
+                        THEN ar.resolved_company_name
+                        ELSE NULL
+                    END,
+                    r.reviewer_company
+                ) AS company,
                 r.reviewer_company AS raw_company,
                 ar.confidence_label AS resolution_confidence,
                 r.vendor_name, r.product_category,
@@ -282,7 +293,11 @@ async def list_high_intent_companies(
             LEFT JOIN b2b_account_resolution ar
                 ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
             LEFT JOIN prospect_org_cache poc
-                ON poc.company_name_norm = ar.normalized_company_name
+                ON poc.company_name_norm = CASE
+                    WHEN ar.confidence_label IN ('high', 'medium')
+                    THEN ar.normalized_company_name
+                    ELSE NULL
+                END
             WHERE {where}
             ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
             LIMIT ${idx}
@@ -381,10 +396,19 @@ async def get_vendor_profile(vendor_name: str) -> str:
             vname,
         )
 
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, industry
+        # Migrate to: read_high_intent_companies() from _b2b_shared
         # Top 5 high-intent companies
         hi_rows = await pool.fetch(
             f"""
-            SELECT COALESCE(ar.resolved_company_name, r.reviewer_company) AS reviewer_company,
+            SELECT COALESCE(
+                       CASE
+                           WHEN ar.confidence_label IN ('high', 'medium')
+                           THEN ar.resolved_company_name
+                           ELSE NULL
+                       END,
+                       r.reviewer_company
+                   ) AS reviewer_company,
                    (r.enrichment->>'urgency_score')::numeric AS urgency,
                    r.enrichment->>'pain_category' AS pain,
                    r.reviewer_title, r.company_size_raw,
@@ -407,7 +431,11 @@ async def get_vendor_profile(vendor_name: str) -> str:
             LEFT JOIN b2b_account_resolution ar
                 ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
             LEFT JOIN prospect_org_cache poc
-                ON poc.company_name_norm = ar.normalized_company_name
+                ON poc.company_name_norm = CASE
+                    WHEN ar.confidence_label IN ('high', 'medium')
+                    THEN ar.normalized_company_name
+                    ELSE NULL
+                END
             WHERE r.vendor_name ILIKE '%' || $1 || '%'
               AND r.enrichment_status = 'enriched'
               AND (r.enrichment->>'urgency_score')::numeric >= 7
@@ -419,6 +447,8 @@ async def get_vendor_profile(vendor_name: str) -> str:
             vname,
         )
 
+        # DEPRECATED-ENRICHMENT-READ: pain_category
+        # Migrate to: read_vendor_evidence() from _b2b_shared
         # Pain distribution
         pain_rows = await pool.fetch(
             f"""

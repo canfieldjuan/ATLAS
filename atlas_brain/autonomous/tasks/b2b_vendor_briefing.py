@@ -2469,6 +2469,8 @@ async def _fetch_high_urgency_quotes(
     pool: Any, vendor_name: str, limit: int = 5
 ) -> list[dict[str, Any]]:
     """Fetch quotable phrases with reviewer context from high-urgency reviews."""
+    # DEPRECATED-ENRICHMENT-READ: quotable_phrases, reviewer_context.industry, urgency_score
+    # Migrate to: read_vendor_evidence() from _b2b_shared
     rows = await pool.fetch(
         """
         SELECT enrichment->'quotable_phrases' AS phrases,
