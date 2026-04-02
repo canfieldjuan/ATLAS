@@ -39,6 +39,8 @@ logger = logging.getLogger("backfill_derived_fields")
 
 BATCH_SIZE = 200
 
+# APPROVED-ENRICHMENT-READ: enrichment_schema_version, urgency_score, pain_category, would_recommend, competitors_mentioned
+# Reason: backfill/migration script — direct enrichment access required
 _FILTER_QUERIES = {
     "all": """
         SELECT id, enrichment, rating, rating_max, raw_metadata, content_type,

@@ -225,7 +225,7 @@ async def list_high_intent_companies(
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, role_level, decision_maker, pain_category, competitors_mentioned, contract_value_signal, seat_count, lock_in_level, contract_end, buying_stage, industry
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context, pain_category, competitors_mentioned, contract_context, budget_signals, use_case, timeline, buyer_authority
         # Migrate to: read_high_intent_companies() from _b2b_shared
         conditions = [
             "r.enrichment_status = 'enriched'",
@@ -396,7 +396,7 @@ async def get_vendor_profile(vendor_name: str) -> str:
             vname,
         )
 
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, industry
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, reviewer_context
         # Migrate to: read_high_intent_companies() from _b2b_shared
         # Top 5 high-intent companies
         hi_rows = await pool.fetch(

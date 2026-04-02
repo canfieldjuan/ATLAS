@@ -35,6 +35,7 @@ EXEMPT_MODULES: frozenset[str] = frozenset({
     "atlas_brain/services/extraction_health_audit.py",
     "atlas_brain/autonomous/tasks/_b2b_shared.py",
     "atlas_brain/services/b2b/enrichment_repair_policy.py",
+    "scripts/b2b_field_access_inventory.py",  # self-referential regex patterns
 })
 
 
@@ -235,6 +236,17 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
             "_b2b_shared._fetch_budget_signals",
         ),
         "migration_target": "read_review_details",
+    },
+
+    "sentiment_trajectory": {
+        "owner_path": "pool",
+        "owner_pool": "b2b_temporal_intelligence",
+        "stranded": False,
+        "approved_consumers": (
+            "_b2b_shared._fetch_sentiment_turning_points",
+            "_b2b_witnesses._witness_salience",
+        ),
+        "migration_target": "read_vendor_evidence",
     },
 
     # ---- Pool-owned: temporal_intelligence ----

@@ -135,6 +135,8 @@ async def main():
     if args.vendors:
         vendor_list = [v.strip() for v in args.vendors.split(",") if v.strip()]
 
+    # APPROVED-ENRICHMENT-READ: pain_cluster, specific_complaints, quotable_phrases, pain_categories, pain_category
+    # Reason: backfill/migration script — direct enrichment access required
     # Build query depending on --recluster flag
     cluster_condition = "" if args.recluster else "AND enrichment->>'pain_cluster' IS NULL"
 

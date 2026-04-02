@@ -51,7 +51,7 @@ async def search_reviews(
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
-        # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score, intent_to_leave
+        # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score, churn_signals, reviewer_context
         # Migrate to: read_review_details() from _b2b_shared
         conditions = [
             "enrichment_status = 'enriched'",
@@ -106,7 +106,7 @@ async def search_reviews(
         params.append(capped)
         where = " AND ".join(conditions)
 
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, intent_to_leave, decision_maker, industry
+        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, churn_signals, reviewer_context
         # Migrate to: read_review_details() from _b2b_shared
         rows = await pool.fetch(
             f"""

@@ -44,6 +44,8 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
+# APPROVED-ENRICHMENT-READ: buyer_authority
+# Reason: backfill/migration script — direct enrichment access required
 def _candidate_role_clause() -> str:
     return """
       AND enrichment->'buyer_authority' IS NOT NULL

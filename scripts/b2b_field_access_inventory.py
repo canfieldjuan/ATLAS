@@ -20,18 +20,20 @@ from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCAN_ROOT = REPO_ROOT / "atlas_brain"
+SCAN_ROOTS = [REPO_ROOT / "atlas_brain", REPO_ROOT / "scripts"]
 OUTPUT_DIR = REPO_ROOT / "docs"
 
-# Matches enrichment->>'field' and enrichment->'field' with optional table alias
+# Matches enrichment->>'field', enrichment->'field', and enrichment #>> '{field,...}'
 ENRICHMENT_RE = re.compile(
-    r"""(?:\w+\.)?enrichment\s*->>?\s*'([^']+)'""",
+    r"""(?:\w+\.)?enrichment\s*->>?\s*'([^']+)'"""
+    r"""|(?:\w+\.)?enrichment\s*#>>?\s*'\{([^,}]+)""",
     re.IGNORECASE,
 )
 
 # Matches nested access: enrichment->'obj'->>'nested'
 ENRICHMENT_NESTED_RE = re.compile(
-    r"""(?:\w+\.)?enrichment\s*->\s*'([^']+)'\s*->>?\s*'([^']+)'""",
+    r"""(?:\w+\.)?enrichment\s*->\s*'([^']+)'\s*->>?\s*'([^']+)'"""
+    r"""|(?:\w+\.)?enrichment\s*#>>?\s*'\{([^,}]+),([^,}]+)""",
     re.IGNORECASE,
 )
 
@@ -52,9 +54,11 @@ def scan_file(path: Path) -> list[dict]:
         return hits
 
     for lineno, line in enumerate(lines, 1):
-        # Top-level field access
+        # Top-level field access (-> / ->> and #> / #>> forms)
         for m in ENRICHMENT_RE.finditer(line):
-            field = m.group(1)
+            field = m.group(1) or m.group(2)
+            if not field:
+                continue
             hits.append({
                 "field": field,
                 "nested": None,
@@ -64,7 +68,8 @@ def scan_file(path: Path) -> list[dict]:
 
         # Nested field access (overrides top-level for same match)
         for m in ENRICHMENT_NESTED_RE.finditer(line):
-            parent, child = m.group(1), m.group(2)
+            parent = m.group(1) or m.group(3)
+            child = m.group(2) or m.group(4)
             # Find and update the top-level hit for this parent
             updated = False
             for h in hits:
@@ -92,16 +97,17 @@ def main():
     field_totals: dict[str, int] = defaultdict(int)
     nested_totals: dict[str, int] = defaultdict(int)
 
-    for pyfile in sorted(SCAN_ROOT.rglob("*.py")):
-        hits = scan_file(pyfile)
-        if not hits:
-            continue
-        rel = relative(pyfile)
-        all_files[rel] = hits
-        for h in hits:
-            field_totals[h["field"]] += 1
-            if h["nested"]:
-                nested_totals[f"{h['field']}.{h['nested']}"] += 1
+    for scan_root in SCAN_ROOTS:
+        for pyfile in sorted(scan_root.rglob("*.py")):
+            hits = scan_file(pyfile)
+            if not hits:
+                continue
+            rel = relative(pyfile)
+            all_files[rel] = hits
+            for h in hits:
+                field_totals[h["field"]] += 1
+                if h["nested"]:
+                    nested_totals[f"{h['field']}.{h['nested']}"] += 1
 
     today = date.today().isoformat()
     out = OUTPUT_DIR / f"B2B_FIELD_ACCESS_INVENTORY_{today}.md"

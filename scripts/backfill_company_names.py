@@ -135,6 +135,8 @@ async def run(args):
         params.extend(sources)
         idx += len(sources)
 
+    # APPROVED-ENRICHMENT-READ: urgency_score
+    # Reason: backfill/migration script — direct enrichment access required
     # Fetch reviews needing company extraction
     params.append(args.limit)
     rows = await pool.fetch(

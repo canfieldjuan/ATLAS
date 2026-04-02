@@ -154,6 +154,8 @@ async def main():
     if args.vendors:
         vendor_list = [v.strip() for v in args.vendors.split(",") if v.strip()]
 
+    # APPROVED-ENRICHMENT-READ: pain_category
+    # Reason: backfill/migration script — direct enrichment access required
     # Fetch reviews to reclassify
     if vendor_list:
         rows = await pool.fetch(

@@ -26,6 +26,9 @@ _PROFILE_URL_TEMPLATES = {
     "github": "https://github.com/{username}",
     "reddit": "https://www.reddit.com/user/{username}",
 }
+_SELF_IDENT_TEXT_PATTERN = (
+    r"( i work at | i work for | we work at | we work for | we use this at )"
+)
 
 
 def _build_author_profile_url(source: str, username: str) -> str | None:
@@ -33,6 +36,57 @@ def _build_author_profile_url(source: str, username: str) -> str | None:
     if template and username:
         return template.format(username=username)
     return None
+
+
+async def _exclude_unsupported_sources(
+    pool: Any,
+    *,
+    eligible_statuses: list[str],
+    excluded_sources: list[str],
+) -> int:
+    """Mark low-signal sources as excluded so they stop competing for resolution."""
+    if not excluded_sources:
+        return 0
+    status = await pool.execute(
+        """
+        INSERT INTO b2b_account_resolution (
+            review_id, source, source_item_url,
+            author_handle, author_profile_url,
+            reviewer_company_raw,
+            resolved_company_name, normalized_company_name,
+            confidence_score, confidence_label,
+            resolution_method, resolution_evidence,
+            resolution_status, resolved_at
+        )
+        SELECT
+            r.id,
+            r.source,
+            r.source_url,
+            r.reviewer_name,
+            NULL,
+            r.reviewer_company,
+            NULL,
+            NULL,
+            0.0,
+            'unresolved',
+            'unsupported_source',
+            jsonb_build_object('reason', 'unsupported_source', 'source', r.source),
+            'excluded',
+            NOW()
+        FROM b2b_reviews r
+        LEFT JOIN b2b_account_resolution ar ON ar.review_id = r.id
+        WHERE r.enrichment_status = ANY($1::text[])
+          AND r.enrichment IS NOT NULL
+          AND r.source = ANY($2::text[])
+          AND ar.id IS NULL
+        """,
+        eligible_statuses,
+        excluded_sources,
+    )
+    try:
+        return int(str(status).split()[-1])
+    except Exception:
+        return 0
 
 
 async def _propagate_user_resolutions(pool: Any, backfill_labels: set) -> int:
@@ -132,6 +186,27 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     batch_size = getattr(cfg, "account_resolution_batch_size", 100)
     backfill_min = getattr(cfg, "account_resolution_backfill_min_confidence", "medium")
+    eligible_statuses = list(
+        getattr(
+            cfg,
+            "account_resolution_eligible_statuses",
+            ["enriched", "no_signal", "quarantined"],
+        ) or ["enriched", "no_signal", "quarantined"]
+    )
+    source_priority = list(
+        getattr(
+            cfg,
+            "account_resolution_source_priority",
+            ["g2", "gartner", "capterra", "software_advice", "trustpilot"],
+        ) or ["g2", "gartner", "capterra", "software_advice", "trustpilot"]
+    )
+    excluded_sources = list(
+        getattr(
+            cfg,
+            "account_resolution_excluded_sources",
+            ["capterra", "software_advice", "trustpilot", "trustradius"],
+        ) or ["capterra", "software_advice", "trustpilot", "trustradius"]
+    )
     backfill_labels = {"high"}
     if backfill_min == "medium":
         backfill_labels.add("medium")
@@ -139,8 +214,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         backfill_labels.update(("medium", "low"))
 
     t0 = time.monotonic()
+    excluded_count = await _exclude_unsupported_sources(
+        pool,
+        eligible_statuses=eligible_statuses,
+        excluded_sources=excluded_sources,
+    )
 
-    # Claim: enriched reviews without a resolution row
+    # APPROVED-ENRICHMENT-READ: reviewer_context
+    # Reason: account resolution needs company_name from enrichment for identity matching
     rows = await pool.fetch(
         """
         SELECT r.id, r.source, r.source_url, r.reviewer_name,
@@ -150,18 +231,36 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                r.vendor_name, r.product_category, r.rating, r.rating_max
         FROM b2b_reviews r
         LEFT JOIN b2b_account_resolution ar ON ar.review_id = r.id
-        WHERE r.enrichment_status = 'enriched'
+        WHERE r.enrichment_status = ANY($1::text[])
+          AND r.enrichment IS NOT NULL
+          AND NOT (r.source = ANY($2::text[]))
           AND ar.id IS NULL
         ORDER BY
-            CASE WHEN (r.reviewer_company IS NOT NULL AND r.reviewer_company != '') THEN 0 ELSE 1 END,
+            CASE
+                WHEN NULLIF(trim(coalesce(r.reviewer_company, '')), '') IS NOT NULL THEN 0
+                WHEN NULLIF(trim(coalesce(r.enrichment #>> '{reviewer_context,company_name}', '')), '') IS NOT NULL THEN 1
+                WHEN NULLIF(trim(coalesce(r.reviewer_title, '')), '') IS NOT NULL
+                     AND lower(r.reviewer_title) ~ '( at | @ )' THEN 2
+                WHEN NULLIF(trim(coalesce(r.reviewer_title, '')), '') IS NOT NULL THEN 3
+                WHEN lower(left(coalesce(r.review_text, ''), 500)) ~ $3 THEN 4
+                ELSE 5
+            END,
+            COALESCE(array_position($4::text[], r.source), 999),
             r.enriched_at DESC
-        LIMIT $1
+        LIMIT $5
         """,
+        eligible_statuses,
+        excluded_sources,
+        _SELF_IDENT_TEXT_PATTERN,
+        source_priority,
         batch_size,
     )
 
     if not rows:
-        return {"_skip_synthesis": "No reviews pending resolution"}
+        return {
+            "_skip_synthesis": "No reviews pending resolution",
+            "excluded_sources": int(excluded_count or 0),
+        }
 
     from ...services.b2b.account_resolver import (
         extract_from_github_profile,
@@ -409,4 +508,5 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "low_confidence": low_count,
         "errors": errors,
         "elapsed_seconds": elapsed,
+        "excluded_sources": int(excluded_count or 0),
     }
