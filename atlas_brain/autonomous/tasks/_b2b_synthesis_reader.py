@@ -797,11 +797,32 @@ def contract_gaps_for_consumer(view: SynthesisView | None, consumer: str) -> lis
                 contract = contract_getter(name)
                 if isinstance(contract, dict) and contract:
                     contracts[name] = contract
+    # Content arrays that indicate meaningful data per section
+    _SECTION_CONTENT_KEYS = {
+        "segment_playbook": "priority_segments",
+        "competitive_reframes": "reframes",
+        "migration_proof": "named_examples",
+        "account_reasoning": "top_accounts",
+    }
+
     gaps: list[str] = []
     for name in required:
         section = contracts.get(name)
         if not isinstance(section, dict) or not section:
             gaps.append(name)
+            continue
+        # Confidence = insufficient means the section is structurally present
+        # but analytically empty — treat as a gap for consumers
+        conf = str(section.get("confidence") or "").strip().lower()
+        if conf == "insufficient":
+            gaps.append(f"{name}:insufficient")
+            continue
+        # Check for empty content arrays that consumers depend on
+        content_key = _SECTION_CONTENT_KEYS.get(name)
+        if content_key:
+            content = section.get(content_key)
+            if isinstance(content, list) and not content:
+                gaps.append(f"{name}:empty_{content_key}")
     return gaps
 
 

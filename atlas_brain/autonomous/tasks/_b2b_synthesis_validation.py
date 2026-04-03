@@ -766,18 +766,37 @@ def _check_source_ids(
             _walk(sec, section)
 
 
-def _check_witness_pack_governance(packet: Any | None, result: ValidationResult) -> None:
-    """Warn when synthesis had to rely on generic fallback witnesses."""
+def _check_witness_pack_governance(
+    packet: Any | None,
+    result: ValidationResult,
+    *,
+    governance_blocking: bool = False,
+) -> None:
+    """Check witness pack quality. Blocking for schema >= 2.3."""
     if packet is None:
         return
     governance = {}
     if isinstance(getattr(packet, "section_packets", None), dict):
         governance = getattr(packet, "section_packets", {}).get("_witness_governance") or {}
+    witness_pack = getattr(packet, "witness_pack", []) or []
+
+    # Empty witness pack
+    if not witness_pack:
+        _add(
+            result,
+            "packet_artifacts.witness_pack",
+            "empty_witness_pack",
+            "synthesis has no witness evidence to anchor reasoning",
+            severity="error" if governance_blocking else "warning",
+        )
+        return
+
+    # Thin specific pool (only generic fallbacks used)
     thin_pool = bool(governance.get("thin_specific_witness_pool"))
     if not thin_pool:
         thin_pool = any(
             str(witness.get("generic_reason") or "").strip()
-            for witness in (getattr(packet, "witness_pack", []) or [])
+            for witness in witness_pack
             if isinstance(witness, dict)
         )
     if thin_pool:
@@ -786,7 +805,7 @@ def _check_witness_pack_governance(packet: Any | None, result: ValidationResult)
             "packet_artifacts.witness_pack",
             "thin_specific_witness_pool",
             "witness selection fell back to generic excerpts because the specific witness pool was too thin",
-            severity="warning",
+            severity="error" if governance_blocking else "warning",
         )
 
 
@@ -1307,6 +1326,54 @@ def _check_confidence_posture_limits(
     )
 
 
+def _check_high_confidence_without_evidence(
+    synthesis: dict[str, Any],
+    packet: Any | None,
+    result: ValidationResult,
+    *,
+    governance_blocking: bool = False,
+) -> None:
+    """Flag sections claiming high confidence when their supporting pool is thin.
+
+    Blocking for schema >= 2.3 to prevent high-confidence claims built on
+    zero or insufficient evidence from reaching downstream consumers.
+    """
+    if packet is None:
+        return
+    coverage_gaps = getattr(packet, "coverage_gaps", None) or []
+    gap_areas = {
+        str(g.get("area") or "").lower()
+        for g in coverage_gaps
+        if isinstance(g, dict)
+    }
+
+    # Map pool gap areas to the sections they feed
+    _POOL_TO_SECTIONS = {
+        "displacement": ("migration_proof", "competitive_reframes"),
+        "accounts": ("account_reasoning",),
+        "segment": ("segment_playbook",),
+        "temporal": ("timing_intelligence",),
+        "category": ("category_reasoning",),
+    }
+
+    for pool_area, sections in _POOL_TO_SECTIONS.items():
+        if pool_area not in gap_areas:
+            continue
+        for section_name in sections:
+            sec = synthesis.get(section_name)
+            if not isinstance(sec, dict):
+                continue
+            conf = str(sec.get("confidence") or "").strip().lower()
+            if conf == "high":
+                _add(
+                    result,
+                    f"{section_name}.confidence",
+                    "high_confidence_without_evidence",
+                    f"section '{section_name}' claims high confidence but pool '{pool_area}' has a coverage gap",
+                    severity="error" if governance_blocking else "warning",
+                )
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1365,7 +1432,8 @@ def validate_synthesis(
     _check_contradiction_hedging(normalized, packet, result, governance_blocking=_governance_blocking)
     _check_why_they_stay(normalized, packet, result, governance_blocking=_governance_blocking)
     _check_confidence_posture_limits(normalized, packet, result, governance_blocking=_governance_blocking)
-    _check_witness_pack_governance(packet, result)
+    _check_high_confidence_without_evidence(normalized, packet, result, governance_blocking=_governance_blocking)
+    _check_witness_pack_governance(packet, result, governance_blocking=_governance_blocking)
 
     if result.errors:
         logger.warning("Synthesis validation FAILED for %s: %s", vendor_name, result.summary())
