@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger("atlas.witnesses")
 
 _CURRENCY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s*/\s*(?:mo|month|yr|year|seat))?", re.I)
 _NUMBER_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\b")
@@ -26,7 +29,8 @@ _WORKFLOW_SUBSTITUTION_PATTERNS = (
 )
 _BUNDLE_PATTERNS = (
     "bundle", "bundled", "suite", "workspace", "microsoft 365", "google workspace",
-    "already included", "included with",
+    "already included", "included with", "all-in-one", "one platform",
+    "single system", "one place", "everything in one place", "source of truth",
 )
 _INTERNAL_TOOL_PATTERNS = (
     "internal tool", "in-house", "homegrown", "home-grown", "custom tool",
@@ -36,11 +40,24 @@ _PRODUCTIVITY_POSITIVE_PATTERNS = (
     "more productive", "faster without", "better without", "easier without",
     "more efficient", "save time", "saves time", "time savings", "sped up",
     "streamlined workflow", "reduced manual work", "less manual work",
+    "less labor-intensive", "less labour-intensive", "eliminating manual data entry",
+    "faster incident response", "speeds incident response",
 )
 _PRODUCTIVITY_NEGATIVE_PATTERNS = (
     "less productive", "slower now", "harder to work", "lost productivity",
     "slowed us down", "time consuming", "takes too long", "waste of time",
     "more manual work", "too many manual steps",
+)
+_PRODUCTIVITY_POSITIVE_REGEXES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bstreamlin(?:e|ed|es|ing)\b", re.I),
+    re.compile(r"\bsimplif(?:y|ies|ied|ying)\b.{0,40}\b(process(?:es)?|workflow(?:s)?|management|tasks?|work)\b", re.I),
+    re.compile(r"\breduc(?:e|ed|es|ing)\b.{0,40}\b(administrative complexity|manual data entry|response time)\b", re.I),
+    re.compile(r"\bfre(?:e|ed|es|ing)\b.{0,40}\b(team|soc team|staff)\b.{0,40}\bfocus\b", re.I),
+    re.compile(r"\bboost(?:ed|ing)?\b.{0,40}\b(productivity|roi)\b", re.I),
+)
+_PRODUCTIVITY_NEGATIVE_REGEXES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bmanual\b.{0,24}\bnightmare\b", re.I),
+    re.compile(r"\bslower\b.{0,24}\bresponse\b", re.I),
 )
 _PROCUREMENT_PATTERNS = (
     "procurement", "vendor standardization", "approved vendor", "approved software",
@@ -144,6 +161,11 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle in lowered for needle in needles)
 
 
+def _matches_any_regex(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
+    lowered = text.lower()
+    return any(pattern.search(lowered) for pattern in patterns)
+
+
 def _has_pricing_currency_signal(text: str) -> bool:
     lowered = str(text or "").lower()
     if not lowered:
@@ -239,9 +261,15 @@ def derive_productivity_delta_claim(source_row: dict[str, Any]) -> str:
         str(source_row.get(field) or "")
         for field in ("summary", "review_text", "pros", "cons")
     ).lower()
-    if _contains_any(review_blob, _PRODUCTIVITY_POSITIVE_PATTERNS):
+    if (
+        _contains_any(review_blob, _PRODUCTIVITY_POSITIVE_PATTERNS)
+        or _matches_any_regex(review_blob, _PRODUCTIVITY_POSITIVE_REGEXES)
+    ):
         return "more_productive"
-    if _contains_any(review_blob, _PRODUCTIVITY_NEGATIVE_PATTERNS):
+    if (
+        _contains_any(review_blob, _PRODUCTIVITY_NEGATIVE_PATTERNS)
+        or _matches_any_regex(review_blob, _PRODUCTIVITY_NEGATIVE_REGEXES)
+    ):
         return "less_productive"
     if "no change" in review_blob:
         return "no_change"
@@ -701,6 +729,8 @@ def build_vendor_witness_artifacts(
         **(specificity_weights or {}),
     }
     candidates: list[dict[str, Any]] = []
+    _spans_persisted = 0
+    _spans_fallback = 0
 
     for review in reviews:
         enrichment = _coerce_json_dict(review.get("enrichment"))
@@ -709,6 +739,9 @@ def build_vendor_witness_artifacts(
         spans = enrichment.get("evidence_spans")
         if not isinstance(spans, list) or not spans:
             spans = derive_evidence_spans(enrichment, review)
+            _spans_fallback += 1
+        else:
+            _spans_persisted += 1
         for idx, raw_span in enumerate(spans):
             if not isinstance(raw_span, dict):
                 continue
@@ -889,6 +922,13 @@ def build_vendor_witness_artifacts(
             "thin_specific_witness_pool": any(
                 str(item.get("generic_reason") or "").strip() for item in selected
             ),
+            "spans_persisted": _spans_persisted,
+            "spans_fallback": _spans_fallback,
         },
     }
+    if _spans_fallback > 0:
+        logger.info(
+            "Witness fallback: %s -- %d/%d reviews missing persisted evidence_spans, recomputed from raw enrichment",
+            vendor_name, _spans_fallback, _spans_persisted + _spans_fallback,
+        )
     return selected, section_packets
