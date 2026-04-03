@@ -2469,32 +2469,18 @@ async def _fetch_high_urgency_quotes(
     pool: Any, vendor_name: str, limit: int = 5
 ) -> list[dict[str, Any]]:
     """Fetch quotable phrases with reviewer context from high-urgency reviews."""
-    # DEPRECATED-ENRICHMENT-READ: quotable_phrases, reviewer_context.industry, urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
-    rows = await pool.fetch(
-        """
-        SELECT enrichment->'quotable_phrases' AS phrases,
-               reviewer_company, reviewer_title, company_size_raw,
-               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-        FROM b2b_reviews
-        WHERE LOWER(vendor_name) = LOWER($1)
-          AND enrichment_status = 'enriched'
-          AND enrichment IS NOT NULL
-          AND (enrichment->>'urgency_score')::float >= 7
-        ORDER BY enriched_at DESC
-        LIMIT $2
-        """,
-        vendor_name,
-        limit,
+    from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_quote_evidence
+
+    rows = await read_vendor_quote_evidence(
+        pool,
+        vendor_name=vendor_name,
+        min_urgency=7.0,
+        limit=limit,
+        require_quotes=True,
     )
     quotes: list[dict[str, Any]] = []
     for row in rows:
-        phrases = row["phrases"]
-        if isinstance(phrases, str):
-            try:
-                phrases = json.loads(phrases)
-            except (json.JSONDecodeError, TypeError):
-                continue
+        phrases = row.get("quotable_phrases")
         if isinstance(phrases, list):
             for p in phrases:
                 text = p.strip() if isinstance(p, str) else ""
@@ -2503,7 +2489,7 @@ async def _fetch_high_urgency_quotes(
                         "text": text,
                         "company": row.get("reviewer_company"),
                         "title": row.get("reviewer_title"),
-                        "company_size": row.get("company_size_raw"),
+                        "company_size": row.get("company_size"),
                         "industry": row.get("industry"),
                     })
     return quotes

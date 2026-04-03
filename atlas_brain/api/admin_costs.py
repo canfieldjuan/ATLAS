@@ -733,8 +733,8 @@ async def b2b_efficiency(
             run_bucket["calls"] += 1
             run_bucket[f"{pass_name}_cost_usd"] += cost_usd
 
-    # DEPRECATED-ENRICHMENT-READ: evidence_spans
-    # Migrate to: read_vendor_cost_metrics() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: evidence_spans
+    # Reason: admin analytics aggregation (evidence_spans count)
     source_quality_rows = await _safe_fetch(
         pool,
         f"""
@@ -2618,8 +2618,8 @@ async def reddit_overview(days: int = Query(default=7, ge=1, le=30)):
     triage_denominator = enriched + no_signal
 
     # -- Signal conversion: intent_to_leave + high urgency -----------------
-    # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave, urgency_score
-    # Migrate to: read_vendor_cost_metrics() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: churn_signals.intent_to_leave, urgency_score
+    # Reason: admin analytics aggregation (Reddit churn/urgency counts)
     conversion_row = await pool.fetchrow(
         """
         SELECT
@@ -2703,8 +2703,8 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # DEPRECATED-ENRICHMENT-READ: urgency_score
-    # Migrate to: read_vendor_cost_metrics() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score
+    # Reason: admin analytics aggregation (per-subreddit signal metrics)
     rows = await pool.fetch(
         """
         SELECT
@@ -3008,8 +3008,8 @@ async def reddit_per_vendor(
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, churn_signals.intent_to_leave
-    # Migrate to: read_vendor_cost_metrics() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score, churn_signals.intent_to_leave
+    # Reason: admin analytics aggregation (per-vendor churn metrics)
     # Main per-vendor aggregation
     rows = await pool.fetch(
         """
@@ -3081,8 +3081,8 @@ async def reddit_per_vendor(
             top_subs[vn].append(r["subreddit"])
 
     # Top 3 pain categories per vendor
-    # DEPRECATED-ENRICHMENT-READ: pain_category
-    # Migrate to: read_vendor_cost_metrics() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: pain_category
+    # Reason: admin analytics aggregation (per-vendor pain distribution)
     pain_rows = await pool.fetch(
         """
         SELECT

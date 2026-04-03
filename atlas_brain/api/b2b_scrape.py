@@ -370,8 +370,8 @@ async def _build_probation_telemetry(
     review_rows = []
     company_signal_rows = []
     if target_ids:
-        # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave, urgency_score, competitors_mentioned
-        # Migrate to: read_review_details() from _b2b_shared
+        # APPROVED-ENRICHMENT-READ: churn_signals.intent_to_leave, urgency_score, competitors_mentioned
+        # Reason: actionable review count aggregation
         review_rows = await pool.fetch(
             """
             SELECT raw_metadata->>'scrape_target_id' AS target_id,

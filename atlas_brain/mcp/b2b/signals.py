@@ -330,8 +330,8 @@ async def get_vendor_profile(vendor_name: str) -> str:
             limit=5,
         )
 
-        # DEPRECATED-ENRICHMENT-READ: pain_category
-        # Migrate to: read_vendor_evidence() from _b2b_shared
+        # APPROVED-ENRICHMENT-READ: pain_category
+        # Reason: vendor profile pain distribution aggregation
         # Pain distribution
         pain_rows = await pool.fetch(
             f"""
