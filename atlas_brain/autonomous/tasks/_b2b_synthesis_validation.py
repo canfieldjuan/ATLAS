@@ -1347,31 +1347,41 @@ def _check_high_confidence_without_evidence(
         if isinstance(g, dict)
     }
 
-    # Map pool gap areas to the sections they feed
-    _POOL_TO_SECTIONS = {
+    # Map pool gap areas to the sections they feed.
+    # Coverage gaps use area strings like "displacement", "accounts",
+    # "temporal_depth", "strength_pricing", "weakness_support" etc.
+    # We match by prefix to handle all variants.
+    _POOL_PREFIX_TO_SECTIONS = {
         "displacement": ("migration_proof", "competitive_reframes"),
         "accounts": ("account_reasoning",),
         "segment": ("segment_playbook",),
         "temporal": ("timing_intelligence",),
         "category": ("category_reasoning",),
+        # Thin segment samples use area like "strength_X" or "weakness_X"
+        "strength": ("segment_playbook",),
+        "weakness": ("segment_playbook",),
     }
 
-    for pool_area, sections in _POOL_TO_SECTIONS.items():
-        if pool_area not in gap_areas:
+    # Build effective set of affected sections from gap areas
+    affected_sections: set[str] = set()
+    for gap_area in gap_areas:
+        for prefix, sections in _POOL_PREFIX_TO_SECTIONS.items():
+            if gap_area == prefix or gap_area.startswith(f"{prefix}_"):
+                affected_sections.update(sections)
+
+    for section_name in affected_sections:
+        sec = synthesis.get(section_name)
+        if not isinstance(sec, dict):
             continue
-        for section_name in sections:
-            sec = synthesis.get(section_name)
-            if not isinstance(sec, dict):
-                continue
-            conf = str(sec.get("confidence") or "").strip().lower()
-            if conf == "high":
-                _add(
-                    result,
-                    f"{section_name}.confidence",
-                    "high_confidence_without_evidence",
-                    f"section '{section_name}' claims high confidence but pool '{pool_area}' has a coverage gap",
-                    severity="error" if governance_blocking else "warning",
-                )
+        conf = str(sec.get("confidence") or "").strip().lower()
+        if conf == "high":
+            _add(
+                result,
+                f"{section_name}.confidence",
+                "high_confidence_without_evidence",
+                f"section '{section_name}' claims high confidence but its supporting pool has a coverage gap",
+                severity="error" if governance_blocking else "warning",
+            )
 
 
 # ---------------------------------------------------------------------------

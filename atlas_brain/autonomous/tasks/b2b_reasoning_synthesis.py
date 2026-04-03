@@ -1526,7 +1526,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 meta["prior_row_age_days"] = int(decision["prior_row_age_days"])
             synthesis = build_persistable_synthesis(synthesis, packet)
             if payload_mode == "lean":
-                synthesis["_lean_mode"] = {
+                lean_mode_info = {
                     "omitted": [
                         k for k, v in [
                             ("contradiction_rows", not include_contradiction_rows),
@@ -1537,6 +1537,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "items_per_pool": payload_items_per_pool,
                     "witness_count": payload_witness_count,
                 }
+                # Store in both meta (canonical) and top-level (quality gate reads it)
+                synthesis.setdefault("meta", {})["lean_mode"] = lean_mode_info
+                synthesis["_lean_mode"] = lean_mode_info
             persisted_vresult = validate_synthesis(synthesis, packet)
             if not persisted_vresult.is_valid:
                 logger.warning(
