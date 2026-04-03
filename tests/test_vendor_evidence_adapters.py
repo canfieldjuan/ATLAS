@@ -169,6 +169,46 @@ async def test_vendor_quote_limit_in_sql():
 
 
 @pytest.mark.asyncio
+async def test_vendor_quote_require_quotes_filter():
+    """require_quotes=True adds non-empty quotable_phrases check to SQL."""
+    pool = FakePool([])
+    await read_vendor_quote_evidence(pool, vendor_name="Zendesk", require_quotes=True)
+    sql = pool.fetch.call_args[0][0]
+    where = sql.split("WHERE")[1]
+    assert "quotable_phrases" in where
+    assert "jsonb_array_length" in where
+
+
+@pytest.mark.asyncio
+async def test_vendor_quote_require_quotes_default_off():
+    """Default does NOT require non-empty quotable_phrases."""
+    pool = FakePool([])
+    await read_vendor_quote_evidence(pool, vendor_name="Zendesk")
+    sql = pool.fetch.call_args[0][0]
+    where = sql.split("WHERE")[1].split("ORDER")[0]
+    assert "jsonb_array_length" not in where
+
+
+@pytest.mark.asyncio
+async def test_vendor_quote_recency_imported_at():
+    """recency_column='imported_at' uses imported_at in WHERE."""
+    pool = FakePool([])
+    await read_vendor_quote_evidence(pool, vendor_name="Zendesk", recency_column="imported_at")
+    sql = pool.fetch.call_args[0][0]
+    assert "r.imported_at > NOW()" in sql
+
+
+@pytest.mark.asyncio
+async def test_vendor_quote_recency_default_enriched_at():
+    """Default recency uses enriched_at."""
+    pool = FakePool([])
+    await read_vendor_quote_evidence(pool, vendor_name="Zendesk")
+    sql = pool.fetch.call_args[0][0]
+    assert "r.enriched_at > NOW()" in sql
+    assert "COALESCE" not in sql.split("WHERE")[1].split("ORDER")[0]
+
+
+@pytest.mark.asyncio
 async def test_vendor_quote_suppress_applied():
     pool = FakePool([])
     with patch(

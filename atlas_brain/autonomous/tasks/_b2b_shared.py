@@ -9106,6 +9106,8 @@ async def read_vendor_quote_evidence(
     limit: int = 10,
     sources: list[str] | None = None,
     pain_filter: str | None = None,
+    require_quotes: bool = False,
+    recency_column: str = "enriched_at",
 ) -> list[dict[str, Any]]:
     """Row-level quote evidence for a vendor.
 
@@ -9114,14 +9116,27 @@ async def read_vendor_quote_evidence(
       - b2b_blog_post_generation._fetch_high_urgency_quotes (vendor variant)
       - b2b_challenger_brief._fetch_review_pain_quotes
 
+    Args:
+      require_quotes: When True, only returns reviews with non-empty
+          quotable_phrases (matches challenger_brief semantics).
+      recency_column: 'enriched_at' (default), 'imported_at' (challenger_brief),
+          or 'coalesce' (reviewed_at -> imported_at -> enriched_at).
+
     Returns dicts with: vendor_name, source, reviewer_company, reviewer_title,
     role_level, pain_category, urgency, review_text, quotable_phrases, rating.
     """
     from atlas_brain.services.b2b.corrections import suppress_predicate
 
+    if recency_column == "imported_at":
+        recency_expr = "r.imported_at"
+    elif recency_column == "coalesce":
+        recency_expr = "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)"
+    else:
+        recency_expr = "r.enriched_at"
+
     conditions = [
         "r.enrichment_status = 'enriched'",
-        "r.enriched_at > NOW() - make_interval(days => $1)",
+        f"{recency_expr} > NOW() - make_interval(days => $1)",
         "LOWER(r.vendor_name) = LOWER($2)",
     ]
     params: list = [window_days, vendor_name]
@@ -9139,6 +9154,11 @@ async def read_vendor_quote_evidence(
         conditions.append(f"r.enrichment->>'pain_categories' ILIKE '%' || ${idx} || '%'")
         params.append(pain_filter)
         idx += 1
+    if require_quotes:
+        conditions.append(
+            "r.enrichment->'quotable_phrases' IS NOT NULL"
+            " AND jsonb_array_length(r.enrichment->'quotable_phrases') > 0"
+        )
 
     conditions.append(
         suppress_predicate("review", id_expr="r.id", source_expr="r.source", vendor_expr="r.vendor_name")
