@@ -149,6 +149,20 @@ async def test_min_urgency_passed():
 
 
 @pytest.mark.asyncio
+async def test_suppress_predicate_applied():
+    """Adapter applies suppress_predicate to exclude corrected/suppressed reviews."""
+    pool = FakePool([])
+    with patch(
+        "atlas_brain.services.b2b.corrections.suppress_predicate",
+        return_value="r.id != 'blocked'",
+    ) as mock_sp:
+        await read_campaign_opportunities(pool)
+    mock_sp.assert_called_once()
+    sql = pool.fetch.call_args[0][0]
+    assert "r.id != 'blocked'" in sql
+
+
+@pytest.mark.asyncio
 async def test_empty_result():
     pool = FakePool([])
     results = await read_campaign_opportunities(pool)

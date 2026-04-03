@@ -1613,7 +1613,7 @@ async def _generate_churning_company_campaigns(
         return {"generated": 0, "skipped": 0, "failed": 0, "companies": 0, "error": "Skill not found"}
 
     llm_model_name = getattr(llm, "model_id", None) or getattr(llm, "model", "unknown")
-    claimer = f"reconcile:{getattr(task, 'id', None) or 'adhoc'}:{_uuid.uuid4().hex[:10]}"
+    claimer = f"reconcile:{run_id or 'adhoc'}:{_uuid.uuid4().hex[:10]}"
     batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     generated = 0
     failed = 0
@@ -3027,6 +3027,7 @@ async def _generate_challenger_campaigns(
     generated = 0
     failed = 0
     skipped = 0
+    deferred = 0
     sequences_created = 0
     batch_metrics = {
         "jobs": 0,
