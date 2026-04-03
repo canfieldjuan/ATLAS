@@ -141,8 +141,8 @@ async def list_opportunities(
         params.append(vendor_name)
         idx += 1
 
-    # DEPRECATED-ENRICHMENT-READ: reviewer_context.decision_maker
-    # Migrate to: read_campaign_opportunities() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: reviewer_context.decision_maker
+    # (CTE with competitor expansion + affiliate partner JOIN, structurally coupled)
     if dm_only:
         extra_conditions += " AND (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true"
 
@@ -156,8 +156,8 @@ async def list_opportunities(
         params.append(account_id)
         idx += 1
 
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, timeline.contract_end, timeline.decision_timeline, competitors_mentioned
-    # Migrate to: read_campaign_opportunities() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, timeline.contract_end, timeline.decision_timeline, competitors_mentioned
+    # (CTE with competitor expansion + affiliate partner JOIN, structurally coupled)
     rows = await pool.fetch(
         f"""
         WITH review_competitors AS (

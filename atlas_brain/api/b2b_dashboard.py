@@ -29,6 +29,7 @@ from ..services.tracing import (
 )
 from ..services.scraping.capabilities import get_capability
 from ..services.scraping.sources import ALL_SOURCES, ReviewSource, display_name as source_display_name
+from ..autonomous.tasks._b2b_shared import read_high_intent_companies
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_dashboard")
@@ -212,6 +213,17 @@ def _overlay_reasoning_detail_from_view(
 def _should_scope(user: AuthUser | None) -> bool:
     """Return True if the request should be tenant-scoped (non-admin authenticated user)."""
     return user is not None and not getattr(user, "is_admin", False)
+
+
+async def _get_scoped_vendors(pool, user: AuthUser | None) -> list[str] | None:
+    """Fetch tracked vendor names for a tenant-scoped user, or None if unscoped."""
+    if not _should_scope(user):
+        return None
+    rows = await pool.fetch(
+        "SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid",
+        user.account_id,
+    )
+    return [r["vendor_name"] for r in rows]
 
 
 from ..services.b2b.corrections import suppress_predicate as _suppress_predicate  # noqa: E402
@@ -629,77 +641,37 @@ async def list_high_intent(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context.role_level, reviewer_context.decision_maker, pain_category, competitors_mentioned, contract_context.contract_value_signal, budget_signals.seat_count, use_case.lock_in_level, timeline.contract_end, buyer_authority.buying_stage, reviewer_context.industry
-    # Migrate to: read_high_intent_companies() from _b2b_shared
-    conditions = [
-        "enrichment_status = 'enriched'",
-        "(enrichment->>'urgency_score')::numeric >= $1",
-        "reviewer_company IS NOT NULL AND reviewer_company != ''",
-        "enriched_at > NOW() - make_interval(days => $2)",
-    ]
-    params: list = [min_urgency, window_days]
-    idx = 3
-
-    if _should_scope(user):
-        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
-        params.append(user.account_id)
-        idx += 1
-
-    if vendor_name:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-        params.append(vendor_name)
-        idx += 1
-
-    conditions.append(_suppress_predicate('review'))
+    scoped_vendors = await _get_scoped_vendors(pool, user)
     capped = min(limit, 100)
-    params.append(capped)
-    where = " AND ".join(conditions)
 
-    # DEPRECATED-ENRICHMENT-READ: reviewer_context.role_level, reviewer_context.decision_maker, urgency_score, pain_category, competitors_mentioned, contract_context.contract_value_signal, budget_signals.seat_count, use_case.lock_in_level, timeline.contract_end, buyer_authority.buying_stage, reviewer_context.industry
-    # Migrate to: read_high_intent_companies() from _b2b_shared
-    rows = await pool.fetch(
-        f"""
-        SELECT reviewer_company, vendor_name, product_category,
-               enrichment->'reviewer_context'->>'role_level' AS role_level,
-               (enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
-               (enrichment->>'urgency_score')::numeric AS urgency,
-               enrichment->>'pain_category' AS pain,
-               enrichment->'competitors_mentioned' AS alternatives,
-               enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
-               CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                    THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
-               enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
-               enrichment->'timeline'->>'contract_end' AS contract_end,
-               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
-               reviewer_title, company_size_raw,
-               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
-        FROM b2b_reviews
-        WHERE {where}
-        ORDER BY (enrichment->>'urgency_score')::numeric DESC
-        LIMIT ${idx}
-        """,
-        *params,
+    rows = await read_high_intent_companies(
+        pool,
+        min_urgency=min_urgency,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        scoped_vendors=scoped_vendors,
+        limit=capped,
     )
 
     companies = []
     for r in rows:
         companies.append({
-            "company": r["reviewer_company"],
-            "vendor": r["vendor_name"],
-            "category": r["product_category"],
-            "role_level": r["role_level"],
-            "decision_maker": r["is_dm"],
-            "urgency": _safe_float(r["urgency"], 0),
-            "pain": r["pain"],
-            "alternatives": _safe_json(r["alternatives"]),
-            "contract_signal": r["value_signal"],
-            "seat_count": r["seat_count"],
-            "lock_in_level": r["lock_in_level"],
-            "contract_end": r["contract_end"],
-            "buying_stage": r["buying_stage"],
-            "reviewer_title": r["reviewer_title"],
-            "company_size": r["company_size_raw"],
-            "industry": r["industry"],
+            "company": r.get("company"),
+            "vendor": r.get("vendor"),
+            "category": r.get("category"),
+            "role_level": r.get("role_level"),
+            "decision_maker": r.get("decision_maker"),
+            "urgency": _safe_float(r.get("urgency"), 0),
+            "pain": r.get("pain"),
+            "alternatives": r.get("alternatives"),
+            "contract_signal": r.get("contract_signal"),
+            "seat_count": r.get("seat_count"),
+            "lock_in_level": r.get("lock_in_level"),
+            "contract_end": r.get("contract_end"),
+            "buying_stage": r.get("buying_stage"),
+            "reviewer_title": r.get("title"),
+            "company_size": r.get("company_size"),
+            "industry": r.get("industry"),
         })
 
     return {"companies": companies, "count": len(companies)}
@@ -748,68 +720,15 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
         vname,
     )
 
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, reviewer_context.industry
-    # Migrate to: read_high_intent_companies() from _b2b_shared
-    hi_rows = await pool.fetch(
-        f"""
-        SELECT COALESCE(
-                   CASE
-                       WHEN ar.confidence_label IN ('high', 'medium')
-                       THEN COALESCE(ar.display_name, ar.input_company_name, ar.resolved_company_name)
-                       ELSE NULL
-                   END,
-                   r.reviewer_company
-               ) AS reviewer_company,
-               (r.enrichment->>'urgency_score')::numeric AS urgency,
-               r.enrichment->>'pain_category' AS pain,
-               r.reviewer_title, r.company_size_raw,
-               COALESCE(poc.industry, r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
-               poc.founded_year,
-               poc.total_funding,
-               poc.latest_funding_stage,
-               poc.headcount_growth_6m,
-               poc.headcount_growth_12m,
-               poc.headcount_growth_24m,
-               poc.publicly_traded_exchange,
-               poc.publicly_traded_symbol,
-               poc.short_description AS company_description
-        FROM b2b_reviews r
-        LEFT JOIN b2b_account_resolution ar
-            ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
-        LEFT JOIN prospect_org_cache poc
-            ON poc.company_name_norm = CASE
-                WHEN ar.confidence_label IN ('high', 'medium')
-                THEN ar.normalized_company_name
-                ELSE NULL
-            END
-        WHERE r.vendor_name ILIKE '%' || $1 || '%'
-          AND r.enrichment_status = 'enriched'
-          AND (r.enrichment->>'urgency_score')::numeric >= 7
-          AND COALESCE(
-                  CASE
-                      WHEN ar.confidence_label IN ('high', 'medium')
-                      THEN COALESCE(ar.display_name, ar.input_company_name, ar.resolved_company_name)
-                      ELSE NULL
-                  END,
-                  r.reviewer_company
-              ) IS NOT NULL
-          AND COALESCE(
-                  CASE
-                      WHEN ar.confidence_label IN ('high', 'medium')
-                      THEN COALESCE(ar.display_name, ar.input_company_name, ar.resolved_company_name)
-                      ELSE NULL
-                  END,
-                  r.reviewer_company
-              ) != ''
-          AND {_suppress_predicate('review', 'r.id', 'r.source', 'r.vendor_name')}
-        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
-        LIMIT 5
-        """,
-        vname,
+    hi_rows = await read_high_intent_companies(
+        pool,
+        min_urgency=7.0,
+        vendor_name=vname,
+        limit=5,
     )
 
-    # DEPRECATED-ENRICHMENT-READ: pain_category
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: pain_category
+    # Reason: inline aggregate, GROUP BY pain_category
     pain_rows = await pool.fetch(
         f"""
         SELECT enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
@@ -886,21 +805,21 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
 
     profile["high_intent_companies"] = [
         {
-            "company": r["reviewer_company"],
-            "urgency": _safe_float(r["urgency"], 0),
-            "pain": r["pain"],
-            "title": r["reviewer_title"],
-            "company_size": r["company_size_raw"],
-            "industry": r["industry"],
-            "founded_year": r["founded_year"],
-            "total_funding": r["total_funding"],
-            "funding_stage": r["latest_funding_stage"],
-            "headcount_growth_6m": _safe_float(r["headcount_growth_6m"]),
-            "headcount_growth_12m": _safe_float(r["headcount_growth_12m"]),
-            "headcount_growth_24m": _safe_float(r["headcount_growth_24m"]),
-            "publicly_traded": r["publicly_traded_exchange"] or None,
-            "ticker": r["publicly_traded_symbol"] or None,
-            "company_description": r["company_description"],
+            "company": r.get("company"),
+            "urgency": _safe_float(r.get("urgency"), 0),
+            "pain": r.get("pain"),
+            "title": r.get("title"),
+            "company_size": r.get("company_size"),
+            "industry": r.get("industry"),
+            "founded_year": r.get("founded_year"),
+            "total_funding": r.get("total_funding"),
+            "funding_stage": r.get("funding_stage"),
+            "headcount_growth_6m": _safe_float(r.get("headcount_growth_6m")),
+            "headcount_growth_12m": _safe_float(r.get("headcount_growth_12m")),
+            "headcount_growth_24m": _safe_float(r.get("headcount_growth_24m")),
+            "publicly_traded": r.get("publicly_traded"),
+            "ticker": r.get("ticker"),
+            "company_description": r.get("company_description"),
         }
         for r in hi_rows
     ]
@@ -1360,122 +1279,64 @@ async def search_reviews(
     limit: int = Query(20, ge=1, le=100),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    from ..autonomous.tasks._b2b_shared import read_review_details
+
     pool = _pool_or_503()
-    conditions = [
-        "enrichment_status = 'enriched'",
-        "enriched_at > NOW() - make_interval(days => $1)",
-    ]
-    params: list = [window_days]
-    idx = 2
 
+    scoped_vendors: list[str] | None = None
     if _should_scope(user):
-        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
-        params.append(user.account_id)
-        idx += 1
-
-    # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score, churn_signals.intent_to_leave, reviewer_context.decision_maker, reviewer_context.role_level, buyer_authority.buying_stage, competitors_mentioned, quotable_phrases, positive_aspects, specific_complaints, reviewer_context.industry
-    # Migrate to: read_review_details() from _b2b_shared
-    if vendor_name:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-        params.append(vendor_name)
-        idx += 1
-
-    if pain_category:
-        conditions.append(f"enrichment->>'pain_category' = ${idx}")
-        params.append(pain_category)
-        idx += 1
-
-    if min_urgency is not None:
-        conditions.append(f"(enrichment->>'urgency_score')::numeric >= ${idx}")
-        params.append(min_urgency)
-        idx += 1
-
-    if company:
-        conditions.append(f"reviewer_company ILIKE '%' || ${idx} || '%'")
-        params.append(company)
-        idx += 1
-
-    # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave
-    # Migrate to: read_review_details() from _b2b_shared
-    if has_churn_intent is not None:
-        conditions.append(
-            f"(enrichment->'churn_signals'->>'intent_to_leave')::boolean = ${idx}"
+        rows = await pool.fetch(
+            "SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid",
+            user.account_id,
         )
-        params.append(has_churn_intent)
-        idx += 1
+        scoped_vendors = [r["vendor_name"] for r in rows]
 
-    if min_relevance is not None:
-        conditions.append(f"COALESCE(relevance_score, 0.5) >= ${idx}")
-        params.append(min_relevance)
-        idx += 1
-
-    if exclude_low_fidelity:
-        conditions.append("(low_fidelity IS NULL OR low_fidelity = false)")
-
-    conditions.append(_suppress_predicate('review'))
     capped = min(limit, 100)
-    params.append(capped)
-    where = " AND ".join(conditions)
-
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, churn_signals.intent_to_leave, reviewer_context.decision_maker, reviewer_context.role_level, buyer_authority.buying_stage, competitors_mentioned, quotable_phrases, positive_aspects, specific_complaints, reviewer_context.industry
-    # Migrate to: read_review_details() from _b2b_shared
-    rows = await pool.fetch(
-        f"""
-        SELECT id, vendor_name, product_category, reviewer_company,
-               source, reviewed_at, rating,
-               (enrichment->>'urgency_score')::numeric AS urgency_score,
-               enrichment->>'pain_category' AS pain_category,
-               (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
-               (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
-               enrichment->'reviewer_context'->>'role_level' AS role_level,
-               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
-               sentiment_direction,
-               enrichment->'competitors_mentioned' AS competitors_raw,
-               enrichment->'quotable_phrases' AS quotable_raw,
-               enrichment->'positive_aspects' AS positive_raw,
-               enrichment->'specific_complaints' AS complaints_raw,
-               enriched_at, reviewer_title, company_size_raw,
-               COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
-               relevance_score, author_churn_score,
-               low_fidelity, low_fidelity_reasons
-        FROM b2b_reviews
-        WHERE {where}
-        ORDER BY (enrichment->>'urgency_score')::numeric DESC
-        LIMIT ${idx}
-        """,
-        *params,
+    details = await read_review_details(
+        pool,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        scoped_vendors=scoped_vendors,
+        pain_category=pain_category,
+        min_urgency=min_urgency,
+        company=company,
+        has_churn_intent=has_churn_intent,
+        min_relevance=min_relevance,
+        exclude_low_fidelity=exclude_low_fidelity,
+        recency_column="enriched_at",
+        limit=capped,
     )
 
     reviews = [
         {
-            "id": str(r["id"]),
-            "vendor_name": r["vendor_name"],
-            "product_category": r["product_category"],
-            "reviewer_company": r["reviewer_company"],
-            "rating": _safe_float(r["rating"]),
-            "urgency_score": _safe_float(r["urgency_score"]),
-            "pain_category": r["pain_category"],
-            "intent_to_leave": r["intent_to_leave"],
-            "decision_maker": r["decision_maker"],
-            "source": r["source"],
-            "reviewed_at": str(r["reviewed_at"]) if r["reviewed_at"] else None,
-            "role_level": r["role_level"] if r["role_level"] != "unknown" else None,
-            "buying_stage": r["buying_stage"] if r["buying_stage"] != "unknown" else None,
-            "sentiment_direction": r["sentiment_direction"] if r["sentiment_direction"] != "unknown" else None,
-            "competitors_mentioned": _safe_json(r["competitors_raw"]) or [],
-            "quotable_phrases": _safe_json(r["quotable_raw"]) or [],
-            "positive_aspects": _safe_json(r["positive_raw"]) or [],
-            "specific_complaints": _safe_json(r["complaints_raw"]) or [],
-            "enriched_at": str(r["enriched_at"]) if r["enriched_at"] else None,
-            "reviewer_title": r["reviewer_title"],
-            "company_size": r["company_size_raw"],
-            "industry": r["industry"],
-            "relevance_score": _safe_float(r["relevance_score"]),
-            "author_churn_score": _safe_float(r["author_churn_score"]),
-            "low_fidelity": bool(r["low_fidelity"]) if r["low_fidelity"] is not None else False,
-            "low_fidelity_reasons": _safe_json(r["low_fidelity_reasons"]) or [],
+            "id": d.get("id"),
+            "vendor_name": d.get("vendor_name"),
+            "product_category": d.get("product_category"),
+            "reviewer_company": d.get("reviewer_company"),
+            "rating": d.get("rating"),
+            "urgency_score": d.get("urgency_score"),
+            "pain_category": d.get("pain_category"),
+            "intent_to_leave": d.get("intent_to_leave"),
+            "decision_maker": d.get("decision_maker"),
+            "source": d.get("source"),
+            "reviewed_at": str(d["reviewed_at"]) if d.get("reviewed_at") else None,
+            "role_level": d.get("role_level"),
+            "buying_stage": d.get("buying_stage"),
+            "sentiment_direction": d["sentiment_direction"] if d.get("sentiment_direction") != "unknown" else None,
+            "competitors_mentioned": d.get("competitors_mentioned") or [],
+            "quotable_phrases": d.get("quotable_phrases") or [],
+            "positive_aspects": d.get("positive_aspects") or [],
+            "specific_complaints": d.get("specific_complaints") or [],
+            "enriched_at": str(d["enriched_at"]) if d.get("enriched_at") else None,
+            "reviewer_title": d.get("reviewer_title"),
+            "company_size": d.get("company_size"),
+            "industry": d.get("industry"),
+            "relevance_score": d.get("relevance_score"),
+            "author_churn_score": d.get("author_churn_score"),
+            "low_fidelity": bool(d["low_fidelity"]) if d.get("low_fidelity") is not None else False,
+            "low_fidelity_reasons": d.get("low_fidelity_reasons") or [],
         }
-        for r in rows
+        for d in details
     ]
 
     return {"reviews": reviews, "count": len(reviews)}
@@ -3872,85 +3733,44 @@ async def export_reviews(
     window_days: int = Query(90, ge=1, le=3650),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    from ..autonomous.tasks._b2b_shared import read_review_details
+
     pool = _pool_or_503()
-    conditions = [
-        "enrichment_status = 'enriched'",
-        "enriched_at > NOW() - make_interval(days => $1)",
-    ]
-    params: list = [window_days]
-    idx = 2
 
+    scoped_vendors: list[str] | None = None
     if _should_scope(user):
-        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
-        params.append(user.account_id)
-        idx += 1
-
-    # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score, churn_signals.intent_to_leave, reviewer_context.decision_maker
-    # Migrate to: read_review_details() from _b2b_shared
-    if vendor_name:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-        params.append(vendor_name)
-        idx += 1
-
-    if pain_category:
-        conditions.append(f"enrichment->>'pain_category' = ${idx}")
-        params.append(pain_category)
-        idx += 1
-
-    if min_urgency is not None:
-        conditions.append(f"(enrichment->>'urgency_score')::numeric >= ${idx}")
-        params.append(min_urgency)
-        idx += 1
-
-    if company:
-        conditions.append(f"reviewer_company ILIKE '%' || ${idx} || '%'")
-        params.append(company)
-        idx += 1
-
-    # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave
-    # Migrate to: read_review_details() from _b2b_shared
-    if has_churn_intent is not None:
-        conditions.append(
-            f"(enrichment->'churn_signals'->>'intent_to_leave')::boolean = ${idx}"
+        vrows = await pool.fetch(
+            "SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid",
+            user.account_id,
         )
-        params.append(has_churn_intent)
-        idx += 1
+        scoped_vendors = [r["vendor_name"] for r in vrows]
 
-    conditions.append(_suppress_predicate('review'))
-    where = " AND ".join(conditions)
-
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, churn_signals.intent_to_leave, reviewer_context.decision_maker
-    # Migrate to: read_review_details() from _b2b_shared
-    rows = await pool.fetch(
-        f"""
-        SELECT vendor_name, product_category, reviewer_company,
-               rating,
-               (enrichment->>'urgency_score')::numeric AS urgency_score,
-               enrichment->>'pain_category' AS pain_category,
-               (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
-               (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
-               enriched_at
-        FROM b2b_reviews
-        WHERE {where}
-        ORDER BY (enrichment->>'urgency_score')::numeric DESC
-        LIMIT {EXPORT_ROW_LIMIT}
-        """,
-        *params,
+    details = await read_review_details(
+        pool,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        scoped_vendors=scoped_vendors,
+        pain_category=pain_category,
+        min_urgency=min_urgency,
+        company=company,
+        has_churn_intent=has_churn_intent,
+        recency_column="enriched_at",
+        limit=EXPORT_ROW_LIMIT,
     )
 
     data = [
         {
-            "vendor_name": r["vendor_name"],
-            "product_category": r["product_category"] or "",
-            "reviewer_company": r["reviewer_company"] or "",
-            "rating": _safe_float(r["rating"], ""),
-            "urgency_score": _safe_float(r["urgency_score"], ""),
-            "pain_category": r["pain_category"] or "",
-            "intent_to_leave": r["intent_to_leave"] if r["intent_to_leave"] is not None else "",
-            "decision_maker": r["decision_maker"] if r["decision_maker"] is not None else "",
-            "enriched_at": str(r["enriched_at"]) if r["enriched_at"] else "",
+            "vendor_name": d.get("vendor_name", ""),
+            "product_category": d.get("product_category") or "",
+            "reviewer_company": d.get("reviewer_company") or "",
+            "rating": d["rating"] if d.get("rating") is not None else "",
+            "urgency_score": d["urgency_score"] if d.get("urgency_score") is not None else "",
+            "pain_category": d.get("pain_category") or "",
+            "intent_to_leave": d["intent_to_leave"] if d.get("intent_to_leave") is not None else "",
+            "decision_maker": d["decision_maker"] if d.get("decision_maker") is not None else "",
+            "enriched_at": str(d["enriched_at"]) if d.get("enriched_at") else "",
         }
-        for r in rows
+        for d in details
     ]
 
     return _csv_response(data, "enriched_reviews.csv")
@@ -3968,77 +3788,40 @@ async def export_high_intent(
     window_days: int = Query(90, ge=1, le=3650),
     user: AuthUser | None = Depends(optional_auth),
 ):
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context.role_level, reviewer_context.decision_maker, pain_category, competitors_mentioned, contract_context.contract_value_signal, budget_signals.seat_count, use_case.lock_in_level, timeline.contract_end, buyer_authority.buying_stage
-    # Migrate to: read_high_intent_companies() from _b2b_shared
     pool = _pool_or_503()
-    conditions = [
-        "enrichment_status = 'enriched'",
-        "(enrichment->>'urgency_score')::numeric >= $1",
-        "reviewer_company IS NOT NULL AND reviewer_company != ''",
-        "enriched_at > NOW() - make_interval(days => $2)",
-    ]
-    params: list = [min_urgency, window_days]
-    idx = 3
+    scoped_vendors = await _get_scoped_vendors(pool, user)
 
-    if _should_scope(user):
-        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
-        params.append(user.account_id)
-        idx += 1
-
-    if vendor_name:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-        params.append(vendor_name)
-        idx += 1
-
-    conditions.append(_suppress_predicate('review'))
-    where = " AND ".join(conditions)
-
-    # DEPRECATED-ENRICHMENT-READ: reviewer_context.role_level, reviewer_context.decision_maker, urgency_score, pain_category, competitors_mentioned, contract_context.contract_value_signal, budget_signals.seat_count, use_case.lock_in_level, timeline.contract_end, buyer_authority.buying_stage
-    # Migrate to: read_high_intent_companies() from _b2b_shared
-    rows = await pool.fetch(
-        f"""
-        SELECT reviewer_company, vendor_name, product_category,
-               enrichment->'reviewer_context'->>'role_level' AS role_level,
-               (enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
-               (enrichment->>'urgency_score')::numeric AS urgency,
-               enrichment->>'pain_category' AS pain,
-               enrichment->'competitors_mentioned' AS alternatives,
-               enrichment->'contract_context'->>'contract_value_signal' AS value_signal,
-               CASE WHEN enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                    THEN (enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
-               enrichment->'use_case'->>'lock_in_level' AS lock_in_level,
-               enrichment->'timeline'->>'contract_end' AS contract_end,
-               enrichment->'buyer_authority'->>'buying_stage' AS buying_stage
-        FROM b2b_reviews
-        WHERE {where}
-        ORDER BY (enrichment->>'urgency_score')::numeric DESC
-        LIMIT {EXPORT_ROW_LIMIT}
-        """,
-        *params,
+    rows = await read_high_intent_companies(
+        pool,
+        min_urgency=min_urgency,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        scoped_vendors=scoped_vendors,
+        limit=EXPORT_ROW_LIMIT,
     )
 
     data = []
     for r in rows:
-        alternatives = _safe_json(r["alternatives"])
+        alternatives = r.get("alternatives")
         if isinstance(alternatives, list):
             alt_str = "; ".join(str(a) for a in alternatives)
         else:
             alt_str = str(alternatives) if alternatives else ""
 
         data.append({
-            "company": r["reviewer_company"],
-            "vendor": r["vendor_name"],
-            "category": r["product_category"] or "",
-            "role_level": r["role_level"] or "",
-            "decision_maker": r["is_dm"] if r["is_dm"] is not None else "",
-            "urgency": _safe_float(r["urgency"], ""),
-            "pain": r["pain"] or "",
+            "company": r.get("company") or "",
+            "vendor": r.get("vendor") or "",
+            "category": r.get("category") or "",
+            "role_level": r.get("role_level") or "",
+            "decision_maker": r.get("decision_maker") if r.get("decision_maker") is not None else "",
+            "urgency": _safe_float(r.get("urgency"), ""),
+            "pain": r.get("pain") or "",
             "alternatives": alt_str,
-            "contract_signal": r["value_signal"] or "",
-            "seat_count": r["seat_count"] if r["seat_count"] is not None else "",
-            "lock_in_level": r["lock_in_level"] or "",
-            "contract_end": r["contract_end"] or "",
-            "buying_stage": r["buying_stage"] or "",
+            "contract_signal": r.get("contract_signal") or "",
+            "seat_count": r.get("seat_count") if r.get("seat_count") is not None else "",
+            "lock_in_level": r.get("lock_in_level") or "",
+            "contract_end": r.get("contract_end") or "",
+            "buying_stage": r.get("buying_stage") or "",
         })
 
     return _csv_response(data, "high_intent_leads.csv")
@@ -5332,8 +5115,8 @@ async def _list_accounts_in_motion_from_reviews(
     limit: int,
     user: AuthUser | None,
 ):
-    # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave, urgency_score, buyer_authority.role_type, buyer_authority.buying_stage, buyer_authority.has_budget_authority, pain_categories, quotable_phrases, competitors_mentioned, churn_signals.contract_signal, reviewer_context.industry
-    # Migrate to: read_high_intent_companies() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: churn_signals, urgency_score, buyer_authority, pain_categories, quotable_phrases, competitors_mentioned, reviewer_context
+    # Reason: DISTINCT ON per-company dedup + intent_to_leave filter + budget_authority — structurally unique
     conditions = [
         "r.enrichment_status = 'enriched'",
         "(r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true",
@@ -5351,8 +5134,6 @@ async def _list_accounts_in_motion_from_reviews(
         )
         params.append(user.account_id)
         idx += 1
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, buyer_authority.role_type, buyer_authority.buying_stage, buyer_authority.has_budget_authority, pain_categories, quotable_phrases, competitors_mentioned, churn_signals.contract_signal, reviewer_context.industry
-    # Migrate to: read_high_intent_companies() from _b2b_shared
     rows = await pool.fetch(
         f"""
         SELECT DISTINCT ON (LOWER(r.reviewer_company))
