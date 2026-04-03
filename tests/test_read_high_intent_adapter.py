@@ -262,6 +262,25 @@ async def test_ineligible_company_filtered_out():
 
 
 @pytest.mark.asyncio
+async def test_scoped_vendors_empty_returns_zero_rows():
+    """Empty scoped_vendors means scoped user with no tracked vendors = zero results."""
+    pool = FakePool([_make_db_row()])
+    results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, scoped_vendors=[])
+    assert results == []
+    pool.fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scoped_vendors_none_means_unscoped():
+    """scoped_vendors=None means no scoping (admin/public) — query runs, no vendor_name ANY filter."""
+    pool = FakePool([_make_db_row()])
+    results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, scoped_vendors=None)
+    assert len(results) == 1
+    sql = pool.fetch.call_args[0][0]
+    assert "r.vendor_name = ANY(" not in sql
+
+
+@pytest.mark.asyncio
 async def test_null_urgency_defaults_to_zero():
     pool = FakePool([_make_db_row(urgency=None)])
     results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30)

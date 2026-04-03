@@ -3753,7 +3753,9 @@ async def _fetch_high_intent_companies(
         extra_where += f"\n          AND r.vendor_name ILIKE '%' || ${idx} || '%'"
         params.append(vendor_name)
         idx += 1
-    if scoped_vendors:
+    if scoped_vendors is not None:
+        if not scoped_vendors:
+            return []  # scoped user with no tracked vendors = zero results
         extra_where += f"\n          AND r.vendor_name = ANY(${idx}::text[])"
         params.append(scoped_vendors)
         idx += 1
@@ -8800,7 +8802,9 @@ async def read_review_details(
     params: list = [window_days]
     idx = 2
 
-    if scoped_vendors:
+    if scoped_vendors is not None:
+        if not scoped_vendors:
+            return []  # scoped user with no tracked vendors = zero results
         conditions.append(f"r.vendor_name = ANY(${idx}::text[])")
         params.append(scoped_vendors)
         idx += 1
