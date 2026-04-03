@@ -8768,6 +8768,7 @@ async def read_review_details(
     min_relevance: float | None = None,
     exclude_low_fidelity: bool = False,
     content_type: str | None = None,
+    recency_column: str = "enriched_at",
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Shared adapter for review detail reads.
@@ -8788,10 +8789,13 @@ async def read_review_details(
     """
     from atlas_brain.services.b2b.corrections import suppress_predicate
 
+    if recency_column == "enriched_at":
+        recency_expr = "r.enriched_at"
+    else:
+        recency_expr = "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)"
     conditions = [
         "r.enrichment_status = 'enriched'",
-        "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)"
-        " > NOW() - make_interval(days => $1)",
+        f"{recency_expr} > NOW() - make_interval(days => $1)",
     ]
     params: list = [window_days]
     idx = 2
@@ -8874,7 +8878,7 @@ async def read_review_details(
 
     results = []
     for r in rows:
-        urg = 0.0
+        urg = None
         if r["urgency_score"] is not None:
             try:
                 urg = float(r["urgency_score"])
@@ -8891,8 +8895,8 @@ async def read_review_details(
             "enriched_at": r["enriched_at"],
             "urgency_score": urg,
             "pain_category": r["pain_category"],
-            "intent_to_leave": bool(r["intent_to_leave"]) if r["intent_to_leave"] is not None else False,
-            "decision_maker": bool(r["decision_maker"]) if r["decision_maker"] is not None else False,
+            "intent_to_leave": bool(r["intent_to_leave"]) if r["intent_to_leave"] is not None else None,
+            "decision_maker": bool(r["decision_maker"]) if r["decision_maker"] is not None else None,
             "role_level": r["role_level"] if r["role_level"] != "unknown" else None,
             "buying_stage": r["buying_stage"] if r["buying_stage"] != "unknown" else None,
             "sentiment_direction": r["sentiment_direction"],
@@ -8907,7 +8911,7 @@ async def read_review_details(
             "specific_complaints": _safe_json(r["complaints_raw"]),
             "relevance_score": float(r["relevance_score"]) if r["relevance_score"] is not None else None,
             "author_churn_score": float(r["author_churn_score"]) if r["author_churn_score"] is not None else None,
-            "low_fidelity": bool(r["low_fidelity"]) if r["low_fidelity"] is not None else False,
+            "low_fidelity": bool(r["low_fidelity"]) if r["low_fidelity"] is not None else None,
             "low_fidelity_reasons": _safe_json(r["low_fidelity_reasons"]),
         })
     return results

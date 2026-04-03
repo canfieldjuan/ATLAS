@@ -96,10 +96,10 @@ async def test_urgency_is_float():
 
 
 @pytest.mark.asyncio
-async def test_null_urgency_defaults_to_zero():
+async def test_null_urgency_stays_none():
     pool = FakePool([_make_db_row(urgency_score=None)])
     results = await read_review_details(pool, window_days=30)
-    assert results[0]["urgency_score"] == 0.0
+    assert results[0]["urgency_score"] is None
 
 
 @pytest.mark.asyncio
@@ -216,6 +216,25 @@ async def test_limit_in_sql():
 
 
 @pytest.mark.asyncio
+async def test_default_recency_uses_enriched_at():
+    """Default recency filters on enriched_at only (MCP semantics)."""
+    pool = FakePool([])
+    await read_review_details(pool, window_days=30)
+    sql = pool.fetch.call_args[0][0]
+    assert "r.enriched_at > NOW()" in sql
+    assert "COALESCE" not in sql.split("WHERE")[1].split("ORDER")[0]
+
+
+@pytest.mark.asyncio
+async def test_coalesce_recency_column():
+    """recency_column='coalesce' uses COALESCE(reviewed_at, imported_at, enriched_at)."""
+    pool = FakePool([])
+    await read_review_details(pool, window_days=30, recency_column="coalesce")
+    sql = pool.fetch.call_args[0][0]
+    assert "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)" in sql
+
+
+@pytest.mark.asyncio
 async def test_empty_result_set():
     pool = FakePool([])
     results = await read_review_details(pool, window_days=30)
@@ -223,13 +242,24 @@ async def test_empty_result_set():
 
 
 @pytest.mark.asyncio
-async def test_boolean_fields_coerced():
+async def test_null_booleans_stay_none():
+    """Null enrichment signals preserve None so consumers can distinguish missing from negative."""
     pool = FakePool([_make_db_row(intent_to_leave=None, decision_maker=None, low_fidelity=None)])
     results = await read_review_details(pool, window_days=30)
     r = results[0]
-    assert r["intent_to_leave"] is False
-    assert r["decision_maker"] is False
-    assert r["low_fidelity"] is False
+    assert r["intent_to_leave"] is None
+    assert r["decision_maker"] is None
+    assert r["low_fidelity"] is None
+
+
+@pytest.mark.asyncio
+async def test_true_booleans_stay_true():
+    pool = FakePool([_make_db_row(intent_to_leave=True, decision_maker=True, low_fidelity=True)])
+    results = await read_review_details(pool, window_days=30)
+    r = results[0]
+    assert r["intent_to_leave"] is True
+    assert r["decision_maker"] is True
+    assert r["low_fidelity"] is True
 
 
 @pytest.mark.asyncio
