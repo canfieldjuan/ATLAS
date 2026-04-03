@@ -1,0 +1,45 @@
+Juan Canfield
+Effingham, IL
+(630) 750-3509 | canfieldjuan24@gmail.com
+LinkedIn: https://www.linkedin.com/in/juan-canfield-9b2a733b5/
+GitHub: https://github.com/canfieldjuan/atlas-portfolio
+Authorized to work in the U.S.
+
+Summary
+AI systems builder with 3+ years of hands-on experience shipping agentic workflows, LLM integrations, and internal automation systems. Experienced in building practical AI tools across research, marketing-adjacent content workflows, sales enablement, and operations. Strong builder mentality with a focus on fast iteration, AI-first development, API integrations, workflow orchestration, and turning AI into a real operator inside a business.
+
+Selected Project Experience
+
+ATLAS / Churn Signals
+AI reasoning, automation, and churn-intelligence platform
+GitHub Project: https://github.com/canfieldjuan/atlas-portfolio
+
+- Built AI-first workflows across research, sales enablement, internal operations, and content generation using structured LLM orchestration, validation, and workflow automation.
+- Designed a synthesis-first agentic reasoning pipeline across 40,000+ raw reviews, 30,000+ enriched reviews, and 56 vendors to generate reusable vendor and cross-vendor intelligence.
+- Built downstream sales and GTM outputs including battle cards, challenger briefs, account-intelligence views, and tenant reports for live business workflows.
+- Developed content and marketing-adjacent automation workflows for blog generation, review, quality gating, prepublish preview, and monetization visibility.
+- Implemented observability, retry handling, validation-result persistence, and operator review systems so AI outputs could be audited, corrected, and trusted in production.
+- Added aggressive prompt caching across large structured synthesis calls, reducing repeated token cost by ~70% on warmed runs.
+- Worked in an AI-first, rapid-iteration style across Python, TypeScript, React, PostgreSQL, and multi-model LLM integrations to ship functional systems quickly and refine them from real usage.
+
+Experience
+
+AI/ML Solutions Architect
+FineTune Lab.AI | Aug 2023 - Present
+
+- Built and shipped production AI workflows integrating multiple LLM providers, custom inference infrastructure, and full-stack product systems.
+- Designed no-code and low-code automation flows that let users train, evaluate, and deploy AI models without engineering-heavy handoffs.
+- Architected AI knowledge and retrieval systems using vector search, embeddings, and structured data pipelines for research and workflow automation.
+- Developed monitoring, analytics, and alerting systems for production AI applications, improving visibility into failures, anomalies, and model behavior.
+- Built repeatable model evaluation, fine-tuning, and deployment workflows that turned experimentation into usable internal systems.
+- Engineered scalable serving support across vLLM, Hugging Face, Ollama, and custom inference environments.
+- Shipped real-time AI product experiences with streaming, session management, automated tagging, and application workflow logic.
+- Designed and optimized backend and data architecture with PostgreSQL and Supabase, including Row-Level Security, query tuning, and scalable data models.
+
+Skills
+LLMs, Prompt Engineering, AI Agents, Agentic Workflows, Workflow Automation, RAG, Knowledge Systems, AI Copilots, Model Evaluation, Fine-Tuning, OpenAI API, Claude, OpenRouter, LangChain, vLLM, Ollama, Hugging Face, Python, JavaScript, TypeScript, SQL, Node.js, React, PostgreSQL, Supabase, Redis, Docker, CI/CD, API Integrations, System Design
+
+Education
+
+Associate in Computer Aided Drafting and Design
+ITT Technical Institute | Orland Park, IL
