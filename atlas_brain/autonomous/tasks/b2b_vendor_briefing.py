@@ -62,7 +62,7 @@ def _apply_synthesis_view_to_briefing(
 
     from ._b2b_synthesis_reader import inject_synthesis_freshness
 
-    context = view.consumer_context("vendor_briefing")
+    context = view.filtered_consumer_context("vendor_briefing")
     contracts = context.get("reasoning_contracts") or {}
     vendor_core = context.get("vendor_core_reasoning") or {}
     displacement = context.get("displacement_reasoning") or {}
@@ -165,6 +165,10 @@ def _apply_synthesis_view_to_briefing(
     if contract_gaps:
         briefing["reasoning_contract_gaps"] = contract_gaps
         used = True
+    section_disclaimers = context.get("reasoning_section_disclaimers")
+    if isinstance(section_disclaimers, dict) and section_disclaimers:
+        briefing["reasoning_section_disclaimers"] = section_disclaimers
+        used = True
 
     inject_synthesis_freshness(
         briefing,
@@ -215,6 +219,7 @@ def _apply_reasoning_synthesis_to_briefing(
         "reasoning_witness_highlights",
         "reasoning_reference_ids",
         "reasoning_contract_gaps",
+        "reasoning_section_disclaimers",
         "reasoning_source",
         "category_council",
     ):

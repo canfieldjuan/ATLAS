@@ -337,6 +337,9 @@ def _inject_reasoning_campaign_context(
     reference_ids = consumer_context.get("reference_ids")
     if isinstance(reference_ids, dict) and reference_ids:
         target["reasoning_reference_ids"] = reference_ids
+    disclaimers = consumer_context.get("reasoning_section_disclaimers")
+    if isinstance(disclaimers, dict) and disclaimers:
+        target["reasoning_section_disclaimers"] = disclaimers
 
 
 def _campaign_specificity_audit(
@@ -2390,7 +2393,7 @@ async def _generate_vendor_campaigns(
         if vendor_reasoning is not None:
             _inject_reasoning_campaign_context(
                 vendor_ctx,
-                vendor_reasoning.consumer_context("campaign"),
+                vendor_reasoning.filtered_consumer_context("campaign"),
             )
             cn = vendor_reasoning.section("causal_narrative")
             wedge = vendor_reasoning.primary_wedge

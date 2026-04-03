@@ -1869,6 +1869,20 @@ def test_briefing_context_surfaces_sanitized_reasoning_anchor_examples():
     assert context["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
 
 
+def test_inject_reasoning_campaign_context_surfaces_section_disclaimers():
+    target = {}
+    mod._inject_reasoning_campaign_context(
+        target,
+        {
+            "reasoning_section_disclaimers": {
+                "timing_intelligence": "Timing guidance is based on limited direct evidence.",
+            },
+        },
+    )
+
+    assert target["reasoning_section_disclaimers"]["timing_intelligence"]
+
+
 # ---------------------------------------------------------------------------
 # Phase 5: reasoning_context enrichment
 # ---------------------------------------------------------------------------

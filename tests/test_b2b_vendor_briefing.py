@@ -294,6 +294,31 @@ def test_apply_reasoning_synthesis_to_briefing_surfaces_anchor_examples_and_refe
     assert briefing["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
 
 
+def test_apply_reasoning_synthesis_to_briefing_surfaces_section_disclaimers():
+    briefing = {}
+    feed_entry = {
+        "reasoning_contracts": {
+            "schema_version": "v1",
+            "vendor_core_reasoning": {
+                "schema_version": "v1",
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "high",
+                },
+                "timing_intelligence": {
+                    "confidence": "low",
+                    "best_timing_window": "Q2 renewal",
+                },
+            },
+        },
+    }
+
+    used = briefing_mod._apply_reasoning_synthesis_to_briefing(briefing, feed_entry)
+
+    assert used is True
+    assert briefing["reasoning_section_disclaimers"]["timing_intelligence"]
+
+
 def test_apply_reasoning_synthesis_to_briefing_does_not_backfill_missing_explicit_contracts():
     briefing = {}
     feed_entry = {

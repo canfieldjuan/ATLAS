@@ -273,6 +273,13 @@ async def test_load_pool_layers_for_blog_injects_anchor_context_and_claim_plan(m
                 "reference_ids": _blog_anchor_context()["reasoning_reference_ids"],
             }
 
+        def filtered_consumer_context(self, consumer):
+            context = self.consumer_context(consumer)
+            context["reasoning_section_disclaimers"] = {
+                "timing_intelligence": "Timing guidance is based on limited direct evidence.",
+            }
+            return context
+
     monkeypatch.setattr(
         blog_mod,
         "fetch_all_pool_layers",
@@ -299,6 +306,7 @@ async def test_load_pool_layers_for_blog_injects_anchor_context_and_claim_plan(m
     assert anchor["excerpt_text"].startswith("a customer said Zendesk")
     assert "reviewer_company" not in anchor
     assert data["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
+    assert data["reasoning_section_disclaimers"]["timing_intelligence"]
     assert data["blog_claim_plan"]["primary_thesis"] == "Pricing pressure is driving the story."
     assert data["blog_claim_plan"]["timing_hook"] == "Q2 renewal"
 

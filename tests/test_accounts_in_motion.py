@@ -879,6 +879,51 @@ class TestBuildVendorAggregate:
         assert "smb contracts" in agg["segment_targeting_summary"]
         assert "vendor_core_reasoning" not in agg
 
+    def test_suppressed_account_reasoning_is_not_attached(self):
+        from atlas_brain.autonomous.tasks._b2b_synthesis_reader import SynthesisView
+
+        view = SynthesisView(
+            "Zendesk",
+            {
+                "reasoning_contracts": {
+                    "schema_version": "v1",
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "pricing_shock",
+                            "confidence": "high",
+                            "summary": "Pricing pressure is escalating.",
+                            "data_gaps": [],
+                            "citations": [],
+                        },
+                    },
+                    "account_reasoning": {
+                        "confidence": "insufficient",
+                        "data_gaps": ["Section missing from model output"],
+                        "top_accounts": [],
+                    },
+                },
+            },
+            schema_version="v2",
+            as_of_date=date(2026, 3, 31),
+        )
+
+        agg = _build_vendor_aggregate(
+            "Zendesk",
+            [self._make_account()],
+            category="Helpdesk",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+            synthesis_views={"Zendesk": view},
+        )
+
+        assert "account_reasoning" not in agg.get("reasoning_contracts", {})
+        assert "account_reasoning:insufficient" in agg["reasoning_contract_gaps"]
+        assert "account_reasoning:suppressed" in agg["reasoning_contract_gaps"]
+
     def test_empty_accounts(self):
         """Vendor with no accounts still builds a valid aggregate."""
         agg = _build_vendor_aggregate(

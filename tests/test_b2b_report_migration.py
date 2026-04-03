@@ -142,6 +142,73 @@ class TestGovernanceFieldsInReportEntries:
         assert "metric_ledger" in entry
         assert entry["metric_ledger"][0]["label"] == "total_reviews"
 
+    def test_suppressed_account_reasoning_removed_from_scorecard_contracts(self):
+        entry: dict[str, Any] = {"vendor": "TestVendor"}
+        view = SynthesisView(
+            "TestVendor",
+            {
+                "reasoning_contracts": {
+                    "schema_version": "v1",
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "summary": "Pricing pressure is acute after Q1 hike.",
+                            "data_gaps": [],
+                            "citations": [],
+                        },
+                    },
+                    "account_reasoning": {
+                        "confidence": "insufficient",
+                        "data_gaps": ["Section missing from model output"],
+                        "top_accounts": [],
+                    },
+                },
+            },
+            schema_version="v2",
+            as_of_date=date(2026, 3, 28),
+        )
+        _attach_synthesis_contracts_to_report_entry(
+            entry, view, consumer_name="vendor_scorecard",
+            requested_as_of=date(2026, 3, 28), include_displacement=True,
+        )
+
+        assert "account_reasoning" not in entry["reasoning_contracts"]
+        assert "account_reasoning:insufficient" in entry["reasoning_contract_gaps"]
+        assert "account_reasoning:suppressed" in entry["reasoning_contract_gaps"]
+
+    def test_low_confidence_sections_surface_disclaimers(self):
+        entry: dict[str, Any] = {"vendor": "TestVendor"}
+        view = SynthesisView(
+            "TestVendor",
+            {
+                "reasoning_contracts": {
+                    "schema_version": "v1",
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "summary": "Pricing pressure is acute after Q1 hike.",
+                            "data_gaps": [],
+                            "citations": [],
+                        },
+                        "timing_intelligence": {
+                            "confidence": "low",
+                            "best_timing_window": "Q2 renewal",
+                        },
+                    },
+                },
+            },
+            schema_version="v2",
+            as_of_date=date(2026, 3, 28),
+        )
+        _attach_synthesis_contracts_to_report_entry(
+            entry, view, consumer_name="vendor_scorecard",
+            requested_as_of=date(2026, 3, 28), include_displacement=True,
+        )
+
+        assert entry["reasoning_section_disclaimers"]["timing_intelligence"]
+
     def test_reasoning_source_set(self):
         entry: dict[str, Any] = {"vendor": "TestVendor"}
         view = _make_view_with_governance()

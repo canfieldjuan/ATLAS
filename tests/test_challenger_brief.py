@@ -859,6 +859,47 @@ class TestBuildChallengerBrief:
         assert brief["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
         assert brief["incumbent_profile"]["reasoning_anchor_examples"]["outlier_or_named_account"][0]["reviewer_company"] == "Hack Club"
 
+    def test_build_brief_surfaces_reasoning_section_disclaimers(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "schema_version": "2.1",
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                        },
+                        "timing_intelligence": {
+                            "confidence": "low",
+                            "best_timing_window": "Before renewal",
+                        },
+                    },
+                    "displacement_reasoning": {
+                        "competitive_reframes": {"confidence": "medium"},
+                    },
+                },
+            },
+            "Zendesk",
+        )
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            incumbent_evidence_vault=None,
+            churn_signal=None,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        assert brief["reasoning_section_disclaimers"]["timing_intelligence"]
+        assert brief["incumbent_profile"]["reasoning_section_disclaimers"]["timing_intelligence"]
+
     def test_empty_synthesis_view_does_not_claim_reasoning_source(self):
         """Presence of a synthesis row alone should not mark the brief as synthesis-backed."""
         synthesis_view = load_synthesis_view(

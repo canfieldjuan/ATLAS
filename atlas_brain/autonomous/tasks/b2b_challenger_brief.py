@@ -1409,7 +1409,7 @@ def _build_challenger_brief(
         from ._b2b_synthesis_reader import (
             inject_synthesis_freshness,
         )
-        consumer_context = incumbent_synthesis_view.consumer_context("challenger_brief")
+        consumer_context = incumbent_synthesis_view.filtered_consumer_context("challenger_brief")
         reasoning_contracts = consumer_context.get("reasoning_contracts") or {}
         vendor_core_reasoning = (
             consumer_context.get("vendor_core_reasoning")
@@ -1504,6 +1504,9 @@ def _build_challenger_brief(
         reasoning_contract_gaps = contract_gaps
         if contract_gaps:
             incumbent_section["reasoning_contract_gaps"] = contract_gaps
+        section_disclaimers = consumer_context.get("reasoning_section_disclaimers")
+        if isinstance(section_disclaimers, dict) and section_disclaimers:
+            incumbent_section["reasoning_section_disclaimers"] = section_disclaimers
         if reasoning_anchor_examples:
             incumbent_section["reasoning_anchor_examples"] = reasoning_anchor_examples
         if reasoning_witness_highlights:
@@ -1807,6 +1810,14 @@ def _build_challenger_brief(
         )
     if reasoning_contract_gaps:
         result["reasoning_contract_gaps"] = reasoning_contract_gaps
+    if used_reasoning_synthesis:
+        section_disclaimers = (
+            incumbent_section.get("reasoning_section_disclaimers")
+            if isinstance(incumbent_section, dict)
+            else None
+        )
+        if isinstance(section_disclaimers, dict) and section_disclaimers:
+            result["reasoning_section_disclaimers"] = section_disclaimers
     if battle_card_metadata:
         if battle_card_metadata.get("battle_card_date"):
             result["battle_card_date"] = battle_card_metadata["battle_card_date"]

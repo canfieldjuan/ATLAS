@@ -358,6 +358,12 @@ class SynthesisView:
                     return nested
             if self.has_explicit_contracts:
                 return {}
+        if name in ("category_reasoning", "account_reasoning", "evidence_governance"):
+            top_level = contracts.get(name)
+            if isinstance(top_level, dict):
+                return top_level
+            if self.has_explicit_contracts:
+                return {}
         val = self.raw.get(name)
         if isinstance(val, dict):
             return val
@@ -374,7 +380,11 @@ class SynthesisView:
         Checks both synthesis confidence AND evidence-engine suppression rules
         when vendor_evidence is provided.
         """
-        if self.confidence(section) == "insufficient":
+        sec = self.section(section)
+        conf = ""
+        if isinstance(sec, dict):
+            conf = str(sec.get("confidence") or "").strip().lower()
+        if conf == "insufficient":
             return True
         if vendor_evidence is not None:
             from ...reasoning.evidence_engine import get_evidence_engine
@@ -388,7 +398,11 @@ class SynthesisView:
 
         Checks both synthesis confidence AND evidence-engine degrade rules.
         """
-        if self.confidence(section) == "low":
+        sec = self.section(section)
+        conf = ""
+        if isinstance(sec, dict):
+            conf = str(sec.get("confidence") or "").strip().lower()
+        if conf == "low":
             return True
         if vendor_evidence is not None:
             from ...reasoning.evidence_engine import get_evidence_engine
@@ -681,6 +695,66 @@ class SynthesisView:
             context["packet_artifacts"] = self.packet_artifacts
         return context
 
+    def filtered_consumer_context(self, consumer: str) -> dict[str, Any]:
+        """Consumer context with suppression and flagging applied.
+
+        - Sections with confidence="insufficient" are removed entirely
+        - Sections with confidence="low" get surfaced in reasoning_section_disclaimers
+        - Gaps include both structural gaps and suppressed sections
+
+        Consumers should prefer this over raw consumer_context() for
+        any outbound/rendered content.
+        """
+        context = self.consumer_context(consumer)
+        contracts = context.get("reasoning_contracts") or {}
+        suppressed: list[str] = []
+        disclaimers: dict[str, str] = {}
+
+        # Sections that map to sub-keys of top-level contract blocks
+        _SECTION_MAP = {
+            "causal_narrative": ("vendor_core_reasoning", "causal_narrative"),
+            "segment_playbook": ("vendor_core_reasoning", "segment_playbook"),
+            "timing_intelligence": ("vendor_core_reasoning", "timing_intelligence"),
+            "competitive_reframes": ("displacement_reasoning", "competitive_reframes"),
+            "migration_proof": ("displacement_reasoning", "migration_proof"),
+            "category_reasoning": ("category_reasoning", None),
+            "account_reasoning": ("account_reasoning", None),
+        }
+
+        for section_name, (parent_key, child_key) in _SECTION_MAP.items():
+            if self.should_suppress(section_name):
+                suppressed.append(section_name)
+                # Remove from contracts
+                parent = contracts.get(parent_key)
+                if child_key and isinstance(parent, dict):
+                    parent.pop(child_key, None)
+                elif child_key is None:
+                    contracts.pop(parent_key, None)
+                    context.pop(parent_key, None)
+            elif self.should_flag(section_name):
+                disclaimer = self.get_disclaimer(section_name)
+                if disclaimer:
+                    disclaimers[section_name] = disclaimer
+                else:
+                    disclaimers[section_name] = (
+                        f"Low confidence: {section_name} is based on limited evidence"
+                    )
+
+        if suppressed:
+            gaps = context.get("reasoning_contract_gaps") or []
+            for s in suppressed:
+                gap_entry = f"{s}:suppressed"
+                if gap_entry not in gaps:
+                    gaps.append(gap_entry)
+            context["reasoning_contract_gaps"] = gaps
+            context["_suppressed_sections"] = suppressed
+
+        if disclaimers:
+            context["reasoning_section_disclaimers"] = disclaimers
+            context["_section_disclaimers"] = disclaimers
+
+        return context
+
     def materialized_contracts(self) -> dict[str, Any]:
         """Return contract-first reasoning blocks with flat-section fallback.
 
@@ -882,7 +956,7 @@ def inject_synthesis_into_card(
     If ``vendor_evidence`` is provided, evidence-engine suppression and
     conclusion gating rules are applied to sections and injected into the card.
     """
-    context = view.consumer_context("battle_card")
+    context = view.filtered_consumer_context("battle_card")
     if materialize_flat_sections:
         for section in _REQUIRED_SECTIONS:
             if not view.should_suppress(section, vendor_evidence):

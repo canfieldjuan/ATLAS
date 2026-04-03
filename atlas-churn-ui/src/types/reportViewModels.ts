@@ -304,6 +304,7 @@ export interface BattleCardViewModel {
   evidence_depth_warning?: string
   evidence_conclusions: string[]
   low_confidence_sections: string[]
+  reasoning_section_disclaimers?: Record<string, string>
   falsification_conditions: string[]
   uncertainty_sources: string[]
   // Operational signals

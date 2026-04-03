@@ -953,28 +953,37 @@ def _build_vendor_aggregate(
         view = (synthesis_views or {}).get(_normalize_company_key(vendor))
     if view is not None:
         from ._b2b_synthesis_reader import (
-            contract_gaps_for_consumer,
             inject_synthesis_freshness,
         )
-        reasoning_contracts: dict[str, Any] = {}
-        materialized_contracts = getattr(view, "materialized_contracts", None)
-        if callable(materialized_contracts):
-            reasoning_contracts = materialized_contracts() or {}
+        context_getter = getattr(view, "filtered_consumer_context", None)
+        if callable(context_getter):
+            context = context_getter("accounts_in_motion")
         else:
-            for name in (
-                "vendor_core_reasoning",
-                "displacement_reasoning",
-                "category_reasoning",
-                "account_reasoning",
-            ):
-                contract = view.contract(name)
-                if contract:
-                    reasoning_contracts[name] = contract
-            if reasoning_contracts:
-                reasoning_contracts["schema_version"] = "v1"
+            contracts_getter = getattr(view, "consumer_context", None)
+            context = contracts_getter("accounts_in_motion") if callable(contracts_getter) else {}
+
+        reasoning_contracts = context.get("reasoning_contracts") or {}
+        if not reasoning_contracts:
+            materialized_contracts = getattr(view, "materialized_contracts", None)
+            if callable(materialized_contracts):
+                reasoning_contracts = materialized_contracts() or {}
+            else:
+                for name in (
+                    "vendor_core_reasoning",
+                    "displacement_reasoning",
+                    "category_reasoning",
+                    "account_reasoning",
+                ):
+                    contract = view.contract(name)
+                    if contract:
+                        reasoning_contracts[name] = contract
+                if reasoning_contracts:
+                    reasoning_contracts["schema_version"] = "v1"
         if reasoning_contracts:
             result["reasoning_contracts"] = reasoning_contracts
-            reference_ids = getattr(view, "reference_ids", None)
+            reference_ids = context.get("reference_ids")
+            if not isinstance(reference_ids, dict):
+                reference_ids = getattr(view, "reference_ids", None)
             if isinstance(reference_ids, dict) and reference_ids:
                 result["reference_ids"] = reference_ids
             vendor_core = reasoning_contracts.get("vendor_core_reasoning") or {}
@@ -1024,9 +1033,12 @@ def _build_vendor_aggregate(
             view,
             requested_as_of=requested_as_of,
         )
-        contract_gaps = contract_gaps_for_consumer(view, "accounts_in_motion")
+        contract_gaps = context.get("reasoning_contract_gaps") or []
         if contract_gaps:
             result["reasoning_contract_gaps"] = contract_gaps
+        section_disclaimers = context.get("reasoning_section_disclaimers")
+        if isinstance(section_disclaimers, dict) and section_disclaimers:
+            result["reasoning_section_disclaimers"] = section_disclaimers
 
         # Phase 3 governance fields
         wts = getattr(view, "why_they_stay", None)

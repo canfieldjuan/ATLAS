@@ -182,7 +182,11 @@ def _overlay_reasoning_detail_from_view(
     if entry.get("uncertainty_sources"):
         target["reasoning_uncertainty_sources"] = entry["uncertainty_sources"]
 
-    context = view.consumer_context("vendor_scorecard")
+    context_getter = getattr(view, "filtered_consumer_context", None)
+    if callable(context_getter):
+        context = context_getter("vendor_scorecard")
+    else:
+        context = view.consumer_context("vendor_scorecard")
     contracts = context.get("reasoning_contracts")
     if isinstance(contracts, dict) and contracts:
         target["reasoning_contracts"] = contracts
@@ -192,6 +196,9 @@ def _overlay_reasoning_detail_from_view(
     contract_gaps = context.get("reasoning_contract_gaps")
     if isinstance(contract_gaps, list) and contract_gaps:
         target["reasoning_contract_gaps"] = contract_gaps
+    section_disclaimers = context.get("reasoning_section_disclaimers")
+    if isinstance(section_disclaimers, dict) and section_disclaimers:
+        target["reasoning_section_disclaimers"] = section_disclaimers
     if getattr(view, "meta", None):
         target["evidence_window"] = view.meta
     primary_wedge = getattr(view, "primary_wedge", None)

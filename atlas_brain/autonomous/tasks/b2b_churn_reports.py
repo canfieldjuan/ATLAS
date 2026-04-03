@@ -409,12 +409,18 @@ def _attach_synthesis_contracts_to_report_entry(
     if not isinstance(entry, dict) or view is None:
         return
     from ._b2b_synthesis_reader import (
-        contract_gaps_for_consumer,
         inject_synthesis_freshness,
     )
 
+    context_getter = getattr(view, "filtered_consumer_context", None)
+    if callable(context_getter):
+        context = context_getter(consumer_name)
+    else:
+        consumer_context = getattr(view, "consumer_context", None)
+        context = consumer_context(consumer_name) if callable(consumer_context) else {}
+
     contracts: dict[str, Any] = {}
-    materialized = view.materialized_contracts()
+    materialized = context.get("reasoning_contracts") or view.materialized_contracts()
     vendor_core = materialized.get("vendor_core_reasoning")
     if vendor_core:
         contracts["vendor_core_reasoning"] = vendor_core
@@ -443,7 +449,9 @@ def _attach_synthesis_contracts_to_report_entry(
             view.reasoning_contracts.get("schema_version") or "v1"
         )
         entry["reasoning_contracts"] = contracts
-    reference_ids = getattr(view, "reference_ids", None)
+    reference_ids = context.get("reference_ids")
+    if not isinstance(reference_ids, dict):
+        reference_ids = getattr(view, "reference_ids", None)
     if isinstance(reference_ids, dict) and reference_ids:
         entry["reference_ids"] = reference_ids
 
@@ -472,9 +480,12 @@ def _attach_synthesis_contracts_to_report_entry(
         view,
         requested_as_of=requested_as_of,
     )
-    contract_gaps = contract_gaps_for_consumer(view, consumer_name)
+    contract_gaps = context.get("reasoning_contract_gaps") or []
     if contract_gaps:
         entry["reasoning_contract_gaps"] = contract_gaps
+    section_disclaimers = context.get("reasoning_section_disclaimers")
+    if isinstance(section_disclaimers, dict) and section_disclaimers:
+        entry["reasoning_section_disclaimers"] = section_disclaimers
 
     # Phase 6: surface governance fields for confidence/freshness transparency
     why_they_stay = getattr(view, "why_they_stay", None)

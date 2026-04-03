@@ -705,6 +705,13 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     evidence_depth_warning: asString(value.evidence_depth_warning),
     evidence_conclusions: toStringArray(value.evidence_conclusions),
     low_confidence_sections: toStringArray(value.low_confidence_sections),
+    reasoning_section_disclaimers: (() => {
+      const obj = asRecord(value.reasoning_section_disclaimers)
+      const entries = Object.entries(obj).filter(([, message]) => typeof message === 'string' && Boolean(asString(message)))
+      return entries.length > 0
+        ? Object.fromEntries(entries.map(([section, message]) => [section, asString(message)!]))
+        : undefined
+    })(),
     falsification_conditions: toStringArray(value.falsification_conditions),
     uncertainty_sources: toStringArray(value.uncertainty_sources),
     account_pressure_metrics: (() => {

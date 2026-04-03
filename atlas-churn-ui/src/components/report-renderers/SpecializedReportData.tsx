@@ -1177,7 +1177,7 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
         </SectionCard>
       )}
 
-      {(data.evidence_depth_warning || data.low_confidence_sections.length > 0 || data.uncertainty_sources.length > 0 || data.falsification_conditions.length > 0 || data.evidence_conclusions.length > 0) && (
+      {(data.evidence_depth_warning || data.low_confidence_sections.length > 0 || Object.keys(data.reasoning_section_disclaimers ?? {}).length > 0 || data.uncertainty_sources.length > 0 || data.falsification_conditions.length > 0 || data.evidence_conclusions.length > 0) && (
         <SectionCard title="Evidence Posture" icon={<Shield className="h-4 w-4 text-amber-400" />}>
           {data.evidence_depth_warning && (
             <p className="text-xs text-amber-300 mb-3">{data.evidence_depth_warning}</p>
@@ -1191,12 +1191,18 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
                 ))}</ul>
               </div>
             )}
-            {(data.low_confidence_sections.length > 0 || data.uncertainty_sources.length > 0) && (
+            {(data.low_confidence_sections.length > 0 || Object.keys(data.reasoning_section_disclaimers ?? {}).length > 0 || data.uncertainty_sources.length > 0) && (
               <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
                 <p className="text-amber-400 font-medium mb-1.5">Use Carefully</p>
                 <ul className="space-y-1">
                   {data.low_confidence_sections.map((s, i) => (
                     <li key={`lc-${i}`} className="text-slate-400 flex gap-1.5"><span className="text-amber-400 shrink-0">!</span><span>{s}</span></li>
+                  ))}
+                  {Object.entries(data.reasoning_section_disclaimers ?? {}).map(([section, disclaimer]) => (
+                    <li key={`disc-${section}`} className="text-slate-400 flex gap-1.5">
+                      <span className="text-amber-400 shrink-0">!</span>
+                      <span><span className="text-slate-300">{section.replaceAll('_', ' ')}:</span> {disclaimer}</span>
+                    </li>
                   ))}
                   {data.uncertainty_sources.map((s, i) => (
                     <li key={`us-${i}`} className="text-slate-400 flex gap-1.5"><span className="text-slate-500 shrink-0">?</span><span>{s}</span></li>
