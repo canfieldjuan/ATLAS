@@ -2855,8 +2855,8 @@ async def _find_migration_guide_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_pricing_reality_check_candidates(pool) -> list[dict[str, Any]]:
     """Vendors where users complain about pricing -- bait-and-switch, hidden costs, etc."""
-    # DEPRECATED-ENRICHMENT-READ: pain_categories, urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: pain_categories, urgency_score
+    # Reason: inline aggregate query, structurally coupled to product output
     sources = _blog_source_allowlist()
     rows = await pool.fetch(
         """
@@ -2895,8 +2895,8 @@ async def _find_pricing_reality_check_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_switching_story_candidates(pool) -> list[dict[str, Any]]:
     """Vendors users are actively leaving -- real switching stories from reviews."""
-    # DEPRECATED-ENRICHMENT-READ: urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score
+    # Reason: inline aggregate query, structurally coupled to product output
     sources = _blog_source_allowlist()
     rows = await pool.fetch(
         """
@@ -2945,8 +2945,8 @@ async def _find_switching_story_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_pain_point_roundup_candidates(pool) -> list[dict[str, Any]]:
     """Categories with enough vendors to do a cross-vendor complaint comparison."""
-    # DEPRECATED-ENRICHMENT-READ: urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score
+    # Reason: inline aggregate query, structurally coupled to product output
     sources = _blog_source_allowlist()
     rows = await pool.fetch(
         """
@@ -3773,8 +3773,8 @@ async def _gather_data(
     elif topic_type == "pain_point_roundup":
         category = topic_ctx["category"]
         # Per-vendor pain breakdown from raw reviews
-        # DEPRECATED-ENRICHMENT-READ: pain_categories, urgency_score
-        # Migrate to: read_vendor_evidence() from _b2b_shared
+        # APPROVED-ENRICHMENT-READ: pain_categories, urgency_score
+        # Reason: inline aggregate query, structurally coupled to product output
         sources = _blog_source_allowlist()
         vendor_pains = await pool.fetch(
             """
@@ -3929,8 +3929,8 @@ async def _gather_data(
         )
         vendor_names = [r["vendor_name"] for r in cat_rows]
 
-    # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: churn_signals.intent_to_leave
+    # Reason: inline aggregate query, structurally coupled to product output
     if vendor_names:
         ctx_row = await pool.fetchrow(
             """
@@ -3946,8 +3946,8 @@ async def _gather_data(
             vendor_names, ctx_sources,
         )
     else:
-        # DEPRECATED-ENRICHMENT-READ: churn_signals.intent_to_leave
-        # Migrate to: read_vendor_evidence() from _b2b_shared
+        # APPROVED-ENRICHMENT-READ: churn_signals.intent_to_leave
+        # Reason: inline aggregate query, structurally coupled to product output
         ctx_row = await pool.fetchrow(
             """
             SELECT
@@ -4107,8 +4107,8 @@ async def _fetch_vendor_extended_context(pool, vendor_name: str) -> dict[str, An
 
 async def _fetch_pain_category_urgency(pool, vendor_name: str) -> dict[str, float]:
     """Query per-category average urgency directly from b2b_reviews."""
-    # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: pain_category, urgency_score
+    # Reason: inline aggregate query, structurally coupled to product output
     rows = await pool.fetch(
         """
         SELECT enrichment->>'pain_category' AS pain_cat,
@@ -6767,8 +6767,8 @@ _KNOWN_TOPIC_TYPES = {
 
 async def _fetch_vendor_stats(pool, vendor_name: str) -> dict[str, Any]:
     """Return review counts and urgency for a single vendor."""
-    # DEPRECATED-ENRICHMENT-READ: urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score
+    # Reason: inline aggregate query, structurally coupled to product output
     row = await pool.fetchrow(
         """
         SELECT

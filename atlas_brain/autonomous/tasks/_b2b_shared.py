@@ -9044,6 +9044,215 @@ async def read_campaign_opportunities(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Class 2: Shared SQL fragment helpers for repeated aggregate patterns
+# ---------------------------------------------------------------------------
+
+def _vendor_evidence_base_filters(
+    *,
+    alias: str = "r",
+    window_param: int = 1,
+    recency_column: str = "enriched_at",
+) -> str:
+    """Base WHERE clause for vendor evidence queries.
+
+    Centralizes enrichment status check, recency semantics, and suppression.
+    Returns a SQL fragment with $<window_param> as the window_days placeholder.
+    """
+    from atlas_brain.services.b2b.corrections import suppress_predicate
+
+    if recency_column == "enriched_at":
+        recency = f"{alias}.enriched_at"
+    else:
+        recency = f"COALESCE({alias}.reviewed_at, {alias}.imported_at, {alias}.enriched_at)"
+
+    return (
+        f"{alias}.enrichment_status = 'enriched'"
+        f" AND {recency} > NOW() - make_interval(days => ${window_param})"
+        f" AND {suppress_predicate('review', id_expr=f'{alias}.id', source_expr=f'{alias}.source', vendor_expr=f'{alias}.vendor_name')}"
+    )
+
+
+def _competitor_unnest_sql(alias: str = "r") -> str:
+    """SQL fragment for CROSS JOIN LATERAL on competitors_mentioned."""
+    return (
+        f"CROSS JOIN LATERAL jsonb_array_elements("
+        f"CASE WHEN jsonb_typeof({alias}.enrichment->'competitors_mentioned') = 'array'"
+        f" THEN {alias}.enrichment->'competitors_mentioned'"
+        f" ELSE '[]'::jsonb END) AS comp(value)"
+    )
+
+
+def _integration_stack_unnest_sql(alias: str = "r") -> str:
+    """SQL fragment for jsonb_array_elements_text on use_case.integration_stack."""
+    return (
+        f"jsonb_array_elements_text("
+        f"CASE WHEN jsonb_typeof({alias}.enrichment->'use_case'->'integration_stack') = 'array'"
+        f" THEN {alias}.enrichment->'use_case'->'integration_stack'"
+        f" ELSE '[]'::jsonb END)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Class 1: Row-level evidence readers
+# ---------------------------------------------------------------------------
+
+async def read_vendor_quote_evidence(
+    pool,
+    *,
+    vendor_name: str,
+    window_days: int = 90,
+    min_urgency: float = 5.0,
+    limit: int = 10,
+    sources: list[str] | None = None,
+    pain_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Row-level quote evidence for a vendor.
+
+    Replaces direct enrichment reads in:
+      - b2b_blog_post_generation._resolve_blog_battle_summary (pricing/switching)
+      - b2b_blog_post_generation._fetch_high_urgency_quotes (vendor variant)
+      - b2b_challenger_brief._fetch_review_pain_quotes
+
+    Returns dicts with: vendor_name, source, reviewer_company, reviewer_title,
+    role_level, pain_category, urgency, review_text, quotable_phrases, rating.
+    """
+    from atlas_brain.services.b2b.corrections import suppress_predicate
+
+    conditions = [
+        "r.enrichment_status = 'enriched'",
+        "r.enriched_at > NOW() - make_interval(days => $1)",
+        "LOWER(r.vendor_name) = LOWER($2)",
+    ]
+    params: list = [window_days, vendor_name]
+    idx = 3
+
+    if min_urgency > 0:
+        conditions.append(f"(r.enrichment->>'urgency_score')::numeric >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+    if sources:
+        conditions.append(f"r.source = ANY(${idx}::text[])")
+        params.append(sources)
+        idx += 1
+    if pain_filter:
+        conditions.append(f"r.enrichment->>'pain_categories' ILIKE '%' || ${idx} || '%'")
+        params.append(pain_filter)
+        idx += 1
+
+    conditions.append(
+        suppress_predicate("review", id_expr="r.id", source_expr="r.source", vendor_expr="r.vendor_name")
+    )
+    params.append(limit)
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name, r.source, r.reviewer_company, r.reviewer_title,
+               COALESCE(r.reviewer_title, r.enrichment->'reviewer_context'->>'role_level') AS role_level,
+               r.enrichment->>'pain_category' AS pain_category,
+               (r.enrichment->>'urgency_score')::numeric AS urgency,
+               r.review_text, r.rating,
+               r.enrichment->'quotable_phrases' AS quotable_raw
+        FROM b2b_reviews r
+        WHERE {where}
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
+        LIMIT ${idx}
+        """,
+        *params,
+    )
+
+    return [
+        {
+            "vendor_name": r["vendor_name"],
+            "source": r["source"],
+            "reviewer_company": r["reviewer_company"],
+            "reviewer_title": r["reviewer_title"],
+            "role_level": r["role_level"],
+            "pain_category": r["pain_category"],
+            "urgency": float(r["urgency"]) if r["urgency"] is not None else None,
+            "review_text": r["review_text"],
+            "rating": float(r["rating"]) if r["rating"] is not None else None,
+            "quotable_phrases": _safe_json(r["quotable_raw"]),
+        }
+        for r in rows
+    ]
+
+
+async def read_category_quote_evidence(
+    pool,
+    *,
+    product_category: str,
+    window_days: int = 90,
+    min_urgency: float = 5.0,
+    limit: int = 10,
+    sources: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Row-level quote evidence for a product category.
+
+    Replaces direct enrichment reads in:
+      - b2b_blog_post_generation._fetch_high_urgency_quotes (category variant)
+
+    Same return shape as read_vendor_quote_evidence.
+    """
+    from atlas_brain.services.b2b.corrections import suppress_predicate
+
+    conditions = [
+        "r.enrichment_status = 'enriched'",
+        "r.enriched_at > NOW() - make_interval(days => $1)",
+        "r.product_category = $2",
+    ]
+    params: list = [window_days, product_category]
+    idx = 3
+
+    if min_urgency > 0:
+        conditions.append(f"(r.enrichment->>'urgency_score')::numeric >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+    if sources:
+        conditions.append(f"r.source = ANY(${idx}::text[])")
+        params.append(sources)
+        idx += 1
+
+    conditions.append(
+        suppress_predicate("review", id_expr="r.id", source_expr="r.source", vendor_expr="r.vendor_name")
+    )
+    params.append(limit)
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT r.vendor_name, r.source, r.reviewer_company, r.reviewer_title,
+               COALESCE(r.reviewer_title, r.enrichment->'reviewer_context'->>'role_level') AS role_level,
+               r.enrichment->>'pain_category' AS pain_category,
+               (r.enrichment->>'urgency_score')::numeric AS urgency,
+               r.review_text, r.rating,
+               r.enrichment->'quotable_phrases' AS quotable_raw
+        FROM b2b_reviews r
+        WHERE {where}
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC NULLS LAST
+        LIMIT ${idx}
+        """,
+        *params,
+    )
+
+    return [
+        {
+            "vendor_name": r["vendor_name"],
+            "source": r["source"],
+            "reviewer_company": r["reviewer_company"],
+            "reviewer_title": r["reviewer_title"],
+            "role_level": r["role_level"],
+            "pain_category": r["pain_category"],
+            "urgency": float(r["urgency"]) if r["urgency"] is not None else None,
+            "review_text": r["review_text"],
+            "rating": float(r["rating"]) if r["rating"] is not None else None,
+            "quotable_phrases": _safe_json(r["quotable_raw"]),
+        }
+        for r in rows
+    ]
+
+
 def _battle_card_weaknesses_from_evidence_vault(
     vault: dict[str, Any] | None,
     *,
