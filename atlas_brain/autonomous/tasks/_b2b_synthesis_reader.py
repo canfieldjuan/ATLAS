@@ -380,10 +380,7 @@ class SynthesisView:
         Checks both synthesis confidence AND evidence-engine suppression rules
         when vendor_evidence is provided.
         """
-        sec = self.section(section)
-        conf = ""
-        if isinstance(sec, dict):
-            conf = str(sec.get("confidence") or "").strip().lower()
+        conf = self.confidence(section)
         if conf == "insufficient":
             return True
         if vendor_evidence is not None:
@@ -398,10 +395,7 @@ class SynthesisView:
 
         Checks both synthesis confidence AND evidence-engine degrade rules.
         """
-        sec = self.section(section)
-        conf = ""
-        if isinstance(sec, dict):
-            conf = str(sec.get("confidence") or "").strip().lower()
+        conf = self.confidence(section)
         if conf == "low":
             return True
         if vendor_evidence is not None:
@@ -983,6 +977,9 @@ def inject_synthesis_into_card(
     contract_gaps = context.get("reasoning_contract_gaps") or []
     if contract_gaps:
         card_entry["reasoning_contract_gaps"] = contract_gaps
+    suppressed = context.get("_suppressed_sections") or []
+    if suppressed:
+        card_entry["suppressed_sections"] = suppressed
 
     # Always inject meta and wedge info
     card_entry["evidence_window"] = view.meta
