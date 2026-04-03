@@ -2191,8 +2191,8 @@ async def _compute_vendor_trend(
 
     Returns 'increasing', 'stable', 'decreasing', or None on error.
     """
-    # DEPRECATED-ENRICHMENT-READ: urgency_score
-    # Migrate to: read_campaign_opportunities() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score
+    # Reason: COUNT-only aggregation with urgency threshold, not a row-level extraction
     try:
         # Build vendor name match condition
         names = [vendor_name]
@@ -3563,84 +3563,42 @@ async def _fetch_opportunities(
     dm_only: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch and score top opportunities from enriched b2b_reviews."""
-    extra_conditions = ""
-    params: list[Any] = [90, 5.0, min(limit * 3, 500)]  # window_days, min_urgency, fetch_limit
-    idx = 4
+    from atlas_brain.autonomous.tasks._b2b_shared import read_campaign_opportunities
 
-    if vendor_filter:
-        extra_conditions += f" AND r.vendor_name ILIKE '%' || ${idx} || '%'"
-        params.append(vendor_filter)
-        idx += 1
+    rows = await read_campaign_opportunities(
+        pool,
+        window_days=90,
+        min_urgency=5.0,
+        vendor_name=vendor_filter,
+        company=company_filter,
+        dm_only=dm_only,
+        limit=min(limit * 3, 500),
+    )
 
-    if company_filter:
-        extra_conditions += (
-            f" AND COALESCE(NULLIF(BTRIM(r.reviewer_company), ''), "
-            f"NULLIF(BTRIM(r.reviewer_company_norm), '')) ILIKE '%' || ${idx} || '%'"
-        )
-        params.append(company_filter)
-        idx += 1
-
-    # DEPRECATED-ENRICHMENT-READ: reviewer_context.decision_maker
-    # Migrate to: read_campaign_opportunities() from _b2b_shared
-    if dm_only:
-        extra_conditions += " AND (r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true"
-
-    # DEPRECATED-ENRICHMENT-READ: urgency_score, reviewer_context.decision_maker, buyer_authority.role_type, buyer_authority.buying_stage, budget_signals.seat_count, timeline.contract_end, timeline.decision_timeline, competitors_mentioned, pain_categories, quotable_phrases, feature_gaps, use_case.primary_workflow, use_case.integration_stack, reviewer_context.industry
-    # Migrate to: read_campaign_opportunities() from _b2b_shared
-    rows = await pool.fetch(
-        f"""
-        SELECT r.id AS review_id,
-               r.vendor_name,
-               COALESCE(NULLIF(BTRIM(r.reviewer_company), ''), NULLIF(BTRIM(r.reviewer_company_norm), '')) AS reviewer_company,
-               r.product_category,
-               (r.enrichment->>'urgency_score')::numeric AS urgency,
-               (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
-               r.enrichment->'buyer_authority'->>'role_type' AS role_type,
-               r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
-               CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
-                    THEN (r.enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
-               r.enrichment->'timeline'->>'contract_end' AS contract_end,
-               r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
-               r.enrichment->'competitors_mentioned' AS competitors_json,
-               r.enrichment->'pain_categories' AS pain_json,
-               r.enrichment->'quotable_phrases' AS quotable_phrases,
-               r.enrichment->'feature_gaps' AS feature_gaps,
-               r.enrichment->'use_case'->>'primary_workflow' AS primary_workflow,
-               r.enrichment->'use_case'->'integration_stack' AS integration_stack,
-               r.sentiment_direction,
-               COALESCE(r.reviewer_industry, r.enrichment->'reviewer_context'->>'industry') AS industry,
-               r.reviewer_title, r.company_size_raw,
-               prior_eng.avg_open_hours
-        FROM b2b_reviews r
-        LEFT JOIN LATERAL (
-            SELECT AVG(hours_to_first_open) AS avg_open_hours
+    # Fetch prior engagement speed for scoring tie-breaker
+    avg_open_cache: dict[str, float | None] = {}
+    vendor_names = {r["vendor_name"] for r in rows if r.get("vendor_name")}
+    if vendor_names:
+        eng_rows = await pool.fetch(
+            """
+            SELECT vendor_name, AVG(hours_to_first_open) AS avg_open_hours
             FROM b2b_campaigns
-            WHERE vendor_name = r.vendor_name
+            WHERE vendor_name = ANY($1::text[])
               AND hours_to_first_open IS NOT NULL
               AND sent_at > NOW() - INTERVAL '90 days'
-        ) prior_eng ON true
-        WHERE r.enrichment_status = 'enriched'
-          AND COALESCE(r.reviewed_at, r.imported_at, r.enriched_at) > NOW() - make_interval(days => $1)
-          AND (r.enrichment->>'urgency_score')::numeric >= $2
-          {extra_conditions}
-        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
-        LIMIT $3
-        """,
-        *params,
-    )
+            GROUP BY vendor_name
+            """,
+            list(vendor_names),
+        )
+        for er in eng_rows:
+            avg_open_cache[er["vendor_name"]] = (
+                float(er["avg_open_hours"]) if er["avg_open_hours"] is not None else None
+            )
 
     opportunities = []
     for r in rows:
         row_dict = dict(r)
-        # Parse competitors for context scoring
-        competitors = row_dict.get("competitors_json")
-        if isinstance(competitors, str):
-            try:
-                competitors = json.loads(competitors)
-            except (json.JSONDecodeError, TypeError):
-                competitors = []
-        if not isinstance(competitors, list):
-            competitors = []
+        competitors = row_dict.get("competitors", [])
 
         mention_context = ""
         if competitors and isinstance(competitors[0], dict):
@@ -3648,7 +3606,7 @@ async def _fetch_opportunities(
 
         row_dict["mention_context"] = mention_context
         row_dict["urgency"] = _safe_float(row_dict.get("urgency"), 0)
-        row_dict["avg_open_hours"] = float(r["avg_open_hours"]) if r["avg_open_hours"] is not None else None
+        row_dict["avg_open_hours"] = avg_open_cache.get(row_dict.get("vendor_name"))
         opp_score, score_components = _compute_score(row_dict)
 
         if opp_score < min_score:
@@ -3656,8 +3614,6 @@ async def _fetch_opportunities(
 
         row_dict["opportunity_score"] = opp_score
         row_dict["score_components"] = score_components
-        row_dict["competitors"] = competitors
-        row_dict["review_id"] = str(r["review_id"])
         opportunities.append(row_dict)
 
     # Sort by score, then by prior engagement speed as tie-breaker (lower open hours = better)

@@ -8917,6 +8917,133 @@ async def read_review_details(
     return results
 
 
+async def read_campaign_opportunities(
+    pool,
+    *,
+    window_days: int = 90,
+    min_urgency: float = 5.0,
+    vendor_name: str | None = None,
+    company: str | None = None,
+    dm_only: bool = True,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Shared adapter for campaign opportunity enrichment reads.
+
+    Replaces direct enrichment reads in:
+      - tasks.b2b_campaign_generation._fetch_opportunities
+      - api.b2b_affiliates.list_opportunities
+
+    Returns review-level dicts with buyer authority, timeline, competitor
+    context, pain categories, and quotable phrases extracted from enrichment.
+    Consumers add domain-specific logic (scoring, affiliate matching, etc.).
+    """
+    from atlas_brain.services.b2b.corrections import suppress_predicate
+
+    conditions = [
+        "r.enrichment_status = 'enriched'",
+        "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)"
+        " > NOW() - make_interval(days => $1)",
+        "(r.enrichment->>'urgency_score')::numeric >= $2",
+    ]
+    params: list = [window_days, min_urgency]
+    idx = 3
+
+    if vendor_name:
+        conditions.append(f"r.vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+    if company:
+        conditions.append(
+            f"COALESCE(NULLIF(BTRIM(r.reviewer_company), ''),"
+            f" NULLIF(BTRIM(r.reviewer_company_norm), ''))"
+            f" ILIKE '%' || ${idx} || '%'"
+        )
+        params.append(company)
+        idx += 1
+    if dm_only:
+        conditions.append(
+            "(r.enrichment->'reviewer_context'->>'decision_maker')::boolean = true"
+        )
+
+    conditions.append(
+        suppress_predicate(
+            "review", id_expr="r.id", source_expr="r.source",
+            vendor_expr="r.vendor_name",
+        )
+    )
+    params.append(limit)
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT r.id AS review_id,
+               r.vendor_name,
+               COALESCE(NULLIF(BTRIM(r.reviewer_company), ''),
+                        NULLIF(BTRIM(r.reviewer_company_norm), '')) AS reviewer_company,
+               r.product_category, r.source, r.reviewed_at,
+               (r.enrichment->>'urgency_score')::numeric AS urgency,
+               (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
+               r.enrichment->'buyer_authority'->>'role_type' AS role_type,
+               r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+               CASE WHEN r.enrichment->'budget_signals'->>'seat_count' ~ '^\\d+$'
+                    THEN (r.enrichment->'budget_signals'->>'seat_count')::int END AS seat_count,
+               r.enrichment->'timeline'->>'contract_end' AS contract_end,
+               r.enrichment->'timeline'->>'decision_timeline' AS decision_timeline,
+               r.enrichment->'competitors_mentioned' AS competitors_json,
+               r.enrichment->'pain_categories' AS pain_json,
+               r.enrichment->'quotable_phrases' AS quotable_phrases,
+               r.enrichment->'feature_gaps' AS feature_gaps,
+               r.enrichment->'use_case'->>'primary_workflow' AS primary_workflow,
+               r.enrichment->'use_case'->'integration_stack' AS integration_stack,
+               r.sentiment_direction,
+               COALESCE(r.reviewer_industry,
+                        r.enrichment->'reviewer_context'->>'industry') AS industry,
+               r.reviewer_title, r.company_size_raw,
+               NULLIF(BTRIM(r.reviewer_name), '') AS reviewer_name
+        FROM b2b_reviews r
+        WHERE {where}
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
+        LIMIT ${idx}
+        """,
+        *params,
+    )
+
+    results = []
+    for r in rows:
+        competitors = _safe_json(r["competitors_json"])
+        if not isinstance(competitors, list):
+            competitors = []
+        seat_count = r["seat_count"]
+        results.append({
+            "review_id": str(r["review_id"]) if r["review_id"] else None,
+            "vendor_name": r["vendor_name"],
+            "reviewer_company": r["reviewer_company"],
+            "reviewer_name": r["reviewer_name"],
+            "product_category": r["product_category"],
+            "source": r["source"],
+            "reviewed_at": r["reviewed_at"],
+            "urgency": float(r["urgency"]) if r["urgency"] is not None else None,
+            "is_dm": bool(r["is_dm"]) if r["is_dm"] is not None else None,
+            "role_type": r["role_type"],
+            "buying_stage": r["buying_stage"],
+            "seat_count": seat_count,
+            "contract_end": r["contract_end"],
+            "decision_timeline": r["decision_timeline"],
+            "competitors": competitors,
+            "competitors_json": r["competitors_json"],
+            "pain_json": r["pain_json"],
+            "quotable_phrases": _safe_json(r["quotable_phrases"]),
+            "feature_gaps": _safe_json(r["feature_gaps"]),
+            "primary_workflow": r["primary_workflow"],
+            "integration_stack": _safe_json(r["integration_stack"]),
+            "sentiment_direction": r["sentiment_direction"],
+            "industry": r["industry"],
+            "reviewer_title": r["reviewer_title"],
+            "company_size_raw": r["company_size_raw"],
+        })
+    return results
+
+
 def _battle_card_weaknesses_from_evidence_vault(
     vault: dict[str, Any] | None,
     *,

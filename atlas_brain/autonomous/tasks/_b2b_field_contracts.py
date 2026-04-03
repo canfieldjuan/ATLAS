@@ -49,6 +49,8 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
             "_b2b_shared._fetch_vendor_churn_scores",
             "_b2b_shared._fetch_high_intent_companies",
             "_b2b_shared._fetch_vendor_witness_reviews",
+            "_b2b_shared.read_campaign_opportunities",
+            "b2b_campaign_generation._compute_vendor_trend",
             "backfill_derived_fields",
             "backfill_company_names",
         ),
