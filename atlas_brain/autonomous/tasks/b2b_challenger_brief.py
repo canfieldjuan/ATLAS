@@ -363,8 +363,6 @@ def _extract_pain_quotes_from_reviews(
     return deduped
 
 
-# DEPRECATED-ENRICHMENT-READ: quotable_phrases, pain_category, urgency_score, reviewer_context
-# Migrate to: read_vendor_evidence() from _b2b_shared
 async def _fetch_review_pain_quotes(
     pool,
     vendor: str,
@@ -377,42 +375,29 @@ async def _fetch_review_pain_quotes(
 ) -> list[dict]:
     """Fetch top pain quotes directly from enriched reviews for a vendor.
 
-    Reads ``enrichment->'quotable_phrases'`` plus pain metadata from b2b_reviews.
-    Used as fallback when no battle card quotes are available.
+    Uses shared adapter for enrichment reads. Post-processing (dedup,
+    similarity filtering) stays local.
     """
-    # DEPRECATED-ENRICHMENT-READ: reviewer_context.role_level, pain_category, quotable_phrases, urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
-    rows = await pool.fetch(
-        """
-        SELECT vendor_name, source, reviewer_company, reviewer_title,
-               COALESCE(reviewer_title, enrichment->'reviewer_context'->>'role_level') AS role,
-               enrichment->>'pain_category' AS pain_category,
-               enrichment->'quotable_phrases' AS phrases,
-               (enrichment->>'urgency_score')::float AS urgency
-        FROM b2b_reviews
-        WHERE LOWER(vendor_name) = LOWER($1)
-          AND enrichment_status = 'enriched'
-          AND enrichment->'quotable_phrases' IS NOT NULL
-          AND jsonb_array_length(enrichment->'quotable_phrases') > 0
-          AND (enrichment->>'urgency_score')::float >= $4
-          AND imported_at > NOW() - make_interval(days => $2)
-        ORDER BY (enrichment->>'urgency_score')::float DESC
-        LIMIT $3
-        """,
-        vendor,
-        window_days,
-        candidate_limit,
-        min_urgency,
+    from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_quote_evidence
+
+    rows = await read_vendor_quote_evidence(
+        pool,
+        vendor_name=vendor,
+        window_days=window_days,
+        min_urgency=min_urgency,
+        limit=candidate_limit,
+        require_quotes=True,
+        recency_column="imported_at",
     )
     normalized_rows = [{
-        "vendor_name": row["vendor_name"],
-        "source": row["source"],
-        "company": row["reviewer_company"],
-        "role": row["role"],
-        "pain_category": row["pain_category"],
-        "phrases": row["phrases"],
-        "urgency": row["urgency"],
-    } for row in rows]
+        "vendor_name": r["vendor_name"],
+        "source": r["source"],
+        "company": r["reviewer_company"],
+        "role": r["role_level"],
+        "pain_category": r["pain_category"],
+        "phrases": r["quotable_phrases"],
+        "urgency": r["urgency"],
+    } for r in rows]
     return _extract_pain_quotes_from_reviews(
         normalized_rows,
         vendor=vendor,

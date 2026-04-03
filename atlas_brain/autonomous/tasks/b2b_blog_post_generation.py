@@ -3647,33 +3647,27 @@ async def _gather_data(
             evidence_vault_lookup.get(vendor),
         )
         # Pull actual pricing complaint reviews directly
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_categories
-        # Migrate to: read_vendor_evidence() from _b2b_shared
+        from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_quote_evidence
         sources = _blog_source_allowlist()
-        pricing_reviews = await pool.fetch(
-            """
-            SELECT review_text, vendor_name, reviewer_title, rating, source,
-                   enrichment->>'urgency_score' AS urgency,
-                   enrichment->>'pain_categories' AS pains
-            FROM b2b_reviews
-            WHERE vendor_name = $1 AND enrichment_status = 'enriched'
-              AND enrichment->>'pain_categories' ILIKE '%pricing%'
-              AND source = ANY($2)
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
-            LIMIT 10
-            """,
-            vendor, sources,
+        pricing_rows = await read_vendor_quote_evidence(
+            pool,
+            vendor_name=vendor,
+            window_days=3650,
+            min_urgency=0,
+            limit=10,
+            sources=sources,
+            pain_filter="pricing",
         )
         raw_pricing_reviews = [
             {
-                "text": r["review_text"][:300],
+                "text": (r["review_text"] or "")[:300],
                 "vendor": r["vendor_name"],
                 "role": r["reviewer_title"],
-                "rating": float(r["rating"]) if r["rating"] else None,
-                "urgency": float(r["urgency"]) if r["urgency"] else 0,
+                "rating": r["rating"],
+                "urgency": r["urgency"] or 0,
                 "source_name": r["source"],
             }
-            for r in pricing_reviews
+            for r in pricing_rows
         ]
         vault_pricing_reviews = _build_specialized_blog_review_rows_from_evidence_vault(
             evidence_vault_lookup.get(vendor),
@@ -3728,8 +3722,8 @@ async def _gather_data(
             evidence_vault_lookup.get(vendor),
         )
         # Pull actual switching reviews
-        # DEPRECATED-ENRICHMENT-READ: urgency_score
-        # Migrate to: read_vendor_evidence() from _b2b_shared
+        # APPROVED-ENRICHMENT-READ: urgency_score
+        # Reason: review_text ILIKE filter is domain-specific, only urgency in ORDER BY
         sources = _blog_source_allowlist()
         switch_reviews = await pool.fetch(
             """
@@ -4243,8 +4237,8 @@ async def _fetch_negative_quotes(
     sources: list[str], limit: int = 9,
 ) -> list[dict[str, Any]]:
     """High-urgency enriched reviews (negative signal)."""
-    # DEPRECATED-ENRICHMENT-READ: urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
+    # APPROVED-ENRICHMENT-READ: urgency_score
+    # Reason: urgency used only in ORDER BY; query is structurally tied to account_resolution + prospect_org_cache JOINs
     _quote_cols = """
         r.review_text, r.vendor_name, r.reviewer_title, r.rating,
         r.enrichment->>'urgency_score' AS urgency,
@@ -4272,8 +4266,6 @@ async def _fetch_negative_quotes(
                 ELSE NULL
             END
     """
-    # DEPRECATED-ENRICHMENT-READ: urgency_score
-    # Migrate to: read_vendor_evidence() from _b2b_shared
     if vendor_name:
         rows = await pool.fetch(
             f"""
@@ -4288,8 +4280,6 @@ async def _fetch_negative_quotes(
             vendor_name, sources, limit,
         )
     elif category:
-        # DEPRECATED-ENRICHMENT-READ: urgency_score
-        # Migrate to: read_vendor_evidence() from _b2b_shared
         rows = await pool.fetch(
             f"""
             SELECT {_quote_cols}
