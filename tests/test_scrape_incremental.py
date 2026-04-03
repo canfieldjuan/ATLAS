@@ -526,6 +526,37 @@ async def test_insert_reviews_repairs_missing_fields_on_existing_duplicate(monke
     )
 
 
+@pytest.mark.asyncio
+async def test_insert_reviews_sanitizes_synthetic_reviewer_title(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "reddit",
+            "vendor_name": "HubSpot",
+            "source_review_id": "post-3",
+            "review_text": "A" * 160,
+            "reviewed_at": "2026-03-25",
+            "reviewer_title": "Repeat Churn Signal (Score: 10.0)",
+        },
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-sanitize", parser_version="reddit:1")
+
+    assert stats["inserted"] == 1
+    assert len(pool.inserted_rows) == 1
+    assert pool.inserted_rows[0][14] is None
+
+
 def test_repair_parser_fields_sql_casts_nullable_params():
     from atlas_brain.autonomous.tasks.b2b_scrape_intake import _REPAIR_PARSER_FIELDS_SQL
 

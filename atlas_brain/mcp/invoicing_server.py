@@ -10,6 +10,8 @@ Tools:
     list_invoices       -- filter by status, contact_id, business_context_id
     update_invoice      -- edit draft invoices
     send_invoice        -- mark sent; optionally send via email
+    approve_and_send    -- batch approve drafts: generate PDF, email, mark sent
+    export_invoice_pdf  -- generate PDF for an invoice and save to disk
     record_payment      -- record manual payment, auto-update status
     mark_void           -- void/cancel an invoice with reason
     customer_balance    -- outstanding balance by contact_id/phone/email
@@ -815,6 +817,244 @@ async def search_invoices(
     except Exception as exc:
         logger.exception("search_invoices error")
         return json.dumps({"error": "Internal error", "invoices": [], "count": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tool: approve_and_send
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def approve_and_send(
+    invoice_ids: Optional[str] = None,
+    status_filter: str = "draft",
+    dry_run: bool = False,
+) -> str:
+    """
+    Approve draft invoices: generate PDFs, email with attachment, mark as sent.
+
+    invoice_ids: JSON array of invoice numbers or UUIDs (e.g. '["INV-2026-0014"]').
+                 If omitted, processes ALL invoices matching status_filter.
+    status_filter: only process invoices with this status (default: draft)
+    dry_run: if true, list what would be sent without actually sending
+
+    Returns a summary of processed invoices.
+    """
+    import base64
+    import os
+
+    repo = _repo()
+
+    # Resolve which invoices to process
+    invoices_to_send: list[dict] = []
+
+    if invoice_ids:
+        try:
+            ids = json.loads(invoice_ids) if isinstance(invoice_ids, str) else invoice_ids
+        except json.JSONDecodeError:
+            return json.dumps({"success": False, "error": "Invalid invoice_ids JSON"})
+
+        for inv_ref in ids:
+            inv_ref = str(inv_ref).strip()
+            if _is_uuid(inv_ref):
+                inv = await repo.get_by_id(_uuid.UUID(inv_ref))
+            else:
+                inv = await repo.get_by_number(inv_ref)
+            if inv:
+                invoices_to_send.append(inv)
+            else:
+                logger.warning("approve_and_send: invoice %s not found, skipping", inv_ref)
+    else:
+        invoices_to_send = await repo.search(status=status_filter, limit=200)
+
+    if not invoices_to_send:
+        return json.dumps({"success": True, "message": f"No {status_filter} invoices found", "processed": 0})
+
+    from ..services.invoice_pdf import render_invoice_pdf
+    from ..services.email_provider import get_email_provider
+    from ..templates.email.invoice import BUSINESS_NAME, BUSINESS_PHONE, BUSINESS_EMAIL
+    from ..config import settings
+
+    save_base = os.path.expanduser(settings.invoicing.auto_invoice_save_path)
+    email_provider = get_email_provider()
+
+    results = {
+        "processed": 0,
+        "sent": 0,
+        "skipped": 0,
+        "errors": [],
+        "details": [],
+    }
+
+    for inv in invoices_to_send:
+        inv_num = inv["invoice_number"]
+        customer_name = inv.get("customer_name", "Customer")
+        customer_email = inv.get("customer_email")
+
+        if inv.get("status") not in ("draft", "sent"):
+            results["skipped"] += 1
+            results["details"].append({"invoice": inv_num, "status": "skipped", "reason": f"status is {inv.get('status')}"})
+            continue
+
+        if not customer_email:
+            results["skipped"] += 1
+            results["details"].append({"invoice": inv_num, "status": "skipped", "reason": "no customer email"})
+            continue
+
+        if dry_run:
+            results["details"].append({
+                "invoice": inv_num,
+                "customer": customer_name,
+                "email": customer_email,
+                "total": str(inv.get("total_amount", 0)),
+                "status": "would_send",
+            })
+            results["processed"] += 1
+            continue
+
+        # Generate PDF
+        try:
+            pdf_bytes = render_invoice_pdf(inv)
+        except Exception as e:
+            logger.error("PDF generation failed for %s: %s", inv_num, e)
+            results["errors"].append({"invoice": inv_num, "error": f"PDF failed: {e}"})
+            continue
+
+        # Save PDF to disk
+        pdf_filename = f"{inv_num}.pdf"
+        try:
+            issue_date = inv.get("issue_date")
+            if isinstance(issue_date, str):
+                issue_date = date.fromisoformat(issue_date)
+            year = issue_date.year if issue_date else date.today().year
+            customer_folder = os.path.join(save_base, str(year), customer_name)
+            os.makedirs(customer_folder, exist_ok=True)
+            pdf_path = os.path.join(customer_folder, pdf_filename)
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_bytes)
+        except Exception as e:
+            logger.warning("Failed to save PDF for %s: %s", inv_num, e)
+            pdf_path = None
+
+        # Send email with PDF attachment
+        try:
+            invoice_for = inv.get("invoice_for") or "services rendered"
+            total_str = f"${float(inv.get('total_amount', 0)):,.2f}"
+            due_date = inv.get("due_date", "")
+            if isinstance(due_date, date):
+                due_date = due_date.strftime("%m/%d/%Y")
+
+            email_body = (
+                f"Please find attached invoice {inv_num} for {invoice_for}.\n\n"
+                f"Amount Due: {total_str}\n"
+                f"Due Date: {due_date}\n\n"
+                f"Make all checks payable to {BUSINESS_NAME}.\n\n"
+                f"Thank you for your business!\n\n"
+                f"{BUSINESS_NAME}\n"
+                f"{BUSINESS_PHONE}\n"
+                f"{BUSINESS_EMAIL}"
+            )
+
+            attachments = [{
+                "filename": pdf_filename,
+                "content": base64.b64encode(pdf_bytes).decode("ascii"),
+            }]
+
+            await email_provider.send(
+                to=[customer_email],
+                subject=f"Invoice {inv_num} - {BUSINESS_NAME} - {total_str}",
+                body=email_body,
+                attachments=attachments,
+            )
+
+            # Mark as sent
+            now = datetime.now(timezone.utc)
+            await repo.update_status(inv["id"], "sent", sent_at=now, sent_via="email")
+
+            # CRM log
+            contact_id = inv.get("contact_id")
+            await _log_crm(
+                str(contact_id) if contact_id else None, "invoice",
+                f"Invoice {inv_num} approved and sent via email ({total_str})",
+            )
+
+            results["sent"] += 1
+            results["details"].append({
+                "invoice": inv_num,
+                "customer": customer_name,
+                "email": customer_email,
+                "total": total_str,
+                "status": "sent",
+                "pdf_path": pdf_path,
+            })
+        except Exception as e:
+            logger.error("Failed to send invoice %s: %s", inv_num, e)
+            results["errors"].append({"invoice": inv_num, "error": str(e)})
+
+        results["processed"] += 1
+
+    results["success"] = True
+    return json.dumps(results, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Tool: export_invoice_pdf
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def export_invoice_pdf(
+    invoice_id: str,
+    save_to_disk: bool = True,
+) -> str:
+    """
+    Generate a PDF for an invoice and optionally save to disk.
+
+    invoice_id: UUID or invoice number (e.g. INV-2026-0001)
+    save_to_disk: save PDF to ~/Desktop/Atlas-Invoices/ (default: true)
+
+    Returns the PDF file path and size.
+    """
+    import os
+
+    try:
+        repo = _repo()
+        if _is_uuid(invoice_id):
+            inv = await repo.get_by_id(_uuid.UUID(invoice_id))
+        else:
+            inv = await repo.get_by_number(invoice_id)
+
+        if not inv:
+            return json.dumps({"success": False, "error": "Invoice not found"})
+
+        from ..services.invoice_pdf import render_invoice_pdf
+
+        pdf_bytes = render_invoice_pdf(inv)
+
+        result = {
+            "success": True,
+            "invoice_number": inv["invoice_number"],
+            "pdf_size_bytes": len(pdf_bytes),
+        }
+
+        if save_to_disk:
+            from ..config import settings
+            save_base = os.path.expanduser(settings.invoicing.auto_invoice_save_path)
+            issue_date = inv.get("issue_date")
+            if isinstance(issue_date, str):
+                issue_date = date.fromisoformat(issue_date)
+            year = issue_date.year if issue_date else date.today().year
+            customer_name = inv.get("customer_name", "Customer")
+            customer_folder = os.path.join(save_base, str(year), customer_name)
+            os.makedirs(customer_folder, exist_ok=True)
+            pdf_filename = f"{inv['invoice_number']}.pdf"
+            pdf_path = os.path.join(customer_folder, pdf_filename)
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_bytes)
+            result["pdf_path"] = pdf_path
+
+        return json.dumps(result, default=str)
+    except Exception as exc:
+        logger.exception("export_invoice_pdf error")
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 # ---------------------------------------------------------------------------

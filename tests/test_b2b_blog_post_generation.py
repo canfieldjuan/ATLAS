@@ -14,6 +14,8 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
     _blueprint_vendor_alternative,
     _build_specialized_blog_review_rows_from_evidence_vault,
     _detect_campaign_content_gaps,
+    _fetch_negative_quotes,
+    _fetch_positive_quotes,
     _gather_data,
     _load_pool_layers_for_blog,
     _merge_blog_quotes_with_evidence_vault,
@@ -208,6 +210,38 @@ def _section_by_id(blueprint, section_id: str):
         if section.id == section_id:
             return section
     raise AssertionError(f"missing section {section_id}")
+
+
+@pytest.mark.asyncio
+async def test_fetch_negative_quotes_only_uses_trusted_account_resolution():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await _fetch_negative_quotes(
+        pool,
+        vendor_name="Zendesk",
+        category=None,
+        sources=["g2"],
+        limit=3,
+    )
+
+    sql = pool.fetch.await_args.args[0]
+    assert "WHEN ar.confidence_label IN ('high', 'medium')" in sql
+
+
+@pytest.mark.asyncio
+async def test_fetch_positive_quotes_only_uses_trusted_account_resolution():
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await _fetch_positive_quotes(
+        pool,
+        vendor_name="Zendesk",
+        category=None,
+        sources=["g2"],
+        limit=3,
+    )
+
+    sql = pool.fetch.await_args.args[0]
+    assert "WHEN ar.confidence_label IN ('high', 'medium')" in sql
 
 
 @pytest.mark.asyncio

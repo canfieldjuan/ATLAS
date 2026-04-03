@@ -490,6 +490,8 @@ async def test_run_records_attempt_and_summary_event_for_non_clean_repair_run(mo
     rows = [{
         "id": uuid4(),
         "vendor_name": "Smartsheet",
+        "source": "reddit",
+        "content_type": "community_discussion",
         "enrichment_repair_attempts": 0,
     }]
     pool = SimpleNamespace(
@@ -533,6 +535,8 @@ async def test_run_records_attempt_and_summary_event_for_non_clean_repair_run(mo
     result = await repair_mod.run(task)
 
     assert result["shadowed"] == 1
+    assert result["strict_discussion_candidates_kept"] == 1
+    assert result["strict_discussion_candidates_dropped"] == 0
     assert record_attempt.await_count == 1
     assert emit_event.await_count == 1
     assert record_attempt.await_args.kwargs["run_id"] == execution_id
@@ -542,6 +546,30 @@ async def test_run_records_attempt_and_summary_event_for_non_clean_repair_run(mo
     assert emit_event.await_args.kwargs["event_type"] == "repair_run_summary"
     assert emit_event.await_args.kwargs["reason_code"] == "enrichment_repair_shadowed"
     assert emit_event.await_args.kwargs["update_review_state"] is False
+    assert emit_event.await_args.kwargs["detail"]["strict_discussion_candidates_kept"] == 1
+    assert emit_event.await_args.kwargs["detail"]["low_signal_discussion_skipped"] == 0
+
+
+@pytest.mark.asyncio
+async def test_skip_low_signal_strict_discussion_rows_marks_terminal_shadow(monkeypatch):
+    pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 3"))
+
+    result = await repair_mod._skip_low_signal_strict_discussion_rows(
+        pool,
+        strict_sources=["reddit"],
+        strict_content_types=["comment", "community_discussion"],
+        scoped_vendors=["slack"],
+        max_attempts=2,
+        limit=25,
+    )
+
+    assert result == 3
+    query = pool.execute.await_args.args[0]
+    args = pool.execute.await_args.args
+    assert "enrichment_repair_status = 'shadowed'" in query
+    assert args[4] == ["slack"]
+    assert "repair_skipped_low_signal_discussion" in str(args[5])
+    assert "NOT (" in query
 
 
 def test_strategic_adjudication_reasons_detects_missing_witness_interfaces():
@@ -1475,7 +1503,16 @@ async def test_run_query_includes_strategic_adjudication_conditions(monkeypatch)
     result = await repair_mod.run(_task())
 
     assert result["_skip_synthesis"] == "No enriched reviews need repair"
-    query = pool.fetch.await_args.args[0]
+    (
+        query,
+        max_attempts,
+        max_batch,
+        trusted_sources,
+        scoped_vendors,
+        excluded_sources,
+        strict_discussion_sources,
+        strict_discussion_content_types,
+    ) = pool.fetch.await_args.args
     assert "jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == \"pricing_backlash\")')" in query
     assert "COALESCE(NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NOT NULL" in query
     assert "lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'none'" in query
@@ -1484,6 +1521,14 @@ async def test_run_query_includes_strategic_adjudication_conditions(monkeypatch)
     assert 'like_regex "^adjudication:"' in query
     assert "WHEN enrichment_repair_status IS NULL THEN 0" in query
     assert "WHEN enrichment_status = 'enriched' THEN 0" in query
+    assert "lower(source) <> ALL($5::text[])" in query
+    assert "lower(source) <> ALL($6::text[])" in query
+    assert "lower(COALESCE(content_type, '')) <> ALL($7::text[])" in query
+    assert "review_text ILIKE ('%' || vendor_name || '%')" in query
+    assert "trustradius" not in trusted_sources
+    assert "trustpilot" in excluded_sources
+    assert strict_discussion_sources == ["reddit"]
+    assert strict_discussion_content_types == ["comment", "community_discussion", "insider_account"]
 
 
 @pytest.mark.asyncio
@@ -1600,3 +1645,41 @@ async def test_run_scopes_rows_to_test_vendors(monkeypatch):
     assert result["_skip_synthesis"] == "No enriched reviews need repair"
     args = pool.fetch.await_args.args
     assert args[4] == ["zendesk", "freshdesk"]
+
+
+@pytest.mark.asyncio
+async def test_run_scopes_strict_discussion_gate_from_config(monkeypatch):
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(return_value="UPDATE 0"),
+        fetch=AsyncMock(return_value=[]),
+    )
+
+    monkeypatch.setattr(repair_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_enabled", True, raising=False)
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_model",
+        "google/gemini-3.1-flash-lite-preview",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_strict_discussion_sources",
+        "reddit,hackernews",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        repair_mod.settings.b2b_churn,
+        "enrichment_repair_strict_discussion_content_types",
+        ["community_discussion", "comment"],
+        raising=False,
+    )
+
+    result = await repair_mod.run(_task())
+
+    assert result["_skip_synthesis"] == "No enriched reviews need repair"
+    args = pool.fetch.await_args.args
+    assert args[6] == ["hackernews", "reddit"]
+    assert args[7] == ["comment", "community_discussion"]

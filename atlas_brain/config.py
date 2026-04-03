@@ -2061,6 +2061,9 @@ class InvoicingConfig(BaseSettings):
     auto_invoice_enabled: bool = Field(default=True, description="Monthly auto-invoice generation")
     auto_invoice_send_email: bool = Field(default=True, description="Auto-send invoices via email")
     auto_invoice_due_days: int = Field(default=30, ge=1, le=365, description="Payment terms for auto-invoices")
+    auto_invoice_calendar_id: str = Field(default="", description="Google Calendar ID for commercial cleaning events")
+    auto_invoice_review_mode: bool = Field(default=True, description="Hold invoices as draft for review instead of auto-sending")
+    auto_invoice_save_path: str = Field(default="~/Desktop/Atlas-Invoices", description="Base path for saving invoice PDFs")
 
 
 class ExternalDataConfig(BaseSettings):
@@ -2784,6 +2787,24 @@ class B2BChurnConfig(BaseSettings):
         le=3600.0,
         description="Timeout for each vendor or cross-vendor reasoning LLM call",
     )
+    reasoning_synthesis_max_stale_days: int = Field(
+        default=3,
+        ge=0,
+        le=90,
+        description="Classify unchanged vendor reasoning rows newer than this as fresh reuse and older rows as stale reuse",
+    )
+    reasoning_synthesis_max_input_tokens: int = Field(
+        default=20000,
+        ge=512,
+        le=50000,
+        description="Approximate max input tokens allowed for a single vendor reasoning synthesis prompt before lean fallback or rejection",
+    )
+    reasoning_synthesis_max_items_per_pool: int = Field(
+        default=8,
+        ge=1,
+        le=20,
+        description="Max scored items per pool in the default vendor reasoning payload",
+    )
     reasoning_synthesis_max_tokens: int = Field(
         default=4096,
         ge=256,
@@ -2839,6 +2860,26 @@ class B2BChurnConfig(BaseSettings):
         ge=1,
         le=50,
         description="Max witnesses included in each vendor reasoning packet",
+    )
+    reasoning_synthesis_lean_max_items_per_pool: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Max scored items per pool when vendor reasoning falls back to lean prompt mode",
+    )
+    reasoning_synthesis_lean_max_witnesses: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description="Max witnesses included when vendor reasoning falls back to lean prompt mode",
+    )
+    reasoning_synthesis_rerun_if_missing_packet_artifacts: bool = Field(
+        default=True,
+        description="Rerun vendor reasoning when the latest unchanged row is missing packet artifacts",
+    )
+    reasoning_synthesis_rerun_if_missing_reference_ids: bool = Field(
+        default=True,
+        description="Rerun vendor reasoning when the latest unchanged row is missing canonical reference ids",
     )
     reasoning_witness_highlight_limit: int = Field(
         default=4,

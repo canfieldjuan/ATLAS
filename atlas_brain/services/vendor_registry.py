@@ -31,6 +31,7 @@ _BOOTSTRAP_ALIASES: dict[str, str] = {
     "aws": "Amazon Web Services",
     "amazon web services": "Amazon Web Services",
     "ms teams": "Microsoft Teams",
+    "teams": "Microsoft Teams",
     "ms 365": "Microsoft 365",
     "office 365": "Microsoft 365",
     "o365": "Microsoft 365",

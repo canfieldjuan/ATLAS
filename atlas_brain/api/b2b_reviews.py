@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..services.b2b.reviewer_identity import sanitize_reviewer_title
 from ..services.company_normalization import normalize_company_name
 from ..services.scraping.sources import ReviewSource
 from ..services.vendor_registry import resolve_vendor_name
@@ -173,7 +174,7 @@ async def import_b2b_reviews(reviews: list[B2BReviewInput]) -> dict:
             r.pros,
             r.cons,
             r.reviewer_name,
-            r.reviewer_title,
+            sanitize_reviewer_title(r.reviewer_title),
             r.reviewer_company,
             reviewer_company_norm,
             r.company_size_raw,

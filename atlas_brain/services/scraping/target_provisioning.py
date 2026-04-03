@@ -8,7 +8,7 @@ from typing import Any
 
 from ...config import settings
 from ..vendor_registry import resolve_vendor_name
-from .sources import SEARCH_SOURCES, parse_source_allowlist
+from .sources import SEARCH_SOURCES, filter_deprecated_sources, parse_source_allowlist
 from .target_planning import (
     build_scrape_coverage_plan,
     collapse_inventory_rows,
@@ -180,7 +180,10 @@ async def provision_missing_core_targets_for_vendors(
         }
 
     inventory_rows, existing_targets = await fetch_coverage_inputs(pool)
-    allowed_sources = parse_source_allowlist(settings.b2b_scrape.source_allowlist)
+    allowed_sources = filter_deprecated_sources(
+        parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+        settings.b2b_scrape.deprecated_sources,
+    )
     plan = build_scrape_coverage_plan(
         inventory_rows,
         existing_targets,
@@ -269,7 +272,10 @@ async def provision_vendor_onboarding_targets(
         inventory_rows = list(inventory_rows)
         inventory_rows.append(_bootstrap_inventory_row(canonical_vendor, bootstrap_category))
 
-    allowed_sources = parse_source_allowlist(settings.b2b_scrape.source_allowlist)
+    allowed_sources = filter_deprecated_sources(
+        parse_source_allowlist(settings.b2b_scrape.source_allowlist),
+        settings.b2b_scrape.deprecated_sources,
+    )
     plan = build_scrape_coverage_plan(
         inventory_rows,
         existing_targets,

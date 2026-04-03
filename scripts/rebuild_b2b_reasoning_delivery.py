@@ -38,6 +38,18 @@ def _parse_csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _selected_mode(args: argparse.Namespace) -> str:
+    if getattr(args, "reports_only", False):
+        return "reports_only"
+    if getattr(args, "cross_vendor_only", False):
+        return "cross_vendor_only"
+    if getattr(args, "vendor_reasoning_only", False):
+        return "vendor_reasoning_only"
+    if getattr(args, "full_refresh", False):
+        return "full_refresh"
+    return "legacy"
+
+
 async def _discover_stale_vendors(
     pool,
     *,
@@ -159,6 +171,7 @@ async def _run_report_refresh(
 async def _main(args: argparse.Namespace) -> None:
     selected_vendors = _parse_csv(args.vendors)
     selected_report_types = _parse_csv(args.report_types) or list(VALID_REPORT_TYPES)
+    mode = _selected_mode(args)
     invalid_report_types = sorted(set(selected_report_types).difference(VALID_REPORT_TYPES))
     if invalid_report_types:
         raise SystemExit(f"Invalid report types: {invalid_report_types}")
@@ -179,6 +192,7 @@ async def _main(args: argparse.Namespace) -> None:
 
         result: dict[str, object] = {
             "apply": bool(args.apply),
+            "mode": mode,
             "requested_vendors": selected_vendors,
             "stale_vendor_rows": stale_vendors,
             "report_coverage": report_summary,
@@ -188,17 +202,37 @@ async def _main(args: argparse.Namespace) -> None:
             print(json.dumps(result, indent=2, default=str))
             return
 
-        should_run_reasoning_rebuild = bool(vendor_names) or bool(args.rebuild_cross_vendor)
+        should_run_reasoning_rebuild = False
+        rebuild_cross_vendor = bool(args.rebuild_cross_vendor)
+        rebuild_vendors = vendor_names
+        if mode == "reports_only":
+            should_run_reasoning_rebuild = False
+        elif mode == "cross_vendor_only":
+            should_run_reasoning_rebuild = True
+            rebuild_cross_vendor = True
+            rebuild_vendors = vendor_names
+        elif mode == "vendor_reasoning_only":
+            should_run_reasoning_rebuild = bool(vendor_names)
+            rebuild_cross_vendor = False
+        elif mode == "full_refresh":
+            should_run_reasoning_rebuild = True
+            rebuild_cross_vendor = True
+        else:
+            should_run_reasoning_rebuild = bool(vendor_names) or bool(args.rebuild_cross_vendor)
         if should_run_reasoning_rebuild:
             rebuild_result = await _run_reasoning_rebuild(
-                vendors=vendor_names,
-                rebuild_cross_vendor=bool(args.rebuild_cross_vendor),
+                vendors=rebuild_vendors,
+                rebuild_cross_vendor=rebuild_cross_vendor,
             )
         else:
-            rebuild_result = {"_skip_synthesis": "No stale vendors selected"}
+            if mode == "reports_only":
+                rebuild_result = {"_skip_synthesis": "reports-only mode"}
+            else:
+                rebuild_result = {"_skip_synthesis": "No stale vendors selected"}
         result["reasoning_rebuild"] = rebuild_result
 
-        if args.include_reports:
+        should_refresh_reports = bool(args.include_reports) or mode in {"reports_only", "full_refresh"}
+        if should_refresh_reports:
             report_results: dict[str, dict] = {}
             skipped: dict[str, str] = {}
             for report_type in selected_report_types:
@@ -224,6 +258,27 @@ if __name__ == "__main__":
     parser.add_argument("--apply", action="store_true", help="Execute rebuild tasks.")
     parser.add_argument("--vendors", default="", help="Comma-separated vendor names.")
     parser.add_argument("--limit", type=int, default=None, help="Maximum stale vendor rows to inspect.")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--reports-only",
+        action="store_true",
+        help="Refresh supported reports only; do not rerun vendor or cross-vendor reasoning.",
+    )
+    mode_group.add_argument(
+        "--cross-vendor-only",
+        action="store_true",
+        help="Rebuild cross-vendor synthesis only; do not rerun vendor reasoning or reports.",
+    )
+    mode_group.add_argument(
+        "--vendor-reasoning-only",
+        action="store_true",
+        help="Rerun vendor reasoning only; do not rebuild reports.",
+    )
+    mode_group.add_argument(
+        "--full-refresh",
+        action="store_true",
+        help="Rerun vendor reasoning, rebuild cross-vendor synthesis, and refresh reports.",
+    )
     parser.add_argument(
         "--include-reports",
         action="store_true",

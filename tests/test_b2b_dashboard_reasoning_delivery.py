@@ -224,3 +224,25 @@ async def test_tenant_get_vendor_detail_overlays_synthesis_detail(monkeypatch):
     assert result["churn_signal"]["archetype"] == "price_squeeze"
     assert result["churn_signal"]["reasoning_executive_summary"] == "Pricing pressure is driving evaluation activity."
     assert result["churn_signal"]["reasoning_reference_ids"]["metric_ids"] == ["metric:test:1"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_vendor_profile_only_uses_trusted_account_resolution(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace(
+        fetchrow=AsyncMock(
+            side_effect=[
+                None,
+                {"total_reviews": 0, "pending_enrichment": 0, "enriched": 0},
+            ]
+        ),
+        fetch=AsyncMock(side_effect=[[], []]),
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.get_vendor_profile("Zendesk", user=None)
+
+    assert result["vendor_name"] == "Zendesk"
+    hi_sql = pool.fetch.await_args_list[0].args[0]
+    assert "WHEN ar.confidence_label IN ('high', 'medium')" in hi_sql

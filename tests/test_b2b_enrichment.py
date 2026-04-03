@@ -106,6 +106,135 @@ def test_repair_target_fields_skips_roundup_style_competitor_repair_without_name
     assert "competitors_mentioned" not in targets
 
 
+def test_effective_enrichment_skip_sources_includes_deprecated_sources(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_skip_sources",
+        "stackoverflow,github",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "deprecated_review_sources",
+        "capterra,software_advice,trustpilot,trustradius",
+        raising=False,
+    )
+
+    assert b2b_enrichment._effective_enrichment_skip_sources() == {
+        "stackoverflow",
+        "github",
+        "capterra",
+        "software_advice",
+        "trustpilot",
+        "trustradius",
+    }
+
+
+def test_trusted_repair_sources_filters_deprecated_sources(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_priority_sources",
+        "g2,trustradius,capterra,software_advice,gartner,trustpilot,peerspot",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "deprecated_review_sources",
+        "capterra,software_advice,trustpilot,trustradius",
+        raising=False,
+    )
+
+    assert b2b_enrichment._trusted_repair_sources() == {"g2", "gartner", "peerspot"}
+
+
+def test_tier1_has_extraction_gaps_keeps_default_behavior_for_non_strict_sources(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_tier2_strict_sources",
+        "gartner,peerspot",
+        raising=False,
+    )
+    tier1 = {
+        "specific_complaints": [],
+        "quotable_phrases": ["Users keep mentioning admin overhead."],
+        "competitors_mentioned": [],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "churn_signals": {},
+    }
+
+    assert b2b_enrichment._tier1_has_extraction_gaps(tier1, source="g2") is True
+
+
+def test_tier1_has_extraction_gaps_is_stricter_for_gartner_and_peerspot(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_tier2_strict_sources",
+        "gartner,peerspot",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_tier2_strict_min_complaints",
+        2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_tier2_strict_min_quotes",
+        2,
+        raising=False,
+    )
+    weak_tier1 = {
+        "specific_complaints": [],
+        "quotable_phrases": ["One generic quote"],
+        "competitors_mentioned": [],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "churn_signals": {},
+    }
+    strong_tier1 = {
+        "specific_complaints": ["Billing was confusing", "Renewal price jumped unexpectedly"],
+        "quotable_phrases": ["Two useful quotes", "Another useful quote"],
+        "competitors_mentioned": [],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "churn_signals": {},
+    }
+
+    assert b2b_enrichment._tier1_has_extraction_gaps(weak_tier1, source="gartner") is False
+    assert b2b_enrichment._tier1_has_extraction_gaps(weak_tier1, source="peerspot") is False
+    assert b2b_enrichment._tier1_has_extraction_gaps(strong_tier1, source="gartner") is True
+
+
+def test_tier1_has_extraction_gaps_still_allows_strict_sources_with_churn_or_competitor(monkeypatch):
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_tier2_strict_sources",
+        "gartner,peerspot",
+        raising=False,
+    )
+    churn_tier1 = {
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "competitors_mentioned": [],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "churn_signals": {"intent_to_leave": True},
+    }
+    competitor_tier1 = {
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "competitors_mentioned": [{"name": "HubSpot"}],
+        "pricing_phrases": [],
+        "recommendation_language": [],
+        "churn_signals": {},
+    }
+
+    assert b2b_enrichment._tier1_has_extraction_gaps(churn_tier1, source="gartner") is True
+    assert b2b_enrichment._tier1_has_extraction_gaps(competitor_tier1, source="peerspot") is True
+
+
 def test_is_no_signal_result_accepts_empty_community_discussion_without_rating():
     result = {
         "churn_signals": {
@@ -867,6 +996,7 @@ def test_compute_derived_fields_promotes_contract_notice_into_evaluation_deadlin
 
     derived = b2b_enrichment._compute_derived_fields(result, row)
 
+    assert derived["timeline"]["contract_end"] == "renewal"
     assert derived["timeline"]["evaluation_deadline"] == "30 days"
     assert derived["timeline"]["decision_timeline"] == "within_quarter"
     assert any(span["time_anchor"] == "30 days" for span in derived["evidence_spans"])
@@ -937,6 +1067,684 @@ def test_compute_derived_fields_promotes_event_timeframe_into_contract_end(monke
 
     assert derived["timeline"]["contract_end"] == "next quarter"
     assert derived["timeline"]["decision_timeline"] == "within_quarter"
+
+
+def test_finalize_enrichment_for_persist_backfills_company_name_from_reviewer_company(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 4.1
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "HubSpot",
+        "summary": "Solid tool",
+        "review_text": "We use it daily for sales and support workflows.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "Operations Manager",
+        "reviewer_company": "Acme Corp",
+        "raw_metadata": {"source_weight": 0.8},
+        "content_type": "review",
+        "rating": 4.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "support_escalation": False,
+            "renewal_timing": None,
+        },
+        "reviewer_context": {"role_level": "manager", "decision_maker": False},
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    finalized, error = b2b_enrichment._finalize_enrichment_for_persist(result, row)
+
+    assert error is None
+    assert finalized is not None
+    assert finalized["reviewer_context"]["company_name"] == "Acme Corp"
+
+
+def test_finalize_enrichment_for_persist_does_not_copy_vendor_name_into_company_name(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 4.1
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "HubSpot",
+        "summary": "Solid tool",
+        "review_text": "We use it daily for sales and support workflows.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "Operations Manager",
+        "reviewer_company": "HubSpot",
+        "raw_metadata": {"source_weight": 0.8},
+        "content_type": "review",
+        "rating": 4.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "support_escalation": False,
+            "renewal_timing": None,
+        },
+        "reviewer_context": {"role_level": "manager", "decision_maker": False},
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    finalized, error = b2b_enrichment._finalize_enrichment_for_persist(result, row)
+
+    assert error is None
+    assert finalized is not None
+    assert finalized["reviewer_context"].get("company_name") in (None, "")
+
+
+def test_infer_role_level_from_generic_function_title_aliases():
+    row = {"summary": "", "review_text": "", "pros": "", "cons": ""}
+
+    assert b2b_enrichment._infer_role_level_from_text("PMO", row) == "manager"
+    assert b2b_enrichment._infer_role_level_from_text("Product", row) == "ic"
+    assert b2b_enrichment._infer_role_level_from_text("Owner/Managing Member", row) == "executive"
+
+
+def test_finalize_enrichment_for_persist_promotes_manager_with_commercial_context_to_decision_maker(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 7.0
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return True
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "Zendesk",
+        "summary": "Renewal decision forced budget review",
+        "review_text": (
+            "As operations manager, I owned the renewal review after they quoted us $48k/year "
+            "before the Q2 contract end."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "Operations Manager",
+        "reviewer_company": "Acme Corp",
+        "raw_metadata": {"source_weight": 0.9},
+        "content_type": "review",
+        "rating": 2.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": True,
+            "support_escalation": False,
+            "renewal_timing": None,
+        },
+        "reviewer_context": {"role_level": "manager", "decision_maker": False},
+        "budget_signals": {"annual_spend_estimate": "$48k/year"},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": ["quoted us $48k/year"],
+        "event_mentions": [],
+        "timeline": {"contract_end": "Q2 2026"},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    finalized, error = b2b_enrichment._finalize_enrichment_for_persist(result, row)
+
+    assert error is None
+    assert finalized is not None
+    assert finalized["reviewer_context"]["role_level"] == "manager"
+    assert finalized["reviewer_context"]["decision_maker"] is True
+    assert finalized["buyer_authority"]["role_type"] == "economic_buyer"
+
+
+def test_finalize_enrichment_for_persist_keeps_generic_manager_non_decision_maker_without_commercial_context(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 3.0
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "Klaviyo",
+        "summary": "Good ESP",
+        "review_text": "As marketing manager I use it every day for campaigns and segmentation.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "Marketing Manager",
+        "reviewer_company": "Acme Corp",
+        "raw_metadata": {"source_weight": 0.9},
+        "content_type": "review",
+        "rating": 4.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "migration_in_progress": False,
+            "contract_renewal_mentioned": False,
+            "support_escalation": False,
+            "renewal_timing": None,
+        },
+        "reviewer_context": {"role_level": "manager", "decision_maker": False},
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    finalized, error = b2b_enrichment._finalize_enrichment_for_persist(result, row)
+
+    assert error is None
+    assert finalized is not None
+    assert finalized["reviewer_context"]["decision_maker"] is False
+    assert finalized["buyer_authority"]["role_type"] == "champion"
+
+
+def test_compute_derived_fields_promotes_explicit_budget_anchors(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 8.2
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return False
+
+        def derive_budget_authority(self, result):
+            return True
+
+        def derive_price_complaint(self, result):
+            return True
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "summary": "Renewal quote forced a decision",
+        "review_text": (
+            "At renewal they quoted us $200k/year for 200 users, or $85/user/month. "
+            "It was a 30% price increase and we started evaluating alternatives."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Operations",
+        "reviewer_company": "Acme Corp",
+        "raw_metadata": {"source_weight": 0.9},
+        "content_type": "review",
+        "rating": 2.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": "next quarter",
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {
+            "role_level": "director",
+            "decision_maker": True,
+            "company_name": "Acme Corp",
+        },
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": ["The renewal quote forced us to reevaluate the tool."],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["budget_signals"]["annual_spend_estimate"] == "$200k/year"
+    assert derived["budget_signals"]["price_per_seat"] == "$85/user/month"
+    assert derived["budget_signals"]["seat_count"] == 200
+    assert derived["budget_signals"]["price_increase_mentioned"] is True
+    assert derived["budget_signals"]["price_increase_detail"] == "30% price increase"
+    assert derived["contract_context"]["contract_value_signal"] == "enterprise_high"
+
+
+def test_compute_derived_fields_ignores_salary_noise_for_budget_signals(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 1.5
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return None
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "Copper",
+        "product_name": "Copper",
+        "summary": "My intern salary this year",
+        "review_text": "I got a $140k salary offer as an intern this year and took the job.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "raw_metadata": {"source_weight": 0.2},
+        "content_type": "community_discussion",
+        "rating": None,
+        "rating_max": 5,
+        "source": "reddit",
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {"role_level": "unknown", "decision_maker": False},
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "community_discussion",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["budget_signals"] == {}
+
+
+def test_compute_derived_fields_ignores_ambiguous_noisy_source_budget_noise(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 2.0
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return None
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+    monkeypatch.setattr(
+        b2b_enrichment.settings.b2b_churn,
+        "enrichment_low_fidelity_noisy_sources",
+        "reddit,quora,twitter",
+    )
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "Close",
+        "product_name": "Close",
+        "summary": "Can't remove the charge? Well, I'll just use it then",
+        "review_text": (
+            "The apartment complex charged an upcharge of $25 a month for assigned parking. "
+            "The lease breaking fees and rent increase would have cost over a thousand dollars."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "raw_metadata": {"source_weight": 0.2},
+        "content_type": "community_discussion",
+        "rating": None,
+        "rating_max": 5,
+        "source": "reddit",
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {"role_level": "unknown", "decision_maker": False},
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "community_discussion",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": ["upcharge of $25 a month", "lease breaking fees", "over a thousand dollars"],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["budget_signals"] == {}
+
+
+def test_compute_derived_fields_derives_annual_spend_from_monthly_unit_price_and_seat_count(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 1.5
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return None
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "HubSpot",
+        "product_name": "HubSpot Sales Hub",
+        "summary": "Renewal pricing pushed us to reevaluate",
+        "review_text": "Our renewal quote came in at $85/user/month for 200 users.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "VP Operations",
+        "reviewer_company": "Acme Corp",
+        "raw_metadata": {"source_weight": 0.9},
+        "content_type": "review",
+        "rating": 2.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": "next quarter",
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {
+            "role_level": "director",
+            "decision_maker": True,
+            "company_name": "Acme Corp",
+        },
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": ["The renewal quote forced us to reevaluate the tool."],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["budget_signals"]["price_per_seat"] == "$85/user/month"
+    assert derived["budget_signals"]["seat_count"] == 200
+    assert derived["budget_signals"]["annual_spend_estimate"] == "$204k/year"
+    assert derived["contract_context"]["contract_value_signal"] == "enterprise_high"
+
+
+def test_compute_derived_fields_skips_ambiguous_range_unit_price_for_annual_spend(monkeypatch):
+    class _Engine:
+        map_hash = "test-hash"
+
+        def compute_urgency(self, indicators, rating, rating_max, content_type, source_weight):
+            return 1.5
+
+        def override_pain(self, primary_pain, complaints, quotable, pricing_phrases, feature_gaps, recommendation_language):
+            return primary_pain
+
+        def derive_recommend(self, rec_lang, rating, rating_max):
+            return None
+
+        def derive_budget_authority(self, result):
+            return False
+
+        def derive_price_complaint(self, result):
+            return False
+
+    monkeypatch.setattr(evidence_engine, "get_evidence_engine", lambda: _Engine())
+
+    row = {
+        "id": uuid4(),
+        "vendor_name": "SentinelOne",
+        "product_name": "SentinelOne Singularity Complete",
+        "summary": "Pricing depends on volume",
+        "review_text": "The quote was $7 to $10 per agent per month for 6000 agents.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "Director of Security",
+        "reviewer_company": "Acme Corp",
+        "raw_metadata": {"source_weight": 0.9},
+        "content_type": "review",
+        "rating": 3.0,
+        "rating_max": 5,
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "contract_renewal_mentioned": True,
+            "renewal_timing": "this quarter",
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {
+            "role_level": "director",
+            "decision_maker": True,
+            "company_name": "Acme Corp",
+        },
+        "budget_signals": {
+            "price_per_seat": "$7 to $10 per agent per month",
+            "seat_count": 6000,
+        },
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": ["The quote depends heavily on agent volume."],
+        "quotable_phrases": [],
+        "positive_aspects": [],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": [],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["budget_signals"]["price_per_seat"] == "$7 to $10 per agent per month"
+    assert derived["budget_signals"]["seat_count"] == 6000
+    assert derived["budget_signals"].get("annual_spend_estimate") is None
+
+
+def test_extract_numeric_amount_supports_suffixes():
+    assert b2b_enrichment._extract_numeric_amount("$200k/year") == 200000
+    assert b2b_enrichment._extract_numeric_amount("USD 1.5m annual contract") == 1500000
+
+
+def test_normalize_budget_value_text_preserves_readable_time_markers():
+    assert b2b_enrichment._normalize_budget_value_text("$8,000 a year") == "$8,000 a year"
+    assert b2b_enrichment._normalize_budget_value_text("$8,000ayear") == "$8,000 a year"
+    assert b2b_enrichment._normalize_budget_value_text("$10k / year") == "$10k/year"
+    assert b2b_enrichment._normalize_budget_value_text("$4/ user/ month") == "$4/user/month"
 
 
 @pytest.mark.asyncio

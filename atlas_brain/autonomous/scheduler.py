@@ -540,6 +540,20 @@ class TaskScheduler:
             },
         },
         {
+            "name": "cleaning_sms_reminder",
+            "description": "Send SMS reminders to residential customers 3 days before cleaning",
+            "task_type": "builtin",
+            "schedule_type": "cron",
+            "cron_expression": "0 9 * * *",
+            "timeout_seconds": 60,
+            "metadata": {
+                "builtin_handler": "cleaning_sms_reminder",
+                "lead_days": 3,
+                "calendar_id": "pj1f79l6onh69nbcjud6gcl2f0@group.calendar.google.com",
+                "from_number": "+18669978185",
+            },
+        },
+        {
             "name": "reasoning_tick",
             "description": "Polling safety net for reasoning agent missed events",
             "task_type": "builtin",

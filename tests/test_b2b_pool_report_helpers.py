@@ -262,6 +262,100 @@ async def test_fetch_all_pool_layers_canonicalizes_displacement_from_vendor_key(
     assert layers["Amazon Web Services"]["displacement"][0]["to_vendor"] == "Google Cloud Platform"
 
 
+@pytest.mark.asyncio
+async def test_fetch_all_pool_layers_uses_resolved_company_for_review_candidates():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_evidence_vault": [],
+            "FROM b2b_segment_intelligence": [],
+            "FROM b2b_temporal_intelligence": [],
+            "FROM b2b_account_intelligence": [],
+            "FROM b2b_displacement_dynamics": [],
+            "FROM b2b_product_profiles": [],
+            "FROM b2b_category_dynamics": [],
+            "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar": [
+                {
+                    "vendor_name": "Zendesk",
+                    "id": uuid4(),
+                    "source": "g2",
+                    "rating": 2.0,
+                    "rating_max": 5.0,
+                    "summary": "We are evaluating options.",
+                    "review_text": "The renewal quote forced us to revisit the stack.",
+                    "pros": "",
+                    "cons": "",
+                    "reviewer_title": "IT Manager",
+                    "reviewer_company": "Acme Corp",
+                    "raw_reviewer_company": "",
+                    "resolution_confidence": "medium",
+                    "reviewed_at": None,
+                    "imported_at": None,
+                    "raw_metadata": json.dumps({"source_weight": 0.8}),
+                    "enrichment": json.dumps({"pain_category": "pricing"}),
+                }
+            ],
+        },
+    )
+
+    layers = await shared_mod.fetch_all_pool_layers(
+        pool,
+        as_of=mod.date.today(),
+        analysis_window_days=30,
+    )
+
+    review = layers["Zendesk"]["reviews"][0]
+    assert review["reviewer_company"] == "Acme Corp"
+    assert review["raw_reviewer_company"] == ""
+    assert review["resolution_confidence"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_fetch_all_pool_layers_ignores_low_confidence_resolved_company_for_review_candidates():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_evidence_vault": [],
+            "FROM b2b_segment_intelligence": [],
+            "FROM b2b_temporal_intelligence": [],
+            "FROM b2b_account_intelligence": [],
+            "FROM b2b_displacement_dynamics": [],
+            "FROM b2b_product_profiles": [],
+            "FROM b2b_category_dynamics": [],
+            "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar": [
+                {
+                    "vendor_name": "Zendesk",
+                    "id": uuid4(),
+                    "source": "g2",
+                    "rating": 2.0,
+                    "rating_max": 5.0,
+                    "summary": "We are evaluating options.",
+                    "review_text": "The renewal quote forced us to revisit the stack.",
+                    "pros": "",
+                    "cons": "",
+                    "reviewer_title": "IT Manager",
+                    "reviewer_company": "Raw Acme",
+                    "raw_reviewer_company": "Raw Acme",
+                    "resolution_confidence": "low",
+                    "reviewed_at": None,
+                    "imported_at": None,
+                    "raw_metadata": json.dumps({"source_weight": 0.8}),
+                    "enrichment": json.dumps({"pain_category": "pricing"}),
+                }
+            ],
+        },
+    )
+
+    layers = await shared_mod.fetch_all_pool_layers(
+        pool,
+        as_of=mod.date.today(),
+        analysis_window_days=30,
+    )
+
+    review = layers["Zendesk"]["reviews"][0]
+    assert review["reviewer_company"] == "Raw Acme"
+    assert review["raw_reviewer_company"] == "Raw Acme"
+    assert review["resolution_confidence"] == "low"
+
+
 def test_resolve_vendor_category_prefers_specific_profile_over_generic():
     preferred = {"Zendesk": "Helpdesk", "HubSpot": "Marketing Automation"}
     assert mod._resolve_vendor_category("Zendesk", "B2B Software", preferred) == "Helpdesk"

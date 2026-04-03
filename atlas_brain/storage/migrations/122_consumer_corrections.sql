@@ -20,5 +20,6 @@ ALTER TABLE data_corrections DROP CONSTRAINT IF EXISTS chk_correction_type;
 ALTER TABLE data_corrections ADD CONSTRAINT chk_correction_type
     CHECK (correction_type IN (
         'suppress', 'flag', 'override_field',
-        'merge_vendor', 'merge_brand', 'reclassify'
+        'merge_vendor', 'merge_brand', 'reclassify',
+        'suppress_source'
     ));

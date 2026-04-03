@@ -937,6 +937,7 @@ async def _build_deterministic_report_bundle(
         contract_value_lookup=lookups["contract_value_lookup"],
         turning_point_lookup=lookups["turning_point_lookup"],
         tenure_lookup=lookups["tenure_lookup"],
+        evidence_vault_lookup=evidence_vault_lookup,
     )
     deterministic_displacement_map = _build_deterministic_displacement_map(
         competitive_disp,
@@ -1325,93 +1326,268 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         get_pipeline_llm,
         parse_json_response,
     )
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
+    )
     from ...services.b2b.cache_runner import (
         lookup_b2b_exact_stage_text,
         prepare_b2b_exact_skill_stage_request,
         store_b2b_exact_stage_text,
     )
     from ...services.b2b.llm_exact_cache import CacheUnavailable, llm_identity
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.protocols import Message
 
     _llm_workload = "synthesis"
     _llm_max_tokens = _scorecard_narrative_max_tokens()
     _cache_stage_id = "b2b_churn_reports.scorecard_narrative"
     _resolved_llm = get_pipeline_llm(workload=_llm_workload)
     _provider, _model = llm_identity(_resolved_llm)
+    _batch_llm = (
+        get_pipeline_llm(workload="anthropic")
+        if (
+            settings.b2b_churn.anthropic_batch_enabled
+            and settings.b2b_churn.scorecard_anthropic_batch_enabled
+        )
+        else None
+    )
+    _batch_enabled = isinstance(_batch_llm, AnthropicLLM)
+    _batch_provider, _batch_model = llm_identity(_batch_llm) if _batch_enabled else ("", "")
     scorecard_llm_failures = 0
     scorecard_cache_hits = 0
     scorecard_reasoning_reused = 0
     scorecard_guardrail_fallbacks = 0
+    scorecard_batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
     should_generate_scorecard_narratives = (
         not selected_report_types or "vendor_scorecard" in selected_report_types
     )
     if should_generate_scorecard_narratives:
-        for sc in deterministic_vendor_scorecards:
-            reasoning_summary = sc.get("reasoning_summary", "")
-            if reasoning_summary and not sc.get("cross_vendor_comparisons"):
-                sc["expert_take"] = reasoning_summary
-                scorecard_reasoning_reused += 1
-                continue
+        from ._b2b_shared import _normalize_scorecard_expert_take
+
+        async def _store_scorecard_exact_cache(
+            request: Any | None,
+            sc: dict[str, Any],
+            parsed_narrative: dict[str, Any],
+        ) -> None:
+            if request is None:
+                return
+            await store_b2b_exact_stage_text(
+                request,
+                response_text=json.dumps(parsed_narrative, separators=(",", ":")),
+                metadata={
+                    "task": "b2b_churn_reports",
+                    "vendor_name": sc.get("vendor_name") or sc.get("vendor"),
+                    "cache_stage": "scorecard_narrative",
+                },
+            )
+
+        async def _generate_scorecard_narrative_direct(
+            sc: dict[str, Any],
+            llm_input: dict[str, Any],
+            *,
+            request: Any | None,
+            workload: str,
+        ) -> str:
             try:
+                narrative = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        call_llm_with_skill,
+                        "digest/vendor_deep_dive_narrative",
+                        json.dumps(llm_input, default=str),
+                        max_tokens=_llm_max_tokens,
+                        temperature=0.3,
+                        response_format={"type": "json_object"},
+                        workload=workload,
+                        trace_metadata={
+                            "vendor_name": sc.get("vendor_name") or sc.get("vendor"),
+                            "report_type": "vendor_scorecard",
+                        },
+                    ),
+                    timeout=45,
+                )
+                if not narrative:
+                    sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+                    return "failed"
+                parsed_narrative = parse_json_response(narrative)
+                expert_take = _normalize_scorecard_expert_take(
+                    parsed_narrative.get("expert_take", "")
+                )
+                narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
+                if narrative_errors:
+                    sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+                    return "fallback"
+                sc["expert_take"] = expert_take
+                parsed_narrative["expert_take"] = expert_take
+                await _store_scorecard_exact_cache(request, sc, parsed_narrative)
+                return "generated"
+            except Exception:
+                sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+                return "failed"
+
+        if _batch_enabled:
+            batch_entries: list[dict[str, Any]] = []
+            for index, sc in enumerate(deterministic_vendor_scorecards):
+                reasoning_summary = sc.get("reasoning_summary", "")
+                if reasoning_summary and not sc.get("cross_vendor_comparisons"):
+                    sc["expert_take"] = reasoning_summary
+                    scorecard_reasoning_reused += 1
+                    continue
+
                 llm_input = _build_scorecard_narrative_payload(
                     sc,
                     reasoning_lookup=reasoning_lookup,
                 )
                 request: Any | None = None
-                if _provider and _model:
+                request_messages: list[dict[str, str]] = []
+                if _batch_provider and _batch_model:
                     try:
-                        request, _ = prepare_b2b_exact_skill_stage_request(
+                        request, request_messages = prepare_b2b_exact_skill_stage_request(
                             _cache_stage_id,
                             skill_name="digest/vendor_deep_dive_narrative",
                             payload=json.dumps(llm_input, default=str),
-                            provider=_provider,
-                            model=_model,
+                            provider=_batch_provider,
+                            model=_batch_model,
                             max_tokens=_llm_max_tokens,
                             temperature=0.3,
                             response_format={"type": "json_object"},
                         )
                     except CacheUnavailable:
                         request = None
+                        request_messages = []
 
                 if request is not None:
                     cached = await lookup_b2b_exact_stage_text(request)
                     if cached is not None:
                         parsed_narrative = parse_json_response(cached["response_text"])
-                        from ._b2b_shared import _normalize_scorecard_expert_take
-
                         expert_take = _normalize_scorecard_expert_take(
                             parsed_narrative.get("expert_take", "")
                         )
                         narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
                         if not narrative_errors:
-                            scorecard_cache_hits += 1
                             sc["expert_take"] = expert_take
+                            scorecard_cache_hits += 1
                             continue
 
-                narrative = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        call_llm_with_skill,
-                        "digest/vendor_deep_dive_narrative",
-                        json.dumps(llm_input, default=str),
-                        max_tokens=_llm_max_tokens, temperature=0.3,
-                        response_format={"type": "json_object"},
-                        workload=_llm_workload,
-                    ),
-                    timeout=45,
+                batch_entries.append(
+                    {
+                        "custom_id": f"scorecard:{index}:{str(sc.get('vendor_name') or sc.get('vendor') or '').strip().lower()}",
+                        "artifact_id": str(sc.get("vendor_name") or sc.get("vendor") or f"scorecard-{index}"),
+                        "scorecard": sc,
+                        "llm_input": llm_input,
+                        "request": request,
+                        "request_messages": request_messages,
+                    }
                 )
-                parsed_narrative = parse_json_response(narrative)
-                from ._b2b_shared import _normalize_scorecard_expert_take
 
-                expert_take = _normalize_scorecard_expert_take(
-                    parsed_narrative.get("expert_take", "")
+            if batch_entries:
+                execution = await run_anthropic_message_batch(
+                    llm=_batch_llm,
+                    stage_id=_cache_stage_id,
+                    task_name="b2b_churn_reports",
+                    items=[
+                        AnthropicBatchItem(
+                            custom_id=entry["custom_id"],
+                            artifact_type="scorecard_narrative",
+                            artifact_id=entry["artifact_id"],
+                            vendor_name=entry["scorecard"].get("vendor_name") or entry["scorecard"].get("vendor"),
+                            messages=[
+                                Message(
+                                    role=str(message.get("role") or ""),
+                                    content=str(message.get("content") or ""),
+                                )
+                                for message in entry["request_messages"]
+                            ],
+                            max_tokens=_llm_max_tokens,
+                            temperature=0.3,
+                            trace_span_name="b2b.churn_intelligence.scorecard_narrative",
+                            trace_metadata={
+                                "vendor_name": entry["scorecard"].get("vendor_name") or entry["scorecard"].get("vendor"),
+                                "report_type": "vendor_scorecard",
+                                "workload": "anthropic_batch",
+                            },
+                            request_metadata={
+                                "report_type": "vendor_scorecard",
+                            },
+                        )
+                        for entry in batch_entries
+                    ],
+                    run_id=str(task.id),
+                    min_batch_size=int(settings.b2b_churn.scorecard_anthropic_batch_min_items),
+                    batch_metadata={
+                        "report_type": "vendor_scorecard",
+                    },
                 )
-                narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
-                if narrative_errors:
-                    scorecard_guardrail_fallbacks += 1
-                    sc["expert_take"] = _fallback_scorecard_expert_take(sc)
-                else:
-                    sc["expert_take"] = expert_take
-                    parsed_narrative["expert_take"] = expert_take
-                    if request is None:
+                scorecard_batch_metrics["jobs"] += 1 if execution.provider_batch_id else 0
+                scorecard_batch_metrics["submitted_items"] += execution.submitted_items
+                scorecard_batch_metrics["cache_prefiltered_items"] += execution.cache_prefiltered_items
+                scorecard_batch_metrics["fallback_single_call_items"] += execution.fallback_single_call_items
+                scorecard_batch_metrics["completed_items"] += execution.completed_items
+                scorecard_batch_metrics["failed_items"] += execution.failed_items
+
+                for entry in batch_entries:
+                    sc = entry["scorecard"]
+                    request = entry["request"]
+                    outcome = execution.results_by_custom_id.get(entry["custom_id"])
+                    if outcome is not None and outcome.response_text:
+                        parsed_narrative = parse_json_response(outcome.response_text)
+                        expert_take = _normalize_scorecard_expert_take(
+                            parsed_narrative.get("expert_take", "")
+                        )
+                        narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
+                        if narrative_errors:
+                            sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+                            scorecard_guardrail_fallbacks += 1
+                            continue
+                        sc["expert_take"] = expert_take
+                        parsed_narrative["expert_take"] = expert_take
+                        await _store_scorecard_exact_cache(request, sc, parsed_narrative)
+                        continue
+
+                    fallback_status = await _generate_scorecard_narrative_direct(
+                        sc,
+                        entry["llm_input"],
+                        request=request,
+                        workload="anthropic",
+                    )
+                    await mark_batch_fallback_result(
+                        batch_id=execution.local_batch_id,
+                        custom_id=entry["custom_id"],
+                        succeeded=fallback_status != "failed",
+                        error_text=(
+                            outcome.error_text
+                            if outcome is not None and outcome.error_text and fallback_status == "failed"
+                            else "single_call_failed" if fallback_status == "failed" else None
+                        ),
+                    )
+                    if fallback_status == "fallback":
+                        scorecard_guardrail_fallbacks += 1
+                    elif fallback_status == "failed":
+                        scorecard_llm_failures += 1
+        else:
+            _narrative_sem = asyncio.Semaphore(cfg.scorecard_narrative_concurrency)
+
+            async def _generate_scorecard_narrative(sc: dict[str, Any]) -> str:
+                """Generate one scorecard narrative. Returns status string."""
+                reasoning_summary = sc.get("reasoning_summary", "")
+                if reasoning_summary and not sc.get("cross_vendor_comparisons"):
+                    sc["expert_take"] = reasoning_summary
+                    return "reused"
+                async with _narrative_sem:
+                    llm_input = _build_scorecard_narrative_payload(
+                        sc,
+                        reasoning_lookup=reasoning_lookup,
+                    )
+                    request: Any | None = None
+                    if _provider and _model:
                         try:
                             request, _ = prepare_b2b_exact_skill_stage_request(
                                 _cache_stage_id,
@@ -1425,19 +1601,39 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             )
                         except CacheUnavailable:
                             request = None
+
                     if request is not None:
-                        await store_b2b_exact_stage_text(
-                            request,
-                            response_text=json.dumps(parsed_narrative, separators=(",", ":")),
-                            metadata={
-                                "task": "b2b_churn_reports",
-                                "vendor_name": sc.get("vendor_name") or sc.get("vendor"),
-                                "cache_stage": "scorecard_narrative",
-                            },
-                        )
-            except Exception:
-                scorecard_llm_failures += 1
-                sc["expert_take"] = _fallback_scorecard_expert_take(sc)
+                        cached = await lookup_b2b_exact_stage_text(request)
+                        if cached is not None:
+                            parsed_narrative = parse_json_response(cached["response_text"])
+                            expert_take = _normalize_scorecard_expert_take(
+                                parsed_narrative.get("expert_take", "")
+                            )
+                            narrative_errors = _validate_scorecard_expert_take(sc, expert_take)
+                            if not narrative_errors:
+                                sc["expert_take"] = expert_take
+                                return "cached"
+
+                    return await _generate_scorecard_narrative_direct(
+                        sc,
+                        llm_input,
+                        request=request,
+                        workload=_llm_workload,
+                    )
+
+            narrative_results = await asyncio.gather(*[
+                _generate_scorecard_narrative(sc)
+                for sc in deterministic_vendor_scorecards
+            ])
+            for status in narrative_results:
+                if status == "reused":
+                    scorecard_reasoning_reused += 1
+                elif status == "cached":
+                    scorecard_cache_hits += 1
+                elif status == "fallback":
+                    scorecard_guardrail_fallbacks += 1
+                elif status == "failed":
+                    scorecard_llm_failures += 1
     if (
         scorecard_llm_failures
         or scorecard_cache_hits
@@ -1445,11 +1641,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         or scorecard_guardrail_fallbacks
     ):
         logger.info(
-            "Scorecard LLM: %d cache hits, %d failed, %d reused reasoning, %d guardrail fallbacks",
+            "Scorecard LLM: %d cache hits, %d failed, %d reused reasoning, %d guardrail fallbacks, %d batch jobs, %d batch items",
             scorecard_cache_hits,
             scorecard_llm_failures,
             scorecard_reasoning_reused,
             scorecard_guardrail_fallbacks,
+            scorecard_batch_metrics["jobs"],
+            scorecard_batch_metrics["submitted_items"],
         )
     scorecard_llm_generated = 0
     if should_generate_scorecard_narratives:
@@ -1522,6 +1720,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "scorecard_guardrail_fallbacks": scorecard_guardrail_fallbacks,
                             "scorecard_llm_generated": scorecard_llm_generated,
                             "scorecard_llm_failures": scorecard_llm_failures,
+                            "scorecard_batch_jobs": scorecard_batch_metrics["jobs"],
+                            "scorecard_batch_items_submitted": scorecard_batch_metrics["submitted_items"],
+                            "scorecard_batch_cache_prefiltered": scorecard_batch_metrics["cache_prefiltered_items"],
+                            "scorecard_batch_fallback_single_call": scorecard_batch_metrics["fallback_single_call_items"],
+                            "scorecard_batch_completed_items": scorecard_batch_metrics["completed_items"],
+                            "scorecard_batch_failed_items": scorecard_batch_metrics["failed_items"],
                         })
                         if scorecard_llm_generated > 0:
                             report_llm_model = str(
@@ -1651,6 +1855,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "scorecard_guardrail_fallbacks": scorecard_guardrail_fallbacks,
         "scorecard_llm_generated": scorecard_llm_generated,
         "scorecard_llm_failures": scorecard_llm_failures,
+        "scorecard_batch_jobs": scorecard_batch_metrics["jobs"],
+        "scorecard_batch_items_submitted": scorecard_batch_metrics["submitted_items"],
+        "scorecard_batch_cache_prefiltered": scorecard_batch_metrics["cache_prefiltered_items"],
+        "scorecard_batch_fallback_single_call": scorecard_batch_metrics["fallback_single_call_items"],
+        "scorecard_batch_completed_items": scorecard_batch_metrics["completed_items"],
+        "scorecard_batch_failed_items": scorecard_batch_metrics["failed_items"],
         "persistence_skipped": not should_persist_reports,
         "selected_report_types": sorted(selected_report_types),
         "scoped_vendors": sorted(scoped_vendors),

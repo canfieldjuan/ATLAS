@@ -88,6 +88,7 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from atlas_brain.storage.database import get_db_pool
+    from atlas_brain.services.b2b.reviewer_identity import sanitize_reviewer_title
     from atlas_brain.services.vendor_registry import resolve_vendor_name
     from atlas_brain.services.scraping.sources import ReviewSource
 
@@ -158,7 +159,7 @@ async def import_reviews(reviews: list[dict], dry_run: bool = False,
                 review.get("pros"),
                 review.get("cons"),
                 review.get("reviewer_name"),
-                review.get("reviewer_title"),
+                sanitize_reviewer_title(review.get("reviewer_title")),
                 review.get("reviewer_company"),
                 review.get("company_size_raw"),
                 review.get("reviewer_industry"),

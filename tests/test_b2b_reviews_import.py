@@ -135,3 +135,35 @@ async def test_import_b2b_reviews_dedupes_same_text_with_different_ids(monkeypat
     assert len(pool.inserted_rows) == 1
     assert result["imported"] == 1
     assert result["duplicates"] == 1
+
+
+@pytest.mark.asyncio
+async def test_import_b2b_reviews_sanitizes_synthetic_reviewer_title(monkeypatch):
+    from atlas_brain.api.b2b_reviews import B2BReviewInput, import_b2b_reviews
+
+    pool = _FakePool()
+    monkeypatch.setattr("atlas_brain.api.b2b_reviews.get_db_pool", lambda: pool)
+    monkeypatch.setattr(
+        "atlas_brain.api.b2b_reviews.resolve_vendor_name",
+        AsyncMock(side_effect=lambda vendor: vendor),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.api.b2b_reviews._load_existing_review_identity_sets",
+        AsyncMock(return_value=(set(), set())),
+    )
+
+    reviews = [
+        B2BReviewInput(
+            source="reddit",
+            vendor_name="HubSpot",
+            review_text="same review body " * 10,
+            source_review_id="post-9",
+            reviewer_title="Repeat Churn Signal (Score: 10.0)",
+        ),
+    ]
+
+    result = await import_b2b_reviews(reviews)
+
+    assert result["imported"] == 1
+    assert len(pool.inserted_rows) == 1
+    assert pool.inserted_rows[0][14] is None

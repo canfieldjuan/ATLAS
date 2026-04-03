@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ...config import settings
+from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
@@ -1393,6 +1394,7 @@ async def _insert_reviews(
             reviewed_at_ts or r.get("reviewed_at"),
         )
         reviewer_company = r.get("reviewer_company")
+        reviewer_title = sanitize_reviewer_title(r.get("reviewer_title"))
         reviewer_company_norm = normalize_company_name(reviewer_company or "") or None
 
         # Skip reviews already known in DB or already seen in this batch.
@@ -1409,12 +1411,17 @@ async def _insert_reviews(
             ):
                 duplicate_existing += 1
                 if any(
-                    r.get(field)
-                    for field in ("reviewer_title", "reviewer_company", "company_size_raw", "reviewer_industry")
+                    value
+                    for value in (
+                        reviewer_title,
+                        reviewer_company,
+                        r.get("company_size_raw"),
+                        r.get("reviewer_industry"),
+                    )
                 ):
                     repair_candidates.append((
                         dedup_key,
-                        r.get("reviewer_title"),
+                        reviewer_title,
                         reviewer_company,
                         reviewer_company_norm,
                         r.get("company_size_raw"),
@@ -1448,7 +1455,7 @@ async def _insert_reviews(
             r.get("pros"),
             r.get("cons"),
             r.get("reviewer_name"),
-            r.get("reviewer_title"),
+            reviewer_title,
             reviewer_company,
             reviewer_company_norm,
             r.get("company_size_raw"),

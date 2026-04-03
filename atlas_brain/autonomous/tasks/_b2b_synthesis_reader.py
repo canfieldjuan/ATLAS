@@ -8,6 +8,7 @@ Handles both v1 and v2 schemas transparently.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -95,6 +96,142 @@ _CONSUMER_REQUIRED_CONTRACTS = {
         "account_reasoning",
     ),
 }
+
+_PACKET_SCHEMA_VERSION = "witness_packet_v1"
+
+
+def _coerce_json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _collect_reference_source_ids(value: Any, sink: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"source_id", "_sid"} and isinstance(item, str) and item.strip():
+                sink.add(item.strip())
+                continue
+            if key == "citations" and isinstance(item, list):
+                for citation in item:
+                    if isinstance(citation, str) and citation.strip():
+                        sink.add(citation.strip())
+                continue
+            _collect_reference_source_ids(item, sink)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_reference_source_ids(item, sink)
+
+
+def _packet_artifacts_from_payload(packet_payload: dict[str, Any]) -> dict[str, Any]:
+    witness_pack = packet_payload.get("witness_pack")
+    section_packets = packet_payload.get("section_packets")
+    artifacts: dict[str, Any] = {}
+    if isinstance(witness_pack, list) and witness_pack:
+        artifacts["witness_pack"] = [dict(item) for item in witness_pack if isinstance(item, dict)]
+    if isinstance(section_packets, dict) and section_packets:
+        artifacts["section_packets"] = dict(section_packets)
+    return artifacts
+
+
+def _reference_ids_from_contracts_and_packet(
+    raw: dict[str, Any],
+    packet_payload: dict[str, Any],
+) -> dict[str, list[str]]:
+    referenced_ids: set[str] = set()
+    contracts = raw.get("reasoning_contracts")
+    _collect_reference_source_ids(contracts if isinstance(contracts, dict) else raw, referenced_ids)
+
+    metric_source_ids: set[str] = set()
+    metric_ledger = packet_payload.get("metric_ledger")
+    if isinstance(metric_ledger, list):
+        for entry in metric_ledger:
+            if not isinstance(entry, dict):
+                continue
+            sid = str(entry.get("_sid") or "").strip()
+            if sid:
+                metric_source_ids.add(sid)
+    aggregates = packet_payload.get("precomputed_aggregates")
+    if isinstance(aggregates, dict):
+        for value in aggregates.values():
+            if not isinstance(value, dict):
+                continue
+            sid = str(value.get("_sid") or "").strip()
+            if sid:
+                metric_source_ids.add(sid)
+
+    witness_source_ids: set[str] = set()
+    witness_pack = packet_payload.get("witness_pack")
+    if isinstance(witness_pack, list):
+        for witness in witness_pack:
+            if not isinstance(witness, dict):
+                continue
+            sid = str(witness.get("_sid") or witness.get("witness_id") or "").strip()
+            if sid:
+                witness_source_ids.add(sid)
+
+    resolved: dict[str, list[str]] = {}
+    metric_ids = sorted(referenced_ids.intersection(metric_source_ids))
+    witness_ids = sorted(referenced_ids.intersection(witness_source_ids))
+    if metric_ids:
+        resolved["metric_ids"] = metric_ids
+    if witness_ids:
+        resolved["witness_ids"] = witness_ids
+    return resolved
+
+
+def _merge_packet_fallback(
+    raw: dict[str, Any],
+    packet_payload: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(raw)
+    packet_artifacts = merged.get("packet_artifacts")
+    if not isinstance(packet_artifacts, dict) or not packet_artifacts:
+        packet_artifacts = _packet_artifacts_from_payload(packet_payload)
+        if packet_artifacts:
+            merged["packet_artifacts"] = packet_artifacts
+
+    reference_ids = merged.get("reference_ids")
+    if not isinstance(reference_ids, dict) or not reference_ids:
+        resolved_refs = _reference_ids_from_contracts_and_packet(merged, packet_payload)
+        if resolved_refs:
+            merged["reference_ids"] = resolved_refs
+    return merged
+
+
+async def _load_packet_payload_for_vendor(
+    pool,
+    *,
+    vendor_name: str,
+    as_of_date: date,
+    analysis_window_days: int,
+) -> dict[str, Any]:
+    row = await pool.fetchrow(
+        """
+        SELECT packet
+        FROM b2b_vendor_reasoning_packets
+        WHERE LOWER(vendor_name) = LOWER($1)
+          AND as_of_date = $2
+          AND analysis_window_days = $3
+          AND schema_version = $4
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        vendor_name,
+        as_of_date,
+        analysis_window_days,
+        _PACKET_SCHEMA_VERSION,
+    )
+    packet = _coerce_json_dict(row.get("packet")) if row else {}
+    payload = packet.get("payload")
+    return dict(payload) if isinstance(payload, dict) else {}
 
 
 def _repair_stale_timing_support(contracts: dict[str, Any]) -> dict[str, Any]:
@@ -1115,12 +1252,17 @@ async def load_best_reasoning_view(
         )
 
     if synth_row:
-        import json as _json
-
-        raw = synth_row["synthesis"]
-        if isinstance(raw, str):
-            raw = _json.loads(raw)
-        if isinstance(raw, dict) and raw:
+        raw = _coerce_json_dict(synth_row["synthesis"])
+        if raw:
+            if not raw.get("packet_artifacts") or not raw.get("reference_ids"):
+                packet_payload = await _load_packet_payload_for_vendor(
+                    pool,
+                    vendor_name=synth_row["vendor_name"],
+                    as_of_date=synth_row["as_of_date"],
+                    analysis_window_days=analysis_window_days,
+                )
+                if packet_payload:
+                    raw = _merge_packet_fallback(raw, packet_payload)
             return load_synthesis_view(
                 raw,
                 vendor_name=synth_row["vendor_name"],
@@ -1219,8 +1361,6 @@ async def load_best_reasoning_views(
     if not vendor_names:
         return views
 
-    import json as _json
-
     lower_names = [v.lower() for v in vendor_names]
 
     # --- Bulk synthesis query ----------------------------------------------
@@ -1255,16 +1395,21 @@ async def load_best_reasoning_views(
 
     covered: set[str] = set()
     for row in synth_rows:
-        raw = row.get("synthesis")
-        if raw is None:
-            continue
-        if isinstance(raw, str):
-            raw = _json.loads(raw)
-        if not isinstance(raw, dict) or not raw:
+        raw = _coerce_json_dict(row.get("synthesis"))
+        if not raw:
             continue
         vname = row.get("vendor_name")
         if not vname:
             continue
+        if not raw.get("packet_artifacts") or not raw.get("reference_ids"):
+            packet_payload = await _load_packet_payload_for_vendor(
+                pool,
+                vendor_name=vname,
+                as_of_date=row["as_of_date"],
+                analysis_window_days=analysis_window_days,
+            )
+            if packet_payload:
+                raw = _merge_packet_fallback(raw, packet_payload)
         views[vname] = load_synthesis_view(
             raw,
             vendor_name=vname,
@@ -1348,8 +1493,6 @@ async def load_prior_reasoning_snapshots(
     if not vendor_names:
         return snapshots
 
-    import json as _json
-
     cutoff = before_date or date.today()
     requested_by_lower: dict[str, str] = {}
     lower_names: list[str] = []
@@ -1385,9 +1528,18 @@ async def load_prior_reasoning_snapshots(
         requested_name = requested_by_lower.get(lowered)
         if not requested_name:
             continue
-        raw = row["synthesis"]
-        if isinstance(raw, str):
-            raw = _json.loads(raw)
+        raw = _coerce_json_dict(row["synthesis"])
+        if not raw:
+            continue
+        if not raw.get("packet_artifacts") or not raw.get("reference_ids"):
+            packet_payload = await _load_packet_payload_for_vendor(
+                pool,
+                vendor_name=row["vendor_name"],
+                as_of_date=row["as_of_date"],
+                analysis_window_days=analysis_window_days,
+            )
+            if packet_payload:
+                raw = _merge_packet_fallback(raw, packet_payload)
         view = load_synthesis_view(
             raw,
             vendor_name=row["vendor_name"],

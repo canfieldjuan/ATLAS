@@ -16,11 +16,14 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 
 from ...config import settings
+from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
+from ...services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ._b2b_witnesses import (
@@ -441,7 +444,7 @@ async def _call_openrouter_tier1(
         return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
-def _tier1_has_extraction_gaps(tier1: dict) -> bool:
+def _tier1_has_extraction_gaps(tier1: dict, *, source: str | None = None) -> bool:
     """Check if tier 1 left gaps that tier 2 should fill.
 
     Tier 2 adds: pain_categories, competitor classification, buyer_authority,
@@ -457,6 +460,34 @@ def _tier1_has_extraction_gaps(tier1: dict) -> bool:
     churn = tier1.get("churn_signals") or {}
     has_churn = any(bool(v) for v in churn.values())
     has_evidence = bool(complaints or quotes or competitors or pricing or rec_lang)
+    source_norm = str(source or "").strip().lower()
+    strict_sources = set(
+        parse_source_allowlist(settings.b2b_churn.enrichment_tier2_strict_sources)
+    )
+    if source_norm in strict_sources:
+        complaint_count = len(complaints) if isinstance(complaints, list) else 0
+        quote_count = len(quotes) if isinstance(quotes, list) else 0
+        evidence_groups = sum(
+            1
+            for present in (
+                bool(complaints),
+                bool(quotes),
+                bool(competitors),
+                bool(pricing),
+                bool(rec_lang),
+            )
+            if present
+        )
+        has_strong_structured_evidence = (
+            bool(competitors)
+            or bool(pricing)
+            or complaint_count >= int(settings.b2b_churn.enrichment_tier2_strict_min_complaints)
+            or (
+                quote_count >= int(settings.b2b_churn.enrichment_tier2_strict_min_quotes)
+                and evidence_groups >= 2
+            )
+        )
+        return has_churn or has_strong_structured_evidence
     # Tier 2 fires when the review has substance worth classifying:
     # 1. Any churn signal or negative evidence -> need pain classification
     # 2. Competitors mentioned -> need evidence_type + displacement scoring
@@ -1064,7 +1095,8 @@ _TIMELINE_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _TIMELINE_CONTRACT_END_PATTERNS = (
     "contract end", "contract ends", "contract expires", "expiration date",
     "expiry date", "renewal date", "renewal window", "term ends", "term expires",
-    "auto renew", "auto-renew", "automatic renewal",
+    "auto renew", "auto-renew", "automatic renewal", "at renewal", "upon renewal",
+    "final month of", "current contract",
 )
 _TIMELINE_DECISION_DEADLINE_PATTERNS = (
     "notice", "notice period", "before renewal", "before the contract ends",
@@ -1072,10 +1104,78 @@ _TIMELINE_DECISION_DEADLINE_PATTERNS = (
     "evaluation", "considering", "switch", "switching", "migrate", "migration",
     "cutover", "go live", "go-live", "cancel by",
 )
+_TIMELINE_CONTRACT_EVENT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:at|upon)\s+(?:the\s+)?renewal\b", re.I),
+    re.compile(r"\b(?:auto[- ]?renew(?:al)?|annual renewal|next renewal|renewal date|renewal window)\b", re.I),
+    re.compile(r"\bfinal month of (?:my|our|the) current contract\b", re.I),
+    re.compile(r"\b(?:current|existing)\s+contract\b", re.I),
+)
 _TIMELINE_AMBIGUOUS_VENDOR_TOKENS = {"copper", "close"}
 _TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS = (
     "crm", "sales", "pipeline", "lead", "leads", "deal", "deals", "account",
     "contact", "contacts", "prospect", "prospects", "software", "saas",
+)
+_BUDGET_CURRENCY_TOKEN_RE = re.compile(
+    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)",
+    re.IGNORECASE,
+)
+_BUDGET_ANY_AMOUNT_TOKEN_RE = re.compile(
+    r"(?:\$|usd\s*|\u20ac|eur\s*|\u00a3|gbp\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?",
+    re.IGNORECASE,
+)
+_BUDGET_ANNUAL_AMOUNT_RE = re.compile(
+    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)"
+    r"\s*(?P<period>(?:/\s*|\bper\b\s*|\ba\b\s*)?(?:yr|year)\b|annually\b|annual\b|yearly\b)",
+    re.IGNORECASE,
+)
+_BUDGET_PRICE_PER_SEAT_RE = re.compile(
+    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)"
+    r"\s*(?:/|\bper\b)\s*(?:seat|user|license|licence)\b"
+    r"(?:\s*(?:/|\bper\b)\s*(?:monthly|month|mo|annually|annual|year|yr))?",
+    re.IGNORECASE,
+)
+_BUDGET_SEAT_COUNT_RE = re.compile(
+    r"\b(?P<count>\d[\d,]{0,6})\s+(?P<unit>seats?|users?|licenses?|licences?)\b",
+    re.IGNORECASE,
+)
+_BUDGET_PRICE_INCREASE_RE = re.compile(
+    r"\b(?:\d+(?:\.\d+)?%\s+(?:price\s+)?(?:increase|higher|more|jump|hike)"
+    r"|(?:price|pricing|renewal)\s+(?:increase|jump|hike)"
+    r"|(?:raised|increased)\s+(?:our\s+)?(?:price|pricing|renewal|invoice))\b",
+    re.IGNORECASE,
+)
+_BUDGET_PRICE_INCREASE_DETAIL_RE = re.compile(
+    r"\b(?:\d+(?:\.\d+)?%\s+(?:price\s+)?(?:increase|higher|more|jump|hike)"
+    r"|(?:price|pricing|renewal)\s+(?:increase|jump|hike)[^.!,;]{0,80}"
+    r"|(?:raised|increased)[^.!,;]{0,80})",
+    re.IGNORECASE,
+)
+_BUDGET_COMMERCIAL_CONTEXT_PATTERNS = (
+    "pricing", "price", "priced", "cost", "costs", "costly", "expensive",
+    "budget", "billing", "invoice", "overcharg", "renewal", "quote", "quoted",
+    "contract", "subscription", "license", "licence", "plan", "seat", "user",
+)
+_BUDGET_ANNUAL_CONTEXT_PATTERNS = (
+    "renewal", "quote", "quoted", "contract", "subscription", "license",
+    "licence", "annual", "annually", "yearly", "per year", "/year", "/yr",
+)
+_BUDGET_MONTHLY_PERIOD_PATTERNS = (
+    "monthly", "per month", "/month", "/mo", "a month",
+)
+_BUDGET_ANNUAL_PERIOD_PATTERNS = (
+    "annual", "annually", "yearly", "per year", "/year", "/yr", "a year", "a yr",
+)
+_BUDGET_PER_UNIT_PATTERNS = (
+    "per seat", "/seat", "per user", "/user", "per license", "/license",
+    "per licence", "/licence", "per agent", "/agent", "per person", "/person",
+    "per employee", "/employee", "per endpoint", "/endpoint", "per device", "/device",
+    "per member", "/member", "per contact", "/contact",
+)
+_BUDGET_NOISE_PATTERNS = (
+    "salary", "salaries", "compensation", "bonus", "payroll", "hourly",
+    "per hour", "an hour", "wage", "wages", "job offer", "interview", "intern",
+    "income", "revenue", "profit", "arr", "mrr", "valuation", "mortgage",
+    "rent", "tuition", "commission",
 )
 
 
@@ -1100,6 +1200,25 @@ def _extract_concrete_timeline_anchor(text: Any) -> str | None:
     match = _TIMELINE_RELATIVE_ANCHOR_RE.search(raw_text)
     if match:
         return _normalize_timeline_anchor(match.group(0))
+    return None
+
+
+def _extract_contract_end_event_anchor(text: Any) -> str | None:
+    raw_text = str(text or "")
+    if not raw_text.strip():
+        return None
+    for pattern in _TIMELINE_CONTRACT_EVENT_PATTERNS:
+        match = pattern.search(raw_text)
+        if not match:
+            continue
+        anchor = _normalize_timeline_anchor(match.group(0))
+        if not anchor:
+            continue
+        if "renew" in anchor:
+            return "renewal"
+        if "current contract" in anchor:
+            return "current contract end"
+        return anchor
     return None
 
 
@@ -1219,6 +1338,15 @@ def _derive_concrete_timeline_fields(
             evaluation_deadline = anchor
             continue
 
+    if not contract_end and source_row is not None and _has_timeline_commercial_signal(result, source_row):
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        )
+        contract_event_anchor = _extract_contract_end_event_anchor(review_blob)
+        if contract_event_anchor:
+            contract_end = contract_event_anchor
+
     return contract_end, evaluation_deadline
 
 
@@ -1261,11 +1389,305 @@ def _derive_decision_timeline(
     return "unknown"
 
 
+def _budget_match_window(text: str, match: re.Match[str], radius: int = 56) -> str:
+    start = max(0, match.start() - radius)
+    end = min(len(text), match.end() + radius)
+    return text[start:end].lower()
+
+
+def _normalize_budget_value_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.lower()
+    text = re.sub(r"\busd\b\s*", "$", text)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\$\s+", "$", text)
+    text = re.sub(r"(?<=[0-9km])a(year|yr)\b", r" a \1", text)
+    text = re.sub(r"\s*/\s*", "/", text)
+    text = re.sub(r"\bper\s+", "per ", text)
+    text = re.sub(r"\ba\s+(year|yr)\b", r"a \1", text)
+    text = text.strip()
+    return text or None
+
+
+def _normalize_budget_detail_text(value: Any) -> str | None:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n'\".,;:()[]{}")
+    return text or None
+
+
+def _extract_budget_currency_marker(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered.startswith("usd") or "$" in text:
+        return "$"
+    if lowered.startswith("eur") or "\u20ac" in text:
+        return "\u20ac"
+    if lowered.startswith("gbp") or "\u00a3" in text:
+        return "\u00a3"
+    return None
+
+
+def _extract_single_budget_amount(value: Any) -> tuple[str | None, float | None]:
+    text = str(value or "").strip()
+    if not text:
+        return None, None
+    matches = list(_BUDGET_ANY_AMOUNT_TOKEN_RE.finditer(text))
+    if len(matches) != 1:
+        return None, None
+    raw_amount = matches[0].group(0)
+    currency = _extract_budget_currency_marker(raw_amount)
+    amount = _extract_numeric_amount(raw_amount)
+    if currency is None or amount is None:
+        return None, None
+    return currency, amount
+
+
+def _extract_budget_period_multiplier(value: Any) -> int | None:
+    text = str(value or "").lower()
+    if not text:
+        return None
+    if _contains_any(text, _BUDGET_ANNUAL_PERIOD_PATTERNS):
+        return 1
+    if _contains_any(text, _BUDGET_MONTHLY_PERIOD_PATTERNS):
+        return 12
+    return None
+
+
+def _format_annual_budget_amount(currency: str, amount: float) -> str | None:
+    if amount <= 0 or amount > 1_000_000_000_000:
+        return None
+    if amount >= 1_000_000:
+        scaled = amount / 1_000_000
+        suffix = "m"
+    elif amount >= 1_000:
+        scaled = amount / 1_000
+        suffix = "k"
+    else:
+        scaled = amount
+        suffix = ""
+
+    if abs(scaled - round(scaled)) < 1e-9:
+        value_text = str(int(round(scaled)))
+    elif scaled >= 100:
+        value_text = f"{scaled:.0f}"
+    elif scaled >= 10:
+        value_text = f"{scaled:.1f}".rstrip("0").rstrip(".")
+    else:
+        value_text = f"{scaled:.2f}".rstrip("0").rstrip(".")
+    return f"{currency}{value_text}{suffix}/year"
+
+
+def _derive_annual_spend_from_unit_price(budget: dict[str, Any]) -> str | None:
+    try:
+        seat_count = int(budget.get("seat_count"))
+    except (TypeError, ValueError):
+        return None
+    if not (1 <= seat_count <= 1_000_000):
+        return None
+
+    currency, unit_amount = _extract_single_budget_amount(budget.get("price_per_seat"))
+    if currency is None or unit_amount is None:
+        return None
+
+    period_multiplier = _extract_budget_period_multiplier(budget.get("price_per_seat"))
+    if period_multiplier is None:
+        return None
+
+    return _format_annual_budget_amount(currency, unit_amount * seat_count * period_multiplier)
+
+
+def _has_budget_noise_context(text: str) -> bool:
+    return _contains_any(str(text or "").lower(), _BUDGET_NOISE_PATTERNS)
+
+
+def _has_budget_commercial_signal(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> bool:
+    churn = result.get("churn_signals") or {}
+    pricing_phrases = _normalize_text_list(result.get("pricing_phrases"))
+    summary_text = str((source_row or {}).get("summary") or "").strip().lower()
+    review_blob = _combined_source_text(source_row)
+    review_norm = _normalize_compare_text(review_blob)
+    structured_churn = any((
+        bool(churn.get("intent_to_leave")),
+        bool(churn.get("actively_evaluating")),
+        bool(churn.get("migration_in_progress")),
+        bool(churn.get("contract_renewal_mentioned")),
+    ))
+    if not (pricing_phrases or structured_churn or _has_commercial_context(review_norm)):
+        return False
+    if source_row is None:
+        return True
+
+    noisy_sources = {
+        item.strip().lower()
+        for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
+        if item.strip()
+    }
+    source = str(source_row.get("source") or "").strip().lower()
+    if source not in noisy_sources:
+        return True
+
+    vendor_norm = _normalize_compare_text(source_row.get("vendor_name"))
+    product_norm = _normalize_compare_text(source_row.get("product_name"))
+    product_hit = (
+        bool(source_row.get("product_name"))
+        and product_norm != vendor_norm
+        and _text_mentions_name(review_norm, source_row.get("product_name"))
+    )
+    vendor_hit = (
+        bool(source_row.get("vendor_name"))
+        and _text_mentions_name(review_norm, source_row.get("vendor_name"))
+    )
+    if vendor_norm in _TIMELINE_AMBIGUOUS_VENDOR_TOKENS and vendor_hit:
+        vendor_hit = _contains_any(review_blob, _TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS)
+    if _has_consumer_context(review_norm) and not (product_hit or vendor_hit or structured_churn):
+        return False
+    if _has_technical_context(summary_text, review_norm) and not structured_churn:
+        return False
+    return any((
+        product_hit,
+        vendor_hit,
+        structured_churn,
+        _has_strong_commercial_context(review_norm) and not _has_budget_noise_context(review_blob),
+    ))
+
+
+def _derive_budget_signals(result: dict, source_row: dict[str, Any]) -> dict[str, Any]:
+    budget = result.get("budget_signals")
+    if not isinstance(budget, dict):
+        budget = {}
+        result["budget_signals"] = budget
+
+    if not _has_budget_commercial_signal(result, source_row):
+        return budget
+
+    candidates: list[str] = []
+    seen_candidates: set[str] = set()
+    for phrase in _normalize_text_list(result.get("pricing_phrases")):
+        lowered = phrase.lower()
+        if lowered not in seen_candidates:
+            seen_candidates.add(lowered)
+            candidates.append(phrase)
+    review_blob = _combined_source_text(source_row)
+    if review_blob.strip():
+        candidates.append(review_blob)
+
+    if not budget.get("price_per_seat"):
+        for text in candidates:
+            match = _BUDGET_PRICE_PER_SEAT_RE.search(text)
+            if not match:
+                continue
+            window = _budget_match_window(text, match)
+            if _has_budget_noise_context(window):
+                continue
+            normalized = _normalize_budget_value_text(match.group(0))
+            if normalized:
+                budget["price_per_seat"] = normalized
+                break
+
+    if not budget.get("annual_spend_estimate"):
+        for text in candidates:
+            match = _BUDGET_ANNUAL_AMOUNT_RE.search(text)
+            if not match:
+                continue
+            window = _budget_match_window(text, match)
+            if _has_budget_noise_context(window):
+                continue
+            normalized = _normalize_budget_value_text(match.group(0))
+            if normalized:
+                budget["annual_spend_estimate"] = normalized
+                break
+        if not budget.get("annual_spend_estimate"):
+            for text in candidates:
+                for match in _BUDGET_CURRENCY_TOKEN_RE.finditer(text):
+                    window = _budget_match_window(text, match)
+                    if _has_budget_noise_context(window):
+                        continue
+                    if _contains_any(window, _BUDGET_PER_UNIT_PATTERNS):
+                        continue
+                    if _contains_any(window, _BUDGET_MONTHLY_PERIOD_PATTERNS):
+                        continue
+                    if not _contains_any(window, _BUDGET_ANNUAL_CONTEXT_PATTERNS):
+                        continue
+                    normalized = _normalize_budget_value_text(match.group("raw"))
+                    if normalized:
+                        budget["annual_spend_estimate"] = normalized
+                        break
+                if budget.get("annual_spend_estimate"):
+                    break
+
+    if not budget.get("seat_count"):
+        for text in candidates:
+            for match in _BUDGET_SEAT_COUNT_RE.finditer(text):
+                window = _budget_match_window(text, match)
+                if _has_budget_noise_context(window):
+                    continue
+                if not _contains_any(window, _BUDGET_COMMERCIAL_CONTEXT_PATTERNS):
+                    continue
+                try:
+                    count = int(match.group("count").replace(",", ""))
+                except ValueError:
+                    continue
+                if 1 <= count <= 1_000_000:
+                    budget["seat_count"] = count
+                    break
+            if budget.get("seat_count"):
+                break
+
+    if not budget.get("annual_spend_estimate"):
+        derived_annual_spend = _derive_annual_spend_from_unit_price(budget)
+        if derived_annual_spend:
+            budget["annual_spend_estimate"] = derived_annual_spend
+
+    if not _coerce_bool(budget.get("price_increase_mentioned")):
+        for text in candidates:
+            match = _BUDGET_PRICE_INCREASE_RE.search(text)
+            if not match:
+                continue
+            window = _budget_match_window(text, match)
+            if _has_budget_noise_context(window):
+                continue
+            if not _contains_any(window, _BUDGET_COMMERCIAL_CONTEXT_PATTERNS):
+                continue
+            budget["price_increase_mentioned"] = True
+            if not budget.get("price_increase_detail"):
+                detail_match = _BUDGET_PRICE_INCREASE_DETAIL_RE.search(text)
+                detail = _normalize_budget_detail_text(
+                    detail_match.group(0) if detail_match else match.group(0)
+                )
+                if detail:
+                    budget["price_increase_detail"] = detail
+            break
+    elif not budget.get("price_increase_detail"):
+        for text in candidates:
+            detail_match = _BUDGET_PRICE_INCREASE_DETAIL_RE.search(text)
+            if detail_match:
+                detail = _normalize_budget_detail_text(detail_match.group(0))
+                if detail:
+                    budget["price_increase_detail"] = detail
+                    break
+
+    return budget
+
+
 def _extract_numeric_amount(value: Any) -> float | None:
     if value in (None, ""):
         return None
-    match = re.search(r"(\d+(?:\.\d+)?)", str(value))
-    return float(match.group(1)) if match else None
+    match = re.search(r"(\d[\d,]*(?:\.\d+)?)(?:\s*([km]))?", str(value).lower())
+    if not match:
+        return None
+    amount = float(match.group(1).replace(",", ""))
+    suffix = match.group(2)
+    if suffix == "k":
+        amount *= 1_000
+    elif suffix == "m":
+        amount *= 1_000_000
+    return amount
 
 
 def _derive_contract_value_signal(result: dict) -> str:
@@ -1442,13 +1864,13 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     pricing_phrases = result.get("pricing_phrases", [])
     rec_lang = result.get("recommendation_language", [])
     events = result.get("event_mentions", [])
-    budget = result.get("budget_signals", {})
     reviewer = result.get("reviewer_context", {})
 
     # 0. deterministic replacements for deprecated Tier 2 classify path
     result["pain_categories"] = _derive_pain_categories(result)
     result["competitors_mentioned"] = _recover_competitor_mentions(result, source_row)
     result["competitors_mentioned"] = _derive_competitor_annotations(result, source_row)
+    _derive_budget_signals(result, source_row)
 
     ba = result.get("buyer_authority")
     if not isinstance(ba, dict):
@@ -1622,6 +2044,19 @@ def _finalize_enrichment_for_persist(
         return None, "validation_failed"
 
     return payload, None
+
+
+def _trusted_reviewer_company_name(source_row: dict[str, Any] | None) -> str | None:
+    """Return a safe reviewer company candidate from trusted raw fields."""
+    row = source_row if isinstance(source_row, dict) else {}
+    company = str(row.get("reviewer_company") or "").strip()
+    if not company:
+        return None
+    company_norm = normalize_company_name(company) or company.lower()
+    vendor_norm = normalize_company_name(str(row.get("vendor_name") or "")) or ""
+    if vendor_norm and company_norm == vendor_norm:
+        return None
+    return company
 
 
 async def _notify_high_urgency(
@@ -2247,11 +2682,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         return _finish(False)
 
     source = str(row.get("source") or "").strip().lower()
-    skip_sources = {
-        item.strip().lower()
-        for item in str(settings.b2b_churn.enrichment_skip_sources or "").split(",")
-        if item.strip()
-    }
+    skip_sources = _effective_enrichment_skip_sources()
     if source in skip_sources:
         await pool.execute(
             """
@@ -2327,7 +2758,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         tier2 = None
         tier2_model = None
         tier2_cache_hit = False
-        if _tier1_has_extraction_gaps(tier1):
+        if _tier1_has_extraction_gaps(tier1, source=row.get("source")):
             if use_openrouter:
                 tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
                     _call_openrouter_tier2(
@@ -2869,20 +3300,85 @@ _ROLE_TYPE_ALIASES = {
     "unknown": "unknown",
 }
 
-_NOISY_REVIEWER_TITLE_PATTERNS = (
-    re.compile(r"^repeat churn signal", re.I),
-    re.compile(r"score:\s*\d", re.I),
-)
+_ROLE_LEVEL_ALIASES = {
+    "executive": "executive",
+    "exec": "executive",
+    "csuite": "executive",
+    "cxo": "executive",
+    "ceo": "executive",
+    "cto": "executive",
+    "cfo": "executive",
+    "cio": "executive",
+    "cmo": "executive",
+    "coo": "executive",
+    "cro": "executive",
+    "president": "executive",
+    "founder": "executive",
+    "owner": "executive",
+    "executivedirector": "executive",
+    "presidentfounder": "executive",
+    "ownermanagingmember": "executive",
+    "ed": "executive",
+    "director": "director",
+    "vp": "director",
+    "vicepresident": "director",
+    "head": "director",
+    "directeur": "director",
+    "managingdirector": "director",
+    "headofcustomerexperience": "director",
+    "manager": "manager",
+    "lead": "manager",
+    "teamlead": "manager",
+    "supervisor": "manager",
+    "coordinator": "manager",
+    "projectmanager": "manager",
+    "programmanager": "manager",
+    "productmanager": "manager",
+    "marketingmanager": "manager",
+    "digitalmarketingmanager": "manager",
+    "salesmanager": "manager",
+    "operationsmanager": "manager",
+    "itmanager": "manager",
+    "businessdevelopmentmanager": "manager",
+    "clientservicemanager": "manager",
+    "customersuccessmanager": "manager",
+    "pmo": "manager",
+    "bdm": "manager",
+    "leadconsultant": "manager",
+    "projectmanagement": "manager",
+    "ic": "ic",
+    "individualcontributor": "ic",
+    "individual": "ic",
+    "user": "ic",
+    "product": "ic",
+    "marketing": "ic",
+    "digitalmarketing": "ic",
+    "consultant": "ic",
+    "customersupport": "ic",
+    "customersuccess": "ic",
+    "humanresources": "ic",
+    "softwaredevelopment": "ic",
+    "it": "ic",
+    "devops": "ic",
+    "swe": "ic",
+    "fse": "ic",
+    "cybersecurityanalyst": "ic",
+    "chemicalengineer": "ic",
+    "industrialengineer": "ic",
+    "customersatisfactionandqa": "ic",
+    "marketingteam": "ic",
+}
+
 _EXEC_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(vp\b|vice president|director|head of|chief|cfo|ceo|coo|cio|cto|cro|cmo|founder|owner|president)\b",
+    r"\b(vp\b|vice president|director|head of|chief|cfo|ceo|coo|cio|cto|cro|cmo|founder|owner|president|executive director|managing member)\b",
     re.I,
 )
 _CHAMPION_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(manager|lead|supervisor|coordinator)\b",
+    r"\b(manager|lead|team lead|supervisor|coordinator|pmo|project management|bdm)\b",
     re.I,
 )
 _EVALUATOR_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(analyst|architect|engineer|developer|administrator|admin|consultant|specialist)\b",
+    r"\b(analyst|architect|engineer|developer|administrator|admin|consultant|specialist|devops|qa|customer support|customer success|human resources|marketing|product|software development|cybersecurity|it\b|swe\b|fse\b)\b",
     re.I,
 )
 _EXEC_ROLE_TEXT_PATTERN = re.compile(
@@ -2938,6 +3434,14 @@ _END_USER_TEXT_PATTERNS = (
     re.compile(r"\bdaily use\b", re.I),
     re.compile(r"\buse it for\b", re.I),
 )
+_MANAGER_DECISION_TITLE_PATTERN = re.compile(
+    r"\b(operations manager|it manager|project manager|program manager|product manager|marketing manager|sales manager|business development manager|client service manager|customer success manager|team lead|lead consultant|pmo|bdm|security manager|risk management)\b",
+    re.I,
+)
+_COMMERCIAL_DECISION_TEXT_PATTERN = re.compile(
+    r"\b(renewal|quote|quoted|pricing|price increase|budget|contract|procurement|vendor selection|selected|chose|approved|sign(?:ed)? off|purchase|buying committee|rfp|rfq|evaluate|evaluation|migration)\b",
+    re.I,
+)
 
 
 def _canonical_role_type(value: Any) -> str:
@@ -2947,27 +3451,22 @@ def _canonical_role_type(value: Any) -> str:
     return _ROLE_TYPE_ALIASES.get(raw, "unknown")
 
 
+def _normalize_role_title_key(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = text.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", text.strip().lower())
+
+
 def _clean_reviewer_title_for_role_inference(value: Any) -> str:
-    title = str(value or "").strip()
+    title = sanitize_reviewer_title(value) or ""
     if not title or len(title) > 120:
-        return ""
-    lowered = title.lower()
-    if any(pattern.search(lowered) for pattern in _NOISY_REVIEWER_TITLE_PATTERNS):
         return ""
     return title
 
 
 def _canonical_role_level(value: Any) -> str:
-    raw = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
-    if raw in {"executive", "exec", "csuite", "cxo"}:
-        return "executive"
-    if raw in {"director", "vp", "vicepresident", "head"}:
-        return "director"
-    if raw in {"manager", "lead", "teamlead", "supervisor", "coordinator"}:
-        return "manager"
-    if raw in {"ic", "individualcontributor", "individual", "user"}:
-        return "ic"
-    return "unknown"
+    raw = _normalize_role_title_key(value)
+    return _ROLE_LEVEL_ALIASES.get(raw, "unknown")
 
 
 def _combined_source_text(source_row: dict[str, Any] | None) -> str:
@@ -2985,6 +3484,9 @@ def _combined_source_text(source_row: dict[str, Any] | None) -> str:
 def _infer_role_level_from_text(reviewer_title: Any, source_row: dict[str, Any] | None) -> str:
     title = _clean_reviewer_title_for_role_inference(reviewer_title)
     if title:
+        canonical = _canonical_role_level(title)
+        if canonical != "unknown":
+            return canonical
         if re.search(r"\b(cfo|ceo|coo|cio|cto|cro|cmo|chief|founder|owner|president)\b", title, re.I):
             return "executive"
         if re.search(r"\b(vp\b|vice president|svp|evp|director|head of)\b", title, re.I):
@@ -3005,6 +3507,53 @@ def _infer_role_level_from_text(reviewer_title: Any, source_row: dict[str, Any] 
     if _IC_ROLE_TEXT_PATTERN.search(source_text):
         return "ic"
     return "unknown"
+
+
+def _has_manager_level_decision_context(result: dict[str, Any], source_row: dict[str, Any] | None) -> bool:
+    buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
+    if _coerce_bool(buyer_authority.get("has_budget_authority")) is True:
+        return True
+
+    budget = _coerce_json_dict(result.get("budget_signals"))
+    if any(
+        budget.get(field)
+        for field in ("annual_spend_estimate", "price_per_seat", "price_increase_detail")
+    ):
+        return True
+    if _coerce_bool(budget.get("price_increase_mentioned")) is True:
+        return True
+
+    timeline = _coerce_json_dict(result.get("timeline"))
+    if timeline.get("contract_end") or timeline.get("evaluation_deadline"):
+        return True
+
+    churn = _coerce_json_dict(result.get("churn_signals"))
+    if any(
+        _coerce_bool(churn.get(field)) is True
+        for field in ("actively_evaluating", "migration_in_progress", "contract_renewal_mentioned")
+    ):
+        return True
+
+    return bool(_COMMERCIAL_DECISION_TEXT_PATTERN.search(_combined_source_text(source_row)))
+
+
+def _infer_decision_maker(result: dict[str, Any], source_row: dict[str, Any] | None) -> bool:
+    reviewer_context = _coerce_json_dict(result.get("reviewer_context"))
+    buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
+    role_level = _canonical_role_level(reviewer_context.get("role_level"))
+    if role_level in {"executive", "director"}:
+        return True
+    if _coerce_bool(buyer_authority.get("has_budget_authority")) is True:
+        return True
+    if _canonical_role_type(buyer_authority.get("role_type")) == "economic_buyer":
+        return True
+
+    title = _clean_reviewer_title_for_role_inference((source_row or {}).get("reviewer_title"))
+    if title and _EXEC_REVIEWER_TITLE_PATTERN.search(title):
+        return True
+    if title and _MANAGER_DECISION_TITLE_PATTERN.search(title):
+        return _has_manager_level_decision_context(result, source_row)
+    return False
 
 
 def _infer_buyer_role_type_from_text(
@@ -3117,10 +3666,21 @@ _REPAIR_CURRENCY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?", re.I)
 
 
 def _trusted_repair_sources() -> set[str]:
+    return set(
+        filter_deprecated_sources(
+            parse_source_allowlist(settings.b2b_churn.enrichment_priority_sources),
+            settings.b2b_churn.deprecated_review_sources,
+        )
+    )
+
+
+def _effective_enrichment_skip_sources() -> set[str]:
+    configured = parse_source_allowlist(settings.b2b_churn.enrichment_skip_sources)
+    deprecated = parse_source_allowlist(settings.b2b_churn.deprecated_review_sources)
     return {
-        source.strip().lower()
-        for source in str(settings.b2b_churn.enrichment_priority_sources or "").split(",")
-        if source.strip()
+        source
+        for source in [*configured, *deprecated]
+        if source
     }
 
 
@@ -3524,6 +4084,10 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         if not isinstance(bs, dict):
             result["budget_signals"] = {}
         else:
+            for field in ("annual_spend_estimate", "price_per_seat"):
+                if field in bs and bs[field] is not None and not isinstance(bs[field], (int, float)):
+                    text = _normalize_budget_value_text(bs[field])
+                    bs[field] = text if text else None
             if "seat_count" in bs and bs["seat_count"] is not None:
                 try:
                     seat = int(bs["seat_count"])
@@ -3533,6 +4097,11 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
             if "price_increase_mentioned" in bs:
                 coerced = _coerce_bool(bs["price_increase_mentioned"])
                 bs["price_increase_mentioned"] = coerced if coerced is not None else False
+            if "price_increase_detail" in bs and bs["price_increase_detail"] is not None:
+                detail = _normalize_budget_detail_text(bs["price_increase_detail"])
+                bs["price_increase_detail"] = detail if detail else None
+                if bs["price_increase_detail"] and not _coerce_bool(bs.get("price_increase_mentioned")):
+                    bs["price_increase_mentioned"] = True
 
     # use_case: dict with lists and lock_in_level
     uc = result.get("use_case")
@@ -3561,9 +4130,19 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         )
     reviewer_ctx["role_level"] = role_level
     decision_maker = _coerce_bool(reviewer_ctx.get("decision_maker"))
+    derived_decision_maker = _infer_decision_maker(result, source_row)
     if decision_maker is None:
-        decision_maker = role_level in {"executive", "director"}
+        decision_maker = derived_decision_maker
+    else:
+        decision_maker = bool(decision_maker or derived_decision_maker)
     reviewer_ctx["decision_maker"] = decision_maker
+    company_name = str(reviewer_ctx.get("company_name") or "").strip()
+    if company_name:
+        reviewer_ctx["company_name"] = company_name
+    else:
+        trusted_company = _trusted_reviewer_company_name(source_row)
+        if trusted_company:
+            reviewer_ctx["company_name"] = trusted_company
 
     # sentiment_trajectory: dict with direction
     st = result.get("sentiment_trajectory")
@@ -3594,15 +4173,18 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         if bstage and bstage not in _KNOWN_BUYING_STAGES:
             ba["buying_stage"] = "unknown"
         canonical_rt = _canonical_role_type(ba.get("role_type"))
+        derived_role_type = _infer_buyer_role_type(
+            ba,
+            reviewer_ctx,
+            (source_row or {}).get("reviewer_title"),
+            source_row,
+        )
         if canonical_rt == "unknown":
-            ba["role_type"] = _infer_buyer_role_type(
-                ba,
-                reviewer_ctx,
-                (source_row or {}).get("reviewer_title"),
-                source_row,
-            )
+            ba["role_type"] = derived_role_type
         else:
             ba["role_type"] = canonical_rt
+        if derived_role_type == "economic_buyer":
+            ba["role_type"] = "economic_buyer"
         if ba["role_type"] == "economic_buyer":
             reviewer_ctx["decision_maker"] = True
 

@@ -88,9 +88,9 @@ _BIO_COMPANY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
     # "I work at Acme" / "I work for Acme" / "we are at Acme" / "we use this at Acme"
     # NOTE: `work|worked` allows `at|for`; `am|was|are|use\s+\w+` only allows `at`
-    # to prevent false positives like "we use X for task management" → "task management".
+    # to prevent false positives like "we use X for task management" -> "task management".
     # Negative lookahead blocks article+determiner phrases like "a company that...",
-    # "an IT department", "the business", "our team" — these are descriptions, not names.
+    # "an IT department", "the business", "our team" - these are descriptions, not names.
     (re.compile(
         r"\b(?:I|we)\s+"
         r"(?:(?:work|worked)\s+(?:at|for)|(?:am|was|are|use\s+\w+(?:\s+\w+)?)\s+at)\s+"
@@ -101,7 +101,7 @@ _BIO_COMPANY_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
     # "Engineer @ Stripe"
     # Negative lookahead blocks conjunctions/pronouns/prepositions/past-tense
-    # verbs that appear in conversational text — e.g. "working @ mentioned on a
+    # verbs that appear in conversational text - e.g. "working @ mentioned on a
     # card" or "dev @ all the things".
     (re.compile(
         r"\b\w+(?:\s+\w+){0,2}\s*@\s*"
@@ -150,8 +150,26 @@ _ROLE_WORDS = frozenset({
     "analyst", "consultant", "architect", "designer", "admin",
     "sysadmin", "devops", "qa", "tester", "intern", "associate",
     "specialist", "coordinator", "officer", "president", "founder",
+    "principal",
     "ceo", "cto", "cio", "cfo", "coo", "vp", "svp", "evp",
 })
+
+_ROLE_TITLE_WORDS = frozenset(_ROLE_WORDS | {
+    "sales", "marketing", "customer", "success", "product", "operations",
+    "operation", "business", "finance", "financial", "data", "software",
+    "systems", "mechanical", "internet", "technical", "support", "services",
+    "service", "account", "accounts", "call", "center", "of", "and", "the",
+    "chief", "vice", "president", "owner", "administrator", "sre", "it",
+    "growth", "generator", "development", "student", "researcher", "phd",
+    "mba", "bsc", "msc", "ba", "ma", "bs", "ms", "jd", "md", "ad",
+})
+
+_NON_COMPANY_PREFIXES = (
+    "a ", "an ", "the ", "and ", "or ", "but ", "because ", "while ", "when ",
+    "if ", "as ", "since ", "earlier ", "expecting ", "running ", "trying ",
+    "send ", "using ", "use ", "work ", "worked ", "is ", "are ",
+    "was ", "were ", "specializes ", "specialises ",
+)
 
 # Terms that are definitively NOT company names regardless of extraction context.
 # Exact-match against the cleaned, lowercased capture.
@@ -184,6 +202,17 @@ _REJECT_COMPANY_TERMS = frozenset({
     "many of you", "like many of you",
     # Reddit flair false positives
     "moderator", "mod", "admin", "helper", "verified",
+    "commerce",
+})
+
+_TRAILING_CONTEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\s+in\s+(?:the|our|my|their|a|an)\b", re.IGNORECASE),
+    re.compile(r"\s+here\b", re.IGNORECASE),
+)
+
+_REDDIT_FLAIR_STATUS_WORDS = frozenset({
+    "moderator", "mod", "contributor", "verified", "seller", "buyer",
+    "helper", "member", "quality", "sale", "sales", "buy", "buys",
 })
 
 
@@ -194,6 +223,11 @@ _REJECT_COMPANY_TERMS = frozenset({
 def _clean_extracted_name(raw: str) -> str:
     """Clean up regex-extracted company name."""
     name = raw.strip()
+    for pattern in _TRAILING_CONTEXT_PATTERNS:
+        match = pattern.search(name)
+        if match:
+            name = name[:match.start()].strip()
+            break
     # Remove trailing role-like words
     words = name.split()
     while words and words[-1].lower() in _ROLE_WORDS:
@@ -201,26 +235,93 @@ def _clean_extracted_name(raw: str) -> str:
     name = " ".join(words).strip()
     # Remove trailing punctuation
     name = re.sub(r"[,;:.|-]+$", "", name).strip()
-    # Reject if too many words — real company names are rarely > 6 words.
+    # Reject if too many words - real company names are rarely > 6 words.
     # Anything longer is almost certainly a sentence fragment.
     if len(name.split()) > 6:
         return ""
     return name
 
 
-def _extract_from_bio_regex(text: str, field_name: str) -> ResolutionSignal | None:
+def _looks_like_role_title(name: str) -> bool:
+    """Reject captures that read like a job title rather than an employer."""
+    words = [
+        re.sub(r"[^a-z0-9]+", "", part.lower())
+        for part in str(name or "").split()
+    ]
+    words = [word for word in words if word]
+    if not words:
+        return False
+    return all(word in _ROLE_TITLE_WORDS for word in words)
+
+
+def _looks_like_sentence_fragment(name: str) -> bool:
+    lower = str(name or "").strip().lower()
+    if not lower:
+        return False
+    return lower.startswith(_NON_COMPANY_PREFIXES)
+
+
+def _has_company_style_cue(name: str) -> bool:
+    text = str(name or "").strip()
+    if not text:
+        return False
+    if "." in text or "&" in text:
+        return True
+    return any(ch.isupper() for ch in text if ch.isalpha())
+
+
+def _looks_like_reddit_flair_noise(candidate: str, role_part: str) -> bool:
+    text = str(candidate or "").strip()
+    if not text:
+        return False
+    if re.match(r"^[A-Z]:\s*\d+\b", text, re.IGNORECASE):
+        return True
+
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    if not words:
+        return False
+
+    right_words = {
+        word.lower()
+        for word in re.findall(r"[A-Za-z0-9]+", str(role_part or ""))
+    }
+    status_right = bool(right_words & _REDDIT_FLAIR_STATUS_WORDS)
+    suspicious_left = _looks_like_role_title(text) or any(
+        re.fullmatch(r"\d+[A-Z]?", word, re.IGNORECASE) for word in words
+    )
+    return status_right and suspicious_left
+
+
+def _extract_from_bio_regex(
+    text: str,
+    field_name: str,
+    *,
+    allowed_signal_types: set[str] | None = None,
+) -> ResolutionSignal | None:
     """Apply bio regex patterns to a text field. Returns first match."""
     if not text or len(text) < 5:
         return None
     for pattern, signal_type in _BIO_COMPANY_PATTERNS:
+        if allowed_signal_types is not None and signal_type not in allowed_signal_types:
+            continue
         m = pattern.search(text)
         if m:
             raw = _clean_extracted_name(m.group(1))
-            if raw and len(raw) >= 2 and raw.lower() not in _REJECT_COMPANY_TERMS:
+            if (
+                raw
+                and len(raw) >= 2
+                and raw.lower() not in _REJECT_COMPANY_TERMS
+                and not _looks_like_role_title(raw)
+                and not _looks_like_sentence_fragment(raw)
+                and (
+                    signal_type == "company_pipe_title"
+                    or _has_company_style_cue(raw)
+                )
+            ):
                 return ResolutionSignal(
                     signal_type=signal_type,
                     value=raw,
-                    confidence=0.6,
+                    confidence=0.35 if signal_type == "former_at_company" else 0.6,
                     source_field=field_name,
                 )
     return None
@@ -279,30 +380,48 @@ def _extract_from_reddit_metadata(review: dict) -> list[ResolutionSignal]:
     # Reddit flair: often "Company Name | Role" or "Role @ Company"
     flair = (raw_meta.get("author_flair_text") or "").strip()
     if flair:
+        skip_flair_bio = False
         # Try "Company | Role" format
         if "|" in flair:
             parts = flair.split("|", 1)
-            candidate = parts[0].strip()
-            if candidate and candidate.lower() not in _ROLE_WORDS and len(candidate) >= 3:
+            left_part = parts[0].strip()
+            right_part = parts[1].strip()
+            candidate = _clean_extracted_name(left_part)
+            if (
+                candidate
+                and candidate.lower() not in _REJECT_COMPANY_TERMS
+                and not _looks_like_role_title(candidate)
+                and not _looks_like_reddit_flair_noise(candidate, right_part)
+                and len(candidate) >= 3
+            ):
                 signals.append(ResolutionSignal(
                     signal_type="reddit_flair_company",
                     value=candidate,
                     confidence=0.65,
                     source_field="raw_metadata.author_flair_text",
                 ))
+            else:
+                skip_flair_bio = True
         # Try bio regex on flair text
-        bio_signal = _extract_from_bio_regex(flair, "raw_metadata.author_flair_text")
-        if bio_signal:
-            bio_signal.confidence = 0.6
-            signals.append(bio_signal)
+        if not skip_flair_bio:
+            bio_signal = _extract_from_bio_regex(flair, "raw_metadata.author_flair_text")
+            if bio_signal:
+                bio_signal.confidence = 0.6
+                signals.append(bio_signal)
 
     # Employment claim from insider evidence extraction
     if raw_meta.get("employment_claim"):
         # The review text itself may contain "I work at X"
         text = (review.get("review_text") or "")[:500]
-        bio_signal = _extract_from_bio_regex(text, "review_text")
+        bio_signal = _extract_from_bio_regex(
+            text,
+            "review_text",
+            allowed_signal_types={"work_at_company", "former_at_company"},
+        )
         if bio_signal:
-            bio_signal.confidence = 0.55
+            bio_signal.confidence = (
+                0.35 if raw_meta.get("employment_tense") == "past" else 0.55
+            )
             bio_signal.signal_type = "reddit_employment_claim"
             signals.append(bio_signal)
 
@@ -321,7 +440,7 @@ def _extract_from_quora_metadata(review: dict) -> list[ResolutionSignal]:
     # Quora credentials: "Software Engineer at Google (2015-present)"
     bio_signal = _extract_from_bio_regex(title, "reviewer_title")
     if bio_signal:
-        bio_signal.confidence = 0.65
+        bio_signal.confidence = 0.35 if bio_signal.signal_type == "former_at_company" else 0.65
         bio_signal.signal_type = "quora_credentials"
         signals.append(bio_signal)
     return signals
@@ -338,7 +457,7 @@ def _extract_from_producthunt_metadata(review: dict) -> list[ResolutionSignal]:
         return signals
     bio_signal = _extract_from_bio_regex(title, "reviewer_title")
     if bio_signal:
-        bio_signal.confidence = 0.6
+        bio_signal.confidence = 0.35 if bio_signal.signal_type == "former_at_company" else 0.6
         bio_signal.signal_type = "producthunt_headline"
         signals.append(bio_signal)
     return signals
@@ -366,16 +485,24 @@ def _extract_from_review_text(review: dict) -> list[ResolutionSignal]:
     # Summary first (shorter, more likely to self-identify)
     summary = (review.get("summary") or "").strip()
     if summary:
-        sig = _extract_from_bio_regex(summary, "summary")
+        sig = _extract_from_bio_regex(
+            summary,
+            "summary",
+            allowed_signal_types={"title_at_company", "work_at_company", "former_at_company"},
+        )
         if sig:
-            sig.confidence = 0.5
+            sig.confidence = 0.35 if sig.signal_type == "former_at_company" else 0.5
             signals.append(sig)
     # First 500 chars of review text
     text = (review.get("review_text") or "")[:500].strip()
     if text:
-        sig = _extract_from_bio_regex(text, "review_text")
+        sig = _extract_from_bio_regex(
+            text,
+            "review_text",
+            allowed_signal_types={"work_at_company", "former_at_company"},
+        )
         if sig:
-            sig.confidence = 0.45
+            sig.confidence = 0.35 if sig.signal_type == "former_at_company" else 0.45
             signals.append(sig)
     return signals
 
@@ -394,9 +521,13 @@ def _extract_from_hackernews_metadata(review: dict) -> list[ResolutionSignal]:
     # Scan review text for company mentions (HN posts are often first-person)
     text = (review.get("review_text") or "")[:500]
     if text:
-        sig = _extract_from_bio_regex(text, "review_text")
+        sig = _extract_from_bio_regex(
+            text,
+            "review_text",
+            allowed_signal_types={"work_at_company", "former_at_company"},
+        )
         if sig:
-            sig.confidence = 0.45
+            sig.confidence = 0.35 if sig.signal_type == "former_at_company" else 0.45
             sig.signal_type = "hackernews_text_company"
             signals.append(sig)
     return signals
@@ -448,7 +579,7 @@ def _apply_guardrails(
     if len(normalized) < 2:
         return ExcludedCandidate(name=candidate, reason="too_short")
 
-    # Looks like a domain — skipped for direct reviewer declarations
+    # Looks like a domain - skipped for direct reviewer declarations
     if not trust_direct:
         if re.match(r"^[a-z0-9-]+(?:\.[a-z0-9-]+)+$", normalized) and " " not in normalized:
             return ExcludedCandidate(name=candidate, reason="domain_like")
@@ -654,7 +785,7 @@ async def fetch_hn_profile(
     """Fetch HackerNews user profile. Returns {about, company_from_about, profile_urls}.
 
     HN API is public, no auth needed. The 'about' field is HTML with entities
-    (e.g. &#x2F; for /) — we decode entities before stripping tags so that
+    (e.g. &#x2F; for /) - we decode entities before stripping tags so that
     URLs and bio text are fully readable for regex and domain extraction.
     """
     if not username or not username.strip():
@@ -747,9 +878,9 @@ def extract_from_hn_profile(profile: dict[str, str]) -> ResolutionSignal | None:
     """Extract company signal from a fetched HN profile.
 
     Priority:
-      1. company_from_about — bio regex matched a company name in the about text
+      1. company_from_about - bio regex matched a company name in the about text
       2. bio regex re-run on about (redundant guard, handles edge cases)
-      3. profile_urls — domain of first non-platform URL in the about field
+      3. profile_urls - domain of first non-platform URL in the about field
     """
     company = (profile.get("company_from_about") or "").strip()
     if company:
@@ -764,7 +895,7 @@ def extract_from_hn_profile(profile: dict[str, str]) -> ResolutionSignal | None:
     if about:
         sig = _extract_from_bio_regex(about, "hn_user_profile.about")
         if sig:
-            sig.confidence = 0.6
+            sig.confidence = 0.35 if sig.signal_type == "former_at_company" else 0.6
             sig.signal_type = "hn_profile_about"
             return sig
     # Fall back: try to derive a company name from profile URLs in the about field.
@@ -799,7 +930,7 @@ def extract_from_github_profile(profile: dict[str, str]) -> list[ResolutionSigna
     if bio:
         sig = _extract_from_bio_regex(bio, "github_user_profile.bio")
         if sig:
-            sig.confidence = 0.6
+            sig.confidence = 0.35 if sig.signal_type == "former_at_company" else 0.6
             sig.signal_type = "github_profile_bio"
             signals.append(sig)
     return signals
@@ -813,7 +944,7 @@ async def fetch_reddit_profile(
 ) -> dict[str, str]:
     """Fetch Reddit user profile. Returns {bio, profile_urls}.
 
-    Reddit public API — no auth required. Sets a descriptive User-Agent to
+    Reddit public API - no auth required. Sets a descriptive User-Agent to
     comply with Reddit's API terms (otherwise returns 429/403).
     Respects Reddit's rate limit; callers should use a semaphore.
     """
@@ -866,7 +997,7 @@ def extract_from_reddit_profile(profile: dict[str, str]) -> ResolutionSignal | N
     if bio:
         sig = _extract_from_bio_regex(bio, "reddit_user_profile.bio")
         if sig:
-            sig.confidence = 0.55
+            sig.confidence = 0.35 if sig.signal_type == "former_at_company" else 0.55
             sig.signal_type = "reddit_profile_bio"
             return sig
     for url in (profile.get("profile_urls") or []):

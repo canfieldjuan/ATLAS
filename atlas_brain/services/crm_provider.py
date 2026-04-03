@@ -16,11 +16,83 @@ Usage:
 
 import json
 import logging
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
 logger = logging.getLogger("atlas.services.crm_provider")
+
+_INTERACTION_DEDUPE_SUMMARY_MAX_CHARS = 2000
+_INTERACTION_DEDUPE_ANCHOR_KEYS = (
+    "crm_event_id",
+    "source_ref",
+    "message_id",
+    "gmail_message_id",
+    "email_message_id",
+    "thread_id",
+    "appointment_id",
+    "invoice_id",
+    "external_id",
+)
+
+
+def _normalize_interaction_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _coerce_occurrence(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        parsed = value
+    elif value:
+        parsed = datetime.fromisoformat(str(value))
+    else:
+        parsed = datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _interaction_anchor(metadata: dict[str, Any]) -> str:
+    for key in _INTERACTION_DEDUPE_ANCHOR_KEYS:
+        value = metadata.get(key)
+        normalized = _normalize_interaction_text(value)
+        if normalized:
+            return f"{key}:{normalized}"
+    return ""
+
+
+def _interaction_dedupe_key(
+    *,
+    interaction_type: str,
+    summary: str,
+    occurred_at: datetime,
+    intent: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> str | None:
+    normalized_type = _normalize_interaction_text(interaction_type)
+    if not normalized_type:
+        return None
+    normalized_intent = _normalize_interaction_text(intent)
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    anchor = _interaction_anchor(metadata_dict)
+    if anchor:
+        basis = f"anchor|{normalized_type}|{anchor}"
+        return hashlib.md5(basis.encode("utf-8")).hexdigest()
+    normalized_summary = _normalize_interaction_text(summary)
+    if not normalized_summary:
+        return None
+    bucket = occurred_at.astimezone(timezone.utc).date().isoformat()
+    basis = "|".join(
+        [
+            "daily",
+            normalized_type,
+            bucket,
+            normalized_intent,
+            normalized_summary[:_INTERACTION_DEDUPE_SUMMARY_MAX_CHARS],
+        ]
+    )
+    return hashlib.md5(basis.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -307,22 +379,41 @@ class DatabaseCRMProvider:
         summary: str,
         occurred_at: Optional[str] = None,
         intent: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         from ..storage.database import get_db_pool
 
         pool = get_db_pool()
         interaction_id = str(uuid4())
-        occ = (
-            datetime.fromisoformat(occurred_at)
-            if occurred_at
-            else datetime.now(timezone.utc)
+        occ = _coerce_occurrence(occurred_at)
+        metadata_json = json.dumps(metadata or {})
+        dedupe_key = _interaction_dedupe_key(
+            interaction_type=interaction_type,
+            summary=summary,
+            occurred_at=occ,
+            intent=intent,
+            metadata=metadata or {},
         )
         row = await pool.fetchrow(
             """
-            INSERT INTO contact_interactions
-                (id, contact_id, interaction_type, summary, occurred_at, intent)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
+            WITH inserted AS (
+                INSERT INTO contact_interactions
+                    (id, contact_id, interaction_type, summary, occurred_at, intent, metadata, interaction_dedupe_key)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                ON CONFLICT (contact_id, interaction_type, interaction_dedupe_key)
+                    WHERE interaction_dedupe_key IS NOT NULL
+                    DO NOTHING
+                RETURNING contact_interactions.*, true AS _inserted
+            )
+            SELECT * FROM inserted
+            UNION ALL
+            SELECT ci.*, false AS _inserted
+            FROM contact_interactions ci
+            WHERE ci.contact_id = $2
+              AND ci.interaction_type = $3
+              AND ci.interaction_dedupe_key = $8
+              AND NOT EXISTS (SELECT 1 FROM inserted)
+            LIMIT 1
             """,
             interaction_id,
             contact_id,
@@ -330,18 +421,27 @@ class DatabaseCRMProvider:
             summary,
             occ,
             intent,
+            metadata_json,
+            dedupe_key,
         )
         result = dict(row) if row else {}
+        inserted = bool(result.pop("_inserted", False))
 
-        # Emit event for reasoning agent
-        from ..reasoning.producers import emit_if_enabled
-        await emit_if_enabled(
-            "crm.interaction_logged", "crm_provider",
-            {"contact_id": contact_id, "interaction_type": interaction_type,
-             "intent": intent, "summary_preview": summary[:200]},
-            entity_type="contact",
-            entity_id=contact_id,
-        )
+        if inserted:
+            # Emit event for reasoning agent only for new interactions.
+            from ..reasoning.producers import emit_if_enabled
+            await emit_if_enabled(
+                "crm.interaction_logged", "crm_provider",
+                {
+                    "contact_id": contact_id,
+                    "interaction_id": result.get("id"),
+                    "interaction_type": interaction_type,
+                    "intent": intent,
+                    "summary_preview": summary[:200],
+                },
+                entity_type="contact",
+                entity_id=contact_id,
+            )
         return result
 
     async def get_interactions(

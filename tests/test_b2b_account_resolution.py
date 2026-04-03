@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
+from atlas_brain.autonomous.tasks import b2b_account_resolution as task_mod
 from atlas_brain.services.b2b.account_resolver import (
     ExcludedCandidate,
     ResolutionResult,
@@ -57,11 +61,19 @@ class TestBioRegex:
         assert sig.value == "Acme Inc"
         assert sig.signal_type == "founder_of_company"
 
+    def test_founder_sentence_fragment_rejected(self):
+        sig = _extract_from_bio_regex("Founder, and like many of you", "bio")
+        assert sig is None
+
     def test_company_pipe_title(self):
         sig = _extract_from_bio_regex("Acme Corp | Senior Engineer", "bio")
         assert sig is not None
         assert sig.value == "Acme Corp"
         assert sig.signal_type == "company_pipe_title"
+
+    def test_company_pipe_title_rejects_role_like_prefix(self):
+        sig = _extract_from_bio_regex("Chief Growth Generator | RevOps", "bio")
+        assert sig is None
 
     def test_i_work_at(self):
         sig = _extract_from_bio_regex("I work at Google, on the Cloud team", "bio")
@@ -75,6 +87,25 @@ class TestBioRegex:
         assert sig.value == "Stripe"
         assert sig.signal_type == "work_at_company"
 
+    def test_work_at_sentence_fragment_rejected(self):
+        sig = _extract_from_bio_regex("I worked at earlier in my career", "bio")
+        assert sig is None
+
+    def test_work_at_company_with_context_trims_before_guardrails(self):
+        result = resolve_review(
+            {
+                "source": "reddit",
+                "review_text": "I work at Workday in the partner team and help support integrations.",
+                "raw_metadata": {"employment_claim": True},
+                "reviewer_company": None,
+                "reviewer_title": None,
+                "enrichment": None,
+            },
+            vendor_name="Workday",
+        )
+        assert result.resolved_company_name is None
+        assert any(exc.reason == "incumbent_vendor" for exc in result.excluded_candidates)
+
     def test_use_at_company(self):
         # "we use X at Company" is valid
         sig = _extract_from_bio_regex("we use this at Datadog", "bio")
@@ -83,7 +114,7 @@ class TestBioRegex:
         assert sig.signal_type == "work_at_company"
 
     def test_use_for_not_extracted(self):
-        # "we use X for task management" — should NOT extract "task management"
+        # "we use X for task management" - should NOT extract "task management"
         sig = _extract_from_bio_regex("we use Workday for task management", "bio")
         assert sig is None or sig.value != "task management"
 
@@ -93,48 +124,48 @@ class TestBioRegex:
         assert sig is None or sig.value != "project management"
 
     def test_are_for_not_extracted(self):
-        # "we are for open source" — should NOT extract "open source"
+        # "we are for open source" - should NOT extract "open source"
         sig = _extract_from_bio_regex("we are for open source projects", "bio")
         assert sig is None or sig.value != "open source projects"
 
     def test_article_a_not_extracted(self):
-        # "I work at a large tech company" — should NOT extract "a large tech company"
+        # "I work at a large tech company" - should NOT extract "a large tech company"
         sig = _extract_from_bio_regex("I work at a large tech company", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("a "))
 
     def test_article_an_not_extracted(self):
-        # "I work for an IT company" — should NOT extract "an IT company"
+        # "I work for an IT company" - should NOT extract "an IT company"
         sig = _extract_from_bio_regex("I work for an IT company", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("an "))
 
     def test_article_the_not_extracted(self):
-        # "I work at the business development team" — should NOT extract "the business..."
+        # "I work at the business development team" - should NOT extract "the business..."
         sig = _extract_from_bio_regex("I work at the business development team", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("the "))
 
     def test_possessive_our_not_extracted(self):
-        # "we are at our main office" — should NOT extract "our main office"
+        # "we are at our main office" - should NOT extract "our main office"
         sig = _extract_from_bio_regex("we are at our main office", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("our "))
 
     def test_company_name_with_a_prefix_still_works(self):
-        # "Acme" starts with 'A' but is NOT "a " (article) — must still resolve
+        # "Acme" starts with 'A' but is NOT "a " (article) - must still resolve
         sig = _extract_from_bio_regex("I work at Acme Corp", "bio")
         assert sig is not None
         assert sig.value == "Acme Corp"
 
     def test_email_provider_rejected(self):
-        # "handle@gmail" — should NOT extract "gmail" as a company name
+        # "handle@gmail" - should NOT extract "gmail" as a company name
         sig = _extract_from_bio_regex("johndoe @ gmail", "bio")
         assert sig is None or (sig.value and sig.value.lower() != "gmail")
 
     def test_generic_word_rejected(self):
-        # "I work at support" — "support" is a generic term, not a company
+        # "I work at support" - "support" is a generic term, not a company
         sig = _extract_from_bio_regex("I work at support", "bio")
         assert sig is None or (sig.value and sig.value.lower() != "support")
 
     def test_entrepreneur_rejected_from_founder(self):
-        # "Founder, entrepreneur" — "entrepreneur" is not a company name
+        # "Founder, entrepreneur" - "entrepreneur" is not a company name
         sig = _extract_from_bio_regex("Founder, entrepreneur", "bio")
         assert sig is None or (sig.value and sig.value.lower() != "entrepreneur")
 
@@ -243,6 +274,62 @@ class TestRedditExtractor:
         flair_sigs = [s for s in signals if s.signal_type == "reddit_flair_company"]
         assert len(flair_sigs) == 0
 
+    def test_flair_pipe_role_like_prefix_not_treated_as_company(self):
+        review = {
+            "source": "reddit",
+            "raw_metadata": {"author_flair_text": "Data Analyst | RevOps"},
+        }
+        signals = _extract_from_reddit_metadata(review)
+        flair_sigs = [s for s in signals if s.signal_type == "reddit_flair_company"]
+        assert len(flair_sigs) == 0
+
+    def test_flair_pipe_academic_title_not_treated_as_company(self):
+        review = {
+            "source": "reddit",
+            "raw_metadata": {"author_flair_text": "PhD | NLP"},
+        }
+        signals = _extract_from_reddit_metadata(review)
+        flair_sigs = [s for s in signals if s.signal_type == "reddit_flair_company"]
+        assert len(flair_sigs) == 0
+
+    def test_flair_pipe_loyalty_status_not_treated_as_company(self):
+        review = {
+            "source": "reddit",
+            "raw_metadata": {
+                "author_flair_text": "MileagePlus 1K | Quality Contributor",
+            },
+        }
+        signals = _extract_from_reddit_metadata(review)
+        flair_sigs = [s for s in signals if s.signal_type == "reddit_flair_company"]
+        assert len(flair_sigs) == 0
+
+    def test_flair_pipe_trade_counts_not_treated_as_company(self):
+        review = {
+            "source": "reddit",
+            "raw_metadata": {"author_flair_text": "S: 378 | B: 8"},
+        }
+        signals = _extract_from_reddit_metadata(review)
+        flair_sigs = [s for s in signals if s.signal_type == "reddit_flair_company"]
+        assert len(flair_sigs) == 0
+
+    def test_flair_pipe_sale_buy_counts_not_treated_as_company(self):
+        review = {
+            "source": "reddit",
+            "raw_metadata": {"author_flair_text": "0 Sale | 1 Buy"},
+        }
+        signals = _extract_from_reddit_metadata(review)
+        flair_sigs = [s for s in signals if s.signal_type == "reddit_flair_company"]
+        assert len(flair_sigs) == 0
+
+    def test_flair_pipe_role_and_status_not_treated_as_company(self):
+        review = {
+            "source": "reddit",
+            "raw_metadata": {"author_flair_text": "Principal AD | Moderator"},
+        }
+        signals = _extract_from_reddit_metadata(review)
+        flair_sigs = [s for s in signals if s.signal_type == "reddit_flair_company"]
+        assert len(flair_sigs) == 0
+
     def test_employment_claim_with_text(self):
         review = {
             "source": "reddit",
@@ -253,6 +340,21 @@ class TestRedditExtractor:
         emp_sigs = [s for s in signals if "employment" in s.signal_type or "work_at" in s.signal_type]
         assert len(emp_sigs) >= 1
         assert emp_sigs[0].value == "Datadog"
+
+    def test_past_employment_claim_is_not_medium_confidence(self):
+        review = {
+            "source": "reddit",
+            "review_text": "Hey, former employee of Carbon Black here.",
+            "raw_metadata": {
+                "employment_claim": True,
+                "employment_tense": "past",
+            },
+        }
+        signals = _extract_from_reddit_metadata(review)
+        emp_sigs = [s for s in signals if s.signal_type == "reddit_employment_claim"]
+        assert len(emp_sigs) == 1
+        assert emp_sigs[0].value == "Carbon Black"
+        assert emp_sigs[0].confidence < 0.5
 
     def test_no_metadata(self):
         review = {"source": "reddit", "raw_metadata": {}}
@@ -347,7 +449,7 @@ class TestGuardrails:
         assert exc is None
 
     def test_vendor_still_blocked_even_with_trust_direct(self):
-        # trust_direct only skips domain_like — vendor check still applies
+        # trust_direct only skips domain_like - vendor check still applies
         exc = _apply_guardrails("kore.ai", "kore.ai", trust_direct=True)
         assert exc is not None
         assert exc.reason == "incumbent_vendor"
@@ -486,6 +588,22 @@ class TestResolveReview:
         # Enrichment-only = low confidence (0.35), needs corroboration for medium
         assert result.confidence_label == "low"
 
+    def test_former_employer_only_stays_low_confidence(self):
+        review = {
+            "reviewer_company": None,
+            "reviewer_title": None,
+            "source": "reddit",
+            "review_text": "Hey, former employee of Carbon Black here.",
+            "raw_metadata": {
+                "employment_claim": True,
+                "employment_tense": "past",
+            },
+            "enrichment": None,
+        }
+        result = resolve_review(review, vendor_name="SentinelOne")
+        assert result.resolved_company_name == "Carbon Black"
+        assert result.confidence_label == "low"
+
 
 # -- Evidence Serialization -------------------------------------------------
 
@@ -537,6 +655,41 @@ class TestHackerNewsExtractor:
         assert len(signals) == 0
 
 
+@pytest.mark.asyncio
+async def test_account_resolution_task_claims_safe_enrichment_statuses(monkeypatch):
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[]),
+        execute=AsyncMock(return_value="INSERT 0 0"),
+    )
+    cfg = SimpleNamespace(
+        account_resolution_batch_size=250,
+        account_resolution_backfill_min_confidence="medium",
+        account_resolution_eligible_statuses=["enriched", "no_signal", "quarantined"],
+        account_resolution_source_priority=["g2", "gartner", "capterra"],
+        account_resolution_excluded_sources=["software_advice", "trustpilot"],
+    )
+    monkeypatch.setattr(task_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(task_mod, "settings", SimpleNamespace(b2b_churn=cfg))
+
+    result = await task_mod.run(SimpleNamespace())
+
+    assert result == {
+        "_skip_synthesis": "No reviews pending resolution",
+        "excluded_sources": 0,
+    }
+    query, statuses, excluded_sources, text_pattern, source_priority, batch_size = pool.fetch.await_args.args
+    assert "r.enrichment_status = ANY($1::text[])" in query
+    assert "r.enrichment IS NOT NULL" in query
+    assert "NOT (r.source = ANY($2::text[]))" in query
+    assert "array_position($4::text[], r.source)" in query
+    assert statuses == ["enriched", "no_signal", "quarantined"]
+    assert excluded_sources == ["software_advice", "trustpilot"]
+    assert "i work at" in text_pattern
+    assert source_priority == ["g2", "gartner", "capterra"]
+    assert batch_size == 250
+
+
 # -- Review Text Extraction -------------------------------------------------
 
 
@@ -561,8 +714,55 @@ class TestReviewTextExtraction:
         assert len(signals) >= 1
         assert any(s.value == "Stripe" for s in signals)
 
+    def test_review_text_does_not_extract_founder_sentence_fragment(self):
+        review = {
+            "summary": "",
+            "review_text": (
+                "I'm a first time founder, and like many of you, I live in project management tools "
+                "all day."
+            ),
+        }
+        signals = _extract_from_review_text(review)
+        assert len(signals) == 0
+
+    def test_review_text_does_not_extract_handle_style_fragment(self):
+        review = {
+            "summary": "",
+            "review_text": "Every startup stack post I found was clearly sponsored and dev @ all the things.",
+        }
+        signals = _extract_from_review_text(review)
+        assert len(signals) == 0
+
+    def test_review_text_does_not_extract_usage_clause_as_company(self):
+        review = {
+            "summary": "",
+            "review_text": (
+                "The company I work for is using Slack with Trello integration for daily coordination."
+            ),
+        }
+        signals = _extract_from_review_text(review)
+        assert len(signals) == 0
+
+    def test_review_text_does_not_extract_specializes_clause_as_company(self):
+        review = {
+            "summary": "",
+            "review_text": (
+                "The company I work at specializes in Magento but I avoided it for months."
+            ),
+        }
+        signals = _extract_from_review_text(review)
+        assert len(signals) == 0
+
+    def test_title_bio_does_not_extract_generic_commerce(self):
+        review = {
+            "reviewer_title": "Sr. Community Manager @ Commerce",
+            "source": "reddit",
+        }
+        signals = _extract_from_title_bio(review)
+        assert len(signals) == 0
+
     def test_review_text_use_for_not_a_company(self):
-        # "we use X for task management" — should not extract "task management" as a company
+        # "we use X for task management" - should not extract "task management" as a company
         review = {
             "summary": "",
             "review_text": "We use Workday for task management and it has been slow",
@@ -753,7 +953,7 @@ class TestRedditProfile:
         # No bio text pattern match, but has company URL
         profile = {"bio": "Check out my work", "profile_urls": ["https://datadog.com"]}
         sig = extract_from_reddit_profile(profile)
-        # bio "Check out my work" won't match → falls back to URL domain
+        # bio "Check out my work" won't match -> falls back to URL domain
         assert sig is not None
         assert sig.value == "Datadog"
         assert sig.signal_type == "reddit_profile_url_domain"
@@ -789,41 +989,41 @@ class TestRedditProfile:
 class TestFounderPatternGuards:
 
     def test_founder_real_company(self):
-        # "Founder, Acme Inc" — valid company name
+        # "Founder, Acme Inc" - valid company name
         sig = _extract_from_bio_regex("Founder, Acme Inc", "bio")
         assert sig is not None
         assert sig.value == "Acme Inc"
         assert sig.signal_type == "founder_of_company"
 
     def test_founder_and_conjunction_rejected(self):
-        # "Founder, and like many of you" — sentence continuation, not a company
+        # "Founder, and like many of you" - sentence continuation, not a company
         sig = _extract_from_bio_regex("Founder, and like many of you I use this", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("and "))
 
     def test_founder_i_am_rejected(self):
-        # "Founder, I've been using this product" — pronoun start
+        # "Founder, I've been using this product" - pronoun start
         sig = _extract_from_bio_regex("Founder, I've been using this product for years", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("i'"))
 
     def test_founder_trying_to_improve_rejected(self):
-        # "Founder, and i'm trying to improve that" — false positive from previous run
+        # "Founder, and i'm trying to improve that" - false positive from previous run
         sig = _extract_from_bio_regex(
             "Co-founder, and I'm trying to improve that metric", "bio"
         )
         assert sig is None or (sig.value and "trying" not in sig.value.lower())
 
     def test_owner_we_rejected(self):
-        # "Owner, we switched from Slack" — "we" is a pronoun, not a company
+        # "Owner, we switched from Slack" - "we" is a pronoun, not a company
         sig = _extract_from_bio_regex("Owner, we switched from Slack last year", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("we "))
 
     def test_founder_the_rejected(self):
-        # "Founder, the company was acquired" — article start
+        # "Founder, the company was acquired" - article start
         sig = _extract_from_bio_regex("Founder, the company was acquired", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("the "))
 
     def test_founder_many_rejected(self):
-        # "Founder, many of you know me" — "many" is in reject lookahead
+        # "Founder, many of you know me" - "many" is in reject lookahead
         sig = _extract_from_bio_regex("Founder, many of you know me", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("many"))
 
@@ -838,13 +1038,13 @@ class TestWordCountCap:
         assert _clean_extracted_name("and like many of you out there") == ""
 
     def test_six_word_limit_exact(self):
-        # Exactly 6 words — allowed
+        # Exactly 6 words - allowed
         result = _clean_extracted_name("Very Long Company Name Inc Ltd")
         # Should NOT be empty (6 words)
         assert result != ""
 
     def test_seven_words_rejected(self):
-        # 7 words — rejected
+        # 7 words - rejected
         result = _clean_extracted_name("Very Long Company Name Inc Ltd Corp")
         assert result == ""
 
@@ -861,23 +1061,23 @@ class TestWordCountCap:
 class TestHandleAtCompanyGuards:
 
     def test_handle_at_real_company(self):
-        # "dev @ Stripe" — valid
+        # "dev @ Stripe" - valid
         sig = _extract_from_bio_regex("dev @ Stripe", "bio")
         assert sig is not None
         assert "Stripe" in sig.value
 
     def test_handle_at_conjunction_rejected(self):
-        # "working @ all the things" — "all" is in reject lookahead
+        # "working @ all the things" - "all" is in reject lookahead
         sig = _extract_from_bio_regex("working @ all the things I do", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("all "))
 
     def test_handle_at_mentioned_rejected(self):
-        # "freelancer @ mentioned on a card" — past-tense verb start, not a company
+        # "freelancer @ mentioned on a card" - past-tense verb start, not a company
         sig = _extract_from_bio_regex("freelancer @ mentioned on a card project", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("mentioned"))
 
     def test_handle_at_many_rejected(self):
-        # "freelancer @ many companies" — "many" in reject lookahead; "freelancer" is
+        # "freelancer @ many companies" - "many" in reject lookahead; "freelancer" is
         # not a title_at_company keyword so handle_at_company fires.
         sig = _extract_from_bio_regex("freelancer @ many companies and startups", "bio")
         assert sig is None or (sig.value and not sig.value.lower().startswith("many"))

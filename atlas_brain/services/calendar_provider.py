@@ -238,18 +238,28 @@ class GoogleCalendarProvider:
         params = {
             "timeMin": start.isoformat(),
             "timeMax": end.isoformat(),
-            "maxResults": 50,
+            "maxResults": 250,
             "singleEvents": "true",
             "orderBy": "startTime",
         }
         headers = await self._auth_headers()
-        resp = await client.get(f"{_GCAL_BASE}/calendars/{cal_id}/events", headers=headers, params=params)
-        if resp.status_code == 401:
-            headers = await self._auth_headers(force_refresh=True)
+        all_events: list[CalendarEvent] = []
+        while True:
             resp = await client.get(f"{_GCAL_BASE}/calendars/{cal_id}/events", headers=headers, params=params)
-        resp.raise_for_status()
-        events = [self._parse_event(item, calendar_id=cal_id) for item in resp.json().get("items", [])]
-        return [e for e in events if e is not None]
+            if resp.status_code == 401:
+                headers = await self._auth_headers(force_refresh=True)
+                resp = await client.get(f"{_GCAL_BASE}/calendars/{cal_id}/events", headers=headers, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            for item in data.get("items", []):
+                parsed = self._parse_event(item, calendar_id=cal_id)
+                if parsed is not None:
+                    all_events.append(parsed)
+            next_page = data.get("nextPageToken")
+            if not next_page:
+                break
+            params["pageToken"] = next_page
+        return all_events
 
     async def get_event(
         self, event_id: str, calendar_id: Optional[str] = None

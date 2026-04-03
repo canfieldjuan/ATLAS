@@ -7,6 +7,14 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
+from ..config import settings
+from ..services.b2b.enrichment_repair_policy import (
+    ACTIVE_REPAIR_POOL_SQL_TEMPLATE,
+    STRICT_DISCUSSION_SKIP_MARKER,
+    strict_discussion_keep_sql,
+    strict_discussion_lists,
+)
+
 _ENRICHED_SCOPE = "enrichment_status = 'enriched'"
 _ARRAY_LEN = """
 CASE
@@ -412,6 +420,12 @@ async def summarize_extraction_health(
     days: int = 30,
     top_n: int = 10,
 ) -> dict[str, Any]:
+    strict_discussion_sources, strict_discussion_content_types = strict_discussion_lists(
+        settings.b2b_churn
+    )
+    active_repair_pool = ACTIVE_REPAIR_POOL_SQL_TEMPLATE.format(
+        max_attempts=int(settings.b2b_churn.enrichment_repair_max_attempts)
+    )
     current_row = await pool.fetchrow(
         f"""
         SELECT
@@ -450,9 +464,21 @@ async def summarize_extraction_health(
           COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_COMPETITOR_WITHOUT_DISPLACEMENT}) AS competitor_without_displacement_framing,
           COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_NAMED_COMPANY_WITHOUT_ACCOUNT_EVIDENCE}) AS named_company_without_named_account_evidence,
           COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_TIMELINE_WITHOUT_ANCHOR}) AS timeline_language_without_timing_anchor,
-          COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_WORKFLOW_WITHOUT_REPLACEMENT}) AS workflow_language_without_replacement_mode
+          COUNT(*) FILTER (WHERE {_ENRICHED_SCOPE} AND {_WORKFLOW_WITHOUT_REPLACEMENT}) AS workflow_language_without_replacement_mode,
+          COUNT(*) FILTER (
+            WHERE COALESCE(enrichment_repair_applied_fields, '[]'::jsonb) ? $1
+          ) AS low_signal_discussion_skipped_rows,
+          COUNT(*) FILTER (
+            WHERE lower(source) = ANY($2::text[])
+              AND lower(COALESCE(content_type, '')) = ANY($3::text[])
+              AND {active_repair_pool}
+              AND {strict_discussion_keep_sql()}
+          ) AS strict_discussion_candidates_kept_rows
         FROM b2b_reviews
-        """
+        """,
+        STRICT_DISCUSSION_SKIP_MARKER,
+        strict_discussion_sources,
+        strict_discussion_content_types,
     )
 
     daily_rows = await pool.fetch(
@@ -516,10 +542,18 @@ async def summarize_extraction_health(
               END
             ),
             0
-          ) AS span_count
+          ) AS span_count,
+          COUNT(*) FILTER (
+            WHERE COALESCE(enrichment_repair_applied_fields, '[]'::jsonb) ? $3
+          ) AS low_signal_discussion_skipped_rows,
+          COUNT(*) FILTER (
+            WHERE lower(source) = ANY($4::text[])
+              AND lower(COALESCE(content_type, '')) = ANY($5::text[])
+              AND {active_repair_pool}
+              AND {strict_discussion_keep_sql()}
+          ) AS strict_discussion_candidates_kept_rows
         FROM b2b_reviews
-        WHERE {_ENRICHED_SCOPE}
-          AND COALESCE(enriched_at, imported_at) >= CURRENT_DATE - ($1::int - 1)
+        WHERE COALESCE(enriched_at, imported_at) >= CURRENT_DATE - ($1::int - 1)
         GROUP BY source
         HAVING COUNT(*) > 0
         ORDER BY
@@ -541,6 +575,9 @@ async def summarize_extraction_health(
         """,
         days,
         top_n,
+        STRICT_DISCUSSION_SKIP_MARKER,
+        strict_discussion_sources,
+        strict_discussion_content_types,
     )
 
     python_current_strategic, python_vendor_strategic = await _python_strategic_rollup(
@@ -629,6 +666,9 @@ async def summarize_extraction_health(
             "witness_count": witness_count,
             "witness_yield_rate": witness_yield_rate,
             "secondary_write_hits": secondary_write_hits,
+            "strict_discussion_candidates_kept": _safe_int(payload.get("strict_discussion_candidates_kept")),
+            "strict_discussion_candidates_dropped": _safe_int(payload.get("strict_discussion_candidates_dropped")),
+            "low_signal_discussion_skipped": _safe_int(payload.get("low_signal_discussion_skipped")),
             "exact_cache_hits": _safe_int(payload.get("exact_cache_hits")),
             "generated": _safe_int(payload.get("generated")),
         })
@@ -662,6 +702,8 @@ async def summarize_extraction_health(
         "named_company_without_named_account_evidence": int(python_current_strategic.get("named_company_without_named_account_evidence", 0) or 0),
         "timeline_language_without_timing_anchor": int(python_current_strategic.get("timeline_language_without_timing_anchor", 0) or 0),
         "workflow_language_without_replacement_mode": int(python_current_strategic.get("workflow_language_without_replacement_mode", 0) or 0),
+        "low_signal_discussion_skipped_rows": int(current.get("low_signal_discussion_skipped_rows", 0) or 0),
+        "strict_discussion_candidates_kept_rows": int(current.get("strict_discussion_candidates_kept_rows", 0) or 0),
     }
     top_vendors = []
     for row in top_vendor_rows:
@@ -717,6 +759,8 @@ async def summarize_extraction_health(
                     if _safe_int(row.get("enriched_rows")) > 0
                     else 0.0
                 ),
+                "low_signal_discussion_skipped_rows": _safe_int(row.get("low_signal_discussion_skipped_rows")),
+                "strict_discussion_candidates_kept_rows": _safe_int(row.get("strict_discussion_candidates_kept_rows")),
             }
             for row in top_source_rows
         ],

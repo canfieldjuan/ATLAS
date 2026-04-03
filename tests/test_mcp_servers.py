@@ -146,6 +146,79 @@ class TestDatabaseCRMProvider:
             ok = await provider.health_check()
         assert ok is True
 
+    async def test_log_interaction_emits_only_for_new_insert(self):
+        from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+        contact_id = str(uuid4())
+        interaction = {
+            "id": str(uuid4()),
+            "contact_id": contact_id,
+            "interaction_type": "email",
+            "summary": "Monthly hours report received",
+            "intent": None,
+            "occurred_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+            "metadata": {},
+            "interaction_dedupe_key": "abc123",
+            "_inserted": True,
+        }
+        pool = self._mock_pool(fetchrow_return=interaction)
+        emit = AsyncMock()
+
+        with (
+            patch("atlas_brain.storage.database.get_db_pool", return_value=pool),
+            patch("atlas_brain.reasoning.producers.emit_if_enabled", emit),
+        ):
+            provider = DatabaseCRMProvider()
+            result = await provider.log_interaction(
+                contact_id=contact_id,
+                interaction_type="email",
+                summary="Monthly hours report received",
+            )
+
+        assert result["id"] == interaction["id"]
+        assert "_inserted" not in result
+        emit.assert_awaited_once()
+        call = emit.await_args
+        assert call.args[0] == "crm.interaction_logged"
+        assert call.args[1] == "crm_provider"
+        assert call.args[2]["interaction_id"] == interaction["id"]
+        assert call.kwargs["entity_id"] == contact_id
+        assert "ON CONFLICT (contact_id, interaction_type, interaction_dedupe_key)" in pool.fetchrow.await_args.args[0]
+
+    async def test_log_interaction_duplicate_skips_emit(self):
+        from atlas_brain.services.crm_provider import DatabaseCRMProvider
+
+        contact_id = str(uuid4())
+        existing = {
+            "id": str(uuid4()),
+            "contact_id": contact_id,
+            "interaction_type": "email",
+            "summary": "Monthly hours report received",
+            "intent": None,
+            "occurred_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+            "metadata": {},
+            "interaction_dedupe_key": "abc123",
+            "_inserted": False,
+        }
+        pool = self._mock_pool(fetchrow_return=existing)
+        emit = AsyncMock()
+
+        with (
+            patch("atlas_brain.storage.database.get_db_pool", return_value=pool),
+            patch("atlas_brain.reasoning.producers.emit_if_enabled", emit),
+        ):
+            provider = DatabaseCRMProvider()
+            result = await provider.log_interaction(
+                contact_id=contact_id,
+                interaction_type="email",
+                summary="Monthly hours report received",
+            )
+
+        assert result["id"] == existing["id"]
+        emit.assert_not_awaited()
+
 
 # ===========================================================================
 # get_crm_provider factory

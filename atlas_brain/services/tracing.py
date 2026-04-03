@@ -158,6 +158,7 @@ class FTLTracingClient:
         provider_request_id: Optional[str] = None,
         reasoning: Optional[str] = None,
         duration_ms_override: Optional[float] = None,
+        cost_usd_override: Optional[float] = None,
     ) -> None:
         """End a span and fire-and-forget the trace payload.
 
@@ -215,7 +216,9 @@ class FTLTracingClient:
             payload["billable_input_tokens"] = int(billable_input_tokens)
 
         # Calculate cost from model pricing
-        if (
+        if cost_usd_override is not None:
+            payload["cost_usd"] = round(float(cost_usd_override), 6)
+        elif (
             input_tokens is not None
             or output_tokens is not None
             or cached_tokens is not None
@@ -463,6 +466,24 @@ class FTLTracingClient:
             )
         ):
             return
+        # Extract vendor_name and run_id from metadata for top-level columns
+        meta = payload.get("metadata") or {}
+        vendor_name = None
+        run_id = None
+        if isinstance(meta, dict):
+            vendor_name = meta.get("vendor_name")
+            if not vendor_name:
+                biz = meta.get("business")
+                if isinstance(biz, dict):
+                    vendor_name = biz.get("vendor_name")
+            if isinstance(vendor_name, str):
+                vendor_name = vendor_name.strip() or None
+            else:
+                vendor_name = None
+            raw_run_id = meta.get("run_id")
+            if isinstance(raw_run_id, str) and raw_run_id.strip():
+                run_id = raw_run_id.strip()
+
         try:
             from ..storage.database import get_db_pool
 
@@ -475,8 +496,8 @@ class FTLTracingClient:
                         duration_ms, ttft_ms, inference_time_ms, queue_time_ms,
                         tokens_per_second, billable_input_tokens, cached_tokens,
                         cache_write_tokens, api_endpoint, provider_request_id,
-                        status, metadata)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)"""
+                        status, metadata, vendor_name, run_id)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)"""
             args = (
                 payload.get("span_name", ""),
                 payload.get("operation_type", "llm_call"),
@@ -498,6 +519,8 @@ class FTLTracingClient:
                 payload.get("provider_request_id"),
                 payload.get("status", "completed"),
                 json.dumps(payload.get("metadata", {})),
+                vendor_name,
+                run_id,
             )
             if use_shared_pool:
                 await pool.execute(query, *args)

@@ -2,7 +2,6 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-
 import pytest
 
 from atlas_brain.autonomous.tasks import b2b_campaign_generation as mod
@@ -241,6 +240,103 @@ def test_match_partner_prefers_comparison_vendor():
     partner = mod._match_partner(context, partner_index)
 
     assert partner["id"] == "partner-clickup"
+
+
+def test_campaign_vendor_and_challenger_contexts_are_order_stable():
+    vendor_signals = [
+        {
+            "review_id": "r2",
+            "urgency": 6,
+            "pain_json": [{"category": "Support", "severity": "secondary"}],
+            "competitors": [{"name": "ClickUp"}],
+            "feature_gaps": [{"feature": "reporting"}],
+            "quotable_phrases": ["Second quote"],
+            "contract_end": None,
+        },
+        {
+            "review_id": "r1",
+            "urgency": 9,
+            "pain_json": [{"category": "Pricing", "severity": "primary"}],
+            "competitors": [{"name": "Asana"}],
+            "feature_gaps": [{"feature": "automation"}],
+            "quotable_phrases": ["First quote"],
+            "contract_end": "Q2",
+        },
+    ]
+
+    challenger_signals = [
+        {
+            "review_id": "c2",
+            "buying_stage": "evaluation",
+            "role_type": "champion",
+            "pain_json": [{"category": "Support", "severity": "secondary"}],
+            "vendor_name": "Incumbent B",
+            "seat_count": 150,
+            "competitors": [{"name": "ChallengerX", "reason": "workflow"}],
+            "quotable_phrases": ["Beta quote"],
+        },
+        {
+            "review_id": "c1",
+            "buying_stage": "active_purchase",
+            "role_type": "decision_maker",
+            "pain_json": [{"category": "Pricing", "severity": "primary"}],
+            "vendor_name": "Incumbent A",
+            "seat_count": 600,
+            "competitors": [{"name": "ChallengerX", "reason": "analytics"}],
+            "quotable_phrases": ["Alpha quote"],
+        },
+    ]
+
+    vendor_forward = mod._build_vendor_context("Acme", vendor_signals)
+    vendor_reverse = mod._build_vendor_context("Acme", list(reversed(vendor_signals)))
+    challenger_forward = mod._build_challenger_context("ChallengerX", challenger_signals)
+    challenger_reverse = mod._build_challenger_context("ChallengerX", list(reversed(challenger_signals)))
+
+    assert vendor_forward == vendor_reverse
+    assert challenger_forward == challenger_reverse
+
+
+def test_campaign_company_context_is_order_stable_and_keeps_strongest_pain_severity():
+    best = {
+        "vendor_name": "LegacyCRM",
+        "reviewer_company": "Acme Co",
+        "product_category": "CRM",
+        "urgency": 8,
+        "seat_count": 220,
+        "contract_end": "Q2 renewal",
+        "decision_timeline": "30-60 days",
+        "buying_stage": "evaluation",
+        "role_type": "decision_maker",
+        "industry": "SaaS",
+        "reviewer_title": "VP Ops",
+        "company_size_raw": "201-500",
+        "primary_workflow": "sales",
+        "sentiment_direction": "down",
+    }
+    opps = [
+        {
+            "review_id": "o2",
+            "pain_json": [{"category": "pricing", "severity": "secondary"}],
+            "competitors": [{"name": "Asana", "reason": "lower cost"}],
+            "quotable_phrases": ["Second quote"],
+            "feature_gaps": [{"feature": "automation"}],
+            "integration_stack": ["Slack"],
+        },
+        {
+            "review_id": "o1",
+            "pain_json": [{"category": "pricing", "severity": "primary"}],
+            "competitors": [{"name": "ClickUp", "reason": "reporting"}],
+            "quotable_phrases": ["First quote"],
+            "feature_gaps": [{"feature": "analytics"}],
+            "integration_stack": ["Salesforce"],
+        },
+    ]
+
+    context_forward = mod._build_company_context(best, opps)
+    context_reverse = mod._build_company_context(best, list(reversed(opps)))
+
+    assert context_forward == context_reverse
+    assert context_forward["pain_categories"] == [{"category": "pricing", "severity": "primary"}]
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ provides them (vault weakness/strength, company signals, provenance).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ._b2b_shared import _canonicalize_competitor, _segment_role_multiplier
@@ -234,6 +234,54 @@ class CompressedPacket:
                 ids.add(str(sid))
         return frozenset(ids)
 
+    def prompt_validation_view(
+        self,
+        *,
+        compact_aggregates: bool = False,
+        include_contradiction_rows: bool = True,
+        include_minority_signals: bool = True,
+        include_section_packets: bool = True,
+    ) -> "CompressedPacket":
+        """Return a packet view aligned to the structures shown in the prompt."""
+        aggregates = self.aggregates
+        metric_ledger = self.metric_ledger
+        if compact_aggregates:
+            allowed_aggregate_ids = self._reasoning_aggregate_source_ids()
+            aggregates = [
+                agg for agg in self.aggregates
+                if agg.source_id in allowed_aggregate_ids
+            ]
+            metric_ledger = [
+                entry for entry in self.metric_ledger
+                if str(entry.get("_sid") or "") in allowed_aggregate_ids
+            ]
+        deduped_aggregates: dict[str, TrackedAggregate] = {}
+        for aggregate in aggregates:
+            deduped_aggregates[aggregate.label] = aggregate
+        aggregates = list(deduped_aggregates.values())
+        aggregate_labels_unique = len(aggregates) == len(self.aggregates)
+        if (
+            not compact_aggregates
+            and aggregate_labels_unique
+            and
+            include_contradiction_rows
+            and include_minority_signals
+            and include_section_packets
+        ):
+            return self
+        return replace(
+            self,
+            aggregates=aggregates,
+            metric_ledger=metric_ledger,
+            contradiction_rows=(
+                self.contradiction_rows if include_contradiction_rows else []
+            ),
+            minority_signals=(
+                self.minority_signals if include_minority_signals else []
+            ),
+            section_packets=self.section_packets if include_section_packets else {},
+        )
+
     def _reasoning_aggregate_source_ids(self) -> set[str]:
         """Aggregate IDs worth sending to the reasoning model."""
         retained_prefixes = {
@@ -258,6 +306,9 @@ class CompressedPacket:
         *,
         compact_metric_ledger: bool = False,
         compact_aggregates: bool = False,
+        include_contradiction_rows: bool = True,
+        include_minority_signals: bool = True,
+        include_section_packets: bool = True,
     ) -> dict[str, Any]:
         """Serialize to JSON-ready dict with ``_sid`` on every item."""
         payload: dict[str, Any] = {}
@@ -300,9 +351,9 @@ class CompressedPacket:
                 ]
             else:
                 payload["metric_ledger"] = metric_ledger
-        if self.contradiction_rows:
+        if include_contradiction_rows and self.contradiction_rows:
             payload["contradiction_rows"] = self.contradiction_rows
-        if self.minority_signals:
+        if include_minority_signals and self.minority_signals:
             payload["minority_signals"] = self.minority_signals
         if self.coverage_gaps:
             payload["coverage_gaps"] = self.coverage_gaps
@@ -310,7 +361,7 @@ class CompressedPacket:
             payload["retention_proof"] = self.retention_proof
         if self.witness_pack:
             payload["witness_pack"] = self.witness_pack
-        if self.section_packets:
+        if include_section_packets and self.section_packets:
             payload["section_packets"] = self.section_packets
 
         return payload
@@ -642,7 +693,7 @@ def _score_evidence_vault(
         )
         slug = _slug(cat)
         mc = _safe_float(w.get("mention_count_total", w.get("mention_count", 0)))
-        mc_recent = w.get("mention_count_recent")
+        mc_recent = int(_safe_float(w.get("mention_count_recent"))) if w.get("mention_count_recent") is not None else None
         signal = mc / max(w_max_mc, 1.0) if w_max_mc > 0 else 0.0
         uniq = _uniqueness_penalty(w, higher_ranked)
         recency = _vault_item_recency_score(w)
@@ -650,7 +701,7 @@ def _score_evidence_vault(
 
         aggregates.append(TrackedAggregate(
             label=f"vault_weakness_{slug}_mention_count_total",
-            value=mc,
+            value=int(mc),
             source_id=f"vault:weakness:{slug}:mention_count_total",
         ))
         if mc_recent is not None:
@@ -696,7 +747,7 @@ def _score_evidence_vault(
         )
         slug = _slug(cat)
         mc = _safe_float(s.get("mention_count_total", s.get("mention_count", 0)))
-        mc_recent = s.get("mention_count_recent")
+        mc_recent = int(_safe_float(s.get("mention_count_recent"))) if s.get("mention_count_recent") is not None else None
         signal = mc / max(s_max_mc, 1.0) if s_max_mc > 0 else 0.0
         uniq = _uniqueness_penalty(s, higher_ranked)
         recency = _vault_item_recency_score(s)
@@ -704,7 +755,7 @@ def _score_evidence_vault(
 
         aggregates.append(TrackedAggregate(
             label=f"vault_strength_{slug}_mention_count_total",
-            value=mc,
+            value=int(mc),
             source_id=f"vault:strength:{slug}:mention_count_total",
         ))
         if mc_recent is not None:
@@ -1772,6 +1823,7 @@ def compress_vendor_pools(
     layers: dict[str, Any],
     *,
     max_items_per_pool: int = 8,
+    max_witnesses: int | None = None,
 ) -> CompressedPacket:
     """Compress and score all pool layers for one vendor.
 
@@ -1849,7 +1901,11 @@ def compress_vendor_pools(
     witness_pack, section_packets = build_vendor_witness_artifacts(
         vendor_name,
         layers.get("reviews") or [],
-        max_witnesses=int(getattr(cfg, "reasoning_witness_max_witnesses", 12)),
+        max_witnesses=(
+            int(max_witnesses)
+            if max_witnesses is not None
+            else int(getattr(cfg, "reasoning_witness_max_witnesses", 12))
+        ),
         min_specificity_score=float(
             getattr(cfg, "witness_specificity_min_score", 2.0),
         ),

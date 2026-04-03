@@ -34,6 +34,8 @@ class _FakePool:
             "named_company_without_named_account_evidence": 11,
             "timeline_language_without_timing_anchor": 1234,
             "workflow_language_without_replacement_mode": 601,
+            "low_signal_discussion_skipped_rows": 55,
+            "strict_discussion_candidates_kept_rows": 77,
         }
 
     async def fetch(self, query, *args):
@@ -63,6 +65,8 @@ class _FakePool:
                     "repair_promoted_rows": 60,
                     "rows_with_spans": 760,
                     "span_count": 1900,
+                    "low_signal_discussion_skipped_rows": 33,
+                    "strict_discussion_candidates_kept_rows": 44,
                 }
             ]
         if "FROM task_executions e" in query:
@@ -71,7 +75,7 @@ class _FakePool:
                     "run_id": "run-123",
                     "task_name": "b2b_enrichment_repair",
                     "started_at": datetime(2026, 3, 31, 22, 0, tzinfo=timezone.utc),
-                    "result_text": '{"reviews_processed": 5, "witness_rows": 2, "witness_count": 8, "secondary_write_hits": 1, "exact_cache_hits": 2, "generated": 3}',
+                    "result_text": '{"reviews_processed": 5, "witness_rows": 2, "witness_count": 8, "secondary_write_hits": 1, "strict_discussion_candidates_kept": 2, "strict_discussion_candidates_dropped": 3, "low_signal_discussion_skipped": 3, "exact_cache_hits": 2, "generated": 3}',
                 }
             ]
         if "COALESCE(enriched_at, imported_at) AS activity_at" in query:
@@ -143,6 +147,8 @@ async def test_summarize_extraction_health_returns_snapshot_trend_and_vendors():
     assert result["current_snapshot"]["competitor_without_displacement_framing"] == 1
     assert result["current_snapshot"]["money_without_pricing_span"] == 0
     assert result["current_snapshot"]["workflow_language_without_replacement_mode"] == 0
+    assert result["current_snapshot"]["low_signal_discussion_skipped_rows"] == 55
+    assert result["current_snapshot"]["strict_discussion_candidates_kept_rows"] == 77
     assert result["daily_trend"][0]["enriched_rows"] == 150
     assert result["daily_trend"][0]["span_count"] == 360
     assert result["daily_trend"][0]["witness_yield_rate"] == pytest.approx(2.4)
@@ -153,12 +159,16 @@ async def test_summarize_extraction_health_returns_snapshot_trend_and_vendors():
     assert result["top_vendors"][0]["strategic_candidate_rows"] == 1
     assert result["top_sources"][0]["source"] == "reddit"
     assert result["top_sources"][0]["witness_yield_rate"] == pytest.approx(2.375)
+    assert result["top_sources"][0]["low_signal_discussion_skipped_rows"] == 33
+    assert result["top_sources"][0]["strict_discussion_candidates_kept_rows"] == 44
     assert result["recent_runs"][0]["run_id"] == "run-123"
     assert result["recent_runs"][0]["witness_count"] == 8
     assert result["recent_runs"][0]["secondary_write_hits"] == 1
+    assert result["recent_runs"][0]["strict_discussion_candidates_kept"] == 2
+    assert result["recent_runs"][0]["strict_discussion_candidates_dropped"] == 3
     assert result["current_snapshot"]["secondary_write_hits_window"] == 1
     assert pool.fetch_calls[0][1] == (14,)
-    assert pool.fetch_calls[1][1] == (14, 5)
+    assert pool.fetch_calls[1][1][0:2] == (14, 5)
     assert pool.fetch_calls[2][1] == ()
     assert pool.fetch_calls[3][1] == (5,)
     assert pool.fetch_calls[4][1] == (14, ["b2b_enrichment", "b2b_enrichment_repair"], 5)

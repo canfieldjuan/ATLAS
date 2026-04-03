@@ -9,6 +9,13 @@ from typing import Any
 
 from ...config import settings
 from ...pipelines.llm import call_llm_with_skill, get_pipeline_llm, parse_json_response
+from ...services.b2b.enrichment_repair_policy import (
+    STRICT_DISCUSSION_SKIP_MARKER as _STRICT_DISCUSSION_SKIP_MARKER,
+    strict_discussion_gate_sql as _strict_discussion_gate_sql,
+    strict_discussion_keep_sql as _strict_discussion_keep_sql,
+    strict_discussion_lists as _strict_discussion_lists,
+)
+from ...services.b2b.reviewer_identity import is_synthetic_reviewer_title
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from . import b2b_enrichment as base_enrichment
@@ -129,7 +136,7 @@ _PRICING_CONTEXT_PATTERNS = (
 _HARD_GAP_SQL = """
 (
   (enrichment->'evidence_spans' IS NULL OR jsonb_typeof(enrichment->'evidence_spans') != 'array'
-    OR CASE WHEN jsonb_typeof(enrichment->'evidence_spans') = 'array' THEN jsonb_array_length(enrichment->'evidence_spans') ELSE 0 END = 0)
+  OR CASE WHEN jsonb_typeof(enrichment->'evidence_spans') = 'array' THEN jsonb_array_length(enrichment->'evidence_spans') ELSE 0 END = 0)
   OR COALESCE(enrichment->>'replacement_mode', '') = ''
   OR COALESCE(enrichment->>'operating_model_shift', '') = ''
   OR COALESCE(enrichment->>'productivity_delta_claim', '') = ''
@@ -212,8 +219,7 @@ def _filtered_competitors(competitors: list[dict[str, Any]], source_row: dict[st
 
 
 def _is_synthetic_reviewer_title(value: Any) -> bool:
-    title = str(value or "").strip().lower()
-    return title.startswith("repeat churn signal")
+    return is_synthetic_reviewer_title(value)
 
 
 def _has_timeline_trigger(
@@ -922,6 +928,70 @@ async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
         return 0
 
 
+async def _skip_low_signal_strict_discussion_rows(
+    pool,
+    *,
+    strict_sources: list[str],
+    strict_content_types: list[str],
+    scoped_vendors: list[str],
+    max_attempts: int,
+    limit: int,
+) -> int:
+    if not strict_sources or not strict_content_types or limit <= 0:
+        return 0
+    result = await pool.execute(
+        f"""
+        WITH target AS (
+            SELECT id
+            FROM b2b_reviews
+            WHERE enrichment_status IN ('enriched', 'no_signal')
+              AND lower(source) = ANY($1::text[])
+              AND lower(COALESCE(content_type, '')) = ANY($2::text[])
+              AND COALESCE(low_fidelity, false) = false
+              AND enrichment IS NOT NULL
+              AND enrichment_repair_attempts < $3
+              AND (
+                cardinality($4::text[]) = 0
+                OR lower(vendor_name) = ANY($4::text[])
+              )
+              AND (
+                enrichment_repair_status IS NULL
+                OR enrichment_repair_status = 'failed'
+                OR enrichment_repair_status = 'promoted'
+              )
+              AND NOT {_strict_discussion_keep_sql()}
+              AND NOT (
+                COALESCE(enrichment_repair_applied_fields, '[]'::jsonb) ? $5
+              )
+            ORDER BY enriched_at DESC NULLS LAST, imported_at DESC NULLS LAST, id
+            LIMIT $6
+        )
+        UPDATE b2b_reviews AS r
+        SET enrichment_repair_status = 'shadowed',
+            enrichment_repaired_at = $7,
+            enrichment_repair_applied_fields =
+              CASE
+                WHEN COALESCE(r.enrichment_repair_applied_fields, '[]'::jsonb) ? $5
+                THEN COALESCE(r.enrichment_repair_applied_fields, '[]'::jsonb)
+                ELSE COALESCE(r.enrichment_repair_applied_fields, '[]'::jsonb) || to_jsonb($5::text)
+              END
+        FROM target
+        WHERE r.id = target.id
+        """,
+        strict_sources,
+        strict_content_types,
+        max_attempts,
+        [vendor.lower() for vendor in scoped_vendors],
+        _STRICT_DISCUSSION_SKIP_MARKER,
+        limit,
+        datetime.now(timezone.utc),
+    )
+    try:
+        return int(str(result).split()[-1])
+    except (TypeError, ValueError, IndexError):
+        return 0
+
+
 def _build_repair_payload(row: dict[str, Any], baseline: dict[str, Any], review_truncate_length: int) -> dict[str, Any]:
     def _truncate(value: Any) -> str | None:
         text = str(value or "").strip()
@@ -1094,6 +1164,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         min_value=1,
         max_value=100,
     )
+    strict_discussion_skip_limit = base_enrichment._coerce_int_override(
+        task_metadata.get("enrichment_repair_strict_discussion_skip_limit"),
+        cfg.enrichment_repair_strict_discussion_skip_limit,
+        min_value=1,
+        max_value=5000,
+    )
     run_id = _task_run_id(task)
     scoped_vendors = _normalize_test_vendors(task_metadata.get("test_vendors") or task_metadata.get("vendor_names"))
     stale_no_signal_demoted = await _demote_stale_no_signal_rows(
@@ -1112,15 +1188,32 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     generated = 0
     witness_rows = 0
     witness_count = 0
+    strict_discussion_kept = 0
+    strict_discussion_dropped = 0
     rounds = 0
+    strict_discussion_sources, strict_discussion_content_types = _strict_discussion_lists(cfg)
+    low_signal_discussion_skipped = await _skip_low_signal_strict_discussion_rows(
+        pool,
+        strict_sources=strict_discussion_sources,
+        strict_content_types=strict_discussion_content_types,
+        scoped_vendors=scoped_vendors,
+        max_attempts=cfg.enrichment_repair_max_attempts,
+        limit=strict_discussion_skip_limit,
+    )
+    strict_discussion_dropped += int(low_signal_discussion_skipped or 0)
     while rounds < max_rounds:
         trusted_sources = list(base_enrichment._trusted_repair_sources())
+        excluded_sources = sorted(base_enrichment._effective_enrichment_skip_sources())
         rows = await pool.fetch(
             f"""
             WITH batch AS (
                 SELECT id
                 FROM b2b_reviews
                 WHERE enrichment_status IN ('enriched', 'no_signal')
+                  AND (
+                    cardinality($5::text[]) = 0
+                    OR lower(source) <> ALL($5::text[])
+                  )
                   AND COALESCE(low_fidelity, false) = false
                   AND enrichment IS NOT NULL
                   AND enrichment_repair_attempts < $1
@@ -1141,6 +1234,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     cardinality($4::text[]) = 0
                     OR lower(vendor_name) = ANY($4::text[])
                   )
+                  AND {_strict_discussion_gate_sql(6, 7)}
                   AND (
                     (
                       COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction')
@@ -1392,9 +1486,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             max_batch,
             trusted_sources,
             [vendor.lower() for vendor in scoped_vendors],
+            excluded_sources,
+            strict_discussion_sources,
+            strict_discussion_content_types,
         )
         if not rows:
             break
+        strict_discussion_kept += sum(
+            1
+            for row in rows
+            if str(row.get("source") or "").strip().lower() in strict_discussion_sources
+            and str(row.get("content_type") or "").strip().lower() in strict_discussion_content_types
+        )
         result = await _repair_rows(
             rows,
             cfg,
@@ -1412,12 +1515,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         rounds += 1
         await asyncio.sleep(1)
 
-    if rounds == 0 and stale_no_signal_demoted == 0 and shadowed_hard_gap_quarantined == 0:
+    if (
+        rounds == 0
+        and stale_no_signal_demoted == 0
+        and shadowed_hard_gap_quarantined == 0
+        and low_signal_discussion_skipped == 0
+    ):
         return {"_skip_synthesis": "No enriched reviews need repair"}
     secondary_write_breakdown = {
         "stale_no_signal_demoted": int(stale_no_signal_demoted or 0),
         "shadowed_hard_gap_quarantined": int(shadowed_hard_gap_quarantined or 0),
         "orphaned_recovered": int(orphaned or 0),
+        "low_signal_discussion_skipped": int(low_signal_discussion_skipped or 0),
     }
     secondary_write_hits = sum(secondary_write_breakdown.values())
     result = {
@@ -1435,6 +1544,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "orphaned_recovered": orphaned,
         "secondary_write_hits": secondary_write_hits,
         "secondary_write_breakdown": secondary_write_breakdown,
+        "strict_discussion_candidates_kept": strict_discussion_kept,
+        "strict_discussion_candidates_dropped": strict_discussion_dropped,
+        "low_signal_discussion_skipped": int(low_signal_discussion_skipped or 0),
         "scoped_vendors": scoped_vendors,
         "_skip_synthesis": "B2B enrichment repair complete",
     }
@@ -1499,6 +1611,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "orphaned_recovered": orphaned,
             "secondary_write_hits": secondary_write_hits,
             "secondary_write_breakdown": secondary_write_breakdown,
+            "strict_discussion_candidates_kept": strict_discussion_kept,
+            "strict_discussion_candidates_dropped": strict_discussion_dropped,
+            "low_signal_discussion_skipped": int(low_signal_discussion_skipped or 0),
             "scoped_vendors": scoped_vendors,
         },
         update_review_state=False,

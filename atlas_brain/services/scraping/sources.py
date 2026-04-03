@@ -10,6 +10,7 @@ Because ``ReviewSource`` extends ``str``, existing string comparisons
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from enum import Enum
 
 
@@ -159,6 +160,30 @@ DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
 def parse_source_allowlist(raw: str) -> list[str]:
     """Return a normalized source allowlist from a comma-separated string."""
     return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
+def filter_deprecated_sources(
+    sources: Iterable[str],
+    deprecated: str | Iterable[str] | None,
+) -> list[str]:
+    """Remove deprecated sources from an allowlist while preserving order."""
+    if isinstance(deprecated, str):
+        deprecated_set = set(parse_source_allowlist(deprecated))
+    else:
+        deprecated_set = {
+            str(source).strip().lower()
+            for source in (deprecated or [])
+            if str(source).strip()
+        }
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for source in sources:
+        normalized = str(source).strip().lower()
+        if not normalized or normalized in deprecated_set or normalized in seen:
+            continue
+        filtered.append(normalized)
+        seen.add(normalized)
+    return filtered
 
 
 def is_source_allowed(source: str, allowlist_raw: str) -> bool:

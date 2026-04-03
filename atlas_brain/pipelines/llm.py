@@ -641,6 +641,8 @@ def trace_llm_call(
     provider_request_id: str | None = None,
     # Reasoning
     reasoning: str | None = None,
+    # Pricing override (for discounted batch lanes)
+    cost_usd_override: float | None = None,
     # Error details
     error_message: str | None = None,
     error_type: str | None = None,
@@ -687,6 +689,7 @@ def trace_llm_call(
         api_endpoint=api_endpoint,
         provider_request_id=provider_request_id,
         reasoning=reasoning,
+        cost_usd_override=cost_usd_override,
         error_message=error_message,
         error_type=error_type,
         duration_ms_override=duration_ms if duration_ms > 0 else None,

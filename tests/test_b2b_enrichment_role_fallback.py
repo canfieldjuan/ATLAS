@@ -72,6 +72,13 @@ def test_validate_enrichment_ignores_noisy_title_and_uses_role_level_fallback():
     assert result["buyer_authority"]["role_type"] == "end_user"
 
 
+def test_sanitize_reviewer_title_nulls_repeat_churn_signal():
+    from atlas_brain.services.b2b.reviewer_identity import sanitize_reviewer_title
+
+    assert sanitize_reviewer_title("Repeat Churn Signal (Score: 10.0)") is None
+    assert sanitize_reviewer_title("Product Manager") == "Product Manager"
+
+
 def test_validate_enrichment_infers_economic_buyer_from_purchase_text():
     from atlas_brain.autonomous.tasks.b2b_enrichment import _validate_enrichment
 

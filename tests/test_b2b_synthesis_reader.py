@@ -117,6 +117,7 @@ def _mock_pool(
     legacy_row: dict | None = None,
     synth_rows: list[dict] | None = None,
     legacy_rows: list[dict] | None = None,
+    packet_row: dict | None = None,
 ) -> AsyncMock:
     """Create a mock pool that returns the given rows for fetchrow/fetch."""
     pool = AsyncMock()
@@ -124,6 +125,8 @@ def _mock_pool(
     async def _fetchrow(query: str, *args):
         if "b2b_reasoning_synthesis" in query:
             return synth_row
+        if "b2b_vendor_reasoning_packets" in query:
+            return packet_row
         if "b2b_churn_signals" in query:
             return legacy_row
         return None
@@ -257,6 +260,56 @@ class TestLoadBestReasoningView:
         pool = _mock_pool(synth_row=None, legacy_row=None)
         view = await load_best_reasoning_view(pool, "Acme")
         assert view is None
+
+    @pytest.mark.asyncio
+    async def test_hydrates_packet_artifacts_from_packet_table_when_inline_missing(self):
+        synth = _make_synthesis_row(
+            synthesis={
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "summary": "Pricing pressure is acute.",
+                        },
+                    },
+                },
+            },
+        )
+        packet_row = {
+            "packet": {
+                "payload": {
+                    "metric_ledger": [
+                        {"label": "Price complaints", "_sid": "metric:price"},
+                    ],
+                    "witness_pack": [
+                        {
+                            "witness_id": "witness:1",
+                            "_sid": "witness:1",
+                            "excerpt_text": "Budget pressure at renewal.",
+                        },
+                    ],
+                    "section_packets": {
+                        "anchor_examples": {"common_pattern": ["witness:1"]},
+                    },
+                },
+            },
+        }
+        synth["synthesis"]["reasoning_contracts"]["vendor_core_reasoning"]["causal_narrative"]["citations"] = [
+            "metric:price",
+            "witness:1",
+        ]
+        pool = _mock_pool(synth_row=synth, packet_row=packet_row)
+
+        view = await load_best_reasoning_view(pool, "Acme")
+
+        assert view is not None
+        assert view.reference_ids == {
+            "metric_ids": ["metric:price"],
+            "witness_ids": ["witness:1"],
+        }
+        assert view.packet_artifacts["section_packets"]["anchor_examples"]["common_pattern"] == ["witness:1"]
+        assert view.witness_pack[0]["witness_id"] == "witness:1"
 
     @pytest.mark.asyncio
     async def test_legacy_view_primary_wedge_resolves(self):
