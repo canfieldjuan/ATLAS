@@ -1256,6 +1256,8 @@ def _make_valid_synthesis(packet=None):
             "citations": [pool_sid, witness_sid, total_switches_sid],
         },
         "account_reasoning": {
+            "confidence": "medium",
+            "data_gaps": [],
             "market_summary": "Account activity is concentrated in active evaluation stages.",
             "total_accounts": {
                 "value": total_accounts_val,
@@ -1313,6 +1315,8 @@ class TestValidation:
                     "migration_proof": synthesis["migration_proof"],
                 },
                 "account_reasoning": {
+                    "confidence": "medium",
+                    "data_gaps": [],
                     "market_summary": "Account activity is concentrated in active evaluation stages.",
                     "total_accounts": {
                         "value": agg_sids.get("accounts:summary:total_accounts", 42),
@@ -1616,7 +1620,7 @@ class TestValidation:
         result = validate_synthesis(synthesis, packet)
         assert result.is_valid, result.summary()
 
-    def test_validate_missing_account_and_category_sections_uses_insufficient_stubs(self):
+    def test_validate_missing_account_and_category_sections_are_errors(self):
         from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
             validate_synthesis,
         )
@@ -1624,7 +1628,9 @@ class TestValidation:
         synthesis.pop("account_reasoning", None)
         synthesis.pop("category_reasoning", None)
         result = validate_synthesis(synthesis, packet)
-        assert result.is_valid, result.summary()
+        assert not result.is_valid
+        codes = [e.code for e in result.errors]
+        assert "missing_section" in codes
 
     def test_segment_estimated_reach_rejects_generic_segment_aggregate_source(self):
         from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
@@ -4665,6 +4671,27 @@ class TestReasoningSynthesisTask:
                     return [{
                         "vendor_name": "ModelVendor",
                         "evidence_hash": _compute_pool_hash(_make_layers()),
+                        "has_witness_pack": True,
+                        "has_metric_refs": True,
+                        "has_witness_refs": True,
+                        "synthesis": json.dumps({
+                            "reasoning_contracts": {
+                                "vendor_core_reasoning": {
+                                    "causal_narrative": {"confidence": "medium"},
+                                    "segment_playbook": {"confidence": "medium"},
+                                    "timing_intelligence": {"confidence": "medium"},
+                                },
+                                "displacement_reasoning": {
+                                    "competitive_reframes": {"confidence": "medium"},
+                                    "migration_proof": {"confidence": "medium"},
+                                },
+                                "account_reasoning": {"confidence": "medium"},
+                                "category_reasoning": {"confidence": "medium"},
+                            },
+                            "packet_artifacts": {
+                                "witness_pack": [{"witness_id": "w1"}],
+                            },
+                        }),
                     }]
                 return []
 
@@ -4679,9 +4706,6 @@ class TestReasoningSynthesisTask:
 
         async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
             return {"ModelVendor": layers}
-
-        def _fake_resolve(cfg):
-            return FakeLLM()
 
         async def _fake_run_cross_vendor_synthesis(**kwargs):
             seen["force"] = kwargs["force"]
@@ -4698,7 +4722,7 @@ class TestReasoningSynthesisTask:
         )
         monkeypatch.setattr(
             "atlas_brain.pipelines.llm.get_pipeline_llm",
-            lambda **kw: _fake_resolve(None),
+            lambda **kw: FakeLLM(),
         )
         monkeypatch.setattr(
             "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._run_cross_vendor_synthesis",
@@ -4730,6 +4754,25 @@ class TestReasoningSynthesisTask:
             run,
         )
 
+        _prior_synthesis_json = json.dumps({
+            "reasoning_contracts": {
+                "vendor_core_reasoning": {
+                    "causal_narrative": {"confidence": "medium"},
+                    "segment_playbook": {"confidence": "medium"},
+                    "timing_intelligence": {"confidence": "medium"},
+                },
+                "displacement_reasoning": {
+                    "competitive_reframes": {"confidence": "medium"},
+                    "migration_proof": {"confidence": "medium"},
+                },
+                "account_reasoning": {"confidence": "medium"},
+                "category_reasoning": {"confidence": "medium"},
+            },
+            "packet_artifacts": {
+                "witness_pack": [{"witness_id": "w1"}],
+            },
+        })
+
         class FakePool:
             is_initialized = True
 
@@ -4742,6 +4785,7 @@ class TestReasoningSynthesisTask:
                         "has_witness_pack": True,
                         "has_metric_refs": True,
                         "has_witness_refs": True,
+                        "synthesis": _prior_synthesis_json,
                     }]
                 return []
 
@@ -4784,6 +4828,25 @@ class TestReasoningSynthesisTask:
             run,
         )
 
+        _prior_synthesis_json = json.dumps({
+            "reasoning_contracts": {
+                "vendor_core_reasoning": {
+                    "causal_narrative": {"confidence": "medium"},
+                    "segment_playbook": {"confidence": "medium"},
+                    "timing_intelligence": {"confidence": "medium"},
+                },
+                "displacement_reasoning": {
+                    "competitive_reframes": {"confidence": "medium"},
+                    "migration_proof": {"confidence": "medium"},
+                },
+                "account_reasoning": {"confidence": "medium"},
+                "category_reasoning": {"confidence": "medium"},
+            },
+            "packet_artifacts": {
+                "witness_pack": [{"witness_id": "w1"}],
+            },
+        })
+
         class FakePool:
             is_initialized = True
 
@@ -4796,6 +4859,7 @@ class TestReasoningSynthesisTask:
                         "has_witness_pack": True,
                         "has_metric_refs": True,
                         "has_witness_refs": True,
+                        "synthesis": _prior_synthesis_json,
                     }]
                 return []
 
