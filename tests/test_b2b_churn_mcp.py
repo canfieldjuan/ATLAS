@@ -639,30 +639,41 @@ class TestB2BChurnMCPTools:
     async def test_search_reviews_returns_results(self):
         from atlas_brain.mcp.b2b.reviews import search_reviews
 
-        row = {
-            "id": uuid4(),
+        adapter_result = [{
+            "id": str(uuid4()),
             "vendor_name": "Zendesk",
             "product_category": "Customer Support",
             "reviewer_company": "Acme Corp",
-            "rating": Decimal("2.0"),
-            "urgency_score": Decimal("8"),
+            "rating": 2.0,
+            "source": "g2",
+            "reviewed_at": None,
+            "urgency_score": 8.0,
             "pain_category": "pricing",
             "intent_to_leave": True,
             "decision_maker": True,
+            "role_level": "vp",
+            "buying_stage": "evaluation",
+            "sentiment_direction": "declining",
             "enriched_at": datetime(2026, 2, 21, tzinfo=timezone.utc),
             "reviewer_title": "VP Operations",
-            "company_size_raw": "201-500",
+            "company_size": "201-500",
             "industry": "SaaS",
             "content_type": "review",
             "thread_id": None,
-            "relevance_score": Decimal("0.88"),
-            "author_churn_score": Decimal("0.73"),
+            "competitors_mentioned": [],
+            "quotable_phrases": [],
+            "positive_aspects": [],
+            "specific_complaints": [],
+            "relevance_score": 0.88,
+            "author_churn_score": 0.73,
             "low_fidelity": False,
             "low_fidelity_reasons": [],
-        }
-        pool = _mock_pool(fetch_return=[row])
+        }]
+        pool = _mock_pool()
 
-        with _patch_pool(pool):
+        with _patch_pool(pool), \
+             patch("atlas_brain.autonomous.tasks._b2b_shared.read_review_details",
+                   new=AsyncMock(return_value=adapter_result)):
             raw = await search_reviews(vendor_name="Zendesk")
 
         data = json.loads(raw)
@@ -673,9 +684,12 @@ class TestB2BChurnMCPTools:
     async def test_search_reviews_all_filters(self):
         from atlas_brain.mcp.b2b.reviews import search_reviews
 
-        pool = _mock_pool(fetch_return=[])
+        pool = _mock_pool()
+        mock_adapter = AsyncMock(return_value=[])
 
-        with _patch_pool(pool):
+        with _patch_pool(pool), \
+             patch("atlas_brain.autonomous.tasks._b2b_shared.read_review_details",
+                   new=mock_adapter):
             raw = await search_reviews(
                 vendor_name="Zendesk",
                 pain_category="pricing",
@@ -688,24 +702,29 @@ class TestB2BChurnMCPTools:
 
         data = json.loads(raw)
         assert data["count"] == 0
-        call_args = pool.fetch.call_args
-        sql = call_args[0][0]
-        assert "ILIKE" in sql
-        assert "pain_category" in sql
-        assert "urgency_score" in sql
-        assert "reviewer_company ILIKE" in sql
-        assert "intent_to_leave" in sql
+        mock_adapter.assert_called_once()
+        kw = mock_adapter.call_args[1]
+        assert kw["vendor_name"] == "Zendesk"
+        assert kw["pain_category"] == "pricing"
+        assert kw["min_urgency"] == 7.0
+        assert kw["company"] == "Acme"
+        assert kw["has_churn_intent"] is True
+        assert kw["window_days"] == 60
+        assert kw["limit"] == 10
 
     async def test_search_reviews_limit_capped(self):
         from atlas_brain.mcp.b2b.reviews import search_reviews
 
-        pool = _mock_pool(fetch_return=[])
+        pool = _mock_pool()
+        mock_adapter = AsyncMock(return_value=[])
 
-        with _patch_pool(pool):
+        with _patch_pool(pool), \
+             patch("atlas_brain.autonomous.tasks._b2b_shared.read_review_details",
+                   new=mock_adapter):
             await search_reviews(limit=999)
 
-        call_args = pool.fetch.call_args
-        assert call_args[0][-1] == 100
+        kw = mock_adapter.call_args[1]
+        assert kw["limit"] == 100
 
     async def test_search_reviews_error(self):
         from atlas_brain.mcp.b2b.reviews import search_reviews

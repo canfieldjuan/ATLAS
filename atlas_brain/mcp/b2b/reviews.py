@@ -51,107 +51,43 @@ async def search_reviews(
         pool = get_pool()
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
-        # DEPRECATED-ENRICHMENT-READ: pain_category, urgency_score, churn_signals, reviewer_context
-        # Migrate to: read_review_details() from _b2b_shared
-        conditions = [
-            "enrichment_status = 'enriched'",
-            "enriched_at > NOW() - make_interval(days => $1)",
-        ]
-        params: list = [window_days]
-        idx = 2
-
-        if vendor_name:
-            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-            params.append(vendor_name)
-            idx += 1
-
-        if pain_category:
-            conditions.append(f"enrichment->>'pain_category' = ${idx}")
-            params.append(pain_category)
-            idx += 1
-
-        if min_urgency is not None:
-            conditions.append(f"(enrichment->>'urgency_score')::numeric >= ${idx}")
-            params.append(min_urgency)
-            idx += 1
-
-        if company:
-            conditions.append(f"reviewer_company ILIKE '%' || ${idx} || '%'")
-            params.append(company)
-            idx += 1
-
-        if has_churn_intent is not None:
-            conditions.append(
-                f"(enrichment->'churn_signals'->>'intent_to_leave')::boolean = ${idx}"
-            )
-            params.append(has_churn_intent)
-            idx += 1
-
-        if min_relevance is not None:
-            conditions.append(f"COALESCE(relevance_score, 0.5) >= ${idx}")
-            params.append(min_relevance)
-            idx += 1
-
-        if exclude_low_fidelity:
-            conditions.append("(low_fidelity IS NULL OR low_fidelity = false)")
-
-        if content_type:
-            conditions.append(f"content_type = ${idx}")
-            params.append(content_type)
-            idx += 1
-        else:
-            conditions.append(_suppress_predicate('review'))
-
-        capped = min(limit, 100)
-        params.append(capped)
-        where = " AND ".join(conditions)
-
-        # DEPRECATED-ENRICHMENT-READ: urgency_score, pain_category, churn_signals, reviewer_context
-        # Migrate to: read_review_details() from _b2b_shared
-        rows = await pool.fetch(
-            f"""
-            SELECT id, vendor_name, product_category, reviewer_company,
-                   rating,
-                   (enrichment->>'urgency_score')::numeric AS urgency_score,
-                   enrichment->>'pain_category' AS pain_category,
-                   (enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
-                   (enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
-                   enriched_at, reviewer_title, company_size_raw,
-                   COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry,
-                   content_type, thread_id,
-                   relevance_score, author_churn_score,
-                   low_fidelity, low_fidelity_reasons
-            FROM b2b_reviews
-            WHERE {where}
-            ORDER BY (enrichment->>'urgency_score')::numeric DESC
-            LIMIT ${idx}
-            """,
-            *params,
+        from atlas_brain.autonomous.tasks._b2b_shared import read_review_details
+        results = await read_review_details(
+            pool,
+            window_days=window_days,
+            vendor_name=vendor_name,
+            pain_category=pain_category,
+            min_urgency=min_urgency,
+            company=company,
+            has_churn_intent=has_churn_intent,
+            min_relevance=min_relevance,
+            exclude_low_fidelity=exclude_low_fidelity,
+            content_type=content_type,
+            limit=limit,
         )
-
         reviews = [
             {
-                "id": str(r["id"]),
-                "vendor_name": r["vendor_name"],
-                "product_category": r["product_category"],
-                "reviewer_company": r["reviewer_company"],
-                "rating": float(r["rating"]) if r["rating"] is not None else None,
-                "urgency_score": float(r["urgency_score"]) if r["urgency_score"] is not None else None,
-                "pain_category": r["pain_category"],
-                "intent_to_leave": r["intent_to_leave"],
-                "decision_maker": r["decision_maker"],
-                "enriched_at": r["enriched_at"],
-                "reviewer_title": r["reviewer_title"],
-                "company_size": r["company_size_raw"],
-                "industry": r["industry"],
-                "content_type": r["content_type"],
-                "thread_id": r["thread_id"],
-                "relevance_score": float(r["relevance_score"]) if r["relevance_score"] is not None else None,
-                "author_churn_score": float(r["author_churn_score"]) if r["author_churn_score"] is not None else None,
-                "low_fidelity": bool(r["low_fidelity"]) if r["low_fidelity"] is not None else False,
-                "low_fidelity_reasons": _safe_json(r["low_fidelity_reasons"]) or [],
+                "id": r.get("id"),
+                "vendor_name": r.get("vendor_name"),
+                "product_category": r.get("product_category"),
+                "reviewer_company": r.get("reviewer_company"),
+                "rating": r.get("rating"),
+                "urgency_score": r.get("urgency_score"),
+                "pain_category": r.get("pain_category"),
+                "intent_to_leave": r.get("intent_to_leave"),
+                "decision_maker": r.get("decision_maker"),
+                "enriched_at": r.get("enriched_at"),
+                "reviewer_title": r.get("reviewer_title"),
+                "company_size": r.get("company_size"),
+                "industry": r.get("industry"),
+                "content_type": r.get("content_type"),
+                "thread_id": r.get("thread_id"),
+                "relevance_score": r.get("relevance_score"),
+                "author_churn_score": r.get("author_churn_score"),
+                "low_fidelity": r.get("low_fidelity", False),
+                "low_fidelity_reasons": r.get("low_fidelity_reasons") or [],
             }
-            for r in rows
+            for r in results
         ]
 
         return json.dumps({"reviews": reviews, "count": len(reviews)}, default=str)

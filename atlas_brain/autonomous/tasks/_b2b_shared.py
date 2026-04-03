@@ -8755,6 +8755,164 @@ async def read_high_intent_companies(
     )
 
 
+async def read_review_details(
+    pool,
+    *,
+    window_days: int = 30,
+    vendor_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    pain_category: str | None = None,
+    min_urgency: float | None = None,
+    company: str | None = None,
+    has_churn_intent: bool | None = None,
+    min_relevance: float | None = None,
+    exclude_low_fidelity: bool = False,
+    content_type: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Shared adapter for review detail reads.
+
+    Replaces direct enrichment reads in:
+      - api.b2b_dashboard.search_reviews / export_reviews
+      - api.b2b_tenant_dashboard.list_tenant_reviews
+      - mcp.b2b.reviews.search_reviews
+
+    Returns dicts with keys: id, vendor_name, product_category,
+    reviewer_company, rating, source, reviewed_at, enriched_at,
+    urgency_score, pain_category, intent_to_leave, decision_maker,
+    role_level, buying_stage, sentiment_direction, industry,
+    reviewer_title, company_size, content_type, thread_id,
+    competitors_mentioned, quotable_phrases, positive_aspects,
+    specific_complaints, relevance_score, author_churn_score,
+    low_fidelity, low_fidelity_reasons.
+    """
+    from atlas_brain.services.b2b.corrections import suppress_predicate
+
+    conditions = [
+        "r.enrichment_status = 'enriched'",
+        "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)"
+        " > NOW() - make_interval(days => $1)",
+    ]
+    params: list = [window_days]
+    idx = 2
+
+    if scoped_vendors:
+        conditions.append(f"r.vendor_name = ANY(${idx}::text[])")
+        params.append(scoped_vendors)
+        idx += 1
+    if vendor_name:
+        conditions.append(f"r.vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+    if pain_category:
+        conditions.append(f"r.enrichment->>'pain_category' = ${idx}")
+        params.append(pain_category)
+        idx += 1
+    if min_urgency is not None:
+        conditions.append(f"(r.enrichment->>'urgency_score')::numeric >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+    if company:
+        conditions.append(f"r.reviewer_company ILIKE '%' || ${idx} || '%'")
+        params.append(company)
+        idx += 1
+    if has_churn_intent is not None:
+        conditions.append(
+            f"(r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = ${idx}"
+        )
+        params.append(has_churn_intent)
+        idx += 1
+    if min_relevance is not None:
+        conditions.append(f"COALESCE(r.relevance_score, 0.5) >= ${idx}")
+        params.append(min_relevance)
+        idx += 1
+    if exclude_low_fidelity:
+        conditions.append("(r.low_fidelity IS NULL OR r.low_fidelity = false)")
+
+    if content_type:
+        conditions.append(f"r.content_type = ${idx}")
+        params.append(content_type)
+        idx += 1
+    else:
+        conditions.append(
+            suppress_predicate(
+                "review", id_expr="r.id", source_expr="r.source",
+                vendor_expr="r.vendor_name",
+            )
+        )
+    params.append(limit)
+    where = " AND ".join(conditions)
+
+    rows = await pool.fetch(
+        f"""
+        SELECT r.id, r.vendor_name, r.product_category, r.reviewer_company,
+               r.rating, r.source, r.reviewed_at, r.enriched_at,
+               (r.enrichment->>'urgency_score')::numeric AS urgency_score,
+               r.enrichment->>'pain_category' AS pain_category,
+               (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
+               (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS decision_maker,
+               r.enrichment->'reviewer_context'->>'role_level' AS role_level,
+               r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+               r.sentiment_direction,
+               COALESCE(r.reviewer_industry,
+                        r.enrichment->'reviewer_context'->>'industry') AS industry,
+               r.reviewer_title, r.company_size_raw,
+               r.content_type, r.thread_id,
+               r.enrichment->'competitors_mentioned' AS competitors_raw,
+               r.enrichment->'quotable_phrases' AS quotable_raw,
+               r.enrichment->'positive_aspects' AS positive_raw,
+               r.enrichment->'specific_complaints' AS complaints_raw,
+               r.relevance_score, r.author_churn_score,
+               r.low_fidelity, r.low_fidelity_reasons
+        FROM b2b_reviews r
+        WHERE {where}
+        ORDER BY (r.enrichment->>'urgency_score')::numeric DESC
+        LIMIT ${idx}
+        """,
+        *params,
+    )
+
+    results = []
+    for r in rows:
+        urg = 0.0
+        if r["urgency_score"] is not None:
+            try:
+                urg = float(r["urgency_score"])
+            except (ValueError, TypeError):
+                pass
+        results.append({
+            "id": str(r["id"]) if r["id"] else None,
+            "vendor_name": r["vendor_name"],
+            "product_category": r["product_category"],
+            "reviewer_company": r["reviewer_company"],
+            "rating": float(r["rating"]) if r["rating"] is not None else None,
+            "source": r["source"],
+            "reviewed_at": r["reviewed_at"],
+            "enriched_at": r["enriched_at"],
+            "urgency_score": urg,
+            "pain_category": r["pain_category"],
+            "intent_to_leave": bool(r["intent_to_leave"]) if r["intent_to_leave"] is not None else False,
+            "decision_maker": bool(r["decision_maker"]) if r["decision_maker"] is not None else False,
+            "role_level": r["role_level"] if r["role_level"] != "unknown" else None,
+            "buying_stage": r["buying_stage"] if r["buying_stage"] != "unknown" else None,
+            "sentiment_direction": r["sentiment_direction"],
+            "industry": r["industry"],
+            "reviewer_title": r["reviewer_title"],
+            "company_size": r["company_size_raw"],
+            "content_type": r["content_type"],
+            "thread_id": r["thread_id"],
+            "competitors_mentioned": _safe_json(r["competitors_raw"]),
+            "quotable_phrases": _safe_json(r["quotable_raw"]),
+            "positive_aspects": _safe_json(r["positive_raw"]),
+            "specific_complaints": _safe_json(r["complaints_raw"]),
+            "relevance_score": float(r["relevance_score"]) if r["relevance_score"] is not None else None,
+            "author_churn_score": float(r["author_churn_score"]) if r["author_churn_score"] is not None else None,
+            "low_fidelity": bool(r["low_fidelity"]) if r["low_fidelity"] is not None else False,
+            "low_fidelity_reasons": _safe_json(r["low_fidelity_reasons"]),
+        })
+    return results
+
+
 def _battle_card_weaknesses_from_evidence_vault(
     vault: dict[str, Any] | None,
     *,
