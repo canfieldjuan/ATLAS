@@ -699,8 +699,17 @@ class SynthesisView:
         Consumers should prefer this over raw consumer_context() for
         any outbound/rendered content.
         """
+        import copy
         context = self.consumer_context(consumer)
-        contracts = context.get("reasoning_contracts") or {}
+        # Deep copy contracts so suppression mutations don't affect
+        # the underlying SynthesisView or other consumer calls
+        contracts = copy.deepcopy(context.get("reasoning_contracts") or {})
+        context["reasoning_contracts"] = contracts
+        # Also deep copy the top-level contract shortcuts
+        for key in ("vendor_core_reasoning", "displacement_reasoning",
+                     "category_reasoning", "account_reasoning"):
+            if key in context:
+                context[key] = copy.deepcopy(context[key])
         suppressed: list[str] = []
         disclaimers: dict[str, str] = {}
 
