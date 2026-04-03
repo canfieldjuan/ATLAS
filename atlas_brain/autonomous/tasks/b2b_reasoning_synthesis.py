@@ -31,6 +31,7 @@ from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ._b2b_witnesses import compute_witness_hash
+from ._execution_progress import task_run_id as _task_execution_run_id
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_reasoning_synthesis")
 
@@ -50,10 +51,192 @@ def _approx_prompt_input_tokens(prompt: str, payload: str) -> int:
     return _approx_token_count(prompt) + _approx_token_count(payload) + 16
 
 
-def _compute_pool_hash(layers: dict[str, Any]) -> str:
-    """Deterministic hash of all pool layer data for a vendor."""
+def _trace_reasoning_result(
+    span_name: str,
+    *,
+    llm: Any,
+    messages: list[Any],
+    result: dict[str, Any],
+    metadata: dict[str, Any],
+    duration_ms: float,
+) -> None:
+    from ...pipelines.llm import _trace_cache_metrics, trace_llm_call
+
+    usage = result.get("usage", {}) if isinstance(result, dict) else {}
+    trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
+    cached_tokens, cache_write_tokens, billable_input_tokens = _trace_cache_metrics(usage, trace_meta)
+    response_text = (result.get("response", "") if isinstance(result, dict) else "") or ""
+    trace_llm_call(
+        span_name,
+        input_tokens=int(usage.get("input_tokens", 0) or 0),
+        output_tokens=int(usage.get("output_tokens", 0) or 0),
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        billable_input_tokens=billable_input_tokens,
+        model=getattr(llm, "model", ""),
+        provider=getattr(llm, "name", ""),
+        duration_ms=duration_ms,
+        metadata=metadata,
+        input_data={"messages": [{"role": m.role, "content": (m.content or "")[:500]} for m in messages]},
+        output_data={"response": response_text[:2000]} if response_text else None,
+        api_endpoint=trace_meta.get("api_endpoint"),
+        provider_request_id=trace_meta.get("provider_request_id"),
+        ttft_ms=trace_meta.get("ttft_ms"),
+        inference_time_ms=trace_meta.get("inference_time_ms"),
+        queue_time_ms=trace_meta.get("queue_time_ms"),
+    )
+
+
+_POOL_HASH_IGNORED_TOP_LEVEL_FIELDS = frozenset({"as_of_date"})
+_EVIDENCE_VAULT_HASH_IGNORED_PATHS = {
+    ("metric_snapshot", "snapshot_date"),
+    ("provenance", "enrichment_window_start"),
+    ("provenance", "enrichment_window_end"),
+}
+
+
+def _normalize_pool_hash_value(
+    layer_name: str,
+    value: Any,
+    *,
+    path: tuple[str, ...] = (),
+) -> Any:
+    if isinstance(value, dict):
+        normalized: dict[Any, Any] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            child_path = path + (key_text,)
+            if not path and key_text in _POOL_HASH_IGNORED_TOP_LEVEL_FIELDS:
+                continue
+            if (
+                layer_name == "evidence_vault"
+                and child_path in _EVIDENCE_VAULT_HASH_IGNORED_PATHS
+            ):
+                continue
+            normalized[key] = _normalize_pool_hash_value(
+                layer_name,
+                child,
+                path=child_path,
+            )
+        return normalized
+    if isinstance(value, list):
+        return [
+            _normalize_pool_hash_value(layer_name, child, path=path)
+            for child in value
+        ]
+    return value
+
+
+def _normalize_pool_hash_layers(layers: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for layer_name, layer_value in layers.items():
+        normalized[layer_name] = _normalize_pool_hash_value(
+            str(layer_name),
+            layer_value,
+        )
+    return normalized
+
+
+def _compute_pool_hash_legacy(layers: dict[str, Any]) -> str:
     raw = json.dumps(layers, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _compute_pool_hash(layers: dict[str, Any]) -> str:
+    """Deterministic hash of all pool layer data for a vendor."""
+    normalized_layers = _normalize_pool_hash_layers(layers)
+    return _compute_pool_hash_legacy(normalized_layers)
+
+
+def _coerce_as_of_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _row_has_packet_artifacts(row: dict[str, Any] | None) -> bool:
+    if row is None:
+        return False
+    if "has_witness_pack" not in row:
+        return True
+    return bool(row.get("has_witness_pack"))
+
+
+def _row_has_reference_ids(row: dict[str, Any] | None) -> bool:
+    if row is None:
+        return False
+    if "has_metric_refs" not in row and "has_witness_refs" not in row:
+        return True
+    return bool(row.get("has_metric_refs")) and bool(row.get("has_witness_refs"))
+
+
+def _classify_vendor_reasoning_decision(
+    *,
+    vendor_name: str,
+    today: date,
+    evidence_hash: str,
+    latest_row: dict[str, Any] | None,
+    force: bool,
+    max_stale_days: int,
+    rerun_if_missing_packet_artifacts: bool,
+    rerun_if_missing_reference_ids: bool,
+    hash_matches_prior: bool | None = None,
+) -> dict[str, Any]:
+    prior_hash = str((latest_row or {}).get("evidence_hash") or "")
+    prior_as_of_date = _coerce_as_of_date((latest_row or {}).get("as_of_date"))
+    prior_row_age_days = (
+        max(0, (today - prior_as_of_date).days)
+        if prior_as_of_date is not None
+        else None
+    )
+    if latest_row is not None and hash_matches_prior is None:
+        hash_matches_prior = prior_hash == evidence_hash
+    hash_changed = bool(latest_row) and not bool(hash_matches_prior)
+    missing_packet_artifacts = bool(latest_row) and not _row_has_packet_artifacts(latest_row)
+    missing_reference_ids = bool(latest_row) and not _row_has_reference_ids(latest_row)
+
+    if force:
+        reason = "forced"
+        should_reason = True
+    elif latest_row is None:
+        reason = "missing_prior_row"
+        should_reason = True
+    elif hash_changed:
+        reason = "hash_changed"
+        should_reason = True
+    elif rerun_if_missing_packet_artifacts and missing_packet_artifacts:
+        reason = "missing_packet_artifacts"
+        should_reason = True
+    elif rerun_if_missing_reference_ids and missing_reference_ids:
+        reason = "missing_reference_ids"
+        should_reason = True
+    elif (
+        prior_row_age_days is not None
+        and prior_row_age_days > max_stale_days
+    ):
+        reason = "stale_reused"
+        should_reason = False
+    else:
+        reason = "hash_reuse"
+        should_reason = False
+
+    return {
+        "vendor_name": vendor_name,
+        "reason": reason,
+        "should_reason": should_reason,
+        "hash_changed": hash_changed,
+        "prior_as_of_date": prior_as_of_date,
+        "prior_row_age_days": prior_row_age_days,
+        "missing_packet_artifacts": missing_packet_artifacts,
+        "missing_reference_ids": missing_reference_ids,
+    }
 
 
 def _validation_feedback(vresult: Any, limit: int) -> list[str]:
@@ -332,16 +515,7 @@ async def _record_validation_attempt(
 
 def _task_run_id(task: ScheduledTask | Any) -> str | None:
     """Return a stable run identifier for scheduled, manual, and test invocations."""
-    task_id = getattr(task, "id", None)
-    if task_id:
-        return str(task_id)
-    metadata = getattr(task, "metadata", None)
-    if isinstance(metadata, dict):
-        for key in ("run_id", "task_id", "invocation_id"):
-            value = metadata.get(key)
-            if value:
-                return str(value)
-    return None
+    return _task_execution_run_id(task)
 
 
 def _coerce_timestamptz(value: Any) -> Any:
@@ -571,27 +745,115 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Check for existing synthesis to skip unchanged vendors
     existing = await pool.fetch(
         """
-        SELECT vendor_name, evidence_hash
-        FROM b2b_reasoning_synthesis
-        WHERE as_of_date = $1
-          AND analysis_window_days = $2
-          AND schema_version = $3
+        WITH latest AS (
+            SELECT DISTINCT ON (vendor_name)
+                   vendor_name,
+                   as_of_date,
+                   evidence_hash,
+                   jsonb_path_exists(synthesis, '$.packet_artifacts.witness_pack[*]') AS has_witness_pack,
+                   jsonb_path_exists(synthesis, '$.reference_ids.metric_ids[*]') AS has_metric_refs,
+                   jsonb_path_exists(synthesis, '$.reference_ids.witness_ids[*]') AS has_witness_refs
+            FROM b2b_reasoning_synthesis
+            WHERE analysis_window_days = $1
+              AND schema_version = $2
+            ORDER BY vendor_name, as_of_date DESC, created_at DESC
+        )
+        SELECT vendor_name, as_of_date, evidence_hash, has_witness_pack, has_metric_refs, has_witness_refs
+        FROM latest
         """,
-        today, window_days, _SCHEMA_VERSION,
+        window_days, _SCHEMA_VERSION,
     )
-    existing_hashes: dict[str, str] = {
-        r["vendor_name"]: r["evidence_hash"] for r in existing
+    latest_rows: dict[str, dict[str, Any]] = {
+        r["vendor_name"]: dict(r) for r in existing
     }
 
     # Filter to vendors needing reasoning
+    max_stale_days = max(
+        0,
+        int(getattr(cfg, "reasoning_synthesis_max_stale_days", 3)),
+    )
+    rerun_if_missing_packet_artifacts = bool(
+        getattr(cfg, "reasoning_synthesis_rerun_if_missing_packet_artifacts", True),
+    )
+    rerun_if_missing_reference_ids = bool(
+        getattr(cfg, "reasoning_synthesis_rerun_if_missing_reference_ids", True),
+    )
     force = bool((task.metadata or {}).get("force"))
     force_cross_vendor = bool((task.metadata or {}).get("force_cross_vendor"))
-    vendors_to_reason: list[tuple[str, dict, str]] = []
+    rerun_reason_counts = {
+        "forced": 0,
+        "missing_prior_row": 0,
+        "hash_changed": 0,
+        "missing_packet_artifacts": 0,
+        "missing_reference_ids": 0,
+        "hash_reuse": 0,
+        "stale_reused": 0,
+    }
+    normalized_hashes: dict[str, str] = {}
+    legacy_current_hashes: dict[str, str] = {}
+    transition_candidates_by_date: dict[date, list[str]] = {}
     for vendor_name, layers in vendor_pools.items():
         ev_hash = _compute_pool_hash(layers)
-        if not force and existing_hashes.get(vendor_name) == ev_hash:
+        legacy_ev_hash = _compute_pool_hash_legacy(layers)
+        normalized_hashes[vendor_name] = ev_hash
+        legacy_current_hashes[vendor_name] = legacy_ev_hash
+        latest_row = latest_rows.get(vendor_name)
+        if latest_row is None:
             continue
-        vendors_to_reason.append((vendor_name, layers, ev_hash))
+        prior_hash = str(latest_row.get("evidence_hash") or "")
+        if prior_hash in {ev_hash, legacy_ev_hash}:
+            continue
+        prior_as_of_date = _coerce_as_of_date(latest_row.get("as_of_date"))
+        if prior_as_of_date is None or prior_as_of_date == today:
+            continue
+        transition_candidates_by_date.setdefault(
+            prior_as_of_date, [],
+        ).append(vendor_name)
+
+    legacy_hash_compatible_vendors: set[str] = set()
+    for prior_as_of_date, candidate_vendors in transition_candidates_by_date.items():
+        prior_vendor_pools = await fetch_all_pool_layers(
+            pool,
+            as_of=prior_as_of_date,
+            analysis_window_days=window_days,
+        )
+        for vendor_name in candidate_vendors:
+            prior_layers = prior_vendor_pools.get(vendor_name)
+            latest_row = latest_rows.get(vendor_name)
+            if prior_layers is None or latest_row is None:
+                continue
+            prior_hash = str(latest_row.get("evidence_hash") or "")
+            prior_normalized_hash = _compute_pool_hash(prior_layers)
+            prior_legacy_hash = _compute_pool_hash_legacy(prior_layers)
+            if prior_hash not in {prior_normalized_hash, prior_legacy_hash}:
+                continue
+            if prior_normalized_hash == normalized_hashes.get(vendor_name):
+                legacy_hash_compatible_vendors.add(vendor_name)
+
+    vendors_to_reason: list[tuple[str, dict, str, dict[str, Any]]] = []
+    for vendor_name, layers in vendor_pools.items():
+        ev_hash = normalized_hashes[vendor_name]
+        latest_row = latest_rows.get(vendor_name)
+        prior_hash = str((latest_row or {}).get("evidence_hash") or "")
+        hash_matches_prior = bool(latest_row) and (
+            prior_hash in {ev_hash, legacy_current_hashes[vendor_name]}
+            or vendor_name in legacy_hash_compatible_vendors
+        )
+        decision = _classify_vendor_reasoning_decision(
+            vendor_name=vendor_name,
+            today=today,
+            evidence_hash=ev_hash,
+            latest_row=latest_row,
+            force=force,
+            max_stale_days=max_stale_days,
+            rerun_if_missing_packet_artifacts=rerun_if_missing_packet_artifacts,
+            rerun_if_missing_reference_ids=rerun_if_missing_reference_ids,
+            hash_matches_prior=hash_matches_prior,
+        )
+        rerun_reason_counts[decision["reason"]] += 1
+        if not decision["should_reason"]:
+            continue
+        vendors_to_reason.append((vendor_name, layers, ev_hash, decision))
 
     skipped = len(vendor_pools) - len(vendors_to_reason)
     logger.info(
@@ -605,7 +867,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {
             "vendors_total": len(vendor_pools),
             "vendors_reasoned": 0,
+            "vendors_failed": 0,
             "vendors_skipped": skipped,
+            "vendors_skipped_hash_reuse": rerun_reason_counts["hash_reuse"],
+            "vendors_skipped_stale_reuse": rerun_reason_counts["stale_reused"],
+            "vendors_rerun_hash_changed": rerun_reason_counts["hash_changed"],
+            "vendors_rerun_missing_prior": rerun_reason_counts["missing_prior_row"],
+            "vendors_rerun_missing_packet_artifacts": rerun_reason_counts["missing_packet_artifacts"],
+            "vendors_rerun_missing_reference_ids": rerun_reason_counts["missing_reference_ids"],
+            "vendors_forced": rerun_reason_counts["forced"],
             "_skip_synthesis": "All vendors unchanged",
         }
     if not vendors_to_reason and cfg.cross_vendor_synthesis_enabled and force_cross_vendor:
@@ -613,12 +883,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "Reasoning synthesis v2: vendor phase skipped; force_cross_vendor enabled",
         )
 
-    # Resolve LLM
-    from ...reasoning.config import ReasoningConfig
-    from ...reasoning.llm_utils import resolve_stratified_llm
+    # Resolve LLM via standard pipeline routing
+    from ...pipelines.llm import get_pipeline_llm
 
-    rcfg = ReasoningConfig()
-    llm_cfg = rcfg.model_copy(deep=True)
     synthesis_model = str(
         getattr(cfg, "reasoning_synthesis_model", "") or ""
     ).strip()
@@ -626,11 +893,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         synthesis_model = str(
             getattr(settings.llm, "openrouter_reasoning_model", "") or ""
         ).strip()
-    if synthesis_model:
-        llm_cfg.stratified_llm_workload = "openrouter"
-        llm_cfg.stratified_openrouter_model = synthesis_model
-        llm_cfg.stratified_openrouter_model_light = synthesis_model
-    llm = resolve_stratified_llm(llm_cfg)
+    llm = get_pipeline_llm(
+        workload="synthesis",
+        openrouter_model=synthesis_model or None,
+        auto_activate_ollama=False,
+    )
     if llm is None:
         return {"_skip_synthesis": "No LLM available for reasoning synthesis"}
 
@@ -656,15 +923,32 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         1.0,
         float(getattr(cfg, "reasoning_synthesis_timeout_seconds", 180.0)),
     )
+    llm_max_input_tokens = max(
+        512,
+        int(getattr(cfg, "reasoning_synthesis_max_input_tokens", 20000)),
+    )
+    _default_max_tokens = 16384
     llm_max_tokens = max(
         256,
         min(
-            int(getattr(cfg, "reasoning_synthesis_max_tokens", rcfg.max_tokens)),
-            int(rcfg.max_tokens),
+            int(getattr(cfg, "reasoning_synthesis_max_tokens", _default_max_tokens)),
+            _default_max_tokens,
         ),
     )
     llm_temperature = float(
-        getattr(cfg, "reasoning_synthesis_temperature", llm_cfg.temperature),
+        getattr(cfg, "reasoning_synthesis_temperature", 0.3),
+    )
+    full_max_items_per_pool = max(
+        1,
+        int(getattr(cfg, "reasoning_synthesis_max_items_per_pool", 8)),
+    )
+    lean_max_items_per_pool = max(
+        1,
+        int(getattr(cfg, "reasoning_synthesis_lean_max_items_per_pool", 4)),
+    )
+    lean_max_witnesses = max(
+        1,
+        int(getattr(cfg, "reasoning_synthesis_lean_max_witnesses", 6)),
     )
     feedback_limit = max(
         1, int(getattr(cfg, "reasoning_synthesis_feedback_limit", 5)),
@@ -674,14 +958,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     succeeded = 0
     failed = 0
     validation_failures = 0
+    witness_count = 0
+    witness_vendor_rows = 0
+    input_budget_rejections = 0
+    payload_mode_full = 0
+    payload_mode_lean = 0
     failed_vendors: list[dict[str, Any]] = []
 
     async def _reason_one(
-        vendor_name: str, layers: dict, ev_hash: str,
+        vendor_name: str, layers: dict, ev_hash: str, decision: dict[str, Any],
     ) -> None:
         nonlocal total_tokens, succeeded, failed, validation_failures, failed_vendors
+        nonlocal witness_count, witness_vendor_rows
+        nonlocal input_budget_rejections, payload_mode_full, payload_mode_lean
         async with sem:
-            packet = compress_vendor_pools(vendor_name, layers)
+            packet = compress_vendor_pools(
+                vendor_name,
+                layers,
+                max_items_per_pool=full_max_items_per_pool,
+            )
+            packet_witness_count = len(getattr(packet, "witness_pack", []) or [])
+            if packet_witness_count > 0:
+                witness_count += packet_witness_count
+                witness_vendor_rows += 1
             try:
                 await _persist_packet_artifacts(
                     pool,
@@ -697,6 +996,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     vendor_name,
                     exc_info=True,
                 )
+            payload_mode = "full"
+            payload_items_per_pool = full_max_items_per_pool
+            section_packets_included = True
+            include_contradiction_rows = True
+            include_minority_signals = True
             payload = json.dumps(
                 packet.to_llm_payload(
                     compact_metric_ledger=True,
@@ -706,6 +1010,116 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 sort_keys=True,
                 default=str,
             )
+            estimated_input_tokens = _approx_prompt_input_tokens(
+                REASONING_SYNTHESIS_PROMPT,
+                payload,
+            )
+            payload_witness_count = packet_witness_count
+            prompt_packet = packet.prompt_validation_view(
+                compact_aggregates=True,
+                include_contradiction_rows=include_contradiction_rows,
+                include_minority_signals=include_minority_signals,
+                include_section_packets=section_packets_included,
+            )
+            if estimated_input_tokens > llm_max_input_tokens:
+                lean_packet = compress_vendor_pools(
+                    vendor_name,
+                    layers,
+                    max_items_per_pool=lean_max_items_per_pool,
+                    max_witnesses=lean_max_witnesses,
+                )
+                include_contradiction_rows = False
+                include_minority_signals = False
+                payload = json.dumps(
+                    lean_packet.to_llm_payload(
+                        compact_metric_ledger=True,
+                        compact_aggregates=True,
+                        include_contradiction_rows=False,
+                        include_minority_signals=False,
+                        include_section_packets=False,
+                    ),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                    default=str,
+                )
+                estimated_input_tokens = _approx_prompt_input_tokens(
+                    REASONING_SYNTHESIS_PROMPT,
+                    payload,
+                )
+                payload_mode = "lean"
+                payload_items_per_pool = lean_max_items_per_pool
+                payload_witness_count = len(getattr(lean_packet, "witness_pack", []) or [])
+                section_packets_included = False
+                prompt_packet = lean_packet.prompt_validation_view(
+                    compact_aggregates=True,
+                    include_contradiction_rows=include_contradiction_rows,
+                    include_minority_signals=include_minority_signals,
+                    include_section_packets=section_packets_included,
+                )
+            if estimated_input_tokens > llm_max_input_tokens:
+                logger.warning(
+                    "Reasoning synthesis rejected for %s: estimated input %d exceeds cap %d",
+                    vendor_name,
+                    estimated_input_tokens,
+                    llm_max_input_tokens,
+                )
+                failed_vendors.append({
+                    "vendor_name": vendor_name,
+                    "stage": "input_budget",
+                    "reasons": [
+                        "input token budget exceeded",
+                    ],
+                    "tokens_used": 0,
+                    "attempts_used": 0,
+                })
+                failed += 1
+                input_budget_rejections += 1
+                from ..visibility import emit_event, record_attempt
+
+                await record_attempt(
+                    pool,
+                    artifact_type="reasoning_synthesis",
+                    artifact_id=vendor_name,
+                    run_id=run_id,
+                    attempt_no=1,
+                    stage="generation",
+                    status="rejected",
+                    blocker_count=1,
+                    blocking_issues=[
+                        (
+                            "input token budget exceeded: "
+                            f"estimated_input_tokens={estimated_input_tokens}, "
+                            f"cap={llm_max_input_tokens}"
+                        ),
+                    ],
+                    failure_step="input_budget",
+                    error_message="Vendor reasoning prompt exceeded the configured input token cap",
+                )
+                await emit_event(
+                    pool,
+                    stage="synthesis",
+                    event_type="input_budget_rejected",
+                    entity_type="vendor",
+                    entity_id=vendor_name,
+                    summary=(
+                        "Vendor reasoning prompt exceeded the configured input token cap"
+                    ),
+                    severity="warning",
+                    actionable=True,
+                    artifact_type="reasoning_synthesis",
+                    run_id=run_id,
+                    reason_code="input_budget",
+                    detail={
+                        "estimated_input_tokens": estimated_input_tokens,
+                        "cap": llm_max_input_tokens,
+                        "payload_mode": payload_mode,
+                    },
+                )
+                return
+            if payload_mode == "lean":
+                payload_mode_lean += 1
+            else:
+                payload_mode_full += 1
             failure_reasons: list[str] = []
             last_text = ""
             last_validation = None
@@ -744,6 +1158,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         ),
                     ))
                 try:
+                    call_started = time.monotonic()
                     import re
                     from ...pipelines.llm import parse_json_response
 
@@ -756,6 +1171,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             response_format={"type": "json_object"},
                         ),
                         timeout=llm_timeout_seconds,
+                    )
+                    _trace_reasoning_result(
+                        "task.b2b_reasoning_synthesis",
+                        llm=llm,
+                        messages=messages,
+                        result=result,
+                        metadata={
+                            "run_id": run_id,
+                            "vendor_name": vendor_name,
+                            "reasoning_mode": "vendor_synthesis",
+                            "attempt_no": attempt + 1,
+                            "schema_version": _SCHEMA_VERSION,
+                            "rerun_reason": decision["reason"],
+                            "payload_mode": payload_mode,
+                            "estimated_input_tokens": estimated_input_tokens,
+                            "prior_row_age_days": decision.get("prior_row_age_days"),
+                            "prior_row_as_of_date": (
+                                decision["prior_as_of_date"].isoformat()
+                                if decision.get("prior_as_of_date") is not None
+                                else None
+                            ),
+                            "hash_changed": bool(decision.get("hash_changed")),
+                            "forced": decision["reason"] == "forced",
+                        },
+                        duration_ms=(time.monotonic() - call_started) * 1000,
                     )
                     text = result.get("response", "").strip()
                     usage = result.get("usage", {})
@@ -778,8 +1218,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         failure_reasons = ["LLM did not return valid JSON"]
                         synthesis = None
                     else:
-                        parsed = normalize_synthesis_source_ids(parsed, packet)
-                        vresult = validate_synthesis(parsed, packet)
+                        parsed = normalize_synthesis_source_ids(parsed, prompt_packet)
+                        vresult = validate_synthesis(parsed, prompt_packet)
                         if vresult.is_valid:
                             synthesis = parsed
                             last_validation = vresult
@@ -964,6 +1404,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 len(items) for items in packet.pools.values()
             )
             meta.setdefault("total_evidence_items", total_items)
+            meta["rerun_reason"] = decision["reason"]
+            meta["payload_mode"] = payload_mode
+            meta["estimated_input_tokens"] = estimated_input_tokens
+            meta["packet_witness_count"] = payload_witness_count
+            meta["packet_items_per_pool"] = payload_items_per_pool
+            meta["section_packets_included"] = section_packets_included
+            if decision.get("prior_as_of_date") is not None:
+                meta["prior_row_as_of_date"] = decision["prior_as_of_date"].isoformat()
+            if decision.get("prior_row_age_days") is not None:
+                meta["prior_row_age_days"] = int(decision["prior_row_age_days"])
             synthesis = build_persistable_synthesis(synthesis, packet)
             persisted_vresult = validate_synthesis(synthesis, packet)
             if not persisted_vresult.is_valid:
@@ -1128,8 +1578,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
 
     await asyncio.gather(*[
-        _reason_one(vn, layers, eh)
-        for vn, layers, eh in vendors_to_reason
+        _reason_one(vn, layers, eh, decision)
+        for vn, layers, eh, decision in vendors_to_reason
     ])
 
     vendor_elapsed = round(time.monotonic() - t0, 1)
@@ -1153,7 +1603,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 pool=pool,
                 vendor_pools=vendor_pools,
                 llm=llm,
-                rcfg=llm_cfg,
                 cfg=cfg,
                 today=today,
                 window_days=window_days,
@@ -1178,11 +1627,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "vendors_reasoned": succeeded,
         "vendors_failed": failed,
         "vendors_validation_failures": validation_failures,
+        "vendors_rejected_input_budget": input_budget_rejections,
         "failed_vendors": failed_vendors,
         "vendors_skipped": skipped,
+        "vendors_skipped_hash_reuse": rerun_reason_counts["hash_reuse"],
+        "vendors_skipped_stale_reuse": rerun_reason_counts["stale_reused"],
+        "vendors_rerun_hash_changed": rerun_reason_counts["hash_changed"],
+        "vendors_rerun_missing_prior": rerun_reason_counts["missing_prior_row"],
+        "vendors_rerun_missing_packet_artifacts": rerun_reason_counts["missing_packet_artifacts"],
+        "vendors_rerun_missing_reference_ids": rerun_reason_counts["missing_reference_ids"],
+        "vendors_forced": rerun_reason_counts["forced"],
+        "vendors_payload_mode_full": payload_mode_full,
+        "vendors_payload_mode_lean": payload_mode_lean,
         "total_tokens": total_tokens,
         "elapsed_seconds": elapsed,
         "schema_version": _SCHEMA_VERSION,
+        "witness_count": witness_count,
+        "witness_vendor_rows": witness_vendor_rows,
         "cross_vendor_succeeded": xv_succeeded,
         "cross_vendor_failed": xv_failed,
         "cross_vendor_tokens": xv_tokens,
@@ -1202,7 +1663,6 @@ async def _run_cross_vendor_synthesis(
     pool,
     vendor_pools: dict[str, dict],
     llm,
-    rcfg,
     cfg,
     today: date,
     window_days: int,
@@ -1622,11 +2082,12 @@ async def _run_cross_vendor_synthesis(
         1.0,
         float(getattr(cfg, "reasoning_synthesis_timeout_seconds", 180.0)),
     )
+    _default_max_tokens = 16384
     xv_llm_max_tokens = max(
         256,
         min(
-            int(getattr(cfg, "reasoning_synthesis_max_tokens", rcfg.max_tokens)),
-            int(rcfg.max_tokens),
+            int(getattr(cfg, "reasoning_synthesis_max_tokens", _default_max_tokens)),
+            _default_max_tokens,
         ),
     )
     xv_llm_max_input_tokens = max(
@@ -1634,7 +2095,7 @@ async def _run_cross_vendor_synthesis(
         int(getattr(cfg, "cross_vendor_llm_max_input_tokens", 12000)),
     )
     xv_llm_temperature = float(
-        getattr(cfg, "reasoning_synthesis_temperature", rcfg.temperature),
+        getattr(cfg, "reasoning_synthesis_temperature", 0.3),
     )
     _succeeded = 0
     _failed = 0
@@ -1706,6 +2167,7 @@ async def _run_cross_vendor_synthesis(
                     Message(role="user", content=payload),
                 ]
                 try:
+                    call_started = time.monotonic()
                     result = await asyncio.wait_for(
                         asyncio.to_thread(
                             llm.chat,
@@ -1715,6 +2177,22 @@ async def _run_cross_vendor_synthesis(
                             response_format={"type": "json_object"},
                         ),
                         timeout=xv_llm_timeout_seconds,
+                    )
+                    _trace_reasoning_result(
+                        "task.b2b_reasoning_synthesis.cross_vendor",
+                        llm=llm,
+                        messages=messages,
+                        result=result,
+                        metadata={
+                            "run_id": run_id,
+                            "reasoning_mode": "cross_vendor",
+                            "analysis_type": analysis_type,
+                            "vendor_name": vendors[0] if len(vendors) == 1 else None,
+                            "vendors": vendors,
+                            "artifact_id": artifact_id,
+                            "attempt_no": attempt + 1,
+                        },
+                        duration_ms=(time.monotonic() - call_started) * 1000,
                     )
                     text = result.get("response", "").strip()
                     usage = result.get("usage", {})

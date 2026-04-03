@@ -31,30 +31,6 @@ class ReasoningConfig(BaseSettings):
     max_tokens: int = Field(default=16384, description="Max tokens for reasoning calls (includes thinking tokens for reasoning models)")
     temperature: float = Field(default=0.3, description="Temperature for reasoning calls (ignored by some reasoning models)")
 
-    # Legacy stratified reasoning LLM backend (standalone tooling only)
-    # Heavy model: archetype classification (Pass 1), pairwise battles
-    # Light model: challenge/ground passes, reconstitute, category councils, asymmetry
-    stratified_llm_workload: str = Field(
-        default="openrouter",
-        description="Legacy engine LLM workload for stratified reasoning: 'openrouter', 'vllm', 'anthropic', or 'auto'",
-    )
-    stratified_openrouter_model: str = Field(
-        default="openai/gpt-oss-120b",
-        description="OpenRouter model for Tier 1 (heavy) reasoning: archetype classify, pairwise battles",
-    )
-    stratified_openrouter_model_light: str = Field(
-        default="",
-        description=(
-            "OpenRouter model for Tier 2 (light) reasoning: challenge/ground "
-            "passes, reconstitute, category councils, asymmetry. "
-            "Empty = reuse stratified_openrouter_model."
-        ),
-    )
-    stratified_anthropic_model: str = Field(
-        default="claude-3-5-haiku-latest",
-        description="Anthropic model for the legacy stratified engine when workload is 'anthropic'",
-    )
-
     triage_model: str = Field(
         default="claude-3-5-haiku-latest",
         description="Cheap model for event triage classification",

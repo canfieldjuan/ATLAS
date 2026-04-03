@@ -4,7 +4,7 @@ validation, and reader contract."""
 import json
 import time
 from copy import deepcopy
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -333,6 +333,40 @@ def _make_layers():
             },
         ],
     }
+
+
+class TestPoolHash:
+    def test_compute_pool_hash_ignores_non_semantic_metadata(self):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _compute_pool_hash,
+        )
+
+        base = _make_layers()
+        changed = deepcopy(base)
+        changed["evidence_vault"]["as_of_date"] = "2026-04-01"
+        changed["segment"]["as_of_date"] = "2026-04-01"
+        changed["temporal"]["as_of_date"] = "2026-04-01"
+        changed["displacement"][0]["as_of_date"] = "2026-04-01"
+        changed["category"]["as_of_date"] = "2026-04-01"
+        changed["accounts"]["as_of_date"] = "2026-04-01"
+        changed["evidence_vault"]["metric_snapshot"]["snapshot_date"] = "2026-04-01"
+        changed["evidence_vault"]["provenance"]["enrichment_window_start"] = "2026-01-01"
+        changed["evidence_vault"]["provenance"]["enrichment_window_end"] = "2026-04-01"
+
+        assert _compute_pool_hash(base) == _compute_pool_hash(changed)
+
+    def test_compute_pool_hash_changes_on_semantic_pool_delta(self):
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _compute_pool_hash,
+        )
+
+        base = _make_layers()
+        changed = deepcopy(base)
+        changed["segment"]["budget_pressure"]["annual_spend_signals"].append(
+            "250k annual spend",
+        )
+
+        assert _compute_pool_hash(base) != _compute_pool_hash(changed)
 
 
 class TestPoolCompression:
@@ -4096,8 +4130,8 @@ class TestReasoningSynthesisTask:
             _fake_fetch_all_pool_layers,
         )
         monkeypatch.setattr(
-            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
-            lambda cfg: fake_llm,
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
         )
         monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_attempts", 2, raising=False,
@@ -4231,8 +4265,8 @@ class TestReasoningSynthesisTask:
             _fake_fetch_all_pool_layers,
         )
         monkeypatch.setattr(
-            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
-            lambda cfg: fake_llm,
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
         )
         monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_attempts", 2, raising=False,
@@ -4386,8 +4420,8 @@ class TestReasoningSynthesisTask:
             _fake_fetch_all_pool_layers,
         )
         monkeypatch.setattr(
-            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
-            lambda cfg: fake_llm,
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
         )
 
         result = await run(SimpleNamespace(metadata={"force": True}))
@@ -4460,8 +4494,8 @@ class TestReasoningSynthesisTask:
             _fake_fetch_all_pool_layers,
         )
         monkeypatch.setattr(
-            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
-            lambda cfg: FakeLLM(json.dumps(invalid_synthesis)),
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: FakeLLM(json.dumps(invalid_synthesis)),
         )
         monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_attempts", 1, raising=False,
@@ -4530,8 +4564,8 @@ class TestReasoningSynthesisTask:
             _fake_fetch_all_pool_layers,
         )
         monkeypatch.setattr(
-            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
-            lambda cfg: SlowLLM(),
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: SlowLLM(),
         )
         monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_attempts", 1, raising=False,
@@ -4580,8 +4614,8 @@ class TestReasoningSynthesisTask:
         async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
             return {"ModelVendor": layers}
 
-        def _fake_resolve(cfg):
-            seen_models.append(cfg.stratified_openrouter_model)
+        def _fake_get_pipeline_llm(**kw):
+            seen_models.append(kw.get("openrouter_model"))
             return FakeLLM()
 
         monkeypatch.setattr(
@@ -4593,8 +4627,8 @@ class TestReasoningSynthesisTask:
             _fake_fetch_all_pool_layers,
         )
         monkeypatch.setattr(
-            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
-            _fake_resolve,
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            _fake_get_pipeline_llm,
         )
         monkeypatch.setattr(
             settings.llm, "openrouter_reasoning_model", "openai/gpt-oss-120b", raising=False,
@@ -4663,8 +4697,8 @@ class TestReasoningSynthesisTask:
             _fake_fetch_all_pool_layers,
         )
         monkeypatch.setattr(
-            "atlas_brain.reasoning.llm_utils.resolve_stratified_llm",
-            _fake_resolve,
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: _fake_resolve(None),
         )
         monkeypatch.setattr(
             "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._run_cross_vendor_synthesis",
@@ -4687,6 +4721,542 @@ class TestReasoningSynthesisTask:
         assert result["cross_vendor_mirrored"] == 4
         assert seen["force"] is True
         assert seen["vendor_names"] == ["ModelVendor"]
+
+    @pytest.mark.asyncio
+    async def test_run_reuses_latest_unchanged_vendor_row_from_prior_day(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _compute_pool_hash,
+            run,
+        )
+
+        class FakePool:
+            is_initialized = True
+
+            async def fetch(self, query, *args):
+                if "FROM b2b_reasoning_synthesis" in query:
+                    return [{
+                        "vendor_name": "ModelVendor",
+                        "as_of_date": date.today() - timedelta(days=1),
+                        "evidence_hash": _compute_pool_hash(_make_layers()),
+                        "has_witness_pack": True,
+                        "has_metric_refs": True,
+                        "has_witness_refs": True,
+                    }]
+                return []
+
+            async def execute(self, query, *args):
+                raise AssertionError("No vendor reasoning write expected when reusing unchanged row")
+
+        layers = _make_layers()
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"ModelVendor": layers}
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: FakePool(),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_max_stale_days", 3, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={}))
+
+        assert result["vendors_reasoned"] == 0
+        assert result["vendors_failed"] == 0
+        assert result["vendors_skipped"] == 1
+        assert result["vendors_skipped_hash_reuse"] == 1
+        assert result["vendors_skipped_stale_reuse"] == 0
+
+    @pytest.mark.asyncio
+    async def test_run_reuses_prior_day_legacy_hash_when_only_metadata_dates_changed(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _compute_pool_hash_legacy,
+            run,
+        )
+
+        class FakePool:
+            is_initialized = True
+
+            async def fetch(self, query, *args):
+                if "FROM b2b_reasoning_synthesis" in query:
+                    return [{
+                        "vendor_name": "ModelVendor",
+                        "as_of_date": date.today() - timedelta(days=1),
+                        "evidence_hash": _compute_pool_hash_legacy(prior_layers),
+                        "has_witness_pack": True,
+                        "has_metric_refs": True,
+                        "has_witness_refs": True,
+                    }]
+                return []
+
+            async def execute(self, query, *args):
+                raise AssertionError(
+                    "No vendor reasoning write expected when only metadata dates changed",
+                )
+
+        current_layers = _make_layers()
+        current_layers["evidence_vault"]["as_of_date"] = date.today().isoformat()
+        current_layers["segment"]["as_of_date"] = date.today().isoformat()
+        current_layers["temporal"]["as_of_date"] = date.today().isoformat()
+        current_layers["category"]["as_of_date"] = date.today().isoformat()
+        current_layers["accounts"]["as_of_date"] = date.today().isoformat()
+        current_layers["displacement"][0]["as_of_date"] = date.today().isoformat()
+        current_layers["evidence_vault"]["metric_snapshot"]["snapshot_date"] = date.today().isoformat()
+        current_layers["evidence_vault"]["provenance"]["enrichment_window_end"] = date.today().isoformat()
+
+        prior_layers = deepcopy(current_layers)
+        prior_date = date.today() - timedelta(days=1)
+        prior_layers["evidence_vault"]["as_of_date"] = prior_date.isoformat()
+        prior_layers["segment"]["as_of_date"] = prior_date.isoformat()
+        prior_layers["temporal"]["as_of_date"] = prior_date.isoformat()
+        prior_layers["category"]["as_of_date"] = prior_date.isoformat()
+        prior_layers["accounts"]["as_of_date"] = prior_date.isoformat()
+        prior_layers["displacement"][0]["as_of_date"] = prior_date.isoformat()
+        prior_layers["evidence_vault"]["metric_snapshot"]["snapshot_date"] = prior_date.isoformat()
+        prior_layers["evidence_vault"]["provenance"]["enrichment_window_end"] = prior_date.isoformat()
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            if as_of == prior_date:
+                return {"ModelVendor": prior_layers}
+            return {"ModelVendor": current_layers}
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: FakePool(),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_max_stale_days", 3, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={}))
+
+        assert result["vendors_reasoned"] == 0
+        assert result["vendors_failed"] == 0
+        assert result["vendors_skipped"] == 1
+        assert result["vendors_skipped_hash_reuse"] == 1
+
+    @pytest.mark.asyncio
+    async def test_run_reruns_when_latest_row_missing_packet_artifacts(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _compute_pool_hash,
+            run,
+        )
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+                self.executemany_calls = []
+
+            async def fetch(self, query, *args):
+                if "FROM b2b_reasoning_synthesis" in query:
+                    return [{
+                        "vendor_name": "ModelVendor",
+                        "as_of_date": date.today(),
+                        "evidence_hash": _compute_pool_hash(_make_layers()),
+                        "has_witness_pack": False,
+                        "has_metric_refs": True,
+                        "has_witness_refs": True,
+                    }]
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                self.executemany_calls.append((query, list(args_iterable)))
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self, response):
+                self.response = response
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                return {
+                    "response": self.response,
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                }
+
+        layers = _make_layers()
+        packet = compress_vendor_pools("ModelVendor", layers)
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        fake_pool = FakePool()
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"ModelVendor": layers}
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: FakeLLM(json.dumps(valid_synthesis)),
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={}))
+
+        assert result["vendors_reasoned"] == 1
+        assert result["vendors_rerun_missing_packet_artifacts"] == 1
+        synthesis_writes = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_reasoning_synthesis" in item[0]
+        ]
+        persisted = json.loads(synthesis_writes[0][1][5])
+        assert persisted["meta"]["rerun_reason"] == "missing_packet_artifacts"
+
+    @pytest.mark.asyncio
+    async def test_run_falls_back_to_lean_vendor_payload_before_call(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks import _b2b_synthesis_validation as validation_mod
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+                self.executemany_calls = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                self.executemany_calls.append((query, list(args_iterable)))
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                self.calls.append(messages)
+                return {
+                    "response": self.response,
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                }
+
+        layers = _make_layers()
+        packet = compress_vendor_pools("LeanVendor", layers)
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        fake_pool = FakePool()
+        fake_llm = FakeLLM(json.dumps(valid_synthesis))
+        normalize_packets = []
+        validate_packets = []
+        real_normalize = validation_mod.normalize_synthesis_source_ids
+        real_validate = validation_mod.validate_synthesis
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"LeanVendor": layers}
+
+        estimate_calls = {"count": 0}
+
+        def _fake_estimate(prompt, payload):
+            estimate_calls["count"] += 1
+            return 600 if estimate_calls["count"] == 1 else 500
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
+        )
+        def _capture_normalize(synthesis, packet):
+            normalize_packets.append(packet)
+            return real_normalize(synthesis, packet)
+        def _capture_validate(synthesis, packet=None):
+            validate_packets.append(packet)
+            return real_validate(synthesis, packet)
+        monkeypatch.setattr(
+            validation_mod, "normalize_synthesis_source_ids", _capture_normalize,
+        )
+        monkeypatch.setattr(
+            validation_mod, "validate_synthesis", _capture_validate,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._approx_prompt_input_tokens",
+            _fake_estimate,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_max_input_tokens", 550, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_attempts", 1, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={"force": True}))
+
+        assert result["vendors_reasoned"] == 1
+        assert result["vendors_payload_mode_lean"] == 1
+        assert result["vendors_payload_mode_full"] == 0
+        assert '"section_packets"' not in fake_llm.calls[0][1].content
+        assert normalize_packets[0].section_packets == {}
+        assert normalize_packets[0].contradiction_rows == []
+        assert normalize_packets[0].minority_signals == []
+        assert validate_packets[0].section_packets == {}
+        assert validate_packets[0].contradiction_rows == []
+        assert validate_packets[0].minority_signals == []
+        assert validate_packets[-1].section_packets == packet.section_packets
+        synthesis_writes = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_reasoning_synthesis" in item[0]
+        ]
+        persisted = json.loads(synthesis_writes[0][1][5])
+        assert persisted["meta"]["payload_mode"] == "lean"
+        assert persisted["meta"]["section_packets_included"] is False
+        assert persisted["meta"]["estimated_input_tokens"] == 500
+
+    @pytest.mark.asyncio
+    async def test_run_uses_configured_full_items_per_pool(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks import _b2b_pool_compression as pool_mod
+        from atlas_brain.autonomous.tasks import _b2b_synthesis_validation as validation_mod
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+                self.executemany_calls = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                self.executemany_calls.append((query, list(args_iterable)))
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self, response):
+                self.calls = []
+                self.response = response
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                self.calls.append(messages)
+                return {
+                    "response": self.response,
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                }
+
+        layers = _make_layers()
+        packet = compress_vendor_pools(
+            "ConfiguredVendor",
+            layers,
+            max_items_per_pool=4,
+        )
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        fake_pool = FakePool()
+        fake_llm = FakeLLM(json.dumps(valid_synthesis))
+        real_compress_vendor_pools = pool_mod.compress_vendor_pools
+        compress_calls = []
+        validate_packets = []
+        real_validate = validation_mod.validate_synthesis
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"ConfiguredVendor": layers}
+
+        def _capture_compress_vendor_pools(vendor_name, layers, **kwargs):
+            compress_calls.append(kwargs)
+            return real_compress_vendor_pools(vendor_name, layers, **kwargs)
+
+        def _capture_validate(synthesis, packet=None):
+            validate_packets.append(packet)
+            return real_validate(synthesis, packet)
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
+        )
+        monkeypatch.setattr(
+            pool_mod, "compress_vendor_pools", _capture_compress_vendor_pools,
+        )
+        monkeypatch.setattr(
+            validation_mod, "validate_synthesis", _capture_validate,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_attempts", 1, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_max_input_tokens", 20000, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_max_items_per_pool", 4, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={"force": True}))
+
+        assert result["vendors_reasoned"] == 1
+        assert compress_calls[0]["max_items_per_pool"] == 4
+        payload = json.loads(fake_llm.calls[0][1].content)
+        payload_aggregate_ids = {
+            str(entry.get("_sid") or "")
+            for entry in payload["precomputed_aggregates"].values()
+        }
+        validation_aggregate_ids = {
+            agg.source_id for agg in validate_packets[0].aggregates
+        }
+        assert validation_aggregate_ids == payload_aggregate_ids
+        payload_metric_ids = {
+            str(entry.get("_sid") or "") for entry in payload["metric_ledger"]
+        }
+        validation_metric_ids = {
+            str(entry.get("_sid") or "") for entry in validate_packets[0].metric_ledger
+        }
+        assert validation_metric_ids == payload_metric_ids
+        synthesis_writes = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_reasoning_synthesis" in item[0]
+        ]
+        persisted = json.loads(synthesis_writes[0][1][5])
+        assert persisted["meta"]["payload_mode"] == "full"
+        assert persisted["meta"]["packet_items_per_pool"] == 4
+
+    @pytest.mark.asyncio
+    async def test_run_rejects_vendor_when_lean_payload_still_exceeds_budget(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                return None
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                self.calls.append(messages)
+                return {"response": "{}", "usage": {"input_tokens": 0, "output_tokens": 0}}
+
+        layers = _make_layers()
+        fake_pool = FakePool()
+        fake_llm = FakeLLM()
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"BudgetVendor": layers}
+
+        estimate_calls = {"count": 0}
+
+        def _fake_estimate(prompt, payload):
+            estimate_calls["count"] += 1
+            return 600 if estimate_calls["count"] == 1 else 580
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._approx_prompt_input_tokens",
+            _fake_estimate,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_max_input_tokens", 550, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={"force": True}))
+
+        assert result["vendors_reasoned"] == 0
+        assert result["vendors_failed"] == 1
+        assert result["vendors_rejected_input_budget"] == 1
+        assert result["failed_vendors"][0]["stage"] == "input_budget"
+        assert fake_llm.calls == []
+        attempt_rows = [
+            item for item in fake_pool.executed
+            if "INSERT INTO artifact_attempts" in item[0]
+        ]
+        assert len(attempt_rows) == 1
+        assert attempt_rows[0][1][5] == "generation"
+        assert attempt_rows[0][1][6] == "rejected"
 
     @pytest.mark.asyncio
     async def test_run_cross_vendor_synthesis_records_success_attempt(self, monkeypatch):
@@ -4821,7 +5391,6 @@ class TestReasoningSynthesisTask:
             pool=fake_pool,
             vendor_pools=vendor_pools,
             llm=FakeLLM(),
-            rcfg=rcfg,
             cfg=cfg,
             today=date(2026, 3, 31),
             window_days=30,
@@ -4939,7 +5508,6 @@ class TestReasoningSynthesisTask:
             pool=fake_pool,
             vendor_pools=vendor_pools,
             llm=FakeLLM(),
-            rcfg=rcfg,
             cfg=cfg,
             today=date(2026, 3, 31),
             window_days=30,
