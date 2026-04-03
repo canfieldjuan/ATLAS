@@ -1205,6 +1205,17 @@ def legacy_reasoning_to_contracts(
         "reasoning_contracts": contracts,
         "schema_version": "legacy",
         "_legacy_source": "b2b_churn_signals",
+        "_legacy_coverage": {
+            "available": ["causal_narrative"],
+            "unavailable": [
+                "segment_playbook",
+                "timing_intelligence",
+                "competitive_reframes",
+                "migration_proof",
+                "category_reasoning",
+                "account_reasoning",
+            ],
+        },
     }
 
 

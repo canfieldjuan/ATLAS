@@ -112,6 +112,11 @@ def _evaluate_synthesis_quality(synthesis: dict) -> tuple[str, list[str]]:
         reasons.append(f"majority_sections_weak:{len(insufficient_or_missing)}/{len(_CORE_SECTIONS)}")
         return _QUALITY_STATUS_WEAK, reasons
 
+    # Lean mode: evidence was stripped before LLM call
+    lean = synthesis.get("_lean_mode")
+    if isinstance(lean, dict) and lean.get("omitted"):
+        reasons.append(f"lean_mode_omissions:{','.join(lean['omitted'])}")
+
     if reasons:
         return _QUALITY_STATUS_WEAK, reasons
 
@@ -1520,6 +1525,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if decision.get("prior_row_age_days") is not None:
                 meta["prior_row_age_days"] = int(decision["prior_row_age_days"])
             synthesis = build_persistable_synthesis(synthesis, packet)
+            if payload_mode == "lean":
+                synthesis["_lean_mode"] = {
+                    "omitted": [
+                        k for k, v in [
+                            ("contradiction_rows", not include_contradiction_rows),
+                            ("minority_signals", not include_minority_signals),
+                            ("section_packets", not section_packets_included),
+                        ] if v
+                    ],
+                    "items_per_pool": payload_items_per_pool,
+                    "witness_count": payload_witness_count,
+                }
             persisted_vresult = validate_synthesis(synthesis, packet)
             if not persisted_vresult.is_valid:
                 logger.warning(
