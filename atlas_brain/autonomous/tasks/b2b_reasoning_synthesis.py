@@ -38,6 +38,85 @@ logger = logging.getLogger("atlas.autonomous.tasks.b2b_reasoning_synthesis")
 _SCHEMA_VERSION = "v2"
 _PACKET_SCHEMA_VERSION = "witness_packet_v1"
 
+_QUALITY_STATUS_PASS = "pass"
+_QUALITY_STATUS_WEAK = "weak"
+_QUALITY_STATUS_REJECTED = "rejected"
+
+_CORE_SECTIONS = (
+    "causal_narrative", "segment_playbook", "timing_intelligence",
+    "migration_proof", "competitive_reframes",
+    "category_reasoning", "account_reasoning",
+)
+
+
+def _evaluate_synthesis_quality(synthesis: dict) -> tuple[str, list[str]]:
+    """Evaluate synthesis quality beyond schema validation.
+
+    Returns (quality_status, quality_reasons).
+    - "pass": synthesis is strong enough for downstream consumers
+    - "weak": synthesis persists but reuse decisions should re-run
+    - "rejected": synthesis should NOT be persisted
+    """
+    reasons: list[str] = []
+    contracts = synthesis.get("reasoning_contracts") or {}
+
+    # Collect confidence levels across all sections
+    section_confidences: dict[str, str] = {}
+    for section_name in _CORE_SECTIONS:
+        sec = contracts.get(section_name)
+        if sec is None:
+            # Check nested under vendor_core_reasoning / displacement_reasoning
+            for parent in ("vendor_core_reasoning", "displacement_reasoning"):
+                parent_dict = contracts.get(parent)
+                if isinstance(parent_dict, dict):
+                    sec = parent_dict.get(section_name)
+                    if sec is not None:
+                        break
+        if not isinstance(sec, dict):
+            reasons.append(f"missing_section:{section_name}")
+            section_confidences[section_name] = "missing"
+            continue
+        conf = str(sec.get("confidence") or "").strip().lower()
+        section_confidences[section_name] = conf or "missing"
+        if not conf:
+            reasons.append(f"no_confidence:{section_name}")
+
+    # Check if ALL sections are insufficient or missing
+    meaningful = [
+        s for s, c in section_confidences.items()
+        if c in ("high", "medium", "low")
+    ]
+    insufficient_or_missing = [
+        s for s, c in section_confidences.items()
+        if c in ("insufficient", "missing", "")
+    ]
+
+    if not meaningful:
+        reasons.append("all_sections_insufficient_or_missing")
+        return _QUALITY_STATUS_REJECTED, reasons
+
+    # Check if causal_narrative (the core wedge) is insufficient
+    causal_conf = section_confidences.get("causal_narrative", "missing")
+    if causal_conf in ("insufficient", "missing"):
+        reasons.append("causal_narrative_insufficient")
+        return _QUALITY_STATUS_REJECTED, reasons
+
+    # Check witness pack
+    packet = synthesis.get("packet_artifacts") or {}
+    witness_pack = packet.get("witness_pack") or []
+    if not witness_pack:
+        reasons.append("empty_witness_pack")
+
+    # Weak if more than half the sections are insufficient
+    if len(insufficient_or_missing) > len(_CORE_SECTIONS) // 2:
+        reasons.append(f"majority_sections_weak:{len(insufficient_or_missing)}/{len(_CORE_SECTIONS)}")
+        return _QUALITY_STATUS_WEAK, reasons
+
+    if reasons:
+        return _QUALITY_STATUS_WEAK, reasons
+
+    return _QUALITY_STATUS_PASS, []
+
 
 def _approx_token_count(text: str) -> int:
     """Approximate token count without relying on a model-specific tokenizer."""
@@ -177,6 +256,27 @@ def _row_has_reference_ids(row: dict[str, Any] | None) -> bool:
     return bool(row.get("has_metric_refs")) and bool(row.get("has_witness_refs"))
 
 
+def _prior_synthesis_is_weak(latest_row: dict[str, Any] | None) -> bool:
+    """Check if prior synthesis was flagged as weak or rejected."""
+    if latest_row is None:
+        return False
+    synthesis = latest_row.get("synthesis")
+    if isinstance(synthesis, str):
+        try:
+            synthesis = json.loads(synthesis)
+        except (json.JSONDecodeError, TypeError):
+            return True  # unparseable = weak
+    if not isinstance(synthesis, dict):
+        return True
+    quality = synthesis.get("_quality_status", "")
+    if quality in (_QUALITY_STATUS_WEAK, _QUALITY_STATUS_REJECTED):
+        return True
+    # Also check for legacy rows with no quality_status but
+    # structurally weak content (all insufficient, empty witness pack)
+    qs, _ = _evaluate_synthesis_quality(synthesis)
+    return qs in (_QUALITY_STATUS_WEAK, _QUALITY_STATUS_REJECTED)
+
+
 def _classify_vendor_reasoning_decision(
     *,
     vendor_name: str,
@@ -216,6 +316,9 @@ def _classify_vendor_reasoning_decision(
         should_reason = True
     elif rerun_if_missing_reference_ids and missing_reference_ids:
         reason = "missing_reference_ids"
+        should_reason = True
+    elif _prior_synthesis_is_weak(latest_row):
+        reason = "prior_quality_weak"
         should_reason = True
     elif (
         prior_row_age_days is not None
@@ -1503,6 +1606,30 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 synthesis.pop("_validation_warnings", None)
             vresult = persisted_vresult
+
+            # Quality gate: reject or flag weak synthesis before persistence
+            quality_status, quality_reasons = _evaluate_synthesis_quality(synthesis)
+            synthesis["_quality_status"] = quality_status
+            synthesis["_quality_reasons"] = quality_reasons
+
+            if quality_status == _QUALITY_STATUS_REJECTED:
+                logger.warning(
+                    "Synthesis quality gate REJECTED for %s: %s",
+                    vendor_name, ", ".join(quality_reasons),
+                )
+                failed_vendors.append({
+                    "vendor_name": vendor_name,
+                    "reason": "quality_gate_rejected",
+                    "quality_reasons": quality_reasons,
+                })
+                failed += 1
+                return
+
+            if quality_status == _QUALITY_STATUS_WEAK:
+                logger.info(
+                    "Synthesis quality gate WEAK for %s: %s",
+                    vendor_name, ", ".join(quality_reasons),
+                )
 
             try:
                 await pool.execute(

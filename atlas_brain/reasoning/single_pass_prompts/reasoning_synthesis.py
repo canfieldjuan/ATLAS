@@ -240,6 +240,8 @@ OUTPUT SCHEMA:
     }},
     "category_reasoning": {{
       "schema_version": "v1",
+      "confidence": "<high|medium|low|insufficient>",
+      "data_gaps": ["<missing evidence>"],
       "market_regime": "<regime or empty string>",
       "narrative": "<analytical regime summary or empty string>",
       "winner": "<category gainer or null>",
@@ -251,6 +253,8 @@ OUTPUT SCHEMA:
     }},
     "account_reasoning": {{
       "schema_version": "v1",
+      "confidence": "<high|medium|low|insufficient>",
+      "data_gaps": ["<missing evidence>"],
       "market_summary": "<account-level intent summary>",
       "total_accounts": {{"value": "<int>", "source_id": "<_sid>"}},
       "high_intent_count": {{"value": "<int>", "source_id": "<_sid>"}},

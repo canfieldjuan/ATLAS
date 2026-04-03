@@ -529,12 +529,9 @@ def _normalized_synthesis_for_validation(synthesis: dict[str, Any]) -> dict[str,
         cr = _contract_block(synthesis, "category_reasoning")
         if cr:
             normalized["category_reasoning"] = cr
-    for section in ("account_reasoning", "category_reasoning"):
-        if not isinstance(normalized.get(section), dict):
-            normalized[section] = {
-                "confidence": "insufficient",
-                "data_gaps": ["Section missing from model output"],
-            }
+    # Do NOT auto-stub missing sections. Let _check_required_sections()
+    # report them as real validation errors so synthesis can be retried
+    # or rejected by the quality gate.
     return normalized
 
 
@@ -578,7 +575,14 @@ def _check_confidence_fields(
         if not isinstance(sec, dict):
             continue
         conf = sec.get("confidence")
-        if conf is not None and conf not in _VALID_CONFIDENCE:
+        if conf is None:
+            _add(
+                result,
+                f"{section}.confidence",
+                "missing_confidence",
+                f"Required section '{section}' has no confidence field",
+            )
+        elif conf not in _VALID_CONFIDENCE:
             _add(
                 result,
                 f"{section}.confidence",
