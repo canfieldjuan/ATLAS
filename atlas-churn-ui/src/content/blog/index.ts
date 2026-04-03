@@ -8,6 +8,9 @@ import switchToClickup202603 from './switch-to-clickup-2026-03'
 import switchToShopify202603 from './switch-to-shopify-2026-03'
 import topComplaintEveryB2bSoftware202603 from './top-complaint-every-b2b-software-2026-03'
 import whyTeamsLeaveAzure202603 from './why-teams-leave-azure-2026-03'
+import b2bSoftwareLandscape202604 from './b2b-software-landscape-2026-04'
+import copperDeepDive202604 from './copper-deep-dive-2026-04'
+import zoomDeepDive202604 from './zoom-deep-dive-2026-04'
 
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
@@ -86,4 +89,7 @@ export const POSTS: BlogPost[] = [
   switchToShopify202603,
   topComplaintEveryB2bSoftware202603,
   whyTeamsLeaveAzure202603,
+  b2bSoftwareLandscape202604,
+  copperDeepDive202604,
+  zoomDeepDive202604,
 ]
