@@ -182,7 +182,7 @@ def test_merge_cross_vendor_lookups_prefers_primary_and_fills_gaps():
 
 
 @pytest.mark.asyncio
-async def test_load_best_cross_vendor_lookup_merges_legacy_with_synthesis(monkeypatch):
+async def test_load_best_cross_vendor_lookup_is_synthesis_only_by_default(monkeypatch):
     async def _fake_reconstruct(pool, as_of=None):
         return {
             "battles": {
@@ -213,6 +213,47 @@ async def test_load_best_cross_vendor_lookup_merges_legacy_with_synthesis(monkey
     ])
 
     lookup = await load_best_cross_vendor_lookup(pool, as_of=date(2026, 3, 29))
+
+    assert lookup["battles"][("A", "B")]["conclusion"]["conclusion"] == "Synthesis battle"
+    assert lookup["councils"] == {}
+
+
+@pytest.mark.asyncio
+async def test_load_best_cross_vendor_lookup_merges_legacy_when_opted_in(monkeypatch):
+    async def _fake_reconstruct(pool, as_of=None):
+        return {
+            "battles": {
+                ("A", "B"): {"source": "legacy", "conclusion": {"conclusion": "Legacy battle"}},
+            },
+            "councils": {
+                "CRM": {"source": "legacy", "conclusion": {"conclusion": "Legacy council"}},
+            },
+            "asymmetries": {},
+        }
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_cross_vendor_lookup",
+        _fake_reconstruct,
+    )
+    pool = FakePool([
+        _make_row(
+            "pairwise_battle",
+            ["A", "B"],
+            None,
+            {
+                "conclusion": {
+                    "conclusion": "Synthesis battle",
+                    "confidence": 0.8,
+                },
+            },
+        ),
+    ])
+
+    lookup = await load_best_cross_vendor_lookup(
+        pool,
+        as_of=date(2026, 3, 29),
+        allow_legacy_fallback=True,
+    )
 
     assert lookup["battles"][("A", "B")]["conclusion"]["conclusion"] == "Synthesis battle"
     assert lookup["councils"]["CRM"]["conclusion"]["conclusion"] == "Legacy council"

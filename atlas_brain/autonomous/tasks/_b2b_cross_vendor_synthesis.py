@@ -963,8 +963,9 @@ async def load_best_cross_vendor_lookup(
     *,
     as_of: date | None = None,
     analysis_window_days: int = 90,
+    allow_legacy_fallback: bool = False,
 ) -> dict[str, dict]:
-    """Load canonical cross-vendor synthesis first, with legacy rows filling gaps."""
+    """Load canonical cross-vendor synthesis, optionally filling gaps from legacy."""
     try:
         synthesis_lookup = await load_cross_vendor_synthesis_lookup(
             pool,
@@ -972,15 +973,18 @@ async def load_best_cross_vendor_lookup(
             analysis_window_days=analysis_window_days,
         )
     except Exception:
-        logger.debug("Cross-vendor synthesis lookup failed; falling back to legacy", exc_info=True)
+        logger.debug("Cross-vendor synthesis lookup failed", exc_info=True)
         synthesis_lookup = empty_cross_vendor_lookup()
 
-    try:
-        from .b2b_churn_intelligence import reconstruct_cross_vendor_lookup
+    if allow_legacy_fallback:
+        try:
+            from .b2b_churn_intelligence import reconstruct_cross_vendor_lookup
 
-        legacy_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=as_of)
-    except Exception:
-        logger.debug("Legacy cross-vendor lookup failed", exc_info=True)
+            legacy_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=as_of)
+        except Exception:
+            logger.debug("Legacy cross-vendor lookup failed", exc_info=True)
+            legacy_lookup = empty_cross_vendor_lookup()
+    else:
         legacy_lookup = empty_cross_vendor_lookup()
 
     merged, _ = merge_cross_vendor_lookups(

@@ -1715,7 +1715,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from .b2b_churn_intelligence import (
         _apply_vendor_scope_to_churn_inputs,
         _normalize_test_vendors,
-        reconstruct_cross_vendor_lookup,
     )
 
     window_days = cfg.intelligence_window_days
@@ -1885,37 +1884,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if str(k or "").strip().lower() in vendor_scope
         }
     # Prefer cross-vendor synthesis; fall back to legacy conclusions
-    from ._b2b_cross_vendor_synthesis import load_cross_vendor_synthesis_lookup
-    try:
-        xv_synth = await load_cross_vendor_synthesis_lookup(
-            pool, as_of=today, analysis_window_days=window_days,
-        )
-    except Exception:
-        logger.debug("Cross-vendor synthesis lookup failed, using legacy", exc_info=True)
-        xv_synth = {"battles": {}, "councils": {}, "asymmetries": {}}
-    xv_legacy = await reconstruct_cross_vendor_lookup(pool, as_of=today)
-    # Merge: synthesis wins per key, legacy fills gaps
-    xv_lookup: dict[str, dict] = {"battles": {}, "councils": {}, "asymmetries": {}}
-    dedup_overrides = 0
-    for bucket in ("battles", "councils", "asymmetries"):
-        merged = dict(xv_legacy.get(bucket, {}))
-        synth_bucket = xv_synth.get(bucket, {})
-        for k, v in synth_bucket.items():
-            if k in merged:
-                dedup_overrides += 1
-            merged[k] = v
-        xv_lookup[bucket] = merged
-    if dedup_overrides > 0:
-        from ..visibility import emit_event
-        await emit_event(
-            pool, stage="battle_cards", event_type="xv_dedup_override",
-            entity_type="cross_vendor", entity_id="batch",
-            summary=f"Synthesis replaced {dedup_overrides} legacy cross-vendor entries",
-            severity="info",
-            run_id=str(task.id),
-            reason_code="synthesis_preferred",
-            detail={"overrides": dedup_overrides},
-        )
+    from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
+    xv_lookup = await load_best_cross_vendor_lookup(
+        pool,
+        as_of=today,
+        analysis_window_days=window_days,
+        allow_legacy_fallback=False,
+    )
     synth_count = sum(
         1 for bucket in ("battles", "councils", "asymmetries")
         for v in xv_lookup[bucket].values()

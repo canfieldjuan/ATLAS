@@ -440,9 +440,6 @@ async def build_accounts_in_motion(
             _fetch_quotable_evidence,
             _fetch_timeline_signals,
         )
-        from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
-            reconstruct_cross_vendor_lookup,
-        )
         from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
             build_reasoning_lookup_from_views,
             load_best_reasoning_view,
@@ -489,7 +486,12 @@ async def build_accounts_in_motion(
         competitive_disp = _aggregate_competitive_disp(competitive_disp)
 
         # Synthesis-first reasoning lookup
-        xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
+        xv_lookup = await load_best_cross_vendor_lookup(
+            pool,
+            as_of=today,
+            analysis_window_days=window,
+            allow_legacy_fallback=False,
+        )
         try:
             view = await load_best_reasoning_view(
                 pool,
