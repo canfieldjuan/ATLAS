@@ -4502,6 +4502,7 @@ async def generate_vendor_comparison_report(
         [primary_name, comparison_name],
         as_of=today,
         analysis_window_days=window_days,
+        allow_legacy_fallback=False,
     )
     _prior_archs = await load_prior_reasoning_snapshots(
         pool,

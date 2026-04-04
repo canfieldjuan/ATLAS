@@ -451,7 +451,11 @@ async def reason_vendor(
             load_best_reasoning_view,
             synthesis_view_to_reasoning_entry,
         )
-        view = await load_best_reasoning_view(pool, vendor_name)
+        view = await load_best_reasoning_view(
+            pool,
+            vendor_name,
+            allow_legacy_fallback=False,
+        )
         if view is None:
             return json.dumps({"success": False, "error": f"No reasoning data for vendor: {vendor_name}"})
         entry = synthesis_view_to_reasoning_entry(view)
@@ -494,7 +498,11 @@ async def compare_vendors(
             load_best_reasoning_views,
             synthesis_view_to_reasoning_entry,
         )
-        views = await load_best_reasoning_views(pool, vendors)
+        views = await load_best_reasoning_views(
+            pool,
+            vendors,
+            allow_legacy_fallback=False,
+        )
         results = []
         for requested_name in vendors:
             matched_view = None

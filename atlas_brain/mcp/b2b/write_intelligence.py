@@ -492,7 +492,12 @@ async def build_accounts_in_motion(
         # Synthesis-first reasoning lookup
         xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=today)
         try:
-            view = await load_best_reasoning_view(pool, vendor, as_of=today)
+            view = await load_best_reasoning_view(
+                pool,
+                vendor,
+                as_of=today,
+                allow_legacy_fallback=False,
+            )
             if view:
                 synth_lookup = build_reasoning_lookup_from_views({vendor: view})
             else:
@@ -710,7 +715,11 @@ async def draft_campaign(
             from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
                 load_best_reasoning_view,
             )
-            reasoning_view = await load_best_reasoning_view(pool, vendor_name.strip())
+            reasoning_view = await load_best_reasoning_view(
+                pool,
+                vendor_name.strip(),
+                allow_legacy_fallback=False,
+            )
             if reasoning_view is not None:
                 wedge = reasoning_view.primary_wedge
                 reasoning_meta: dict = {
