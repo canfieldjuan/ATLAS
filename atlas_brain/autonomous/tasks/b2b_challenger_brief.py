@@ -1371,12 +1371,13 @@ def _build_challenger_brief(
         (incumbent_evidence_vault.get("metric_snapshot") or {})
         if isinstance(incumbent_evidence_vault, dict) else {}
     )
+    use_churn_signal_reasoning = incumbent_synthesis_view is None
     incumbent_section = {
-        "archetype": cs.get("archetype"),
-        "archetype_confidence": cs.get("archetype_confidence"),
+        "archetype": cs.get("archetype") if use_churn_signal_reasoning else None,
+        "archetype_confidence": cs.get("archetype_confidence") if use_churn_signal_reasoning else None,
         "churn_pressure_score": _coalesce(cs.get("churn_pressure_score"), bc_churn_pressure_score),
-        "risk_level": _coalesce(cs.get("risk_level"), bc_risk_level),
-        "key_signals": cs.get("key_signals") or [],
+        "risk_level": _coalesce(cs.get("risk_level"), bc_risk_level) if use_churn_signal_reasoning else bc_risk_level,
+        "key_signals": (cs.get("key_signals") or []) if use_churn_signal_reasoning else [],
         "top_weaknesses": inc_weaknesses[:10],
         "top_strengths": inc_strengths[:5],
         "top_pain_quotes": inc_pain_quotes[:5],
@@ -1412,8 +1413,18 @@ def _build_challenger_brief(
     if incumbent_synthesis_view is not None:
         from ._b2b_synthesis_reader import (
             inject_synthesis_freshness,
+            synthesis_view_to_reasoning_entry,
         )
         consumer_context = incumbent_synthesis_view.filtered_consumer_context("challenger_brief")
+        entry = synthesis_view_to_reasoning_entry(incumbent_synthesis_view)
+        if entry.get("archetype"):
+            incumbent_section["archetype"] = entry["archetype"]
+        if entry.get("confidence") is not None:
+            incumbent_section["archetype_confidence"] = entry["confidence"]
+        if entry.get("risk_level"):
+            incumbent_section["risk_level"] = entry["risk_level"]
+        if entry.get("key_signals"):
+            incumbent_section["key_signals"] = entry["key_signals"]
         reasoning_contracts = consumer_context.get("reasoning_contracts") or {}
         vendor_core_reasoning = (
             consumer_context.get("vendor_core_reasoning")
@@ -1585,7 +1596,7 @@ def _build_challenger_brief(
         if mentions:
             insights.append({"insight": "%d displacement mentions across sources" % mentions, "evidence": "%d mentions" % mentions})
         # Add archetype context if available
-        archetype = (churn_signal or {}).get("archetype")
+        archetype = incumbent_section.get("archetype")
         if archetype:
             insights.append({"insight": "%s classified as %s archetype" % (incumbent, archetype), "evidence": archetype})
         # Add top weakness from incumbent profile

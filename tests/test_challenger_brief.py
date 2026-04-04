@@ -1356,6 +1356,56 @@ class TestBuildChallengerBrief:
         # sentiment_direction is None in churn_signal, should fall back
         assert inc["sentiment_direction"] == "positive"
 
+    def test_synthesis_reasoning_overrides_legacy_churn_signal_reasoning(self):
+        synthesis_view = load_synthesis_view(
+            {
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "summary": "Pricing pressure is driving switching activity.",
+                            "key_signals": ["Renewal scrutiny", "Price increase backlash"],
+                            "what_would_weaken_thesis": [],
+                            "data_gaps": [],
+                            "confidence": "medium",
+                        },
+                    },
+                },
+            },
+            "Zendesk",
+        )
+        churn_signal = {
+            "archetype": "legacy_archetype",
+            "archetype_confidence": 0.2,
+            "risk_level": "low",
+            "key_signals": ["legacy signal"],
+            "churn_pressure_score": 17.0,
+            "sentiment_direction": "mixed",
+            "price_complaint_rate": 0.1,
+            "dm_churn_rate": 0.2,
+        }
+
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal=churn_signal,
+            incumbent_synthesis_view=synthesis_view,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        inc = brief["incumbent_profile"]
+        assert inc["archetype"] == "price_squeeze"
+        assert inc["archetype_confidence"] == 0.55
+        assert inc["risk_level"] == "high"
+        assert inc["key_signals"] == ["Renewal scrutiny", "Price increase backlash"]
+        assert inc["churn_pressure_score"] == 17.0
+
 
 class TestResolveCrossVendorBattle:
     @pytest.mark.asyncio
