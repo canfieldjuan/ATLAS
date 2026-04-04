@@ -444,8 +444,10 @@ class TestBuildChallengerBrief:
 
         # All 7 sections populated
         assert brief["displacement_summary"]["total_mentions"] == 10
-        assert brief["incumbent_profile"]["archetype"] == "pricing_shock"
+        assert brief["incumbent_profile"]["archetype"] is None
         assert brief["incumbent_profile"]["churn_pressure_score"] == 72.5
+        assert brief["incumbent_profile"]["risk_level"] == "high"
+        assert brief["incumbent_profile"]["key_signals"] == []
         assert len(brief["incumbent_profile"]["top_weaknesses"]) == 2
         assert len(brief["challenger_advantage"]["strengths"]) == 1
         assert len(brief["challenger_advantage"]["weakness_coverage"]) >= 1
@@ -1352,7 +1354,7 @@ class TestBuildChallengerBrief:
         assert inc["churn_pressure_score"] == 0.0
         assert inc["price_complaint_rate"] == 0.0
         assert inc["dm_churn_rate"] == 0.0
-        assert inc["risk_level"] == "low"
+        assert inc["risk_level"] == "medium"
         # sentiment_direction is None in churn_signal, should fall back
         assert inc["sentiment_direction"] == "positive"
 
@@ -1404,6 +1406,37 @@ class TestBuildChallengerBrief:
         assert inc["archetype_confidence"] == 0.55
         assert inc["risk_level"] == "high"
         assert inc["key_signals"] == ["Renewal scrutiny", "Price increase backlash"]
+        assert inc["churn_pressure_score"] == 17.0
+
+    def test_churn_signal_no_longer_supplies_reasoning_when_synthesis_missing(self):
+        brief = _build_challenger_brief(
+            incumbent="Zendesk",
+            challenger="Freshdesk",
+            displacement_detail=self._minimal_displacement(),
+            battle_card=None,
+            accounts_in_motion=None,
+            incumbent_profile=None,
+            challenger_profile=None,
+            churn_signal={
+                "archetype": "legacy_archetype",
+                "archetype_confidence": 0.2,
+                "risk_level": "low",
+                "key_signals": ["legacy signal"],
+                "churn_pressure_score": 17.0,
+                "sentiment_direction": "mixed",
+                "price_complaint_rate": 0.1,
+                "dm_churn_rate": 0.2,
+            },
+            incumbent_synthesis_view=None,
+            cross_vendor_battle=None,
+            max_target_accounts=15,
+        )
+
+        inc = brief["incumbent_profile"]
+        assert inc["archetype"] is None
+        assert inc["archetype_confidence"] is None
+        assert inc["risk_level"] is None
+        assert inc["key_signals"] == []
         assert inc["churn_pressure_score"] == 17.0
 
 

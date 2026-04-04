@@ -410,16 +410,14 @@ async def _fetch_review_pain_quotes(
 async def _fetch_churn_signal(pool, vendor: str) -> dict | None:
     """Fetch the latest churn-signal metrics for a vendor.
 
-    These metrics are deterministic signal inputs. The reasoning-shaped
-    columns on ``b2b_churn_signals`` remain compatibility-only and are
-    only used when no synthesis view is available.
+    These metrics are deterministic signal inputs. Reasoning-shaped
+    fields must come from synthesis or already-materialized battle-card
+    artifacts, not from ``b2b_churn_signals`` compatibility columns.
     """
     row = await pool.fetchrow(
         """
-        SELECT archetype, archetype_confidence,
-               reasoning_risk_level, reasoning_key_signals,
-               price_complaint_rate, decision_maker_churn_rate,
-               total_reviews, churn_intent_count, avg_urgency_score,
+        SELECT price_complaint_rate, decision_maker_churn_rate,
+               total_reviews, signal_reviews, churn_intent_count, avg_urgency_score,
                top_competitors, sentiment_distribution
         FROM b2b_churn_signals
         WHERE LOWER(vendor_name) = LOWER($1)
@@ -431,18 +429,12 @@ async def _fetch_churn_signal(pool, vendor: str) -> dict | None:
     if not row:
         return None
 
-    key_signals = row["reasoning_key_signals"]
-    if isinstance(key_signals, str):
-        try:
-            key_signals = json.loads(key_signals)
-        except (json.JSONDecodeError, TypeError):
-            key_signals = []
-
     # Compute churn_pressure_score from available columns
     from ._b2b_shared import _compute_churn_pressure_score
     total_reviews = int(row["total_reviews"] or 0)
+    signal_reviews = int(row.get("signal_reviews") or 0) or total_reviews
     churn_intent = int(row["churn_intent_count"] or 0)
-    churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+    churn_density = round((churn_intent * 100.0 / signal_reviews), 1) if signal_reviews else 0.0
     avg_urgency = float(row["avg_urgency_score"] or 0)
     dm_rate = float(row["decision_maker_churn_rate"] or 0)
     pr_rate = float(row["price_complaint_rate"] or 0)
@@ -460,7 +452,7 @@ async def _fetch_churn_signal(pool, vendor: str) -> dict | None:
         displacement_mention_count=disp_count,
         price_complaint_rate=pr_rate,
         total_reviews=total_reviews,
-        archetype=row["archetype"],
+        archetype=None,
     ), 1)
 
     # Derive sentiment_direction from sentiment_distribution
@@ -484,10 +476,6 @@ async def _fetch_churn_signal(pool, vendor: str) -> dict | None:
             sentiment_direction = "mixed"
 
     return {
-        "archetype": row["archetype"],
-        "archetype_confidence": float(row["archetype_confidence"]) if row["archetype_confidence"] is not None else None,
-        "risk_level": row["reasoning_risk_level"],
-        "key_signals": key_signals or [],
         "churn_pressure_score": churn_pressure_score,
         "sentiment_direction": sentiment_direction,
         "price_complaint_rate": float(row["price_complaint_rate"]) if row["price_complaint_rate"] is not None else None,
@@ -1366,13 +1354,12 @@ def _build_challenger_brief(
         (incumbent_evidence_vault.get("metric_snapshot") or {})
         if isinstance(incumbent_evidence_vault, dict) else {}
     )
-    use_churn_signal_reasoning = incumbent_synthesis_view is None
     incumbent_section = {
-        "archetype": cs.get("archetype") if use_churn_signal_reasoning else None,
-        "archetype_confidence": cs.get("archetype_confidence") if use_churn_signal_reasoning else None,
+        "archetype": None,
+        "archetype_confidence": None,
         "churn_pressure_score": _coalesce(cs.get("churn_pressure_score"), bc_churn_pressure_score),
-        "risk_level": _coalesce(cs.get("risk_level"), bc_risk_level) if use_churn_signal_reasoning else bc_risk_level,
-        "key_signals": (cs.get("key_signals") or []) if use_churn_signal_reasoning else [],
+        "risk_level": bc_risk_level,
+        "key_signals": [],
         "top_weaknesses": inc_weaknesses[:10],
         "top_strengths": inc_strengths[:5],
         "top_pain_quotes": inc_pain_quotes[:5],
