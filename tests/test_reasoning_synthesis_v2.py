@@ -4457,6 +4457,109 @@ class TestReasoningSynthesisTask:
         assert mp["citations"]
 
     @pytest.mark.asyncio
+    async def test_run_avoids_retry_for_deterministically_repairable_migration_output(
+        self, monkeypatch,
+    ):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+                self.executemany_calls = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                rows = list(args_iterable)
+                self.executemany_calls.append((query, rows))
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self, response):
+                self.response = response
+                self.calls = []
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                self.calls.append(
+                    {
+                        "messages": messages,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                    }
+                )
+                return {
+                    "response": self.response,
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                }
+
+        layers = _make_layers()
+        packet = compress_vendor_pools("RetryVendor", layers)
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        repairable = deepcopy(valid_synthesis)
+        repairable["migration_proof"]["switching_is_real"] = True
+        repairable["migration_proof"]["evidence_type"] = "explicit_switch"
+        repairable["migration_proof"]["switch_volume"] = {
+            "value": 0,
+            "source_id": "displacement:aggregate:total_explicit_switches",
+        }
+        repairable["migration_proof"]["active_evaluation_volume"] = {
+            "value": 0,
+            "source_id": "displacement:aggregate:total_active_evaluations",
+        }
+        fake_pool = FakePool()
+        fake_llm = FakeLLM(json.dumps(repairable))
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"RetryVendor": layers}
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_attempts", 2, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_retry_delay_seconds", 0.0, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={"force": True}))
+
+        assert result["vendors_reasoned"] == 1
+        assert result["vendors_failed"] == 0
+        assert len(fake_llm.calls) == 1
+        rejected_attempts = [
+            item for item in fake_pool.executed
+            if "INSERT INTO artifact_attempts" in item[0]
+            and item[1][6] == "rejected"
+        ]
+        assert rejected_attempts == []
+        synthesis_writes = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_reasoning_synthesis" in item[0]
+        ]
+        assert len(synthesis_writes) == 1
+
+    @pytest.mark.asyncio
     async def test_run_returns_failed_vendor_details_for_validation_failure(self, monkeypatch):
         from atlas_brain.config import settings
         from atlas_brain.autonomous.tasks._b2b_pool_compression import (

@@ -1329,9 +1329,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         synthesis = None
                     else:
                         parsed = normalize_synthesis_source_ids(parsed, prompt_packet)
-                        vresult = validate_synthesis(parsed, prompt_packet, governance_blocking=True)
+                        # Validate the canonical persisted shape, not the raw model
+                        # payload. Deterministic contract repairs already know how to
+                        # normalize migration semantics, named examples, and related
+                        # evidence wiring; paying for a second LLM call before those
+                        # repairs run is wasted token burn.
+                        candidate = build_persistable_synthesis(parsed, prompt_packet)
+                        vresult = validate_synthesis(
+                            candidate, prompt_packet, governance_blocking=True,
+                        )
                         if vresult.is_valid:
-                            synthesis = parsed
+                            synthesis = candidate
                             last_validation = vresult
                             break
                         synthesis = None
