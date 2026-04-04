@@ -1329,7 +1329,7 @@ async def load_best_reasoning_view(
     *,
     as_of: date | None = None,
     analysis_window_days: int = 30,
-    allow_legacy_fallback: bool = True,
+    allow_legacy_fallback: bool = False,
 ) -> SynthesisView | None:
     """Load the best available reasoning for a vendor.
 
@@ -1481,7 +1481,7 @@ async def load_best_reasoning_views(
     *,
     as_of: date | None = None,
     analysis_window_days: int = 30,
-    allow_legacy_fallback: bool = True,
+    allow_legacy_fallback: bool = False,
 ) -> dict[str, SynthesisView]:
     """Batch-load best reasoning for multiple vendors.
 

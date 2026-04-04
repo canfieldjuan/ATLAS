@@ -263,7 +263,7 @@ class TestLoadBestReasoningView:
         legacy = _make_legacy_row()
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
 
-        view = await load_best_reasoning_view(pool, "Acme")
+        view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
 
         assert view is not None
         assert view.schema_version == "legacy"
@@ -275,6 +275,15 @@ class TestLoadBestReasoningView:
     async def test_returns_none_when_no_data(self):
         pool = _mock_pool(synth_row=None, legacy_row=None)
         view = await load_best_reasoning_view(pool, "Acme")
+        assert view is None
+
+    @pytest.mark.asyncio
+    async def test_default_does_not_fallback_to_legacy(self):
+        legacy = _make_legacy_row()
+        pool = _mock_pool(synth_row=None, legacy_row=legacy)
+
+        view = await load_best_reasoning_view(pool, "Acme")
+
         assert view is None
 
     @pytest.mark.asyncio
@@ -333,7 +342,7 @@ class TestLoadBestReasoningView:
         legacy = _make_legacy_row()
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
 
-        view = await load_best_reasoning_view(pool, "Acme")
+        view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
         assert view.primary_wedge is not None
         assert view.primary_wedge.value == "price_squeeze"
         assert view.wedge_label == "Price Squeeze"
@@ -343,7 +352,7 @@ class TestLoadBestReasoningView:
         legacy = _make_legacy_row()
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
 
-        view = await load_best_reasoning_view(pool, "Acme")
+        view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
         contracts = view.materialized_contracts()
         assert "vendor_core_reasoning" in contracts
 
@@ -352,7 +361,7 @@ class TestLoadBestReasoningView:
         legacy = _make_legacy_row(falsification=["Price cut", "Market shift"])
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
 
-        view = await load_best_reasoning_view(pool, "Acme")
+        view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
         fcs = view.falsification_conditions()
         assert len(fcs) == 2
         assert fcs[0]["condition"] == "Price cut"
@@ -390,7 +399,7 @@ class TestLoadBestReasoningViews:
         legacy_rows = [_make_legacy_row(vendor_name="VendorB")]
         pool = _mock_pool(synth_rows=synth_rows, legacy_rows=legacy_rows)
 
-        views = await load_best_reasoning_views(pool, ["VendorA", "VendorB"])
+        views = await load_best_reasoning_views(pool, ["VendorA", "VendorB"], allow_legacy_fallback=True)
 
         assert "VendorA" in views
         assert views["VendorA"].schema_version == "v2"
@@ -415,6 +424,15 @@ class TestLoadBestReasoningViews:
         views = await load_best_reasoning_views(pool, ["A", "B"])
         assert len(views) == 2
         assert all(v.schema_version == "v2" for v in views.values())
+
+    @pytest.mark.asyncio
+    async def test_batch_default_does_not_fallback_to_legacy(self):
+        legacy_rows = [_make_legacy_row(vendor_name="VendorB")]
+        pool = _mock_pool(synth_rows=[], legacy_rows=legacy_rows)
+
+        views = await load_best_reasoning_views(pool, ["VendorB"])
+
+        assert views == {}
 
 
 class TestLoadPriorReasoningSnapshots:
@@ -667,7 +685,7 @@ class TestVendorBriefingAdoption:
         legacy = _make_legacy_row(vendor_name="TestVendor", archetype="support_collapse")
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
 
-        view = await load_best_reasoning_view(pool, "TestVendor")
+        view = await load_best_reasoning_view(pool, "TestVendor", allow_legacy_fallback=True)
         assert view is not None
 
         # Simulate what vendor briefing does
