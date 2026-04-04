@@ -95,7 +95,9 @@ CRITICAL RULES:
     may be empty arrays when evidence is insufficient.
 
 17. ``proof_point.source_id`` must come from section-scoped numeric support
-    or shortlist candidates already present in ``section_packets``.
+    or shortlist candidates already present in ``section_packets``. Never use
+    a witness id in ``proof_point.source_id``; witness ids belong only in
+    ``citations``.
 
 18. Never omit ``migration_proof``.  When the evidence is weak, still
     return the full section with cautious confidence, explicit data_gaps,

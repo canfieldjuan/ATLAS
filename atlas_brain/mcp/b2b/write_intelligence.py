@@ -442,7 +442,6 @@ async def build_accounts_in_motion(
         )
         from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
             reconstruct_cross_vendor_lookup,
-            reconstruct_reasoning_lookup,
         )
         from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
             build_reasoning_lookup_from_views,
@@ -504,8 +503,7 @@ async def build_accounts_in_motion(
                 synth_lookup = {}
         except Exception:
             synth_lookup = {}
-        legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
-        reasoning_lookup = {**legacy_lookup, **synth_lookup}
+        reasoning_lookup = synth_lookup
 
         merged = _merge_company_profiles(
             high_intent,

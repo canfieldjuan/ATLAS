@@ -6,9 +6,8 @@ related tables. Builds deterministic reports, runs LLM enrichment,
 and persists to b2b_intelligence.
 
 Reasoning is synthesis-first: builds reasoning_lookup from
-b2b_reasoning_synthesis views when available, with legacy fallback to
-b2b_churn_signals via reconstruct_reasoning_lookup() for vendors not
-yet covered by synthesis.
+b2b_reasoning_synthesis views and treats missing synthesis coverage as a
+real gap instead of silently filling from b2b_churn_signals.
 """
 
 import asyncio
@@ -859,7 +858,6 @@ async def _build_deterministic_report_bundle(
         _fetch_latest_evidence_vault,
         _structure_displacement_report,
     )
-    from .b2b_churn_intelligence import reconstruct_reasoning_lookup
     from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
     from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
 
@@ -876,11 +874,7 @@ async def _build_deterministic_report_bundle(
             analysis_window_days=analysis_window_days,
         )
     if reasoning_lookup is None:
-        # Synthesis-first: build from synthesis views, legacy fallback for gaps
-        legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=as_of)
-        synth_lookup = build_reasoning_lookup_from_views(synthesis_views)
-        # Synthesis entries override legacy; legacy fills uncovered vendors
-        reasoning_lookup = {**legacy_lookup, **synth_lookup}
+        reasoning_lookup = build_reasoning_lookup_from_views(synthesis_views)
     if evidence_vault_lookup is None:
         evidence_vault_lookup = await _fetch_latest_evidence_vault(
             pool,
@@ -1146,7 +1140,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from .b2b_churn_intelligence import (
         _apply_vendor_scope_to_churn_inputs,
         _normalize_test_vendors,
-        reconstruct_reasoning_lookup,
     )
 
     window_days = cfg.intelligence_window_days

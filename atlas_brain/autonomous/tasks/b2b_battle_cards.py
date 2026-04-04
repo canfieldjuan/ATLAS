@@ -1715,7 +1715,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from .b2b_churn_intelligence import (
         _apply_vendor_scope_to_churn_inputs,
         _normalize_test_vendors,
-        reconstruct_reasoning_lookup,
         reconstruct_cross_vendor_lookup,
     )
 
@@ -1877,10 +1876,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         logger.debug("Reasoning views unavailable", exc_info=True)
 
-    # Build reasoning_lookup synthesis-first, legacy fills gaps
-    legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
-    synth_lookup = build_reasoning_lookup_from_views(synthesis_views)
-    reasoning_lookup = {**legacy_lookup, **synth_lookup}
+    # Build reasoning_lookup from synthesis views only.
+    reasoning_lookup = build_reasoning_lookup_from_views(synthesis_views)
     if scoped_vendors:
         vendor_scope = {v.lower() for v in scoped_vendors}
         reasoning_lookup = {

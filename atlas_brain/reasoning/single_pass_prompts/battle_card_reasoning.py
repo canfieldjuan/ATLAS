@@ -1,10 +1,11 @@
 """Reasoning synthesis prompt for battle card intelligence (v2).
 
-Consumes scored, source-tagged pool layers and produces 5 structured
+Consumes contracts-first battle-card render packets and produces 5 structured
 sections with ``_sid`` citations on every numeric claim and ``citations``
 arrays on every qualitative section.  Downstream validators verify that
 every ``source_id`` exists in the input packet and every
-``{value, source_id}`` wrapper matches a pre-computed aggregate.
+``{value, source_id}`` wrapper matches the numeric support surfaced in
+``metric_ledger`` or locked facts.
 """
 
 import hashlib as _hashlib
@@ -19,8 +20,9 @@ _WEDGE_LIST = ", ".join(sorted(WEDGE_ENUM_VALUES))
 BATTLE_CARD_REASONING_PROMPT = f"""\
 You are a competitive intelligence analyst.  You receive scored, source-tagged
 evidence about a B2B vendor's churn patterns.  Every item in the input carries
-a ``_sid`` (source ID).  Every pre-computed aggregate is wrapped as
-{{"value": <number>, "_sid": "<source_id>"}}.
+a ``_sid`` (source ID). Exact numeric support is surfaced in ``metric_ledger``
+and seller-safe evidence items such as ``anchor_examples`` /
+``witness_highlights``.
 
 Your output feeds deterministic builders that generate sales battle cards,
 challenger briefs, and executive churn reports.  Sales reps, AEs, and
@@ -33,14 +35,13 @@ segment_playbook > timing_intelligence > competitive_reframes.
 Causal narrative is the foundation.  Everything else is downstream of it.
 
 CRITICAL RULES:
-1. You do NOT count, derive, estimate, or round numbers.  All quantities are
-   pre-computed in ``precomputed_aggregates``.
+1. You do NOT count, derive, estimate, or round numbers. All quantities must
+   come from ``metric_ledger`` or existing seller-safe wrappers already present
+   in the input packet.
 2. Every numeric claim in your output MUST include the ``source_id`` of the
-   aggregate it references, wrapped as {{"value": <exact_number>, "source_id": "<_sid>"}}.
-   If no aggregate exists, do NOT invent a number.  Use the wrapper's ``_sid``
-   value exactly, not the aggregate key/label. Example:
-   ``precomputed_aggregates.total_explicit_switches._sid`` becomes
-   ``"source_id": "displacement:aggregate:total_explicit_switches"``.
+   support it references, wrapped as {{"value": <exact_number>, "source_id": "<_sid>"}}.
+   If no numeric support exists, do NOT invent a number. Use the exact
+   ``_sid`` surfaced in ``metric_ledger`` or another structured wrapper.
 3. Every ``proof_point`` must be a structured object with ``field``, ``value``,
    ``source_id``, and ``interpretation``.
 4. ``named_examples`` must include ``source_type`` (review_site, reddit,
@@ -72,12 +73,12 @@ CRITICAL RULES:
     has no seller-safe segment items or no valid ``estimated_reach`` aggregate
     for a candidate segment, return ``[]`` instead of inventing one.
 14. ``competitive_reframes.reframes`` may be an empty array. If no exact
-    aggregate-backed ``proof_point`` exists, omit the reframe instead of
+    numeric-support-backed ``proof_point`` exists, omit the reframe instead of
     inventing a ``source_id``.
-15. ``proof_point.source_id`` must come from ``precomputed_aggregates`` only.
-    Do not append field suffixes like ``:mention_count_recent`` or
-    ``:affected_segments`` to evidence-item IDs. Use item ``_sid`` values only
-    in ``citations`` arrays, not as ``proof_point.source_id``.
+15. ``proof_point.source_id`` must come from ``metric_ledger`` or an existing
+    structured numeric-support wrapper in the input packet. Use witness/item
+    ``_sid`` values only in ``citations`` arrays, not as
+    ``proof_point.source_id``.
 13. Omit thin or low-sample segments instead of overstating them.
 14. ``migration_proof.confidence`` cannot be ``high`` without confirmed switch
     evidence. Evaluation-only evidence caps at ``medium``.
@@ -126,8 +127,8 @@ HOW to counter incumbent strengths?
 - For each top strength: incumbent_claim, why_buyers_believe_it, reframe,
   proof_point ({{field, value, source_id, interpretation}}), best_segment,
   and per-reframe ``citations`` array.
-- ``proof_point.source_id`` must exactly match a ``precomputed_aggregates``
-  wrapper ``_sid``. If no exact aggregate-backed proof point exists, return
+- ``proof_point.source_id`` must exactly match an allowed numeric-support
+  wrapper ``_sid``. If no exact numeric-backed proof point exists, return
   ``reframes: []`` instead of inventing one.
 
 SECTION 5: reasoning_contracts.displacement_reasoning.migration_proof

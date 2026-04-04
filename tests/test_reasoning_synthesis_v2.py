@@ -960,13 +960,13 @@ class TestPrompt:
         assert "Do not emit labels like" in BATTLE_CARD_REASONING_PROMPT
         assert "pipeline jargon like" in BATTLE_CARD_REASONING_PROMPT
 
-    def test_prompt_requires_aggregate_backed_proof_points(self):
+    def test_prompt_requires_metric_backed_proof_points(self):
         from atlas_brain.reasoning.single_pass_prompts.battle_card_reasoning import (
             BATTLE_CARD_REASONING_PROMPT,
         )
         assert "proof_point.source_id" in BATTLE_CARD_REASONING_PROMPT
-        assert "precomputed_aggregates" in BATTLE_CARD_REASONING_PROMPT
-        assert ":mention_count_recent" in BATTLE_CARD_REASONING_PROMPT
+        assert "metric_ledger" in BATTLE_CARD_REASONING_PROMPT
+        assert "witness_highlights" in BATTLE_CARD_REASONING_PROMPT
         assert "confirmed explicit switches only" in BATTLE_CARD_REASONING_PROMPT
 
     def test_prompt_rejects_unknown_vault_citations(self):
@@ -3822,7 +3822,7 @@ class TestEdgeCases:
         codes = [e.code for e in result.errors]
         assert "hallucinated_source_id" in codes
 
-    def test_proof_point_requires_aggregate_source(self):
+    def test_proof_point_requires_numeric_support_source(self):
         from atlas_brain.autonomous.tasks._b2b_pool_compression import (
             compress_vendor_pools,
         )
@@ -3838,7 +3838,69 @@ class TestEdgeCases:
         result = validate_synthesis(synthesis, packet)
         assert not result.is_valid
         codes = [e.code for e in result.errors]
-        assert "proof_point_requires_aggregate_source" in codes
+        assert "proof_point_requires_numeric_support_source" in codes
+
+    def test_proof_point_allows_displacement_flow_shortlist_source(self):
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
+            validate_synthesis,
+        )
+
+        packet = compress_vendor_pools("Edge", _make_layers())
+        synthesis, _ = _make_valid_synthesis(packet)
+        synthesis["competitive_reframes"]["reframes"][0]["proof_point"] = {
+            "field": "displacement_flow_mentions",
+            "value": 12,
+            "source_id": "displacement:flow:competitora",
+            "interpretation": "Buyers are actively naming CompetitorA.",
+        }
+        result = validate_synthesis(synthesis, packet)
+        assert result.is_valid, result.summary()
+
+    def test_normalize_witness_backed_proof_point_to_numeric_support_source(self):
+        from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
+            normalize_synthesis_source_ids,
+            validate_synthesis,
+        )
+
+        synthesis, packet = _make_valid_synthesis()
+        synthesis["competitive_reframes"]["reframes"][0]["proof_point"]["source_id"] = (
+            "witness:ee295534-c0cb-423e-af89-173a4e090374:0"
+        )
+        normalize_synthesis_source_ids(synthesis, packet)
+        assert (
+            synthesis["competitive_reframes"]["reframes"][0]["proof_point"]["source_id"]
+            == "vault:weakness:pricing:mention_count_total"
+        )
+        result = validate_synthesis(synthesis, packet)
+        assert result.is_valid, result.summary()
+
+    def test_normalize_drops_reframe_when_numeric_support_is_unavailable(self):
+        from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
+            normalize_synthesis_source_ids,
+            validate_synthesis,
+        )
+
+        synthesis, packet = _make_valid_synthesis()
+        synthesis["competitive_reframes"]["reframes"][0]["proof_point"] = {
+            "field": "unsupported",
+            "value": 999,
+            "source_id": "witness:ee295534-c0cb-423e-af89-173a4e090374:0",
+            "interpretation": "unsupported",
+        }
+        synthesis["competitive_reframes"]["reframes"][0]["citations"] = [
+            "witness:ee295534-c0cb-423e-af89-173a4e090374:0",
+        ]
+        normalize_synthesis_source_ids(synthesis, packet)
+        assert synthesis["competitive_reframes"]["reframes"] == []
+        assert (
+            "Numeric support too thin for competitive reframes."
+            in synthesis["competitive_reframes"]["data_gaps"]
+        )
+        result = validate_synthesis(synthesis, packet)
+        assert result.is_valid, result.summary()
 
     def test_v1_wedge_not_in_v2_registry(self):
         """Old v1 wedge types ('pricing_shock') don't validate in v2."""

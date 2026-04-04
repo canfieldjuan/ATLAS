@@ -392,6 +392,13 @@ def _retry_guidance(vresult: Any) -> list[str]:
             "sections must use only _sid values already present in the input "
             "packet. Do not invent witness ids or leave reframe citations empty.",
         )
+    if "proof_point_requires_numeric_support_source" in seen_codes:
+        guidance.append(
+            "competitive_reframes.reframes[*].proof_point.source_id must use "
+            "numeric support or shortlist source_ids from section_packets. "
+            "Do not use witness ids in proof_point.source_id; keep witness ids "
+            "in citations only.",
+        )
     return guidance
 
 
@@ -1337,6 +1344,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         # evidence wiring; paying for a second LLM call before those
                         # repairs run is wasted token burn.
                         candidate = build_persistable_synthesis(parsed, prompt_packet)
+                        candidate = normalize_synthesis_source_ids(candidate, prompt_packet)
                         vresult = validate_synthesis(
                             candidate, prompt_packet, governance_blocking=True,
                         )

@@ -1183,8 +1183,8 @@ def build_reasoning_lookup_from_views(
     """Build a reasoning_lookup dict from synthesis views.
 
     Returns ``{vendor_name: reasoning_entry}`` in the same shape as
-    ``reconstruct_reasoning_lookup()``.  Callers can merge this with
-    legacy lookups for vendors not covered by synthesis.
+    ``reconstruct_reasoning_lookup()`` so shared deterministic builders can
+    remain synthesis-only without depending on legacy reasoning rows.
     """
     lookup: dict[str, dict[str, Any]] = {}
     for vendor_name, view in synthesis_views.items():
@@ -1452,9 +1452,9 @@ async def discover_reasoning_vendor_names(
     *,
     as_of: date,
     analysis_window_days: int = 90,
-    include_legacy: bool = True,
+    include_legacy: bool = False,
 ) -> list[str]:
-    """Return the union of vendor names with synthesis or legacy reasoning rows."""
+    """Return vendor names with synthesis rows, optionally including legacy rows."""
     synth_names = await pool.fetch(
         "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
         "WHERE as_of_date <= $1 AND analysis_window_days = $2",

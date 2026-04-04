@@ -38,11 +38,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     from .b2b_churn_intelligence import (
         _correlate_articles_with_archetypes,
-        reconstruct_reasoning_lookup,
     )
     from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
 
-    # Synthesis-first: load all synthesis views, fill gaps with legacy
+    # Synthesis-first: load all synthesis views only.
     try:
         from ._b2b_synthesis_reader import load_best_reasoning_views
         # Get all vendor names from churn_signals for scoping
@@ -63,11 +62,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         else:
             synth_lookup = {}
     except Exception:
-        logger.debug("Synthesis view loading failed, falling back to legacy", exc_info=True)
+        logger.debug("Synthesis view loading failed", exc_info=True)
         synth_lookup = {}
 
-    legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
-    reasoning_lookup = {**legacy_lookup, **synth_lookup}
+    reasoning_lookup = synth_lookup
     if not reasoning_lookup:
         return {"_skip_synthesis": "No reasoning data available"}
 

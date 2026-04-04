@@ -1,8 +1,9 @@
 """Follow-up task: build per-vendor accounts-in-motion prospecting lists.
 
-Runs after b2b_churn_core. Reads persisted artifacts from b2b_churn_signals,
-b2b_reviews, and b2b_company_signals. Merges company profiles from multiple
-sources, scores each account, and persists one b2b_intelligence row per vendor
+Runs after b2b_churn_core. Reads persisted artifacts from
+b2b_reasoning_synthesis, b2b_churn_signals, b2b_reviews, and
+b2b_company_signals. Merges company profiles from multiple sources,
+scores each account, and persists one b2b_intelligence row per vendor
 with report_type='accounts_in_motion'.
 """
 
@@ -104,6 +105,39 @@ def _compute_account_opportunity_score(account: dict[str, Any]) -> tuple[int, di
 def _normalize_company_key(company: str | None) -> str:
     """Normalize a company name for dedup key purposes."""
     return (company or "").strip().lower()
+
+
+def _normalize_accounts_in_motion_confidence(value: Any) -> float | None:
+    """Normalize confidence values to the 0-10 scale used by AIM scoring."""
+    if value is None:
+        return None
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if confidence <= 1.0:
+        confidence *= 10.0
+    return round(min(10.0, max(0.0, confidence)), 2)
+
+
+def _is_low_confidence_reddit_insider_seed(
+    row: dict[str, Any],
+    *,
+    min_confidence: float,
+) -> bool:
+    """Return True when a reddit insider-account seed is too weak to trust."""
+    source = str(row.get("source") or "").strip().lower()
+    content_type = str(row.get("content_type") or "").strip().lower()
+    confidence = _normalize_accounts_in_motion_confidence(
+        row.get("confidence_score")
+        if row.get("confidence_score") is not None
+        else row.get("confidence")
+    )
+    if source != "reddit" or content_type != "insider_account":
+        return False
+    if confidence is None:
+        return True
+    return confidence < float(min_confidence)
 
 
 def _extract_account_quote(quotes: Any) -> str | None:
@@ -215,8 +249,8 @@ def _apply_account_quality_adjustments(account: dict[str, Any], cfg) -> tuple[in
         )
         delta += bonus
         components["repeat_evidence"] = bonus
-    confidence = account.get("confidence")
-    if confidence is not None and float(confidence) < cfg.accounts_in_motion_low_confidence_threshold:
+    confidence = _normalize_accounts_in_motion_confidence(account.get("confidence"))
+    if confidence is not None and confidence < cfg.accounts_in_motion_low_confidence_threshold:
         penalty = cfg.accounts_in_motion_low_confidence_penalty
         delta -= penalty
         components["low_confidence"] = -penalty
@@ -284,6 +318,7 @@ def _build_signal_metadata_fallback_rows(
     signal_metadata: list[dict[str, Any]],
     *,
     min_urgency: float,
+    min_confidence: float,
 ) -> list[dict[str, Any]]:
     """Build fallback intake rows from persisted company-signal metadata."""
     fallback: list[dict[str, Any]] = []
@@ -293,10 +328,18 @@ def _build_signal_metadata_fallback_rows(
         if not company or not vendor:
             continue
         try:
-            urgency = float(row.get("confidence") or 0)
+            urgency = float(row.get("urgency") or 0)
         except (TypeError, ValueError):
             urgency = 0.0
         if urgency < float(min_urgency):
+            continue
+        confidence = _normalize_accounts_in_motion_confidence(row.get("confidence"))
+        if confidence is None or confidence < float(min_confidence):
+            continue
+        if _is_low_confidence_reddit_insider_seed(
+            row,
+            min_confidence=min_confidence,
+        ):
             continue
         fallback.append({
             "company": company,
@@ -317,12 +360,15 @@ def _build_signal_metadata_fallback_rows(
             "seat_count": None,
             "contract_end": None,
             "buying_stage": None,
+            "confidence": confidence,
         })
     return fallback
 
 
 def _build_account_pool_seed_rows(
     account_pool_lookup: dict[str, dict[str, Any]] | None,
+    *,
+    reddit_insider_min_confidence: float,
 ) -> list[dict[str, Any]]:
     """Flatten canonical account-intelligence rows into merge seed records."""
     seed_rows: list[dict[str, Any]] = []
@@ -335,6 +381,14 @@ def _build_account_pool_seed_rows(
             company = str(row.get("company_name") or row.get("company") or "").strip()
             if not company:
                 continue
+            if _is_low_confidence_reddit_insider_seed(
+                row,
+                min_confidence=reddit_insider_min_confidence,
+            ):
+                continue
+            confidence = _normalize_accounts_in_motion_confidence(
+                row.get("confidence_score"),
+            )
             seed_rows.append({
                 "company": company,
                 "vendor": vendor,
@@ -355,7 +409,7 @@ def _build_account_pool_seed_rows(
                 "buying_stage": row.get("buying_stage"),
                 "first_seen": row.get("first_seen_at"),
                 "last_seen": row.get("last_seen_at"),
-                "confidence": row.get("confidence_score"),
+                "confidence": confidence,
             })
     return seed_rows
 
@@ -400,8 +454,13 @@ async def _fetch_company_signal_metadata(pool, window_days: int = 90) -> list[di
         """
         SELECT company_name, vendor_name,
                first_seen_at, last_seen_at,
-               urgency_score AS confidence
-        FROM b2b_company_signals
+               urgency_score,
+               confidence_score,
+               source,
+               review_id,
+               r.content_type
+        FROM b2b_company_signals cs
+        LEFT JOIN b2b_reviews r ON r.id = cs.review_id
         WHERE last_seen_at > NOW() - make_interval(days => $1)
         """,
         window_days,
@@ -412,7 +471,11 @@ async def _fetch_company_signal_metadata(pool, window_days: int = 90) -> list[di
             "vendor": r["vendor_name"],
             "first_seen": r["first_seen_at"].isoformat() if r["first_seen_at"] else None,
             "last_seen": r["last_seen_at"].isoformat() if r["last_seen_at"] else None,
-            "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+            "urgency": float(r["urgency_score"]) if r["urgency_score"] is not None else None,
+            "confidence": _normalize_accounts_in_motion_confidence(r["confidence_score"]),
+            "source": r["source"],
+            "review_id": str(r["review_id"]) if r["review_id"] else None,
+            "content_type": r["content_type"],
         }
         for r in rows
     ]
@@ -1131,7 +1194,7 @@ async def _check_freshness(pool) -> date | None:
 # Main task entry point
 # ---------------------------------------------------------------------------
 
-async def run(task: ScheduledTask) -> dict[str, Any]:
+async def run(task: ScheduledTask, *, as_of: date | None = None) -> dict[str, Any]:
     """Build per-vendor accounts-in-motion prospecting lists."""
     cfg = settings.b2b_churn
     if not cfg.enabled or not cfg.intelligence_enabled:
@@ -1141,9 +1204,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    today = await _check_freshness(pool)
+    today = as_of
     if today is None:
-        return {"_skip_synthesis": "Core signals not fresh for today"}
+        today = await _check_freshness(pool)
+        if today is None:
+            return {"_skip_synthesis": "Core signals not fresh for today"}
 
     from ._b2b_shared import (
         _build_competitor_lookup,
@@ -1161,16 +1226,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_timeline_signals,
         _aggregate_competitive_disp,
     )
-    from .b2b_churn_intelligence import (
-        _normalize_test_vendors,
-        reconstruct_reasoning_lookup,
-    )
+    from .b2b_churn_intelligence import _normalize_test_vendors
 
     window_days = cfg.intelligence_window_days
     min_urgency = cfg.accounts_in_motion_min_urgency
     max_per_vendor = cfg.accounts_in_motion_max_per_vendor
     scoped_vendors = _normalize_test_vendors((task.metadata or {}).get("test_vendors"))
-    vendor_scope = {vendor.lower() for vendor in scoped_vendors}
+    scoped_vendor_names: list[str] = []
+    seen_scoped_vendors: set[str] = set()
+    for vendor in scoped_vendors:
+        canonical_vendor = _canonicalize_vendor(vendor)
+        if not canonical_vendor or canonical_vendor in seen_scoped_vendors:
+            continue
+        seen_scoped_vendors.add(canonical_vendor)
+        scoped_vendor_names.append(canonical_vendor)
+    vendor_scope = set(scoped_vendor_names)
 
     # --- Phase 1: Parallel data fetch ---
     await _update_execution_progress(
@@ -1223,8 +1293,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     signal_fallback_intent = _build_signal_metadata_fallback_rows(
         signal_metadata,
         min_urgency=min_urgency,
+        min_confidence=cfg.accounts_in_motion_signal_metadata_min_confidence,
     )
-    seed_rows = _build_account_pool_seed_rows(account_pool_lookup)
+    seed_rows = _build_account_pool_seed_rows(
+        account_pool_lookup,
+        reddit_insider_min_confidence=cfg.accounts_in_motion_reddit_insider_min_confidence,
+    )
     combined_intent: list[dict[str, Any]] = list(high_intent)
     existing_keys = {
         (_normalize_company_key(row.get("company")), _canonicalize_vendor(row.get("vendor")))
@@ -1253,11 +1327,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         raw_seed_count = len(seed_rows)
         combined_intent = [
             row for row in combined_intent
-            if str(row.get("vendor") or "").strip().lower() in vendor_scope
+            if _canonicalize_vendor(row.get("vendor") or "") in vendor_scope
         ]
         seed_rows = [
             row for row in seed_rows
-            if str(row.get("vendor") or "").strip().lower() in vendor_scope
+            if _canonicalize_vendor(row.get("vendor") or "") in vendor_scope
         ]
         logger.info(
             "Scoped accounts in motion to %d vendors: intent rows %d/%d, seed rows %d/%d",
@@ -1266,8 +1340,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
 
     if not combined_intent and not seed_rows:
-        logger.info("No high-intent companies found, skipping")
-        return {"_skip_synthesis": "No high-intent companies"}
+        if not scoped_vendor_names:
+            logger.info("No high-intent companies found, skipping")
+            return {"_skip_synthesis": "No high-intent companies"}
+        logger.info(
+            "No high-intent companies found for scoped vendors %s; persisting empty reports",
+            ", ".join(scoped_vendor_names),
+        )
 
     competitive_disp = _aggregate_competitive_disp(competitive_disp)
     try:
@@ -1297,11 +1376,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         logger.exception("Accounts in motion synthesis lookup failed")
         raw_synthesis_views = {}
-    # Build reasoning_lookup from synthesis views first, legacy fallback
+    # Build reasoning_lookup from synthesis views only.
     from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
-    legacy_lookup = await reconstruct_reasoning_lookup(pool, as_of=today)
-    synth_lookup = build_reasoning_lookup_from_views(raw_synthesis_views)
-    reasoning_lookup = {**legacy_lookup, **synth_lookup}
+    reasoning_lookup = build_reasoning_lookup_from_views(raw_synthesis_views)
     synthesis_views = {
         _canonicalize_vendor(vendor): view
         for vendor, view in raw_synthesis_views.items()
@@ -1351,6 +1428,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vendor_accounts[vendor].sort(key=lambda a: a.get("opportunity_score", 0), reverse=True)
         vendor_accounts[vendor] = vendor_accounts[vendor][:max_per_vendor]
 
+    aggregate_vendors = list(vendor_accounts.keys())
+    for vendor in scoped_vendor_names:
+        if vendor not in vendor_accounts:
+            aggregate_vendors.append(vendor)
+
     # Build lookups (canonicalize vendor keys to match merged profiles)
     feature_gap_lookup = _build_feature_gap_lookup(feature_gaps)
     price_lookup = {_canonicalize_vendor(r["vendor"]): r["price_complaint_rate"] for r in price_rates}
@@ -1361,7 +1443,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     competitor_lookup = _build_competitor_lookup(competitive_disp)
 
     aggregates: list[dict[str, Any]] = []
-    for vendor, accounts in vendor_accounts.items():
+    for vendor in aggregate_vendors:
+        accounts = vendor_accounts.get(vendor, [])
         agg = _build_vendor_aggregate(
             vendor,
             accounts,

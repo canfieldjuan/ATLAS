@@ -96,7 +96,7 @@ _FIELD_SOURCE_PREFIX_RULES = {
     ),
 }
 
-_FIELDS_REQUIRING_AGGREGATE_SOURCE = {
+_FIELDS_REQUIRING_NUMERIC_SUPPORT_SOURCE = {
     "competitive_reframes.reframes[*].proof_point",
 }
 
@@ -238,6 +238,42 @@ def _build_source_alias_map(packet: Any | None) -> dict[str, str]:
     }
 
 
+def _build_numeric_support_lookup(packet: Any | None) -> dict[str, tuple[Any, ...]]:
+    """Build valid numeric-support values keyed by packet source_id."""
+    if packet is None:
+        return {}
+
+    lookup: dict[str, list[Any]] = {}
+
+    def _remember(source_id: str, value: Any) -> None:
+        sid = str(source_id or "").strip()
+        if not sid or value is None:
+            return
+        values = lookup.setdefault(sid, [])
+        if value not in values:
+            values.append(value)
+
+    for agg in getattr(packet, "aggregates", []) or []:
+        _remember(getattr(agg, "source_id", ""), getattr(agg, "value", None))
+
+    for item in (getattr(packet, "pools", {}) or {}).get("displacement") or []:
+        sid = getattr(getattr(item, "source_ref", None), "source_id", "")
+        data = item.data if isinstance(getattr(item, "data", None), dict) else {}
+        flow_summary = data.get("flow_summary") or {}
+        for key in (
+            "total_flow_mentions",
+            "mention_count",
+            "explicit_switch_count",
+            "active_evaluation_count",
+        ):
+            value = flow_summary.get(key)
+            if value is None:
+                value = data.get(key)
+            _remember(sid, value)
+
+    return {sid: tuple(values) for sid, values in lookup.items() if values}
+
+
 def _section_dicts(synthesis: dict[str, Any], section: str) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     current = synthesis.get(section)
@@ -270,6 +306,7 @@ def _normalize_constrained_wrappers(
         for agg in getattr(packet, "aggregates", []) or []
         if getattr(agg, "source_id", "")
     }
+    numeric_support_lookup = _build_numeric_support_lookup(packet)
     has_segment_reach = any(
         getattr(agg, "source_id", "").startswith("segment:reach:")
         for agg in getattr(packet, "aggregates", []) or []
@@ -283,6 +320,11 @@ def _normalize_constrained_wrappers(
 
     def _candidate_wrappers(field_path: str) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
+        if field_path in _FIELDS_REQUIRING_NUMERIC_SUPPORT_SOURCE:
+            for sid, values in numeric_support_lookup.items():
+                for value in values:
+                    candidates.append({"value": value, "source_id": sid})
+            return candidates
         for sid in _FIELD_SOURCE_RULES.get(field_path, set()):
             if sid in aggregate_lookup:
                 candidates.append({"value": aggregate_lookup[sid], "source_id": sid})
@@ -305,14 +347,35 @@ def _normalize_constrained_wrappers(
         for candidate in _candidate_wrappers(field_path):
             if _numeric_equal(candidate.get("value"), wrapper.get("value")):
                 return candidate
-        if field_path in _FIELDS_REQUIRING_AGGREGATE_SOURCE:
-            for sid, value in aggregate_lookup.items():
-                if _numeric_equal(value, wrapper.get("value")):
-                    return {"value": value, "source_id": sid}
+        if field_path in _FIELDS_REQUIRING_NUMERIC_SUPPORT_SOURCE:
+            for sid, values in numeric_support_lookup.items():
+                for value in values:
+                    if _numeric_equal(value, wrapper.get("value")):
+                        return {"value": value, "source_id": sid}
         sid = wrapper.get("source_id")
         if isinstance(sid, str) and sid in aggregate_lookup:
             return {"value": aggregate_lookup[sid], "source_id": sid}
         return wrapper
+
+    def _best_wrapper_from_citations(
+        wrapper: Any,
+        citations: Any,
+    ) -> dict[str, Any] | None:
+        if not isinstance(wrapper, dict):
+            return None
+        current_value = wrapper.get("value")
+        for sid in citations or []:
+            if not isinstance(sid, str) or not sid:
+                continue
+            resolved_sid = alias_map.get(sid, sid)
+            allowed_values = numeric_support_lookup.get(resolved_sid)
+            if not allowed_values:
+                continue
+            if current_value is None:
+                return {"value": allowed_values[0], "source_id": resolved_sid}
+            if any(_numeric_equal(current_value, value) for value in allowed_values):
+                return {"value": current_value, "source_id": resolved_sid}
+        return None
 
     def _upgrade_wrapper_source(
         wrapper: Any,
@@ -329,7 +392,7 @@ def _normalize_constrained_wrappers(
             alias = sid
         if not _field_source_allowed(field_path, sid):
             if (
-                field_path not in _FIELDS_REQUIRING_AGGREGATE_SOURCE
+                field_path not in _FIELDS_REQUIRING_NUMERIC_SUPPORT_SOURCE
                 and not _field_source_allowed(field_path, alias)
             ):
                 return
@@ -337,13 +400,18 @@ def _normalize_constrained_wrappers(
             resolved_sid = alias
         if (
             (
-                field_path in _FIELDS_REQUIRING_AGGREGATE_SOURCE
+                field_path in _FIELDS_REQUIRING_NUMERIC_SUPPORT_SOURCE
                 or field_path in _FIELD_SOURCE_RULES
                 or field_path in _FIELD_SOURCE_PREFIX_RULES
             )
-            and resolved_sid in aggregate_lookup
+            and resolved_sid in numeric_support_lookup
         ):
-            wrapper["value"] = aggregate_lookup[resolved_sid]
+            current = wrapper.get("value")
+            allowed_values = numeric_support_lookup[resolved_sid]
+            if resolved_sid in aggregate_lookup:
+                wrapper["value"] = aggregate_lookup[resolved_sid]
+            elif not any(_numeric_equal(current, value) for value in allowed_values):
+                wrapper["value"] = allowed_values[0]
 
     explicit_switch = None
     for agg in getattr(packet, "aggregates", []) or []:
@@ -415,6 +483,8 @@ def _normalize_constrained_wrappers(
         segment_playbook["priority_segments"] = normalized_segments
 
     for competitive_reframes in _section_dicts(synthesis, "competitive_reframes"):
+        normalized_reframes: list[dict[str, Any]] = []
+        dropped_for_numeric_support = False
         for reframe in competitive_reframes.get("reframes") or []:
             if not isinstance(reframe, dict):
                 continue
@@ -422,8 +492,30 @@ def _normalize_constrained_wrappers(
                 reframe.get("proof_point"),
                 "competitive_reframes.reframes[*].proof_point",
             )
-            if normalized is not None:
-                reframe["proof_point"] = normalized
+            if (
+                isinstance(normalized, dict)
+                and isinstance(normalized.get("source_id"), str)
+                and str(normalized.get("source_id", "")).startswith("witness:")
+            ):
+                citation_normalized = _best_wrapper_from_citations(
+                    normalized,
+                    reframe.get("citations"),
+                )
+                if citation_normalized is not None:
+                    normalized = citation_normalized
+            sid = normalized.get("source_id") if isinstance(normalized, dict) else None
+            if not isinstance(sid, str) or sid not in numeric_support_lookup:
+                dropped_for_numeric_support = True
+                continue
+            reframe["proof_point"] = normalized
+            normalized_reframes.append(reframe)
+        competitive_reframes["reframes"] = normalized_reframes
+        if dropped_for_numeric_support and not normalized_reframes:
+            data_gaps = competitive_reframes.setdefault("data_gaps", [])
+            if isinstance(data_gaps, list):
+                msg = "Numeric support too thin for competitive reframes."
+                if msg not in data_gaps:
+                    data_gaps.append(msg)
 
 
 def normalize_synthesis_source_ids(
@@ -812,10 +904,11 @@ def _check_witness_pack_governance(
 def _check_value_wrappers(
     synthesis: dict[str, Any],
     aggregate_lookup: dict[str, Any],
+    numeric_support_lookup: dict[str, tuple[Any, ...]],
     result: ValidationResult,
 ) -> None:
     """Verify {value, source_id} wrappers match pre-computed aggregates."""
-    if not aggregate_lookup:
+    if not aggregate_lookup and not numeric_support_lookup:
         return
 
     def _numeric_equal(left: Any, right: Any) -> bool:
@@ -838,21 +931,27 @@ def _check_value_wrappers(
                         "invalid_field_source",
                         f"field '{normalized_path}' cannot cite source_id '{sid}'",
                     )
-                if normalized_path in _FIELDS_REQUIRING_AGGREGATE_SOURCE and sid not in aggregate_lookup:
+                if (
+                    normalized_path in _FIELDS_REQUIRING_NUMERIC_SUPPORT_SOURCE
+                    and sid not in numeric_support_lookup
+                ):
                     _add(
                         result,
                         path,
-                        "proof_point_requires_aggregate_source",
-                        f"field '{normalized_path}' must cite a precomputed aggregate source_id, not '{sid}'",
+                        "proof_point_requires_numeric_support_source",
+                        f"field '{normalized_path}' must cite a numeric support or shortlist source_id, not '{sid}'",
                     )
-                if sid and sid in aggregate_lookup:
-                    expected = aggregate_lookup[sid]
-                    if val is not None and expected is not None:
-                        if not _numeric_equal(val, expected) and str(val) != str(expected):
+                if sid and sid in numeric_support_lookup:
+                    expected_values = numeric_support_lookup[sid]
+                    if val is not None and expected_values:
+                        if not any(
+                            _numeric_equal(val, expected) or str(val) == str(expected)
+                            for expected in expected_values
+                        ):
                             _add(
                                 result, path, "value_mismatch",
-                                f"value {val!r} does not match aggregate "
-                                f"{expected!r} for source_id '{sid}'",
+                                f"value {val!r} does not match numeric support "
+                                f"{expected_values!r} for source_id '{sid}'",
                                 severity="warning",
                             )
             for k, v in obj.items():
@@ -1419,12 +1518,14 @@ def validate_synthesis(
     vendor_name = ""
     valid_source_ids: frozenset[str] = frozenset()
     aggregate_lookup: dict[str, Any] = {}
+    numeric_support_lookup: dict[str, tuple[Any, ...]] = {}
 
     if packet is not None:
         vendor_name = getattr(packet, "vendor_name", "")
         valid_source_ids = packet.source_ids()
         for agg in getattr(packet, "aggregates", []):
             aggregate_lookup[agg.source_id] = agg.value
+        numeric_support_lookup = _build_numeric_support_lookup(packet)
 
     result = ValidationResult(vendor_name=vendor_name)
     normalized = _normalized_synthesis_for_validation(synthesis)
@@ -1436,7 +1537,7 @@ def validate_synthesis(
     _check_citations(normalized, result)
     _check_packet_citations(normalized, valid_source_ids, result)
     _check_source_ids(normalized, valid_source_ids, result)
-    _check_value_wrappers(normalized, aggregate_lookup, result)
+    _check_value_wrappers(normalized, aggregate_lookup, numeric_support_lookup, result)
     _check_evidence_type(normalized, result)
     _check_migration_coherence(normalized, result)
     _check_named_examples(normalized, result)
