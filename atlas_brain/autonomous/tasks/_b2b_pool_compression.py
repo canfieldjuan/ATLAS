@@ -94,6 +94,19 @@ def _approx_payload_tokens(value: Any) -> int:
     return max(1, (len(serialized) + 3) // 4)
 
 
+def _reasoning_section_candidate_limit(section: str, default: int) -> int:
+    """Resolve section-packet shortlist limits from config."""
+    from ...config import settings
+
+    cfg = settings.b2b_churn
+    attr = f"reasoning_synthesis_{section}_candidate_limit"
+    try:
+        value = int(getattr(cfg, attr, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(1, value)
+
+
 # ---------------------------------------------------------------------------
 # Source reference
 # ---------------------------------------------------------------------------
@@ -367,11 +380,11 @@ class CompressedPacket:
     ) -> dict[str, Any]:
         """Serialize to a witness-first synthesis payload.
 
-        The reasoning model still receives deterministic aggregates and
-        governance signals, but large raw pool arrays are replaced with
-        compact per-section context blocks. This keeps the prompt anchored
-        to witnesses while preserving the labels and shortlist context
-        needed for segment/account/displacement reasoning.
+        The reasoning model receives witness excerpts, section-scoped
+        witness packets, and light governance signals. Deterministic
+        aggregates still remain on the packet object for validation and
+        contract expansion, but they are not emitted as global prompt
+        blocks.
         """
         payload: dict[str, Any] = {}
         if include_contradiction_rows and self.contradiction_rows:
@@ -427,6 +440,7 @@ class CompressedPacket:
         return None
 
     def _segment_candidates(self) -> list[dict[str, Any]]:
+        limit = _reasoning_section_candidate_limit("segment", 3)
         candidates: list[dict[str, Any]] = []
         for item in self.pools.get("segment") or []:
             entry = _compact_reasoning_context_entry("segment", item)
@@ -448,22 +462,24 @@ class CompressedPacket:
                 "churn_rate": entry.get("churn_rate"),
                 "review_count": entry.get("review_count") or entry.get("count"),
             })
-            if len(candidates) >= 3:
+            if len(candidates) >= limit:
                 break
         return candidates
 
     def _temporal_candidates(self) -> list[dict[str, Any]]:
+        limit = _reasoning_section_candidate_limit("temporal", 3)
         candidates: list[dict[str, Any]] = []
         for item in self.pools.get("temporal") or []:
             entry = _compact_reasoning_context_entry("temporal", item)
             if not entry:
                 continue
             candidates.append(entry)
-            if len(candidates) >= 3:
+            if len(candidates) >= limit:
                 break
         return candidates
 
     def _displacement_candidates(self) -> list[dict[str, Any]]:
+        limit = _reasoning_section_candidate_limit("displacement", 3)
         candidates: list[dict[str, Any]] = []
         for item in self.pools.get("displacement") or []:
             entry = _compact_reasoning_context_entry("displacement", item)
@@ -477,11 +493,12 @@ class CompressedPacket:
                 "active_evaluation_count": entry.get("active_evaluation_count"),
                 "primary_driver": entry.get("primary_driver"),
             })
-            if len(candidates) >= 3:
+            if len(candidates) >= limit:
                 break
         return candidates
 
     def _account_candidates(self) -> list[dict[str, Any]]:
+        limit = _reasoning_section_candidate_limit("account", 3)
         candidates: list[dict[str, Any]] = []
         for item in self.pools.get("accounts") or []:
             entry = _compact_reasoning_context_entry("accounts", item)
@@ -494,22 +511,24 @@ class CompressedPacket:
                 "buying_stage": entry.get("buying_stage"),
                 "decision_maker": entry.get("decision_maker"),
             })
-            if len(candidates) >= 3:
+            if len(candidates) >= limit:
                 break
         return candidates
 
     def _category_candidates(self) -> list[dict[str, Any]]:
+        limit = _reasoning_section_candidate_limit("category", 2)
         candidates: list[dict[str, Any]] = []
         for item in self.pools.get("category") or []:
             entry = _compact_reasoning_context_entry("category", item)
             if not entry:
                 continue
             candidates.append(entry)
-            if len(candidates) >= 2:
+            if len(candidates) >= limit:
                 break
         return candidates
 
     def _retention_candidates(self) -> list[dict[str, Any]]:
+        limit = _reasoning_section_candidate_limit("retention", 3)
         candidates: list[dict[str, Any]] = []
         for entry in self.retention_proof or []:
             candidates.append({
@@ -517,7 +536,7 @@ class CompressedPacket:
                 "area": entry.get("area"),
                 "evidence": entry.get("evidence"),
             })
-            if len(candidates) >= 3:
+            if len(candidates) >= limit:
                 break
         return candidates
 

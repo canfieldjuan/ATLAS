@@ -2873,6 +2873,42 @@ class B2BChurnConfig(BaseSettings):
         le=20,
         description="Max witnesses included when vendor reasoning falls back to lean prompt mode",
     )
+    reasoning_synthesis_segment_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max segment shortlist candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_temporal_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max temporal trigger candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_displacement_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max displacement destination candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_account_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max account shortlist candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_category_candidate_limit: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Max category regime candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_retention_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max retention strength candidates included in witness-first section packets",
+    )
     reasoning_synthesis_rerun_if_missing_packet_artifacts: bool = Field(
         default=True,
         description="Rerun vendor reasoning when the latest unchanged row is missing packet artifacts",
@@ -3100,6 +3136,7 @@ class B2BChurnConfig(BaseSettings):
     # Accounts in motion
     accounts_in_motion_cron: str = Field(default="35 21 * * *", description="Cron for accounts-in-motion prospecting lists")
     accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
+    accounts_in_motion_feed_max_total: int = Field(default=100, ge=1, le=200, description="Max total tenant feed rows returned by the aggregated accounts_in_motion endpoint")
     accounts_in_motion_min_urgency: float = Field(default=5.0, ge=0, le=10, description="Min urgency to include an account in motion")
     accounts_in_motion_repeat_evidence_bonus: int = Field(default=3, ge=0, le=20, description="Bonus points added per extra supporting review for an account in motion")
     accounts_in_motion_repeat_evidence_bonus_max: int = Field(default=6, ge=0, le=30, description="Max total repeat-evidence bonus for an account in motion")

@@ -950,6 +950,38 @@ class TestCompressVendorPoolsIntegration:
         assert packets["account_packet"]["top_accounts"]
         assert packets["category_packet"]["regime_candidates"]
 
+    def test_reasoning_payload_section_packet_limits_are_configurable(self, monkeypatch):
+        from atlas_brain.config import settings
+
+        packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_segment_candidate_limit", 1, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_temporal_candidate_limit", 1, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_displacement_candidate_limit", 1, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_account_candidate_limit", 1, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_category_candidate_limit", 1, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_retention_candidate_limit", 1, raising=False,
+        )
+
+        packets = packet.to_reasoning_payload()["section_packets"]
+
+        assert len(packets["segment_packet"]["priority_segment_candidates"]) <= 1
+        assert len(packets["timing_packet"]["trigger_candidates"]) <= 1
+        assert len(packets["displacement_packet"]["destination_candidates"]) <= 1
+        assert len(packets["account_packet"]["top_accounts"]) <= 1
+        assert len(packets["category_packet"]["regime_candidates"]) <= 1
+        assert len(packets["retention_packet"]["strength_candidates"]) <= 1
+
 
 class TestWitnessGovernance:
     def test_witness_hash_ignores_selection_metadata(self):
