@@ -925,6 +925,7 @@ class TestCompressVendorPoolsIntegration:
         assert "temporal" not in payload
         assert "category" not in payload
         assert payload["compact_context"]["accounts"][0]["name"]
+        assert all("scope" not in entry for entry in payload["metric_ledger"])
 
     def test_reasoning_payload_component_tokens_are_emitted(self):
         packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())

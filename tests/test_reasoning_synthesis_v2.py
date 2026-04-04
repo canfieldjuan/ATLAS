@@ -4898,6 +4898,84 @@ class TestReasoningSynthesisTask:
         assert seen["vendor_names"] == ["ModelVendor"]
 
     @pytest.mark.asyncio
+    async def test_run_skips_cross_vendor_for_test_vendor_pilots(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import compress_vendor_pools
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                return None
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self, response):
+                self.response = response
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                return {
+                    "response": self.response,
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                }
+
+        layers = _make_layers()
+        packet = compress_vendor_pools("PilotVendor", layers)
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        fake_pool = FakePool()
+        fake_llm = FakeLLM(json.dumps(valid_synthesis))
+        seen = {"cross_vendor_called": False}
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+            return {"PilotVendor": layers}
+
+        async def _fake_run_cross_vendor_synthesis(**kwargs):
+            seen["cross_vendor_called"] = True
+            return (1, 0, 100, 1, 0)
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._run_cross_vendor_synthesis",
+            _fake_run_cross_vendor_synthesis,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_attempts", 1, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={"force": True, "test_vendors": ["PilotVendor"]}))
+
+        assert result["vendors_reasoned"] == 1
+        assert result["cross_vendor_succeeded"] == 0
+        assert result["cross_vendor_failed"] == 0
+        assert result["cross_vendor_tokens"] == 0
+        assert seen["cross_vendor_called"] is False
+
+    @pytest.mark.asyncio
     async def test_run_reuses_latest_unchanged_vendor_row_from_prior_day(self, monkeypatch):
         from atlas_brain.config import settings
         from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (

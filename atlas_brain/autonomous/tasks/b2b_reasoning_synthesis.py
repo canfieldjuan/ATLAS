@@ -1764,7 +1764,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     xv_mirrored = 0
     xv_rejected_input_budget = 0
 
-    if cfg.cross_vendor_synthesis_enabled:
+    run_cross_vendor = bool(cfg.cross_vendor_synthesis_enabled)
+    if test_vendors and not force_cross_vendor:
+        run_cross_vendor = False
+
+    if run_cross_vendor:
         try:
             xv_succeeded, xv_failed, xv_tokens, xv_mirrored, xv_rejected_input_budget = await _run_cross_vendor_synthesis(
                 pool=pool,
