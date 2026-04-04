@@ -1,8 +1,7 @@
 """Follow-up task: correlate news articles with vendor churn wedges.
 
-Reads vendor reasoning from synthesis (with legacy fallback) and matches
-against classified news_articles. Persists correlations to
-b2b_article_correlations.
+Reads vendor reasoning from synthesis and matches against classified
+news_articles. Persists correlations to b2b_article_correlations.
 """
 
 import logging
@@ -17,7 +16,7 @@ logger = logging.getLogger("atlas.tasks.b2b_article_correlation")
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
-    """Correlate articles with vendor archetypes from persisted signals."""
+    """Correlate articles with vendor archetypes from persisted synthesis."""
     cfg = settings.b2b_churn
     if not cfg.enabled:
         return {"_skip_synthesis": "B2B churn disabled"}
@@ -39,18 +38,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from .b2b_churn_intelligence import (
         _correlate_articles_with_archetypes,
     )
-    from ._b2b_synthesis_reader import build_reasoning_lookup_from_views
+    from ._b2b_synthesis_reader import (
+        build_reasoning_lookup_from_views,
+        discover_reasoning_vendor_names,
+    )
 
     # Synthesis-first: load all synthesis views only.
     try:
         from ._b2b_synthesis_reader import load_best_reasoning_views
-        # Get all vendor names from churn_signals for scoping
-        vendor_rows = await pool.fetch(
-            "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
-            "WHERE archetype IS NOT NULL AND last_computed_at::date >= $1",
-            today,
+        all_vendors = await discover_reasoning_vendor_names(
+            pool,
+            as_of=today,
+            include_legacy=False,
         )
-        all_vendors = [r["vendor_name"] for r in vendor_rows if r["vendor_name"]]
         if all_vendors:
             views = await load_best_reasoning_views(
                 pool,
