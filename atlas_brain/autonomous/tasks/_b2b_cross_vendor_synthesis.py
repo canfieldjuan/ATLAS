@@ -965,7 +965,11 @@ async def load_best_cross_vendor_lookup(
     analysis_window_days: int = 90,
     allow_legacy_fallback: bool = False,
 ) -> dict[str, dict]:
-    """Load canonical cross-vendor synthesis, optionally filling gaps from legacy."""
+    """Load canonical cross-vendor synthesis, optionally filling gaps from legacy.
+
+    ``allow_legacy_fallback=True`` is deprecated compatibility behavior.
+    Burn-in removal target: 2026-04-18.
+    """
     try:
         synthesis_lookup = await load_cross_vendor_synthesis_lookup(
             pool,

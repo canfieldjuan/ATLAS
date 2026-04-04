@@ -720,8 +720,9 @@ async def _persist_vendor_snapshots(
         if not vendor:
             continue
         total_reviews = int(row.get("total_reviews") or 0)
+        signal_reviews = int(row.get("signal_reviews") or 0) or total_reviews
         churn_intent = int(row.get("churn_intent") or 0)
-        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        churn_density = round((churn_intent * 100.0 / signal_reviews), 1) if signal_reviews else 0.0
         avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
         positive_pct = row.get("positive_review_pct")
         recommend_yes = int(row.get("recommend_yes") or 0)
@@ -830,6 +831,8 @@ async def reconstruct_reasoning_lookup(
 
     Returns the legacy archetype-style dict shape expected by downstream
     compatibility readers, rebuilt from persisted churn-signal fields.
+
+    Deprecated compatibility path. Burn-in removal target: 2026-04-18.
 
     When *as_of* is None, uses the most recent last_computed_at watermark.
     """
@@ -961,7 +964,8 @@ async def reconstruct_cross_vendor_lookup(
       - ``asymmetries``: {(vendor_a, vendor_b): conclusion_dict, ...}
 
     Keyed by sorted vendor tuple (battles/asymmetries) or category name
-    (councils).  When *as_of* is None the most recent computed_date is used.
+    (councils). Deprecated compatibility path. Burn-in removal target:
+    2026-04-18. When *as_of* is None the most recent computed_date is used.
     """
     if as_of is None:
         watermark = await pool.fetchval(
@@ -1081,8 +1085,9 @@ async def _detect_change_events(
 
         # Compute current metrics inline (same as _persist_vendor_snapshots)
         total_reviews = int(row.get("total_reviews") or 0)
+        signal_reviews = int(row.get("signal_reviews") or 0) or total_reviews
         churn_intent = int(row.get("churn_intent") or 0)
-        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        churn_density = round((churn_intent * 100.0 / signal_reviews), 1) if signal_reviews else 0.0
         avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
         recommend_yes = int(row.get("recommend_yes") or 0)
         recommend_no = int(row.get("recommend_no") or 0)
@@ -3458,6 +3463,7 @@ async def _upsert_churn_signals(
                     reasoning_mode, falsification_conditions,
                     reasoning_risk_level, reasoning_executive_summary,
                     reasoning_key_signals, reasoning_uncertainty_sources,
+                    signal_reviews,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
@@ -3465,7 +3471,7 @@ async def _upsert_churn_signals(
                           $30, $31, $32, $33,
                           $34, $35, $36, $37,
                           $38, $39, $40, $41,
-                          $42)
+                          $42, $43)
                 ON CONFLICT (vendor_name) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -3506,6 +3512,7 @@ async def _upsert_churn_signals(
                     reasoning_executive_summary = COALESCE(EXCLUDED.reasoning_executive_summary, b2b_churn_signals.reasoning_executive_summary),
                     reasoning_key_signals = COALESCE(EXCLUDED.reasoning_key_signals, b2b_churn_signals.reasoning_key_signals),
                     reasoning_uncertainty_sources = COALESCE(EXCLUDED.reasoning_uncertainty_sources, b2b_churn_signals.reasoning_uncertainty_sources),
+                    signal_reviews = EXCLUDED.signal_reviews,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -3551,6 +3558,7 @@ async def _upsert_churn_signals(
                 reasoning_lookup.get(vendor, {}).get("executive_summary"),
                 json.dumps(reasoning_lookup.get(vendor, {}).get("key_signals", [])) if reasoning_lookup.get(vendor) else None,
                 json.dumps(reasoning_lookup.get(vendor, {}).get("uncertainty_sources", [])) if reasoning_lookup.get(vendor) else None,
+                vs.get("signal_reviews") or total,
                 now,
             )
         except Exception:

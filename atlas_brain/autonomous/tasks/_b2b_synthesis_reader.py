@@ -1395,6 +1395,7 @@ async def load_best_reasoning_view(
         return None
 
     # --- Fall back to legacy churn signals ---------------------------------
+    # Deprecated compatibility path. Burn-in removal target: 2026-04-18.
     if as_of is not None:
         legacy_row = await pool.fetchrow(
             """
@@ -1454,7 +1455,11 @@ async def discover_reasoning_vendor_names(
     analysis_window_days: int = 90,
     include_legacy: bool = False,
 ) -> list[str]:
-    """Return vendor names with synthesis rows, optionally including legacy rows."""
+    """Return vendor names with synthesis rows, optionally including legacy rows.
+
+    ``include_legacy=True`` is deprecated compatibility behavior. Burn-in
+    removal target: 2026-04-18.
+    """
     synth_names = await pool.fetch(
         "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
         "WHERE as_of_date <= $1 AND analysis_window_days = $2",
@@ -1553,6 +1558,7 @@ async def load_best_reasoning_views(
         return views
 
     # --- Bulk legacy fallback for remaining vendors ------------------------
+    # Deprecated compatibility path. Burn-in removal target: 2026-04-18.
     remaining = [v for v in vendor_names if v.lower() not in covered]
     if not remaining:
         return views
