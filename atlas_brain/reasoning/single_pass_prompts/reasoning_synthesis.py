@@ -13,6 +13,10 @@ Witness-backed packets are also present:
 - ``witness_pack``: deterministically selected review excerpts with stable
   witness IDs and metadata
 - ``section_packets``: compact per-section witness groupings
+- ``compact_context``: compact deterministic summaries for segment,
+  temporal, displacement, category, and account context. Use these for
+  labels, shortlist context, and named entities instead of expecting full
+  raw pool arrays.
 """
 
 import hashlib as _hashlib
@@ -53,9 +57,10 @@ CRITICAL RULES:
 4. ``primary_wedge`` MUST be one of: {_WEDGE_LIST}.
 
 5. Build qualitative claims from ``witness_pack`` first. Use
-   ``precomputed_aggregates`` and ``metric_ledger`` only to state scope,
-   prevalence, and numeric intensity. Do not make a causal claim without
-   at least one witness-backed citation when witness evidence exists.
+   ``compact_context`` for labels, shortlist context, and named entities.
+   Use ``precomputed_aggregates`` and ``metric_ledger`` only to state
+   scope, prevalence, and numeric intensity. Do not make a causal claim
+   without at least one witness-backed citation when witness evidence exists.
 
 6. When ``contradiction_rows`` are present in the input, the output MUST:
    - Set causal_narrative confidence no higher than ``medium``

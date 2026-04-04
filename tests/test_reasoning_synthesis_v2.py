@@ -4720,7 +4720,7 @@ class TestReasoningSynthesisTask:
         async def _fake_run_cross_vendor_synthesis(**kwargs):
             seen["force"] = kwargs["force"]
             seen["vendor_names"] = sorted(kwargs["vendor_pools"].keys())
-            return (4, 0, 3210, 4)
+            return (4, 0, 3210, 4, 0)
 
         monkeypatch.setattr(
             "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
@@ -5472,7 +5472,7 @@ class TestReasoningSynthesisTask:
             force=True,
         )
 
-        assert result == (1, 0, 150, 1)
+        assert result == (1, 0, 150, 1, 0)
         attempt_rows = [
             item for item in fake_pool.executed
             if "INSERT INTO artifact_attempts" in item[0]
@@ -5589,7 +5589,7 @@ class TestReasoningSynthesisTask:
             force=True,
         )
 
-        assert result == (0, 1, 0, 0)
+        assert result == (0, 1, 0, 0, 1)
         attempt_rows = [
             item for item in fake_pool.executed
             if "INSERT INTO artifact_attempts" in item[0]

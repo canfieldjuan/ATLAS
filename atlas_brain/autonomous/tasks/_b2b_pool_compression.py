@@ -366,6 +366,57 @@ class CompressedPacket:
 
         return payload
 
+    def to_reasoning_payload(
+        self,
+        *,
+        compact_metric_ledger: bool = True,
+        compact_aggregates: bool = True,
+        include_contradiction_rows: bool = True,
+        include_minority_signals: bool = True,
+        include_section_packets: bool = True,
+    ) -> dict[str, Any]:
+        """Serialize to a witness-first synthesis payload.
+
+        The reasoning model still receives deterministic aggregates and
+        governance signals, but large raw pool arrays are replaced with
+        compact per-section context blocks. This keeps the prompt anchored
+        to witnesses while preserving the labels and shortlist context
+        needed for segment/account/displacement reasoning.
+        """
+        payload = self.to_llm_payload(
+            compact_metric_ledger=compact_metric_ledger,
+            compact_aggregates=compact_aggregates,
+            include_contradiction_rows=include_contradiction_rows,
+            include_minority_signals=include_minority_signals,
+            include_section_packets=include_section_packets,
+        )
+        for pool_name in self.pools:
+            payload.pop(pool_name, None)
+
+        compact_context: dict[str, list[dict[str, Any]]] = {}
+        limits = {
+            "segment": 4,
+            "temporal": 4,
+            "displacement": 4,
+            "category": 2,
+            "accounts": 5,
+        }
+        for pool_name, limit in limits.items():
+            projected: list[dict[str, Any]] = []
+            for item in self.pools.get(pool_name) or []:
+                entry = _compact_reasoning_context_entry(pool_name, item)
+                if entry:
+                    projected.append(entry)
+                if len(projected) >= limit:
+                    break
+            if projected:
+                compact_context[pool_name] = projected
+
+        if compact_context:
+            payload["compact_context"] = compact_context
+        payload["payload_profile"] = "witness_first_v1"
+        return payload
+
 
 # ---------------------------------------------------------------------------
 # Scoring helpers
@@ -383,6 +434,161 @@ def _slug(text: str) -> str:
         .replace("(", "")
         .replace(")", "")
     )[:60]
+
+
+def _compact_reasoning_context_entry(
+    pool_name: str,
+    item: ScoredItem,
+) -> dict[str, Any] | None:
+    """Project a scored pool item into a compact synthesis context row."""
+    data = item.data if isinstance(item.data, dict) else {}
+    sid = item.source_ref.source_id
+    kind = item.source_ref.kind
+
+    if pool_name == "segment":
+        if kind == "role":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "role_type": data.get("role_type"),
+                "review_count": data.get("review_count"),
+                "churn_rate": data.get("churn_rate"),
+                "top_pain": data.get("top_pain"),
+            }
+        if kind == "department":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "department": data.get("department"),
+                "review_count": data.get("review_count"),
+                "churn_rate": data.get("churn_rate"),
+            }
+        if kind == "use_case":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "use_case": data.get("use_case") or data.get("name"),
+                "mention_count": data.get("mention_count"),
+                "confidence_score": data.get("confidence_score"),
+            }
+        if kind == "size":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "segment": data.get("segment"),
+                "review_count": data.get("review_count"),
+                "churn_rate": data.get("churn_rate"),
+            }
+        if kind == "contract":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "segment": data.get("segment"),
+                "count": data.get("count"),
+                "churn_rate": data.get("churn_rate"),
+            }
+        if kind == "duration":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "duration": data.get("duration"),
+                "count": data.get("count"),
+                "churn_rate": data.get("churn_rate"),
+            }
+        return None
+
+    if pool_name == "temporal":
+        if kind == "spike":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "keyword": data.get("keyword") or data.get("term"),
+                "magnitude": data.get("magnitude") or data.get("spike_ratio"),
+                "change_pct": data.get("change_pct"),
+                "volume": data.get("volume"),
+            }
+        if kind == "sentiment":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "direction": data.get("direction"),
+                "count": data.get("count"),
+                "pct": data.get("pct"),
+            }
+        return {
+            "_sid": sid,
+            "kind": kind,
+            "type": data.get("type") or data.get("trigger_type"),
+            "trigger": (
+                data.get("label")
+                or data.get("trigger")
+                or data.get("deadline")
+                or data.get("evaluation_deadline")
+                or data.get("contract_end")
+                or data.get("decision_timeline")
+                or data.get("date")
+                or data.get("company")
+            ),
+            "urgency": data.get("urgency"),
+            "date": data.get("date") or data.get("deadline"),
+            "company": data.get("company"),
+        }
+
+    if pool_name == "displacement":
+        flow_summary = data.get("flow_summary") or {}
+        primary_driver = data.get("primary_driver")
+        if not primary_driver:
+            switch_reasons = data.get("switch_reasons") or []
+            if switch_reasons and isinstance(switch_reasons[0], dict):
+                primary_driver = (
+                    switch_reasons[0].get("reason")
+                    or switch_reasons[0].get("reason_category")
+                    or switch_reasons[0].get("switch_reason")
+                )
+        return {
+            "_sid": sid,
+            "kind": kind,
+            "to_vendor": data.get("to_vendor") or data.get("competitor"),
+            "mention_count": flow_summary.get("total_flow_mentions") or flow_summary.get("mention_count"),
+            "explicit_switch_count": flow_summary.get("explicit_switch_count"),
+            "active_evaluation_count": flow_summary.get("active_evaluation_count"),
+            "primary_driver": primary_driver,
+        }
+
+    if pool_name == "category":
+        if kind == "regime":
+            return {
+                "_sid": sid,
+                "kind": kind,
+                "regime_type": data.get("regime_type"),
+                "confidence": data.get("confidence"),
+                "avg_churn_velocity": data.get("avg_churn_velocity"),
+                "avg_price_pressure": data.get("avg_price_pressure"),
+            }
+        return {
+            "_sid": sid,
+            "kind": kind,
+            "summary": data.get("summary"),
+            "confidence": data.get("confidence"),
+            "winner": data.get("winner"),
+            "loser": data.get("loser"),
+        }
+
+    if pool_name == "accounts":
+        return {
+            "_sid": sid,
+            "kind": kind,
+            "name": data.get("company_name") or data.get("company") or data.get("name"),
+            "intent_score": _normalize_account_intent_score(
+                data.get("urgency_score")
+                or data.get("intent_score")
+                or data.get("confidence_score")
+            ),
+            "buying_stage": data.get("buying_stage"),
+            "decision_maker": bool(data.get("decision_maker") or data.get("is_decision_maker")),
+        }
+
+    return None
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:

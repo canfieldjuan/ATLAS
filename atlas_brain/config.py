@@ -2998,13 +2998,13 @@ class B2BChurnConfig(BaseSettings):
         description="Approximate max input tokens allowed for a single cross-vendor synthesis prompt before the run is rejected to control spend",
     )
     cross_vendor_category_vendor_summary_limit: int = Field(
-        default=8,
+        default=3,
         ge=1,
         le=20,
         description="Max vendor summaries included in a category-council packet",
     )
     cross_vendor_category_flow_limit: int = Field(
-        default=10,
+        default=3,
         ge=0,
         le=50,
         description="Max displacement flows included in a category-council packet",
@@ -3046,7 +3046,7 @@ class B2BChurnConfig(BaseSettings):
     battle_card_high_priority_urgency_min: float = Field(default=5.0, ge=0.0, le=10.0, description="Min average urgency required before battle-card copy can use high-priority language")
     battle_card_feature_gap_headline_min_mentions: int = Field(default=5, ge=1, le=100, description="Min feature-gap mention count before a battle-card headline can elevate that gap directly")
     battle_card_quality_max_stale_days: int = Field(
-        default=1,
+        default=7,
         ge=0,
         le=30,
         description="Max allowed staleness (days) before battle-card quality gate hard-blocks publishing",
@@ -4138,6 +4138,65 @@ class NewsIntelligenceConfig(BaseSettings):
     )
 
 
+class ProviderCostConfig(BaseSettings):
+    """Provider billing sync configuration for cost reconciliation."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_PROVIDER_COST_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable periodic sync of provider billing totals for reconciliation",
+    )
+    interval_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86400,
+        description="How often to sync provider billing totals",
+    )
+    sync_timeout_seconds: int = Field(
+        default=20,
+        ge=5,
+        le=300,
+        description="HTTP timeout for provider billing sync requests",
+    )
+    snapshot_retention_days: int = Field(
+        default=90,
+        ge=7,
+        le=730,
+        description="Days to retain cumulative provider usage snapshots",
+    )
+    daily_retention_days: int = Field(
+        default=365,
+        ge=30,
+        le=1825,
+        description="Days to retain imported provider daily cost rows",
+    )
+    openrouter_enabled: bool = Field(
+        default=True,
+        description="Sync OpenRouter cumulative usage snapshots when a management key is available",
+    )
+    openrouter_api_key: str = Field(
+        default="",
+        description="Optional OpenRouter management key override for credits snapshots",
+    )
+    anthropic_enabled: bool = Field(
+        default=False,
+        description="Sync Anthropic admin daily cost reports when an admin key is available",
+    )
+    anthropic_admin_api_key: str = Field(
+        default="",
+        description="Anthropic Admin API key for usage and cost reporting",
+    )
+    anthropic_lookback_days: int = Field(
+        default=7,
+        ge=1,
+        le=31,
+        description="Lookback window for Anthropic daily cost report sync",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -4229,6 +4288,7 @@ class Settings(BaseSettings):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     alert_monitor: AlertMonitorConfig = Field(default_factory=AlertMonitorConfig)
     news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
+    provider_cost: ProviderCostConfig = Field(default_factory=ProviderCostConfig)
     saas_auth: SaaSAuthConfig = Field(default_factory=SaaSAuthConfig)
 
     # Reasoning agent (cross-domain event-driven intelligence)

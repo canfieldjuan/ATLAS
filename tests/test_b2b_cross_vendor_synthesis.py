@@ -16,6 +16,7 @@ from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
     load_cross_vendor_synthesis_lookup,
     materialize_cross_vendor_reference_ids,
     normalize_cross_vendor_contract,
+    prompt_compact_cross_vendor_packet,
     to_legacy_cross_vendor_conclusion,
 )
 
@@ -249,7 +250,27 @@ class TestCrossVendorCitationRegistry:
             "metric:freshdesk:1",
             "metric:zendesk:1",
         ]
-        assert result["reference_ids"]["witness_ids"] == [
+
+    def test_prompt_compact_packet_keeps_labels_but_drops_reference_ids(self):
+        packet = build_pairwise_battle_packet(
+            "Zendesk", "Freshdesk", _EDGE, _POOL_LAYERS, _PROFILES,
+        )
+        packet = attach_cross_vendor_citation_registry(
+            packet,
+            analysis_type="pairwise_battle",
+            vendors=["Zendesk", "Freshdesk"],
+            category=None,
+            vendor_reference_lookup=_VENDOR_REFERENCE_LOOKUP,
+        )
+
+        compact = prompt_compact_cross_vendor_packet(packet)
+
+        assert compact["citation_registry"]
+        assert "reference_ids" not in compact["citation_registry"][0]
+        assert compact["citation_registry"][0]["_sid"]
+        assert compact["citation_registry"][0]["label"]
+        assert packet["citation_registry"][0]["reference_ids"]["metric_ids"]
+        assert packet["citation_registry"][0]["reference_ids"]["witness_ids"] == [
             "witness:freshdesk:1",
             "witness:zendesk:1",
         ]

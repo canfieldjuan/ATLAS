@@ -88,6 +88,64 @@ def _vendor_pool_summary(
     segment = layers.get("segment") or layers.get("affected_roles") or []
     temporal = layers.get("temporal") or {}
     displacement = layers.get("displacement") or layers.get("competitive_flows") or []
+    segment_rows = (
+        (segment.get("affected_roles") or [])
+        if isinstance(segment, dict)
+        else (segment if isinstance(segment, list) else [])
+    )
+
+    compact_pain: list[dict[str, Any]] = []
+    for item in (pain or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        compact_pain.append({
+            "category": item.get("category") or item.get("label") or item.get("theme"),
+            "count": item.get("count") or item.get("review_count") or item.get("mention_count"),
+            "churn_rate": item.get("churn_rate"),
+        })
+
+    compact_targets: list[dict[str, Any]] = []
+    for item in (displacement or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        flow_summary = item.get("flow_summary") or {}
+        primary_driver = item.get("primary_driver")
+        if not primary_driver:
+            switch_reasons = item.get("switch_reasons") or []
+            if switch_reasons and isinstance(switch_reasons[0], dict):
+                primary_driver = (
+                    switch_reasons[0].get("reason")
+                    or switch_reasons[0].get("reason_category")
+                    or switch_reasons[0].get("switch_reason")
+                )
+        compact_targets.append({
+            "to_vendor": item.get("to_vendor") or item.get("competitor"),
+            "mention_count": flow_summary.get("total_flow_mentions") or flow_summary.get("mention_count"),
+            "explicit_switch_count": flow_summary.get("explicit_switch_count"),
+            "active_evaluation_count": flow_summary.get("active_evaluation_count"),
+            "primary_driver": primary_driver,
+        })
+
+    compact_segments: list[dict[str, Any]] = []
+    for item in segment_rows[:3]:
+        if not isinstance(item, dict):
+            continue
+        compact_segments.append({
+            "role_type": item.get("role_type") or item.get("department") or item.get("segment"),
+            "review_count": item.get("review_count") or item.get("count"),
+            "churn_rate": item.get("churn_rate"),
+            "top_pain": item.get("top_pain"),
+        })
+
+    compact_competitors: list[dict[str, Any]] = []
+    for item in (core.get("top_competitors") or [])[:3]:
+        if isinstance(item, dict):
+            compact_competitors.append({
+                "name": item.get("name") or item.get("competitor") or item.get("vendor"),
+                "mention_count": item.get("mention_count") or item.get("count"),
+            })
+        elif str(item or "").strip():
+            compact_competitors.append({"name": str(item).strip()})
 
     return {
         "vendor": vendor_name,
@@ -99,10 +157,10 @@ def _vendor_pool_summary(
         "avg_seat_count": budget.get("avg_seat_count") or 0,
         "recommend_ratio": core.get("recommend_ratio"),
         "nps_proxy": core.get("nps_proxy"),
-        "pain_distribution": pain[:5] if isinstance(pain, list) else [],
-        "top_competitors": (core.get("top_competitors") or [])[:5],
-        "displacement_targets": displacement[:5] if isinstance(displacement, list) else [],
-        "segment_summary": segment[:3] if isinstance(segment, list) else [],
+        "pain_distribution": compact_pain,
+        "top_competitors": compact_competitors,
+        "displacement_targets": compact_targets,
+        "segment_summary": compact_segments,
         "sentiment_direction": (temporal.get("sentiment_trajectory") or {}).get("direction"),
     }
 
@@ -120,12 +178,10 @@ def _vendor_profile_summary(
                 break
     return {
         "category": profile.get("product_category") or "",
-        "strengths": (profile.get("strengths") or [])[:5],
-        "weaknesses": (profile.get("weaknesses") or [])[:5],
-        "integrations": (profile.get("top_integrations") or [])[:5],
-        "use_cases": (profile.get("primary_use_cases") or [])[:5],
+        "strengths": (profile.get("strengths") or [])[:3],
+        "weaknesses": (profile.get("weaknesses") or [])[:3],
+        "use_cases": (profile.get("primary_use_cases") or [])[:3],
         "typical_company_size": profile.get("typical_company_size"),
-        "typical_industries": (profile.get("typical_industries") or [])[:5],
     }
 
 
@@ -557,6 +613,28 @@ def attach_cross_vendor_citation_registry(
 
     packet["citation_registry"] = registry
     return packet
+
+
+def prompt_compact_cross_vendor_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    """Return a prompt-safe packet with citation ids but without heavy ref arrays."""
+    compact = dict(packet)
+    registry = []
+    for item in packet.get("citation_registry") or []:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("_sid") or "").strip()
+        label = str(item.get("label") or "").strip()
+        if not sid or not label:
+            continue
+        registry.append({
+            "_sid": sid,
+            "label": label,
+        })
+    if registry:
+        compact["citation_registry"] = registry
+    else:
+        compact.pop("citation_registry", None)
+    return compact
 
 
 def materialize_cross_vendor_reference_ids(

@@ -1112,7 +1112,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             include_contradiction_rows = True
             include_minority_signals = True
             payload = json.dumps(
-                packet.to_llm_payload(
+                packet.to_reasoning_payload(
                     compact_metric_ledger=True,
                     compact_aggregates=True,
                 ),
@@ -1141,7 +1141,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 include_contradiction_rows = False
                 include_minority_signals = False
                 payload = json.dumps(
-                    lean_packet.to_llm_payload(
+                    lean_packet.to_reasoning_payload(
                         compact_metric_ledger=True,
                         compact_aggregates=True,
                         include_contradiction_rows=False,
@@ -1745,10 +1745,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     xv_failed = 0
     xv_tokens = 0
     xv_mirrored = 0
+    xv_rejected_input_budget = 0
 
     if cfg.cross_vendor_synthesis_enabled:
         try:
-            xv_succeeded, xv_failed, xv_tokens, xv_mirrored = await _run_cross_vendor_synthesis(
+            xv_succeeded, xv_failed, xv_tokens, xv_mirrored, xv_rejected_input_budget = await _run_cross_vendor_synthesis(
                 pool=pool,
                 vendor_pools=vendor_pools,
                 llm=llm,
@@ -1777,6 +1778,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "vendors_failed": failed,
         "vendors_validation_failures": validation_failures,
         "vendors_rejected_input_budget": input_budget_rejections,
+        "cross_vendor_rejected_input_budget": xv_rejected_input_budget,
         "failed_vendors": failed_vendors,
         "vendors_skipped": skipped,
         "vendors_skipped_hash_reuse": rerun_reason_counts["hash_reuse"],
@@ -1821,7 +1823,7 @@ async def _run_cross_vendor_synthesis(
 ) -> tuple[int, int, int, int]:
     """Run cross-vendor synthesis: battles, councils, asymmetry.
 
-    Returns (succeeded, failed, tokens_used, mirrored_to_legacy).
+    Returns (succeeded, failed, tokens_used, mirrored_to_legacy, input_budget_rejections).
     """
     import re
 
@@ -1849,9 +1851,10 @@ async def _run_cross_vendor_synthesis(
         compute_cross_vendor_evidence_hash,
         materialize_cross_vendor_reference_ids,
         normalize_cross_vendor_contract,
+        prompt_compact_cross_vendor_packet,
         to_legacy_cross_vendor_conclusion,
     )
-    from ..visibility import record_attempt
+    from ..visibility import emit_event, record_attempt
 
     def _cross_vendor_artifact_id(
         analysis_type: str,
@@ -2251,6 +2254,7 @@ async def _run_cross_vendor_synthesis(
     _failed = 0
     _tokens = 0
     _mirrored = 0
+    _input_budget_rejections = 0
     llm_model_name = getattr(llm, "model", getattr(llm, "model_id", ""))
 
     async def _xv_one(
@@ -2260,7 +2264,7 @@ async def _run_cross_vendor_synthesis(
         category: str | None,
         packet: dict[str, Any],
     ) -> None:
-        nonlocal _succeeded, _failed, _tokens, _mirrored
+        nonlocal _succeeded, _failed, _tokens, _mirrored, _input_budget_rejections
 
         ev_hash = compute_cross_vendor_evidence_hash(packet)
         v_key = "|".join(sorted(vendors))
@@ -2270,10 +2274,16 @@ async def _run_cross_vendor_synthesis(
             return  # unchanged
 
         async with xv_sem:
-            payload = json.dumps(packet, separators=(",", ":"), sort_keys=True, default=str)
+            payload = json.dumps(
+                prompt_compact_cross_vendor_packet(packet),
+                separators=(",", ":"),
+                sort_keys=True,
+                default=str,
+            )
             estimated_input_tokens = _approx_prompt_input_tokens(prompt, payload)
             if estimated_input_tokens > xv_llm_max_input_tokens:
                 _failed += 1
+                _input_budget_rejections += 1
                 logger.warning(
                     "Cross-vendor synthesis rejected for %s %s: estimated input %d exceeds cap %d",
                     analysis_type,
@@ -2301,6 +2311,28 @@ async def _run_cross_vendor_synthesis(
                     error_message=(
                         "Cross-vendor prompt exceeded the configured input token cap"
                     ),
+                )
+                await emit_event(
+                    pool,
+                    stage="synthesis",
+                    event_type="input_budget_rejected",
+                    entity_type="cross_vendor",
+                    entity_id=artifact_id,
+                    summary=(
+                        "Cross-vendor reasoning prompt exceeded the configured input token cap"
+                    ),
+                    severity="warning",
+                    actionable=True,
+                    artifact_type="cross_vendor_reasoning",
+                    run_id=run_id,
+                    reason_code="input_budget",
+                    detail={
+                        "estimated_input_tokens": estimated_input_tokens,
+                        "cap": xv_llm_max_input_tokens,
+                        "analysis_type": analysis_type,
+                        "vendors": vendors,
+                        "category": category,
+                    },
                 )
                 return
             synthesis: dict[str, Any] | None = None
@@ -2572,4 +2604,4 @@ async def _run_cross_vendor_synthesis(
         "%d mirrored, %d tokens",
         _succeeded, _failed, _mirrored, _tokens,
     )
-    return _succeeded, _failed, _tokens, _mirrored
+    return _succeeded, _failed, _tokens, _mirrored, _input_budget_rejections

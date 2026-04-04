@@ -906,6 +906,25 @@ class TestCompressVendorPoolsIntegration:
         witness_ids = {w["witness_id"] for w in packet.witness_pack}
         assert any(witness_id.startswith("witness:r1") for witness_id in witness_ids)
 
+    def test_reasoning_payload_is_witness_first(self):
+        packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
+
+        payload = packet.to_reasoning_payload()
+
+        assert payload["payload_profile"] == "witness_first_v1"
+        assert "witness_pack" in payload
+        assert "section_packets" in payload
+        assert "precomputed_aggregates" in payload
+        assert "metric_ledger" in payload
+        assert "compact_context" in payload
+        assert "evidence_vault" not in payload
+        assert "segment" not in payload
+        assert "accounts" not in payload
+        assert "displacement" not in payload
+        assert "temporal" not in payload
+        assert "category" not in payload
+        assert payload["compact_context"]["accounts"][0]["name"]
+
 
 class TestWitnessGovernance:
     def test_witness_hash_ignores_selection_metadata(self):
