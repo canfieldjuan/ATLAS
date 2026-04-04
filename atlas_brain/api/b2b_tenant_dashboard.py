@@ -4,6 +4,7 @@ Tenant-scoped B2B dashboard endpoints for P5 (Vendor Retention) and P6 (Challeng
 All endpoints require authentication and scope data to the tenant's tracked vendors.
 """
 
+import asyncio
 import json
 import logging
 import uuid as _uuid
@@ -31,6 +32,7 @@ from ..services.tracked_vendor_sources import (
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 from .b2b_dashboard import (
+    _list_accounts_in_motion_from_report,
     _load_reasoning_views_for_vendors,
     _normalize_vendor_name,
     _overlay_reasoning_detail_from_view,
@@ -827,6 +829,101 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
     ]
 
     return profile
+
+
+@router.get("/accounts-in-motion-feed")
+async def list_tenant_accounts_in_motion_feed(
+    min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
+    per_vendor_limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
+    limit: int = Query(settings.b2b_churn.accounts_in_motion_feed_max_total, ge=1, le=200),
+    user: AuthUser = Depends(require_auth),
+):
+    """Aggregated persisted accounts-in-motion feed across tracked vendors."""
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
+
+    tracked_rows = await pool.fetch(
+        """
+        SELECT vendor_name, track_mode, label, added_at
+        FROM tracked_vendors
+        WHERE account_id = $1
+        ORDER BY added_at, vendor_name
+        """,
+        acct,
+    )
+    if not tracked_rows:
+        return {
+            "accounts": [],
+            "count": 0,
+            "tracked_vendor_count": 0,
+            "vendors_with_accounts": 0,
+            "min_urgency": min_urgency,
+            "per_vendor_limit": per_vendor_limit,
+            "freshest_report_date": None,
+        }
+
+    vendor_reports = await asyncio.gather(
+        *[
+            _list_accounts_in_motion_from_report(
+                pool,
+                row["vendor_name"],
+                min_urgency=min_urgency,
+                limit=per_vendor_limit,
+                user=user,
+            )
+            for row in tracked_rows
+        ]
+    )
+
+    accounts: list[dict] = []
+    freshest_report_date: str | None = None
+    vendors_with_accounts = 0
+    for tracked, report in zip(tracked_rows, vendor_reports):
+        if not report:
+            continue
+        report_date = report.get("report_date")
+        if report.get("accounts"):
+            vendors_with_accounts += 1
+        if isinstance(report_date, str) and (
+            freshest_report_date is None or report_date > freshest_report_date
+        ):
+            freshest_report_date = report_date
+        for account in report.get("accounts") or []:
+            if not isinstance(account, dict):
+                continue
+            accounts.append(
+                {
+                    **account,
+                    "watch_vendor": tracked["vendor_name"],
+                    "track_mode": tracked["track_mode"],
+                    "watchlist_label": tracked["label"],
+                    "report_date": report_date,
+                    "stale_days": report.get("stale_days"),
+                    "is_stale": bool(report.get("is_stale")),
+                    "data_source": report.get("data_source"),
+                }
+            )
+
+    accounts.sort(
+        key=lambda account: (
+            bool(account.get("is_stale")),
+            -(account.get("opportunity_score") or 0),
+            -(account.get("urgency") or 0),
+            str(account.get("vendor") or ""),
+            str(account.get("company") or ""),
+        )
+    )
+    limited_accounts = accounts[:limit]
+    return {
+        "accounts": limited_accounts,
+        "count": len(limited_accounts),
+        "tracked_vendor_count": len(tracked_rows),
+        "vendors_with_accounts": vendors_with_accounts,
+        "min_urgency": min_urgency,
+        "per_vendor_limit": per_vendor_limit,
+        "freshest_report_date": freshest_report_date,
+    }
 
 
 @router.get("/vendor-history")
@@ -1744,7 +1841,7 @@ async def export_tenant_source_health(
 async def list_tenant_campaigns(
     status: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Campaigns scoped to tracked vendors. Requires b2b_growth+ plan."""
     pool = _pool_or_503()
@@ -1813,7 +1910,7 @@ async def list_tenant_campaigns(
 @router.post("/campaigns/generate")
 async def generate_campaigns(
     req: GenerateCampaignRequest,
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Generate campaign drafts for a tracked vendor's high-intent leads."""
     pool = _pool_or_503()
@@ -1857,7 +1954,7 @@ async def generate_campaigns(
 async def update_campaign(
     campaign_id: str,
     req: UpdateCampaignRequest,
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Approve or cancel a campaign draft."""
     try:

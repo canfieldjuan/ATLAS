@@ -316,6 +316,8 @@ export interface BattleCardViewModel {
   llm_render_status?: string
   quality_status?: string
   quality_score?: number | null
+  quality_failed_checks: string[]
+  quality_warnings: string[]
   reasoning_source?: string
   reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }

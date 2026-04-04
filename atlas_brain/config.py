@@ -3134,10 +3134,26 @@ class B2BChurnConfig(BaseSettings):
     )
 
     # Accounts in motion
+    company_signal_skip_deprecated_sources: bool = Field(
+        default=True,
+        description="Exclude globally deprecated review sources from canonical company-signal and named-account products",
+    )
+    company_signal_low_trust_sources: list[str] = Field(
+        default=["reddit"],
+        description="Low-trust sources that require a higher confidence threshold before becoming canonical named-account signals",
+    )
+    company_signal_low_trust_min_confidence: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum unit-confidence required for low-trust company signals to enter canonical named-account products",
+    )
     accounts_in_motion_cron: str = Field(default="35 21 * * *", description="Cron for accounts-in-motion prospecting lists")
     accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
     accounts_in_motion_feed_max_total: int = Field(default=100, ge=1, le=200, description="Max total tenant feed rows returned by the aggregated accounts_in_motion endpoint")
     accounts_in_motion_min_urgency: float = Field(default=5.0, ge=0, le=10, description="Min urgency to include an account in motion")
+    accounts_in_motion_signal_metadata_min_confidence: float = Field(default=6.0, ge=0, le=10, description="Minimum normalized confidence required for company-signal metadata fallback rows to seed accounts_in_motion")
+    accounts_in_motion_reddit_insider_min_confidence: float = Field(default=6.0, ge=0, le=10, description="Minimum normalized confidence required for reddit insider_account company signals to seed accounts_in_motion")
     accounts_in_motion_repeat_evidence_bonus: int = Field(default=3, ge=0, le=20, description="Bonus points added per extra supporting review for an account in motion")
     accounts_in_motion_repeat_evidence_bonus_max: int = Field(default=6, ge=0, le=30, description="Max total repeat-evidence bonus for an account in motion")
     accounts_in_motion_low_confidence_threshold: float = Field(default=6.0, ge=0, le=10, description="Confidence below this threshold incurs a quality penalty in accounts_in_motion scoring")

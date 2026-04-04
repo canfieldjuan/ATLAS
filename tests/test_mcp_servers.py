@@ -17,13 +17,13 @@ from unittest.mock import MagicMock
 # ---------------------------------------------------------------------------
 for _heavy_mod in [
     "PIL", "PIL.Image",          # no longer used (VLM removed), kept to avoid import errors
-    "torch",                     # PyTorch — GPU runtime only
-    "transformers",              # HuggingFace transformers — GPU runtime only
-    "numpy",                     # NumPy — required by sentence-transformers/embedding
-    "sentence_transformers",     # Semantic embedding — GPU runtime only
-    "asyncpg",                   # Async PostgreSQL — requires running DB
-    "llama_cpp",                 # llama.cpp LLM backend — GPU runtime only
-    "dateparser",                # Date parsing library — not installed in test env
+    "torch",                     # PyTorch - GPU runtime only
+    "transformers",              # HuggingFace transformers - GPU runtime only
+    "numpy",                     # NumPy - required by sentence-transformers/embedding
+    "sentence_transformers",     # Semantic embedding - GPU runtime only
+    "asyncpg",                   # Async PostgreSQL - requires running DB
+    "llama_cpp",                 # llama.cpp LLM backend - GPU runtime only
+    "dateparser",                # Date parsing library - not installed in test env
 ]:
     sys.modules.setdefault(_heavy_mod, MagicMock())
 
@@ -491,7 +491,7 @@ class TestEmailMCPTools:
             "id": "m1",
             "from": "alice@example.com",
             "subject": "Invoice",
-            "body_text": "Please pay…",
+            "body_text": "Please pay...",
         }
         provider = MagicMock()
         provider.get_message = AsyncMock(return_value=full_msg)
@@ -537,7 +537,7 @@ class TestEmailMCPTools:
 
 
 # ===========================================================================
-# CompositeEmailProvider — fallback logic
+# CompositeEmailProvider - fallback logic
 # ===========================================================================
 
 class TestCompositeEmailProvider:
@@ -578,7 +578,7 @@ class TestCompositeEmailProvider:
 
 
 # ===========================================================================
-# LookupCustomerTool — CRM-first strategy
+# LookupCustomerTool - CRM-first strategy
 # ===========================================================================
 
 class TestLookupCustomerToolCRMFirst:
@@ -639,7 +639,7 @@ class TestLookupCustomerToolCRMFirst:
 
 
 # ===========================================================================
-# IMAPEmailProvider — unit tests (no real IMAP server needed)
+# IMAPEmailProvider - unit tests (no real IMAP server needed)
 # ===========================================================================
 
 class TestIMAPEmailProvider:
@@ -688,7 +688,7 @@ class TestIMAPEmailProvider:
 
     def test_imap_search_criteria_unknown_token_falls_back(self):
         from atlas_brain.services.email_provider import _imap_search_criteria
-        # Unknown tokens silently dropped; empty criteria → ALL
+        # Unknown tokens silently dropped; empty criteria -> ALL
         assert _imap_search_criteria("label:work OR label:personal") == "ALL"
 
     def test_imap_search_criteria_empty_returns_all(self):
@@ -701,7 +701,7 @@ class TestIMAPEmailProvider:
 
     def test_decode_mime_words_encoded(self):
         from atlas_brain.services.email_provider import _decode_mime_words
-        # =?utf-8?q?Hello_World?=  → "Hello World"
+        # =?utf-8?q?Hello_World?=  -> "Hello World"
         encoded = "=?utf-8?q?Hello_World?="
         assert "Hello" in _decode_mime_words(encoded)
 
@@ -766,7 +766,7 @@ class TestCompositeProviderIMAPPreference:
 
 
 # ===========================================================================
-# Twilio MCP Server — unit tests
+# Twilio MCP Server - unit tests
 # ===========================================================================
 
 @pytest.fixture(autouse=False)
@@ -1047,9 +1047,9 @@ class TestICalHelpers:
         """\\n in source (escaped backslash + n) must NOT become a newline."""
         from atlas_brain.services.calendar_provider import _ical_unescape
 
-        # \\n in iCal text → literal backslash + letter n  (NOT a newline)
+        # \\n in iCal text -> literal backslash + letter n  (NOT a newline)
         assert _ical_unescape("C:\\\\nfolder") == "C:\\nfolder"
-        # Plain \n in iCal text → newline
+        # Plain \n in iCal text -> newline
         assert _ical_unescape("Hello\\nWorld") == "Hello\nWorld"
 
 
@@ -1064,7 +1064,7 @@ class TestCalendarMCPTools:
 
         monkeypatch.setattr(cp, "_provider_instance", None)
 
-    def _make_event(self, uid="evt1", summary="Cleaning – Smith"):
+    def _make_event(self, uid="evt1", summary="Cleaning - Smith"):
         from atlas_brain.services.calendar_provider import CalendarEvent
 
         return CalendarEvent(
@@ -1105,7 +1105,7 @@ class TestCalendarMCPTools:
         )
         data = json.loads(raw)
         assert len(data) == 1
-        assert data[0]["summary"] == "Cleaning – Smith"
+        assert data[0]["summary"] == "Cleaning - Smith"
 
     async def test_get_event_found(self, monkeypatch):
         import atlas_brain.mcp.calendar_server as cs
@@ -1138,7 +1138,7 @@ class TestCalendarMCPTools:
         monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
 
         raw = await cs.create_event(
-            summary="Cleaning – Smith",
+            summary="Cleaning - Smith",
             start="2025-03-10T09:00:00Z",
             end="2025-03-10T11:00:00Z",
             location="123 Main St",
@@ -1151,13 +1151,13 @@ class TestCalendarMCPTools:
         import atlas_brain.mcp.calendar_server as cs
 
         existing = self._make_event()
-        updated = self._make_event(summary="Cleaning – Johnson")
+        updated = self._make_event(summary="Cleaning - Johnson")
         mock_provider = AsyncMock()
         mock_provider.get_event.return_value = existing
         mock_provider.update_event.return_value = updated
         monkeypatch.setattr(cs, "_provider", lambda: mock_provider)
 
-        raw = await cs.update_event(event_id="evt1", summary="Cleaning – Johnson")
+        raw = await cs.update_event(event_id="evt1", summary="Cleaning - Johnson")
         data = json.loads(raw)
         assert data["status"] == "updated"
 
@@ -1198,7 +1198,7 @@ class TestCalendarMCPTools:
             end_hour=18,
         )
         data = json.loads(raw)
-        # 8am–6pm = 10 hours → 10 one-hour slots
+        # 8am-6pm = 10 hours -> 10 one-hour slots
         assert data["total_found"] == 10
         assert len(data["free_slots"]) == 10
 
@@ -1225,7 +1225,7 @@ class TestCalendarMCPTools:
             end_hour=18,
         )
         data = json.loads(raw)
-        # 10 total minus 2 blocked (9–10, 10–11) = 8
+        # 10 total minus 2 blocked (9-10, 10-11) = 8
         assert data["total_found"] == 8
 
     async def test_find_free_slots_error(self, monkeypatch):

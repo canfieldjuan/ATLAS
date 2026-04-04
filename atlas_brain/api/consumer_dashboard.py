@@ -744,7 +744,7 @@ async def _list_brands_live(
 async def compare_brands(
     request: Request,
     brands: str = Query(..., description="Comma-separated brand names (2-4)"),
-    user: AuthUser = require_plan("growth"),
+    user: AuthUser = Depends(require_plan("growth")),
 ):
     """Side-by-side comparison of 2-4 brands on core signals + cross-brand intelligence."""
     pool = _pool_or_503()
@@ -1672,7 +1672,7 @@ async def get_competitive_flows(
     direction: Optional[str] = Query(None),
     min_count: int = Query(2),
     limit: int = Query(100, le=500),
-    user: AuthUser = require_plan("growth"),
+    user: AuthUser = Depends(require_plan("growth")),
 ):
     pool = _pool_or_503()
     base_conditions = [

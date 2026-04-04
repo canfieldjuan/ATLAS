@@ -475,6 +475,38 @@ def _executive_source_list() -> list[str]:
     )
 
 
+def _company_signal_skip_sources() -> set[str]:
+    """Return sources that should never seed canonical named-account artifacts."""
+    blocked: set[str] = set()
+    if settings.b2b_churn.company_signal_skip_deprecated_sources:
+        blocked.update(
+            parse_source_allowlist(settings.b2b_scrape.deprecated_sources)
+        )
+    return blocked
+
+
+def _company_signal_low_trust_sources() -> set[str]:
+    """Return configured low-trust sources for canonical company signals."""
+    return {
+        str(source).strip().lower()
+        for source in (settings.b2b_churn.company_signal_low_trust_sources or [])
+        if str(source).strip()
+    }
+
+
+def _normalize_company_signal_confidence(value: Any) -> float | None:
+    """Normalize confidence values to a 0-1 unit interval."""
+    if value is None:
+        return None
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if confidence > 1.0:
+        confidence /= 10.0
+    return round(min(1.0, max(0.0, confidence)), 3)
+
+
 def _eligible_review_timestamp_expr(*, alias: str = "") -> str:
     """Stable review-occurrence timestamp for intelligence windows."""
     p = f"{alias}." if alias else ""
@@ -3533,6 +3565,11 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
                 MODE() WITHIN GROUP (ORDER BY product_category) AS product_category,
                 count(*) AS total_reviews,
                 count(*) FILTER (
+                    WHERE COALESCE((enrichment->>'urgency_score')::numeric, 0) > 0
+                       OR (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
+                       OR jsonb_array_length(COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)) > 0
+                ) AS signal_reviews,
+                count(*) FILTER (
                     WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true
                 ) AS churn_intent,
                 avg(
@@ -3640,6 +3677,7 @@ async def _fetch_vendor_churn_scores(pool, window_days: int, min_reviews: int) -
             "vendor_name": r["vendor_name"],
             "product_category": r["product_category"],
             "total_reviews": r["total_reviews"],
+            "signal_reviews": r["signal_reviews"],
             "churn_intent": r["churn_intent"],
             "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] else 0,
             "avg_rating_normalized": float(r["avg_rating_normalized"]) if r["avg_rating_normalized"] else None,
@@ -3686,6 +3724,7 @@ async def _fetch_vendor_churn_scores_from_signals(
         SELECT vendor_name,
                product_category,
                total_reviews,
+               signal_reviews,
                churn_intent_count AS churn_intent,
                avg_urgency_score AS avg_urgency,
                last_computed_at,
@@ -3703,6 +3742,7 @@ async def _fetch_vendor_churn_scores_from_signals(
             "vendor_name": r["vendor_name"],
             "product_category": r["product_category"],
             "total_reviews": int(r["total_reviews"] or 0),
+            "signal_reviews": int(r["signal_reviews"] or 0) or int(r["total_reviews"] or 0),
             "churn_intent": int(r["churn_intent"] or 0),
             "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] is not None else 0.0,
         }
@@ -3839,10 +3879,12 @@ async def _fetch_high_intent_companies(
             for name in _extract_alternative_names(alternatives)
             if normalize_company_name(name)
         }
-        if not _company_signal_name_is_eligible(
+        if _company_signal_exclusion_reason(
             r["reviewer_company"],
             current_vendor=r["vendor_name"],
             blocked_names=blocked_names,
+            source=r["source"],
+            confidence_score=None,
         ):
             continue
         try:
@@ -3916,6 +3958,7 @@ async def _fetch_existing_company_signals(
                seat_count, contract_end, buying_stage,
                cs.review_id, cs.source, cs.confidence_score,
                cs.first_seen_at, cs.last_seen_at,
+               r.content_type,
                r.reviewer_title,
                r.company_size_raw,
                COALESCE(
@@ -3965,6 +4008,7 @@ async def _fetch_existing_company_signals(
             "buying_stage": row.get("buying_stage"),
             "review_id": str(row.get("review_id") or "") or None,
             "source": row.get("source"),
+            "content_type": row.get("content_type"),
             "confidence_score": float(row["confidence_score"]) if row.get("confidence_score") is not None else None,
             "first_seen_at": str(row.get("first_seen_at") or "") or None,
             "last_seen_at": str(row.get("last_seen_at") or "") or None,
@@ -7838,10 +7882,12 @@ def build_evidence_vault(
     cs_out: list[dict] = []
     for cs in company_signals:
         company_name = cs.get("company") or cs.get("company_name") or ""
-        if not _company_signal_name_is_eligible(
+        if _company_signal_exclusion_reason(
             company_name,
             current_vendor=vendor_name,
             blocked_names=blocked_names,
+            source=cs.get("source"),
+            confidence_score=cs.get("confidence_score"),
         ):
             continue
         cs_out.append({
@@ -8588,10 +8634,12 @@ def build_account_intelligence(
         cn = (ps.get("company_name") or "").strip()
         if not cn:
             continue
-        if not _company_signal_name_is_eligible(
+        if _company_signal_exclusion_reason(
             cn,
             current_vendor=vendor_name,
             blocked_names=blocked_names,
+            source=ps.get("source"),
+            confidence_score=ps.get("confidence_score"),
         ):
             continue
         key = cn.lower()
@@ -8610,6 +8658,7 @@ def build_account_intelligence(
             ),
             "buying_stage": ps.get("buying_stage"),
             "source": ps.get("source"),
+            "content_type": ps.get("content_type"),
             "confidence_score": _sf(ps.get("confidence_score")),
             "first_seen_at": (
                 str(ps.get("first_seen_at") or "") or None
@@ -8644,10 +8693,12 @@ def build_account_intelligence(
             for name in _extract_alternative_names(hi.get("alternatives") or [])
             if normalize_company_name(name)
         )
-        if not _company_signal_name_is_eligible(
+        if _company_signal_exclusion_reason(
             cn,
             current_vendor=vendor_name,
             blocked_names=blocked,
+            source=hi.get("source"),
+            confidence_score=hi.get("confidence_score"),
         ):
             continue
         key = cn.lower()
@@ -9360,6 +9411,62 @@ _GENERIC_COMPANY_PATTERNS = (
     re.compile(r"(^| )\d+\s+employees?( |$)", re.I),
 )
 
+_GENERIC_COMPANY_DESCRIPTOR_PREFIXES = {
+    "small",
+    "medium",
+    "midsized",
+    "mid",
+    "large",
+    "enterprise",
+    "multinational",
+    "global",
+    "regional",
+    "local",
+    "private",
+    "public",
+    "independent",
+    "boutique",
+}
+
+_GENERIC_COMPANY_DESCRIPTOR_TOKENS = {
+    "agency",
+    "bank",
+    "banking",
+    "business",
+    "company",
+    "consulting",
+    "creative",
+    "department",
+    "design",
+    "ecommerce",
+    "erp",
+    "fintech",
+    "firm",
+    "health",
+    "healthcare",
+    "insurance",
+    "management",
+    "manufacturing",
+    "marketing",
+    "organization",
+    "pharmaceutical",
+    "pharma",
+    "project",
+    "provider",
+    "recruitment",
+    "retail",
+    "saas",
+    "software",
+    "solution",
+    "solutions",
+    "support",
+    "sized",
+    "team",
+    "technical",
+    "vendor",
+    "video",
+}
+
 _PLACEHOLDER_COMPANY_NAMES = {
     "company",
     "mycompany",
@@ -9402,6 +9509,12 @@ def _looks_like_generic_company_descriptor(raw_name: Any) -> bool:
         return True
     if normalized in _PLACEHOLDER_COMPANY_NAMES:
         return True
+    tokens = [token for token in re.split(r"[\s/_-]+", normalized) if token]
+    if tokens and tokens[0] in {"a", "an"}:
+        tokens = tokens[1:]
+    if len(tokens) >= 2 and tokens[0] in _GENERIC_COMPANY_DESCRIPTOR_PREFIXES:
+        if all(token in _GENERIC_COMPANY_DESCRIPTOR_TOKENS for token in tokens[1:]):
+            return True
     return any(pattern.search(normalized) for pattern in _GENERIC_COMPANY_PATTERNS)
 
 
@@ -9497,6 +9610,34 @@ def _company_signal_name_is_eligible(
     if normalized in blocked:
         return False
     return True
+
+
+def _company_signal_exclusion_reason(
+    raw_name: Any,
+    *,
+    current_vendor: str = "",
+    blocked_names: set[str] | None = None,
+    source: Any = None,
+    confidence_score: Any = None,
+) -> str | None:
+    """Return a stable exclusion reason for non-actionable company signals."""
+    if not _company_signal_name_is_eligible(
+        raw_name,
+        current_vendor=current_vendor,
+        blocked_names=blocked_names,
+    ):
+        return "ineligible_company_name"
+
+    normalized_source = str(source or "").strip().lower()
+    if normalized_source and normalized_source in _company_signal_skip_sources():
+        return "deprecated_source"
+
+    if normalized_source and normalized_source in _company_signal_low_trust_sources():
+        confidence = _normalize_company_signal_confidence(confidence_score)
+        if confidence is None or confidence < float(settings.b2b_churn.company_signal_low_trust_min_confidence):
+            return "low_confidence_low_trust_source"
+
+    return None
 
 
 def _battle_card_company_is_display_safe(
@@ -9617,6 +9758,14 @@ def _battle_card_companies_from_evidence_vault(
         if not isinstance(item, dict):
             continue
         name = str(item.get("company_name") or "").strip()
+        if _company_signal_exclusion_reason(
+            name,
+            current_vendor=current_vendor,
+            blocked_names=blocked_names,
+            source=item.get("source"),
+            confidence_score=item.get("confidence_score"),
+        ):
+            continue
         if not _battle_card_company_is_display_safe(
             name,
             current_vendor=current_vendor,
@@ -9694,8 +9843,9 @@ def _build_vendor_evidence(
     """
     vendor = _canonicalize_vendor(vs.get("vendor_name") or "")
     total = int(vs.get("total_reviews") or 0)
+    signal_total = int(vs.get("signal_reviews") or 0) or total
     churn = int(vs.get("churn_intent") or 0)
-    churn_density = round((churn * 100.0 / total), 1) if total else 0.0
+    churn_density = round((churn * 100.0 / signal_total), 1) if signal_total else 0.0
     avg_urgency = round(float(vs.get("avg_urgency") or 0), 1)
 
     evidence: dict[str, Any] = {
@@ -10067,9 +10217,11 @@ def _build_deterministic_vendor_feed(
         churn = int(row.get("churn_intent") or 0)
         urgency = float(row.get("avg_urgency") or 0)
         category = row.get("product_category") or "Unknown"
+        sig_reviews = int(row.get("signal_reviews") or 0)
         if vendor not in merged:
             merged[vendor] = {
                 "total_reviews": reviews,
+                "signal_reviews": sig_reviews,
                 "churn_intent": churn,
                 "urgency_weighted_sum": urgency * reviews,
                 "category": category,
@@ -10078,6 +10230,7 @@ def _build_deterministic_vendor_feed(
         else:
             m = merged[vendor]
             m["total_reviews"] += reviews
+            m["signal_reviews"] = m.get("signal_reviews", 0) + sig_reviews
             m["churn_intent"] += churn
             m["urgency_weighted_sum"] += urgency * reviews
             # Keep category with most reviews
@@ -10089,8 +10242,9 @@ def _build_deterministic_vendor_feed(
     fallback_candidates: list[dict[str, Any]] = []
     for vendor, m in merged.items():
         total_reviews = m["total_reviews"]
+        signal_reviews = int(m.get("signal_reviews") or 0) or total_reviews
         churn_intent = m["churn_intent"]
-        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        churn_density = round((churn_intent * 100.0 / signal_reviews), 1) if signal_reviews else 0.0
         avg_urgency = round(m["urgency_weighted_sum"] / total_reviews, 1) if total_reviews else 0.0
         category = m["category"]
         dm_rate = float(dm_lookup.get(vendor, 0))
@@ -10649,9 +10803,11 @@ def _build_deterministic_vendor_scorecards(
         rec_no = int(row.get("recommend_no") or 0)
         rec_total = int(row.get("recommend_total") or 0)
         category = row.get("product_category") or "Unknown"
+        sig_reviews = int(row.get("signal_reviews") or 0)
         if vendor not in merged:
             merged[vendor] = {
                 "total_reviews": reviews,
+                "signal_reviews": sig_reviews,
                 "churn_intent": churn,
                 "urgency_weighted_sum": urgency * reviews,
                 "recommend_yes": rec_yes,
@@ -10665,6 +10821,7 @@ def _build_deterministic_vendor_scorecards(
         else:
             m = merged[vendor]
             m["total_reviews"] += reviews
+            m["signal_reviews"] = m.get("signal_reviews", 0) + sig_reviews
             m["churn_intent"] += churn
             m["urgency_weighted_sum"] += urgency * reviews
             m["recommend_yes"] += rec_yes
@@ -10681,8 +10838,9 @@ def _build_deterministic_vendor_scorecards(
     results: list[dict[str, Any]] = []
     for vendor, m in merged.items():
         total_reviews = m["total_reviews"]
+        signal_reviews = int(m.get("signal_reviews") or 0) or total_reviews
         churn_intent = m["churn_intent"]
-        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        churn_density = round((churn_intent * 100.0 / signal_reviews), 1) if signal_reviews else 0.0
         avg_urgency = round(m["urgency_weighted_sum"] / total_reviews, 1) if total_reviews else 0.0
         positive_pct = round(m["positive_pct_sum"] / m["positive_pct_count"], 1) if m["positive_pct_count"] else None
         recommend_yes = m["recommend_yes"]
@@ -10995,8 +11153,9 @@ def _build_vendor_deep_dives(
             continue
 
         total_reviews = int(row.get("total_reviews") or 0)
+        signal_reviews = int(row.get("signal_reviews") or 0) or total_reviews
         churn_intent = int(row.get("churn_intent") or 0)
-        churn_density = round((churn_intent * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        churn_density = round((churn_intent * 100.0 / signal_reviews), 1) if signal_reviews else 0.0
         avg_urgency = round(float(row.get("avg_urgency") or 0), 1)
         dm_rate = float(dm_lookup.get(v, 0))
         pr_rate = float(price_lookup.get(v, 0))
@@ -11176,7 +11335,7 @@ def _build_deterministic_category_overview(
         ranked = sorted(
             rows,
             key=lambda r: (
-                -((r.get("churn_intent") or 0) / max((r.get("total_reviews") or 1), 1)),
+                -((r.get("churn_intent") or 0) / max((r.get("signal_reviews") or r.get("total_reviews") or 1), 1)),
                 -(r.get("avg_urgency") or 0),
             ),
         )
@@ -11194,7 +11353,8 @@ def _build_deterministic_category_overview(
         emerging = max(category_flows.items(), key=lambda item: item[1])[0] if category_flows else "Insufficient data"
 
         total_reviews = int(top_vendor.get("total_reviews") or 0)
-        churn_density = round((int(top_vendor.get("churn_intent") or 0) * 100.0 / total_reviews), 1) if total_reviews else 0.0
+        signal_reviews = int(top_vendor.get("signal_reviews") or 0) or total_reviews
+        churn_density = round((int(top_vendor.get("churn_intent") or 0) * 100.0 / signal_reviews), 1) if signal_reviews else 0.0
 
         # Aggregate industry/size across all vendors in category
         cat_industries: dict[str, int] = {}
@@ -11437,6 +11597,7 @@ def _build_deterministic_battle_cards(
         if vendor not in merged or reviews > merged[vendor]["total_reviews"]:
             merged[vendor] = {
                 "total_reviews": reviews,
+                "signal_reviews": int(row.get("signal_reviews") or 0),
                 "churn_intent": churn,
                 "avg_urgency": urgency,
                 "category": category,
@@ -11447,8 +11608,9 @@ def _build_deterministic_battle_cards(
     for vendor, m in merged.items():
         vendor_vault = (evidence_vault_lookup or {}).get(vendor, {})
         total_reviews = m["total_reviews"]
+        signal_reviews = int(m.get("signal_reviews") or 0) or total_reviews
         churn_intent = m["churn_intent"]
-        churn_density = round(churn_intent * 100.0 / total_reviews, 1) if total_reviews else 0.0
+        churn_density = round(churn_intent * 100.0 / signal_reviews, 1) if signal_reviews else 0.0
         avg_urgency = round(m["avg_urgency"], 1)
         dm_rate = float(dm_lookup.get(vendor, 0))
         price_rate = float(price_lookup.get(vendor, 0))

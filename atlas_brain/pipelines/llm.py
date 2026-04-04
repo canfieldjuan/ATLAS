@@ -650,16 +650,14 @@ def trace_llm_call(
     """Emit an FTL trace span for an LLM call (fire-and-forget).
 
     Use this for direct ``llm.chat()`` callers that don't go through
-    ``call_llm_with_skill()``.  Lightweight -- no-ops when FTL is disabled.
+    ``call_llm_with_skill()``. Local ``llm_usage`` persistence still runs even
+    when remote FTL delivery is disabled.
 
     Accepts all fields supported by ``tracer.end_span()`` so callers can
     pass through provider metadata, I/O data, timing breakdowns, RAG
     metrics, and business context.
     """
     from ..services.tracing import tracer
-
-    if not tracer.enabled:
-        return
 
     span = tracer.start_span(
         span_name=span_name,

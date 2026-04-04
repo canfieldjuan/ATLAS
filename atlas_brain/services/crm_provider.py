@@ -442,6 +442,13 @@ class DatabaseCRMProvider:
                 entity_type="contact",
                 entity_id=contact_id,
             )
+        elif dedupe_key:
+            logger.info(
+                "Suppressed duplicate CRM interaction contact_id=%s type=%s dedupe_key=%s",
+                contact_id,
+                interaction_type,
+                dedupe_key[:12],
+            )
         return result
 
     async def get_interactions(

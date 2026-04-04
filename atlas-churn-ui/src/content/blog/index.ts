@@ -11,6 +11,10 @@ import whyTeamsLeaveAzure202603 from './why-teams-leave-azure-2026-03'
 import b2bSoftwareLandscape202604 from './b2b-software-landscape-2026-04'
 import copperDeepDive202604 from './copper-deep-dive-2026-04'
 import zoomDeepDive202604 from './zoom-deep-dive-2026-04'
+import closeVsZohoCrm202604 from './close-vs-zoho-crm-2026-04'
+import switchToWoocommerce202604 from './switch-to-woocommerce-2026-04'
+import tableauDeepDive202604 from './tableau-deep-dive-2026-04'
+import magentoDeepDive202604 from './magento-deep-dive-2026-04'
 
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
@@ -92,4 +96,8 @@ export const POSTS: BlogPost[] = [
   b2bSoftwareLandscape202604,
   copperDeepDive202604,
   zoomDeepDive202604,
+  closeVsZohoCrm202604,
+  switchToWoocommerce202604,
+  tableauDeepDive202604,
+  magentoDeepDive202604,
 ]

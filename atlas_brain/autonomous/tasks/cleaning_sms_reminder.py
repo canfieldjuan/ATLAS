@@ -134,13 +134,27 @@ async def run(task: ScheduledTask) -> dict[str, Any] | str:
         # Look up CRM contact for phone number
         contact = None
         contact_phone = None
+        contact_id_for_crm = None
 
         if matched_svc and matched_svc.get("contact_id"):
+            contact_id_for_crm = str(matched_svc["contact_id"])
             try:
-                contact = await crm.get_contact(str(matched_svc["contact_id"]))
+                contact = await crm.get_contact(contact_id_for_crm)
                 contact_phone = (contact or {}).get("phone")
             except Exception as e:
-                logger.warning("Contact lookup failed for %s: %s", matched_svc.get("contact_id"), e)
+                logger.warning("Contact lookup failed for %s: %s", contact_id_for_crm, e)
+
+        # Fallback: match event summary against CRM contact names
+        # (residential customers may not have service agreements)
+        if not contact_phone and summary.strip():
+            try:
+                matches = await crm.search_contacts(query=summary.strip(), limit=1)
+                if matches:
+                    contact = matches[0]
+                    contact_phone = contact.get("phone")
+                    contact_id_for_crm = str(contact["id"]) if contact.get("id") else None
+            except Exception as e:
+                logger.debug("Name-based contact search failed for '%s': %s", summary, e)
 
         if not contact_phone:
             results["reminders_skipped"] += 1
@@ -166,10 +180,11 @@ async def run(task: ScheduledTask) -> dict[str, Any] | str:
 
         # Build the message
         contact_name = (contact or {}).get("full_name", summary)
-        day_name = target_date.strftime("%A, %B %-d")
+        day_name = target_date.strftime("%A, %B %d").replace(" 0", " ")
+        business_name = metadata.get("business_name", "Effingham Office Maids")
         message = (
             f"Hi {contact_name}! This is a friendly reminder from "
-            f"Effingham Office Maids that your cleaning is scheduled "
+            f"{business_name} that your cleaning is scheduled "
             f"for {day_name}. Please let us know if you need to "
             f"reschedule. Thank you!"
         )
@@ -225,14 +240,15 @@ async def run(task: ScheduledTask) -> dict[str, Any] | str:
             })
 
             # CRM log
-            try:
-                await crm.log_interaction(
-                    contact_id=str(matched_svc["contact_id"]),
-                    interaction_type="sms",
-                    summary=f"Cleaning reminder sent for {day_name}",
-                )
-            except Exception as e:
-                logger.warning("CRM log failed: %s", e)
+            if contact_id_for_crm:
+                try:
+                    await crm.log_interaction(
+                        contact_id=contact_id_for_crm,
+                        interaction_type="sms",
+                        summary=f"Cleaning reminder sent for {day_name}",
+                    )
+                except Exception as e:
+                    logger.warning("CRM log failed: %s", e)
 
         except Exception as e:
             logger.error("SMS send failed for %s: %s", contact_phone, e)

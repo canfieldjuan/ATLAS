@@ -5,6 +5,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import ProtectedRoute from './auth/ProtectedRoute'
 
 const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Watchlists = lazy(() => import('./pages/Watchlists'))
 const Vendors = lazy(() => import('./pages/Vendors'))
 const VendorDetail = lazy(() => import('./pages/VendorDetail'))
 const Reviews = lazy(() => import('./pages/Reviews'))
@@ -33,6 +34,7 @@ const BriefingReview = lazy(() => import('./pages/BriefingReview'))
 const Prospects = lazy(() => import('./pages/Prospects'))
 const PipelineReview = lazy(() => import('./pages/PipelineReview'))
 const Report = lazy(() => import('./pages/Report'))
+const WinLossPredictor = lazy(() => import('./pages/WinLossPredictor'))
 
 const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password', '/methodology', '/report']
 
@@ -87,6 +89,7 @@ export default function App() {
         <ErrorBoundary key={location.pathname}>
           <Routes>
             <Route path="/" element={renderLazyRoute(Dashboard)} />
+            <Route path="/watchlists" element={renderLazyRoute(Watchlists)} />
             <Route path="/vendors" element={renderLazyRoute(Vendors)} />
             <Route path="/vendors/:name" element={renderLazyRoute(VendorDetail)} />
             <Route path="/reviews" element={renderLazyRoute(Reviews)} />
@@ -104,6 +107,7 @@ export default function App() {
             <Route path="/briefing-review" element={renderLazyRoute(BriefingReview)} />
             <Route path="/pipeline-review" element={renderLazyRoute(PipelineReview)} />
             <Route path="/prospects" element={renderLazyRoute(Prospects)} />
+            <Route path="/predictor" element={renderLazyRoute(WinLossPredictor)} />
             <Route path="/account" element={renderLazyRoute(Account)} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

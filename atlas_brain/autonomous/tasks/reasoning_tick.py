@@ -16,11 +16,19 @@ logger = logging.getLogger("atlas.autonomous.tasks.reasoning_tick")
 async def run(task: ScheduledTask) -> dict:
     """Pick up unprocessed events and feed them to the reasoning agent."""
     if not settings.reasoning.enabled:
-        return {"_skip_synthesis": "Reasoning disabled"}
+        return {
+            "_skip_synthesis": "Reasoning disabled",
+            "skip_reason": "Reasoning disabled",
+            "trigger_reason": "Reasoning disabled",
+        }
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return {"_skip_synthesis": "Database not available"}
+        return {
+            "_skip_synthesis": "Database not available",
+            "skip_reason": "Database not available",
+            "trigger_reason": "Database not available",
+        }
 
     rows = await pool.fetch(
         """
@@ -34,7 +42,12 @@ async def run(task: ScheduledTask) -> dict:
     )
 
     if not rows:
-        return {"_skip_synthesis": True, "picked_up": 0}
+        return {
+            "_skip_synthesis": True,
+            "picked_up": 0,
+            "skip_reason": "No pending reasoning events",
+            "trigger_reason": "No pending reasoning events",
+        }
 
     from ...reasoning.events import AtlasEvent
     from ...reasoning.consumer import EventConsumer
@@ -69,4 +82,14 @@ async def run(task: ScheduledTask) -> dict:
             logger.warning("reasoning_tick: failed to process event %s", event.id, exc_info=True)
 
     logger.info("reasoning_tick: picked up %d missed events", processed)
-    return {"_skip_synthesis": True, "picked_up": processed, "total_pending": len(rows)}
+    return {
+        "_skip_synthesis": True,
+        "picked_up": processed,
+        "total_pending": len(rows),
+        "skip_reason": "Reasoning tick complete",
+        "trigger_reason": (
+            "Missed reasoning events picked up"
+            if processed > 0
+            else "Reasoning tick complete -- no missed events claimed"
+        ),
+    }

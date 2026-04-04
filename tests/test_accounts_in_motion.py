@@ -36,6 +36,7 @@ import atlas_brain.autonomous.tasks.b2b_accounts_in_motion as accounts_mod
 import atlas_brain.autonomous.tasks.b2b_churn_intelligence as churn_mod
 from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
     _apply_account_quality_adjustments,
+    _build_account_pool_seed_rows,
     _build_fallback_intent_rows,
     _build_signal_metadata_fallback_rows,
     _compute_account_opportunity_score,
@@ -157,6 +158,15 @@ class TestNormalizeCompanyKey:
 
 
 class TestFallbackIntentRows:
+    @pytest.mark.asyncio
+    async def test_fetch_company_signal_metadata_qualifies_company_signal_vendor_name(self):
+        pool = type("Pool", (), {"fetch": AsyncMock(return_value=[])})()
+
+        rows = await accounts_mod._fetch_company_signal_metadata(pool, window_days=30)
+
+        assert rows == []
+        assert "SELECT cs.company_name, cs.vendor_name" in pool.fetch.await_args.args[0]
+
     def test_build_fallback_intent_rows_filters_by_urgency(self):
         rows = _build_fallback_intent_rows(
             [
@@ -199,17 +209,86 @@ class TestFallbackIntentRows:
         assert row["company_size"] == "500-1000"
         assert row["industry"] == "SaaS"
 
-    def test_build_signal_metadata_fallback_rows_uses_confidence_as_urgency(self):
+    def test_build_signal_metadata_fallback_rows_requires_urgency_and_confidence(self):
         rows = _build_signal_metadata_fallback_rows(
             [
-                {"company": "Acme", "vendor": "Zendesk", "confidence": 4.0},
-                {"company": "Beta", "vendor": "Zendesk", "confidence": 6.2},
+                {"company": "Acme", "vendor": "Zendesk", "urgency": 7.5, "confidence": 0.21, "source": "reddit", "content_type": "insider_account"},
+                {"company": "Legacy", "vendor": "Zendesk", "urgency": 8.0, "confidence": 0.91, "source": "trustpilot", "content_type": "review"},
+                {"company": "Beta", "vendor": "Zendesk", "urgency": 4.8, "confidence": 0.92, "source": "g2", "content_type": "review"},
+                {"company": "Gamma", "vendor": "Zendesk", "urgency": 7.1, "confidence": 0.62, "source": "g2", "content_type": "review"},
             ],
             min_urgency=5.0,
+            min_confidence=6.0,
         )
         assert len(rows) == 1
-        assert rows[0]["company"] == "Beta"
-        assert rows[0]["source"] == "company_signals_fallback"
+        assert rows[0]["company"] == "Gamma"
+        assert rows[0]["urgency"] == 7.1
+        assert rows[0]["confidence"] == 6.2
+        assert rows[0]["source"] == "g2"
+        assert rows[0]["seed_origin"] == "company_signals_fallback"
+
+    def test_build_account_pool_seed_rows_skips_low_confidence_reddit_insider_accounts(self):
+        rows = _build_account_pool_seed_rows(
+            {
+                "Zendesk": {
+                    "accounts": [
+                        {
+                            "company_name": "Midsized ERP Software",
+                            "urgency_score": 7.5,
+                            "source": "reddit",
+                            "content_type": "insider_account",
+                            "confidence_score": 0.21,
+                        },
+                        {
+                            "company_name": "Legacy Co",
+                            "urgency_score": 7.4,
+                            "source": "trustpilot",
+                            "content_type": "review",
+                            "confidence_score": 0.91,
+                        },
+                        {
+                            "company_name": "Acme Corp",
+                            "urgency_score": 7.2,
+                            "source": "g2",
+                            "content_type": "review",
+                            "confidence_score": 0.62,
+                        },
+                    ],
+                }
+            }
+        )
+        assert len(rows) == 1
+        assert rows[0]["company"] == "Acme Corp"
+        assert rows[0]["confidence"] == 6.2
+
+    def test_company_signal_exclusion_reason_rejects_deprecated_and_low_trust_sources(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import _company_signal_exclusion_reason
+
+        assert _company_signal_exclusion_reason(
+            "Acme Corp",
+            current_vendor="Zendesk",
+            source="trustpilot",
+            confidence_score=0.91,
+        ) == "deprecated_source"
+        assert _company_signal_exclusion_reason(
+            "Acme Corp",
+            current_vendor="Zendesk",
+            source="reddit",
+            confidence_score=0.21,
+        ) == "low_confidence_low_trust_source"
+        assert _company_signal_exclusion_reason(
+            "Acme Corp",
+            current_vendor="Zendesk",
+            source="g2",
+            confidence_score=0.62,
+        ) is None
+
+    def test_company_signal_name_gate_rejects_descriptor_style_labels(self):
+        from atlas_brain.autonomous.tasks._b2b_shared import _company_signal_name_is_eligible
+
+        assert not _company_signal_name_is_eligible("midsized ERP software", current_vendor="Salesforce")
+        assert not _company_signal_name_is_eligible("a multinational pharmaceutical", current_vendor="ClickUp")
+        assert _company_signal_name_is_eligible("Acme Pharmaceutical", current_vendor="ClickUp")
 
 
 # ---------------------------------------------------------------------------
@@ -1034,6 +1113,73 @@ class TestAccountQualityAdjustments:
 
 class TestAccountsInMotionRunProgress:
     @pytest.mark.asyncio
+    async def test_run_accepts_as_of_override_without_freshness_check(self, monkeypatch):
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return ([], [], [], [], [], [], [], [], [], {}, {})
+
+        freshness = AsyncMock(side_effect=AssertionError("freshness check should be skipped"))
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(accounts_mod, "_check_freshness", freshness)
+        monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(accounts_mod, "_merge_company_profiles", lambda *args, **kwargs: {})
+        monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
+        monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4()), "test_vendors": ["Zendesk"]}})()
+        result = await accounts_mod.run(task, as_of=date(2026, 3, 18))
+
+        assert result == {
+            "_skip_synthesis": "Accounts in motion complete",
+            "vendors": 1,
+            "total_accounts": 0,
+            "persisted": 1,
+        }
+        assert freshness.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_run_allows_maintenance_override_when_disabled(self, monkeypatch):
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return ([], [], [], [], [], [], [], [], [], {}, {})
+
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "enabled", False, raising=False)
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "intelligence_enabled", False, raising=False)
+        monkeypatch.setattr(accounts_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(accounts_mod, "_merge_company_profiles", lambda *args, **kwargs: {})
+        monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
+        monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
+
+        task = type(
+            "Task",
+            (),
+            {"metadata": {"_execution_id": str(uuid4()), "test_vendors": ["Zendesk"], "maintenance_run": True}},
+        )()
+        result = await accounts_mod.run(task, as_of=date(2026, 3, 18))
+
+        assert result == {
+            "_skip_synthesis": "Accounts in motion complete",
+            "vendors": 1,
+            "total_accounts": 0,
+            "persisted": 1,
+        }
+
+    @pytest.mark.asyncio
     async def test_run_emits_progress_metadata_across_stages(self, monkeypatch):
         progress = AsyncMock()
         pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
@@ -1167,3 +1313,55 @@ class TestAccountsInMotionRunProgress:
 
         assert result["_skip_synthesis"] == "Accounts in motion complete"
         assert [row["vendor"] for row in captured["rows"]] == ["Zendesk"]
+
+    @pytest.mark.asyncio
+    async def test_run_persists_empty_scoped_vendor_report_when_scope_has_no_rows(self, monkeypatch):
+        pool = type("Pool", (), {"is_initialized": True, "execute": AsyncMock()})()
+        captured: dict[str, Any] = {}
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (
+                [{"vendor": "Freshdesk", "company": "Beta", "urgency": 8.0}],
+                [], [], [], [], [], [], [], [], {}, {},
+            )
+
+        def fake_build_vendor_aggregate(vendor, accounts, **_kwargs):
+            captured["vendor"] = vendor
+            captured["accounts"] = list(accounts)
+            return {
+                "vendor": vendor,
+                "accounts": list(accounts),
+                "total_accounts_in_motion": len(accounts),
+                "source_review_count": 0,
+                "source_distribution": {},
+                "archetype": None,
+            }
+
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(accounts_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(accounts_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(accounts_mod, "_merge_company_profiles", lambda *args, **kwargs: {})
+        monkeypatch.setattr(accounts_mod, "_build_vendor_aggregate", fake_build_vendor_aggregate)
+        monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
+        monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4()), "test_vendors": ["Zendesk"]}})()
+        result = await accounts_mod.run(task)
+
+        assert result == {
+            "_skip_synthesis": "Accounts in motion complete",
+            "vendors": 1,
+            "total_accounts": 0,
+            "persisted": 1,
+        }
+        assert captured["vendor"] == "Zendesk"
+        assert captured["accounts"] == []
+        assert pool.execute.await_args.args[3] == "Zendesk"
+        assert pool.execute.await_args.args[7] == "failed"

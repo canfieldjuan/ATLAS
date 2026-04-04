@@ -18,19 +18,32 @@ from ...storage.models import ScheduledTask
 logger = logging.getLogger("atlas.autonomous.tasks.market_intake")
 
 
+def _skip_result(reason: str, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "_skip_synthesis": True,
+        "skip_reason": reason,
+        "trigger_reason": reason,
+    }
+    payload.update(extra)
+    return payload
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: poll market prices and record snapshots."""
     cfg = settings.external_data
     if not cfg.enabled or not cfg.market_enabled:
-        return {"_skip_synthesis": True, "skipped": "external_data or market disabled"}
+        return _skip_result("Market intake disabled", skipped="external_data or market disabled")
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return {"_skip_synthesis": True, "skipped": "db not ready"}
+        return _skip_result(
+            "Market intake skipped -- database not ready",
+            skipped="db not ready",
+        )
 
     # Check market hours if configured
     if cfg.market_hours_only and not _is_market_hours():
-        return {"_skip_synthesis": True, "skipped": "outside market hours"}
+        return _skip_result("Outside market hours", skipped="outside market hours")
 
     # Load watchlist symbols
     rows = await pool.fetch(
@@ -43,7 +56,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         """
     )
     if not rows:
-        return {"_skip_synthesis": True, "symbols_checked": 0, "snapshots_recorded": 0}
+        return _skip_result(
+            "No watchlist symbols configured",
+            symbols_checked=0,
+            snapshots_recorded=0,
+        )
 
     watchlist = {r["symbol"]: dict(r) for r in rows}
     symbols = list(watchlist.keys())
@@ -53,7 +70,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         symbols, cfg.market_api_provider, cfg.market_api_key, cfg.api_timeout_seconds
     )
     if not quotes:
-        return {"_skip_synthesis": True, "symbols_checked": len(symbols), "snapshots_recorded": 0, "error": "no quotes"}
+        return _skip_result(
+            "No quotes returned",
+            symbols_checked=len(symbols),
+            snapshots_recorded=0,
+            error="no quotes",
+        )
 
     # Record snapshots
     snapshot_rows = []
@@ -96,6 +118,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     return {
         "_skip_synthesis": True,
+        "skip_reason": "Market snapshots recorded",
+        "trigger_reason": (
+            "Significant market moves detected"
+            if significant > 0
+            else "Market snapshots recorded"
+        ),
         "symbols_checked": len(symbols),
         "snapshots_recorded": len(snapshot_rows),
         "significant_moves": significant,

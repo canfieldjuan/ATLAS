@@ -1,6 +1,7 @@
 import { NavLink, Link } from 'react-router-dom'
 import {
   LayoutDashboard,
+  Eye,
   Building2,
   MessageSquareText,
   FileBarChart,
@@ -9,6 +10,7 @@ import {
   Swords,
   Handshake,
   Newspaper,
+  Target,
   FileSearch,
   MailSearch,
   AlertTriangle,
@@ -32,12 +34,14 @@ interface SidebarLink {
 
 const links: SidebarLink[] = [
   { to: '/', icon: LayoutDashboard, label: 'Overview' },
+  { to: '/watchlists', icon: Eye, label: 'Watchlists' },
   { to: '/vendors', icon: Building2, label: 'Vendors' },
   { to: '/reviews', icon: MessageSquareText, label: 'Reviews' },
   { to: '/reports', icon: FileBarChart, label: 'Reports', gate: 'reports' },
   { to: '/leads', icon: Crosshair, label: 'Leads' },
   { to: '/vendor-targets', icon: Shield, label: 'Targets' },
   { to: '/challengers', icon: Swords, label: 'Challengers' },
+  { to: '/predictor', icon: Target, label: 'Win/Loss' },
   { to: '/affiliates', icon: Handshake, label: 'Affiliates' },
   { to: '/blog', icon: Newspaper, label: 'Blog' },
 ]

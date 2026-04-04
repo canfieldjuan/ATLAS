@@ -17,7 +17,12 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ._b2b_shared import _segment_targeting_summary, _timing_summary_payload, _reasoning_int
+from ._b2b_shared import (
+    _company_signal_exclusion_reason,
+    _segment_targeting_summary,
+    _timing_summary_payload,
+    _reasoning_int,
+)
 from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_accounts_in_motion")
@@ -118,26 +123,6 @@ def _normalize_accounts_in_motion_confidence(value: Any) -> float | None:
     if confidence <= 1.0:
         confidence *= 10.0
     return round(min(10.0, max(0.0, confidence)), 2)
-
-
-def _is_low_confidence_reddit_insider_seed(
-    row: dict[str, Any],
-    *,
-    min_confidence: float,
-) -> bool:
-    """Return True when a reddit insider-account seed is too weak to trust."""
-    source = str(row.get("source") or "").strip().lower()
-    content_type = str(row.get("content_type") or "").strip().lower()
-    confidence = _normalize_accounts_in_motion_confidence(
-        row.get("confidence_score")
-        if row.get("confidence_score") is not None
-        else row.get("confidence")
-    )
-    if source != "reddit" or content_type != "insider_account":
-        return False
-    if confidence is None:
-        return True
-    return confidence < float(min_confidence)
 
 
 def _extract_account_quote(quotes: Any) -> str | None:
@@ -333,13 +318,15 @@ def _build_signal_metadata_fallback_rows(
             urgency = 0.0
         if urgency < float(min_urgency):
             continue
+        if _company_signal_exclusion_reason(
+            company,
+            current_vendor=vendor,
+            source=row.get("source"),
+            confidence_score=row.get("confidence"),
+        ):
+            continue
         confidence = _normalize_accounts_in_motion_confidence(row.get("confidence"))
         if confidence is None or confidence < float(min_confidence):
-            continue
-        if _is_low_confidence_reddit_insider_seed(
-            row,
-            min_confidence=min_confidence,
-        ):
             continue
         fallback.append({
             "company": company,
@@ -356,7 +343,8 @@ def _build_signal_metadata_fallback_rows(
             "quotes": [],
             "contract_signal": None,
             "review_id": None,
-            "source": "company_signals_fallback",
+            "source": row.get("source") or "company_signals_fallback",
+            "seed_origin": "company_signals_fallback",
             "seat_count": None,
             "contract_end": None,
             "buying_stage": None,
@@ -367,8 +355,6 @@ def _build_signal_metadata_fallback_rows(
 
 def _build_account_pool_seed_rows(
     account_pool_lookup: dict[str, dict[str, Any]] | None,
-    *,
-    reddit_insider_min_confidence: float,
 ) -> list[dict[str, Any]]:
     """Flatten canonical account-intelligence rows into merge seed records."""
     seed_rows: list[dict[str, Any]] = []
@@ -381,9 +367,11 @@ def _build_account_pool_seed_rows(
             company = str(row.get("company_name") or row.get("company") or "").strip()
             if not company:
                 continue
-            if _is_low_confidence_reddit_insider_seed(
-                row,
-                min_confidence=reddit_insider_min_confidence,
+            if _company_signal_exclusion_reason(
+                company,
+                current_vendor=vendor,
+                source=row.get("source"),
+                confidence_score=row.get("confidence_score"),
             ):
                 continue
             confidence = _normalize_accounts_in_motion_confidence(
@@ -452,12 +440,12 @@ async def _fetch_company_signal_metadata(pool, window_days: int = 90) -> list[di
     """Read first_seen_at, last_seen_at, confidence from b2b_company_signals."""
     rows = await pool.fetch(
         """
-        SELECT company_name, vendor_name,
-               first_seen_at, last_seen_at,
-               urgency_score,
-               confidence_score,
-               source,
-               review_id,
+        SELECT cs.company_name, cs.vendor_name,
+               cs.first_seen_at, cs.last_seen_at,
+               cs.urgency_score,
+               cs.confidence_score,
+               cs.source,
+               cs.review_id,
                r.content_type
         FROM b2b_company_signals cs
         LEFT JOIN b2b_reviews r ON r.id = cs.review_id
@@ -1197,7 +1185,8 @@ async def _check_freshness(pool) -> date | None:
 async def run(task: ScheduledTask, *, as_of: date | None = None) -> dict[str, Any]:
     """Build per-vendor accounts-in-motion prospecting lists."""
     cfg = settings.b2b_churn
-    if not cfg.enabled or not cfg.intelligence_enabled:
+    maintenance_run = bool((task.metadata or {}).get("maintenance_run"))
+    if (not cfg.enabled or not cfg.intelligence_enabled) and not maintenance_run:
         return {"_skip_synthesis": "B2B churn intelligence disabled"}
 
     pool = get_db_pool()
@@ -1295,10 +1284,7 @@ async def run(task: ScheduledTask, *, as_of: date | None = None) -> dict[str, An
         min_urgency=min_urgency,
         min_confidence=cfg.accounts_in_motion_signal_metadata_min_confidence,
     )
-    seed_rows = _build_account_pool_seed_rows(
-        account_pool_lookup,
-        reddit_insider_min_confidence=cfg.accounts_in_motion_reddit_insider_min_confidence,
-    )
+    seed_rows = _build_account_pool_seed_rows(account_pool_lookup)
     combined_intent: list[dict[str, Any]] = list(high_intent)
     existing_keys = {
         (_normalize_company_key(row.get("company")), _canonicalize_vendor(row.get("vendor")))

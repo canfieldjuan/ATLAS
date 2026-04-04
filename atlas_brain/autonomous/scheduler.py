@@ -554,17 +554,6 @@ class TaskScheduler:
             },
         },
         {
-            "name": "reasoning_tick",
-            "description": "Polling safety net for reasoning agent missed events",
-            "task_type": "builtin",
-            "schedule_type": "interval",
-            "interval_seconds": 300,
-            "timeout_seconds": 120,
-            "metadata": {
-                "builtin_handler": "reasoning_tick",
-            },
-        },
-        {
             "name": "reasoning_reflection",
             "description": "Proactive cross-domain pattern detection and recommendations",
             "task_type": "builtin",
@@ -789,6 +778,16 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "crm_event_processing"},
         },
         {
+            "name": "llm_provider_cost_sync",
+            "description": "Sync provider billing totals for local cost reconciliation",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.provider_cost.interval_seconds
+            "timeout_seconds": 120,
+            "enabled": False,  # opt-in: requires provider admin credentials
+            "metadata": {"builtin_handler": "llm_provider_cost_sync"},
+        },
+        {
             "name": "falsification_check",
             "description": "Nightly check of cached reasoning conclusions against fresh vendor signals",
             "task_type": "builtin",
@@ -838,6 +837,7 @@ class TaskScheduler:
                 "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
                 "b2b_churn_alert": settings.b2b_alert.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
+                "llm_provider_cost_sync": settings.provider_cost.interval_seconds,
             }
 
             # Resolve configurable cron expressions at runtime

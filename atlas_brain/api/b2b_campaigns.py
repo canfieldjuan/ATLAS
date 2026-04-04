@@ -1285,7 +1285,7 @@ async def review_candidates_summary(
 
 
 @router.post("/bulk-approve")
-async def bulk_approve(body: BulkApproveBody, user: AuthUser = require_b2b_plan("b2b_growth")):
+async def bulk_approve(body: BulkApproveBody, user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Approve, queue-send, or reject multiple campaigns at once."""
     if body.action not in ("approve", "queue-send", "reject"):
         raise HTTPException(status_code=400, detail="action must be approve, queue-send, or reject")
@@ -1419,7 +1419,7 @@ async def bulk_approve(body: BulkApproveBody, user: AuthUser = require_b2b_plan(
 
 
 @router.post("/bulk-reject")
-async def bulk_reject(body: BulkRejectBody, user: AuthUser = require_b2b_plan("b2b_growth")):
+async def bulk_reject(body: BulkRejectBody, user: AuthUser = Depends(require_b2b_plan("b2b_growth"))):
     """Reject/cancel multiple campaigns."""
     pool = _pool_or_503()
 
@@ -1914,7 +1914,7 @@ async def get_outcome(
 @router.post("/generate")
 async def generate_campaigns_endpoint(
     body: GenerateRequest,
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Manual trigger: generate campaign content for top opportunities."""
     pool = _pool_or_503()
@@ -2023,7 +2023,7 @@ async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optiona
 async def update_campaign(
     campaign_id: str,
     body: CampaignUpdate,
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     try:
         cid = _uuid.UUID(campaign_id)
@@ -2064,7 +2064,7 @@ async def update_campaign(
 @router.post("/{campaign_id}/approve")
 async def approve_campaign(
     campaign_id: str,
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     try:
         cid = _uuid.UUID(campaign_id)
@@ -2125,7 +2125,7 @@ async def approve_campaign(
 async def queue_campaign_for_send(
     campaign_id: str,
     body: ApproveQueueBody | None = None,
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Queue a campaign for auto-send with a cancel window.
 
@@ -2254,7 +2254,7 @@ async def queue_campaign_for_send(
 @router.post("/{campaign_id}/cancel")
 async def cancel_campaign(
     campaign_id: str,
-    user: AuthUser = require_b2b_plan("b2b_growth"),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Cancel a queued campaign before it sends."""
     try:

@@ -98,6 +98,7 @@ from ._b2b_shared import (  # noqa: E402
     _build_evidence_vault_pass2_rollups,
     _build_company_signal_blocked_names_by_vendor,
     _company_signal_name_is_eligible,
+    _company_signal_exclusion_reason,
     _battle_card_competitor_is_eligible,
     _merge_canonical_company_signals,
     build_evidence_vault,
@@ -1484,7 +1485,8 @@ async def _correlate_articles_with_archetypes(
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: weekly B2B churn intelligence."""
     cfg = settings.b2b_churn
-    if not cfg.enabled or not cfg.intelligence_enabled:
+    maintenance_run = bool((task.metadata or {}).get("maintenance_run"))
+    if (not cfg.enabled or not cfg.intelligence_enabled) and not maintenance_run:
         return {"_skip_synthesis": "B2B churn intelligence disabled"}
 
     pool = get_db_pool()
@@ -2692,10 +2694,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 blocked_names = _company_signal_blocked_names.get(vendor_name) or set()
                 for hi in signals or []:
                     company_name = hi.get("company_name") or hi.get("company") or ""
-                    if not _company_signal_name_is_eligible(
+                    if _company_signal_exclusion_reason(
                         company_name,
                         current_vendor=vendor_name,
                         blocked_names=blocked_names,
+                        source=hi.get("source"),
+                        confidence_score=hi.get("confidence_score"),
                     ):
                         continue
                     review_id = None

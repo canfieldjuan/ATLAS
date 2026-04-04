@@ -24,6 +24,16 @@ _MAX_DEDUP_ENTRIES = 200
 from ...utils.time import format_minutes as _format_time
 
 
+def _skip_result(reason: str, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "_skip_synthesis": reason,
+        "skip_reason": reason,
+        "trigger_reason": reason,
+    }
+    payload.update(extra)
+    return payload
+
+
 async def _send_alert(message: str, title: str = "Atlas Anomaly") -> None:
     """Send an ntfy notification if configured."""
     if not settings.alerts.ntfy_enabled:
@@ -51,10 +61,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return {
-            "error": "Database not initialized",
-            "_skip_synthesis": "Anomaly detection skipped -- database not ready.",
-        }
+        return _skip_result(
+            "Anomaly detection skipped -- database not ready.",
+            error="Database not initialized",
+        )
 
     # Check if temporal_patterns table exists and has data
     try:
@@ -63,17 +73,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
     except Exception:
         # Table doesn't exist yet (migration 025 not applied)
-        return {
-            "checked": 0, "anomalies": 0, "details": [],
-            "note": "temporal_patterns table not ready",
-            "_skip_synthesis": "Anomaly detection skipped -- migration pending.",
-        }
+        return _skip_result(
+            "Anomaly detection skipped -- migration pending.",
+            checked=0,
+            anomalies=0,
+            details=[],
+            note="temporal_patterns table not ready",
+        )
     if not pattern_count:
-        return {
-            "checked": 0, "anomalies": 0, "details": [],
-            "note": "No learned patterns yet",
-            "_skip_synthesis": "Anomaly detection skipped -- no learned patterns yet.",
-        }
+        return _skip_result(
+            "Anomaly detection skipped -- no learned patterns yet.",
+            checked=0,
+            anomalies=0,
+            details=[],
+            note="No learned patterns yet",
+        )
 
     # Use server-local timezone to match presence_events timestamps
     local_tz = zoneinfo.ZoneInfo(settings.autonomous.default_timezone)
@@ -160,6 +174,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "checked": len(recent_events),
         "anomalies": len(anomalies),
         "details": anomalies,
+        "trigger_reason": (
+            "Anomalies detected"
+            if anomalies
+            else "No anomalies detected"
+        ),
     }
 
 

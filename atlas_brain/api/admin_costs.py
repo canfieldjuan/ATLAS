@@ -8,8 +8,10 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import re
 import subprocess
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -29,6 +31,8 @@ from ..storage.database import get_db_pool
 logger = logging.getLogger("atlas.api.admin_costs")
 
 router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
+
+_GENERIC_REASONING_SOURCE_EXCLUDES = {"b2b_churn_intelligence"}
 
 
 def _campaign_batch_stale_minutes() -> int:
@@ -267,6 +271,18 @@ def _build_recent_filters(
     return clauses, args
 
 
+def _llm_usage_text_expr(column_name: str, business_key: str | None = None) -> str:
+    business_field = business_key or column_name
+    return (
+        "COALESCE("
+        f"NULLIF(BTRIM({column_name}), ''), "
+        f"NULLIF(BTRIM(metadata #>> '{{business,{business_field}}}'), ''), "
+        f"NULLIF(BTRIM(metadata ->> '{column_name}'), ''), "
+        "'unknown'"
+        ")"
+    )
+
+
 def _pool_or_503():
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -288,6 +304,172 @@ async def _safe_fetch(pool, query: str, *args):
     except Exception:
         logger.exception("admin_costs.fetch_failed")
         return []
+
+
+def _reconciliation_row_key(day: str, provider: str) -> tuple[str, str]:
+    return (str(day), str(provider).strip().lower())
+
+
+def _first_present_metric(payload: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        if key in payload and payload.get(key) is not None:
+            return _safe_int(payload.get(key))
+    return None
+
+
+def _sum_present_metrics(payload: dict[str, Any], *keys: str) -> int | None:
+    found = False
+    total = 0
+    for key in keys:
+        if key in payload and payload.get(key) is not None:
+            total += _safe_int(payload.get(key))
+            found = True
+    return total if found else None
+
+
+def _normalize_trigger_reason_text(value: Any) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return " ".join(text.split())[:120]
+
+
+def _payload_trigger_reason(
+    task_name: str,
+    payload: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+) -> str | None:
+    skip_reason = _normalize_trigger_reason_text(payload.get("_skip_synthesis"))
+    if skip_reason:
+        return skip_reason
+    explicit_reason = (
+        _normalize_trigger_reason_text(payload.get("trigger_reason"))
+        or _normalize_trigger_reason_text(payload.get("skip_reason"))
+        or _normalize_trigger_reason_text(payload.get("skipped"))
+        or _normalize_trigger_reason_text(payload.get("note"))
+        or _normalize_trigger_reason_text(payload.get("reason_code"))
+        or _normalize_trigger_reason_text(payload.get("reason"))
+    )
+    if explicit_reason:
+        return explicit_reason
+    meta = metadata if isinstance(metadata, dict) else {}
+    metadata_reason = (
+        _normalize_trigger_reason_text(meta.get("trigger_reason"))
+        or _normalize_trigger_reason_text(meta.get("skip_reason"))
+        or _normalize_trigger_reason_text(meta.get("reason_code"))
+    )
+    if metadata_reason:
+        return metadata_reason
+    meta_source = _normalize_trigger_reason_text(meta.get("source_name") or meta.get("source"))
+    meta_event = _normalize_trigger_reason_text(meta.get("event_type"))
+    if meta_source and meta_event:
+        return f"{meta_source} | {meta_event}"
+    if _safe_int(payload.get("strict_discussion_candidates_dropped")) > 0:
+        return "strict_discussion_gate"
+    if _safe_int(payload.get("low_signal_discussion_skipped")) > 0:
+        return "low_signal_discussion"
+    if _safe_int(payload.get("secondary_write_hits")) > 0:
+        return "secondary_write_path"
+    if task_name.strip().lower() == "b2b_reasoning_synthesis" and _safe_int(payload.get("vendors_skipped")) > 0:
+        return "evidence_hash_reuse"
+    return None
+
+
+def _normalize_burn_payload(
+    task_name: str,
+    payload: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, int | str | None]:
+    normalized_name = task_name.strip().lower()
+    rows_processed = _first_present_metric(payload, "rows_processed", "reviews_processed")
+    rows_skipped = _first_present_metric(payload, "rows_skipped", "strict_discussion_candidates_dropped")
+    rows_reprocessed = _first_present_metric(payload, "rows_reprocessed", "reprocessed")
+    successful_items = _first_present_metric(payload, "successful_items", "generated", "published")
+
+    if normalized_name == "b2b_enrichment":
+        if rows_processed is None:
+            rows_processed = _sum_present_metrics(payload, "enriched", "quarantined", "failed", "no_signal")
+        if successful_items is None:
+            successful_items = _first_present_metric(payload, "enriched")
+    elif normalized_name == "b2b_enrichment_repair":
+        if rows_processed is None:
+            rows_processed = _sum_present_metrics(payload, "promoted", "shadowed", "failed")
+        if rows_skipped is None:
+            rows_skipped = _first_present_metric(payload, "low_signal_discussion_skipped")
+        if rows_reprocessed is None:
+            rows_reprocessed = rows_processed
+        if successful_items is None:
+            successful_items = _sum_present_metrics(payload, "promoted", "shadowed")
+    elif normalized_name == "b2b_reasoning_synthesis":
+        if rows_processed is None:
+            rows_processed = _sum_present_metrics(payload, "vendors_reasoned", "vendors_skipped", "cross_vendor_succeeded")
+        if rows_skipped is None:
+            rows_skipped = _first_present_metric(payload, "vendors_skipped")
+        if successful_items is None:
+            successful_items = _sum_present_metrics(payload, "vendors_reasoned", "cross_vendor_succeeded")
+
+    return {
+        "rows_processed": rows_processed,
+        "rows_skipped": rows_skipped,
+        "rows_reprocessed": rows_reprocessed,
+        "successful_items": successful_items,
+        "trigger_reason": _payload_trigger_reason(task_name, payload, metadata),
+    }
+
+
+def _task_name_from_span_name(span_name: str, known_task_names: list[str]) -> str | None:
+    normalized = str(span_name or "").strip()
+    if not normalized.startswith("task."):
+        return None
+    for task_name in sorted(known_task_names, key=len, reverse=True):
+        prefix = f"task.{task_name}"
+        if normalized == prefix or normalized.startswith(prefix + "."):
+            return task_name
+    suffix = normalized[len("task."):]
+    return suffix.split(".", 1)[0].strip() or None
+
+
+def _add_nullable_metric(bucket: dict[str, Any], key: str, value: int | None) -> None:
+    if value is None:
+        return
+    existing = bucket.get(key)
+    bucket[key] = value if existing is None else _safe_int(existing) + value
+
+
+def _dominant_counter_value(counter: Counter[str]) -> str | None:
+    if not counter:
+        return None
+    return sorted(counter.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _blocking_issue_texts(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            try:
+                parsed = ast.literal_eval(text)
+            except Exception:
+                parsed = None
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [text]
+    return []
+
+
+def _parse_input_budget_details(blocking_issues: Any) -> tuple[int | None, int | None]:
+    for issue in _blocking_issue_texts(blocking_issues):
+        match = re.search(r"estimated_input_tokens=(\d+),\s*cap=(\d+)", issue)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return None, None
 
 
 @router.get("/summary")
@@ -339,6 +521,978 @@ async def cost_summary(days: int = Query(default=30, ge=1, le=365)):
         "avg_tokens_per_second": round(float(row["avg_tps"]), 1),
         "today_cost_usd": float(today_row["today_cost"]),
         "today_calls": int(today_row["today_calls"]),
+    }
+
+
+@router.get("/burn-dashboard")
+async def burn_dashboard(
+    days: int = Query(default=30, ge=1, le=365),
+    top_n: int = Query(default=25, ge=1, le=100),
+):
+    """Unified per-job token-burn dashboard across scheduled tasks and generic reasoning."""
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    source_expr = _llm_usage_text_expr("source_name")
+    event_expr = _llm_usage_text_expr("event_type")
+    source_excludes = tuple(_GENERIC_REASONING_SOURCE_EXCLUDES)
+
+    task_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            t.id,
+            t.name,
+            t.last_run_at,
+            latest.status AS last_status,
+            COALESCE(stats.recent_runs, 0) AS recent_runs,
+            COALESCE(stats.recent_failures, 0) AS recent_failures
+        FROM scheduled_tasks t
+        LEFT JOIN LATERAL (
+            SELECT e.status
+            FROM task_executions e
+            WHERE e.task_id = t.id
+            ORDER BY e.started_at DESC
+            LIMIT 1
+        ) latest ON true
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*) AS recent_runs,
+                COUNT(*) FILTER (WHERE e2.status != 'completed') AS recent_failures
+            FROM task_executions e2
+            WHERE e2.task_id = t.id
+              AND e2.started_at >= $1
+        ) stats ON true
+        ORDER BY t.name
+        """,
+        since,
+    )
+    execution_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            t.name AS task_name,
+            e.id::text AS run_id,
+            e.status,
+            e.started_at,
+            e.retry_count,
+            e.result_text,
+            e.metadata
+        FROM task_executions e
+        JOIN scheduled_tasks t ON t.id = e.task_id
+        WHERE e.started_at >= $1
+        ORDER BY e.started_at DESC
+        """,
+        since,
+    )
+    llm_usage_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            run_id,
+            span_name,
+            MAX(created_at) AS last_call_at,
+            COUNT(*) AS model_call_count,
+            COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+            COALESCE(SUM(billable_input_tokens), 0) AS total_billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+            COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND run_id IS NOT NULL
+        GROUP BY run_id, span_name
+        """,
+        since,
+    )
+    visibility_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            t.name AS task_name,
+            COALESCE(NULLIF(BTRIM(v.reason_code), ''), NULLIF(BTRIM(v.event_type), '')) AS trigger_reason,
+            COUNT(*) AS trigger_count
+        FROM pipeline_visibility_events v
+        JOIN task_executions e ON v.run_id = e.id::text
+        JOIN scheduled_tasks t ON e.task_id = t.id
+        WHERE v.occurred_at >= $1
+          AND COALESCE(NULLIF(BTRIM(v.reason_code), ''), NULLIF(BTRIM(v.event_type), '')) IS NOT NULL
+        GROUP BY t.name, trigger_reason
+        ORDER BY t.name, trigger_count DESC, trigger_reason ASC
+        """,
+        since,
+    )
+    budget_rejection_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            artifact_type,
+            artifact_id,
+            blocking_issues,
+            error_message,
+            created_at
+        FROM artifact_attempts
+        WHERE created_at >= $1
+          AND artifact_type IN ('reasoning_synthesis', 'cross_vendor_reasoning')
+          AND failure_step = 'input_budget'
+        ORDER BY created_at DESC
+        """,
+        since,
+    )
+    cross_vendor_usage_row = await _safe_fetchrow(
+        pool,
+        """
+        SELECT
+            COUNT(*) AS model_call_count,
+            COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+            COALESCE(SUM(billable_input_tokens), 0) AS total_billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+            COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+            MAX(created_at) AS last_call_at
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND (
+              span_name = 'task.b2b_reasoning_synthesis.cross_vendor'
+              OR span_name LIKE 'reasoning.cross_vendor.%'
+          )
+        """,
+        since,
+    ) or {}
+    cross_vendor_attempt_row = await _safe_fetchrow(
+        pool,
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'succeeded') AS succeeded_items,
+            COUNT(*) FILTER (
+                WHERE status = 'rejected'
+                  AND COALESCE(failure_step, '') <> 'input_budget'
+            ) AS failed_items,
+            COUNT(*) FILTER (WHERE failure_step = 'input_budget') AS input_budget_rejections,
+            MAX(created_at) AS last_attempt_at
+        FROM artifact_attempts
+        WHERE created_at >= $1
+          AND artifact_type = 'cross_vendor_reasoning'
+        """,
+        since,
+    ) or {}
+    cross_vendor_latest_attempt_row = await _safe_fetchrow(
+        pool,
+        """
+        SELECT
+            status,
+            failure_step,
+            created_at
+        FROM artifact_attempts
+        WHERE created_at >= $1
+          AND artifact_type = 'cross_vendor_reasoning'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        since,
+    ) or {}
+    generic_summary_row = await _safe_fetchrow(
+        pool,
+        f"""
+        SELECT
+            COUNT(*) AS model_call_count,
+            COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
+            COALESCE(SUM(billable_input_tokens), 0) AS total_billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+            COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
+            MAX(created_at) AS last_call_at
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND span_name = 'reasoning.process'
+          AND lower({source_expr}) <> ALL($2::text[])
+        """,
+        since,
+        source_excludes,
+    ) or {}
+    generic_pair_rows = await _safe_fetch(
+        pool,
+        f"""
+        SELECT
+            {source_expr} AS source_name,
+            {event_expr} AS event_type,
+            COUNT(*) AS model_call_count,
+            COALESCE(SUM(cost_usd), 0) AS total_cost_usd
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND span_name = 'reasoning.process'
+          AND lower({source_expr}) <> ALL($2::text[])
+        GROUP BY 1, 2
+        ORDER BY COALESCE(SUM(cost_usd), 0) DESC, COUNT(*) DESC, 1, 2
+        LIMIT 5
+        """,
+        since,
+        source_excludes,
+    )
+
+    rows_by_task: dict[str, dict[str, Any]] = {}
+    payload_trigger_counts: dict[str, Counter[str]] = {}
+    visibility_trigger_counts: dict[str, Counter[str]] = {}
+    manual_trigger_counts: dict[str, Counter[str]] = {}
+    usage_by_run: dict[str, dict[str, Any]] = {}
+    for row in llm_usage_rows:
+        run_id = str(row.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        bucket = usage_by_run.setdefault(
+            run_id,
+            {
+                "model_call_count": 0,
+                "total_input_tokens": 0,
+                "total_billable_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cost_usd": 0.0,
+            },
+        )
+        bucket["model_call_count"] += _safe_int(row.get("model_call_count"))
+        bucket["total_input_tokens"] += _safe_int(row.get("total_input_tokens"))
+        bucket["total_billable_input_tokens"] += _safe_int(row.get("total_billable_input_tokens"))
+        bucket["total_output_tokens"] += _safe_int(row.get("total_output_tokens"))
+        bucket["total_cost_usd"] += _safe_float(row.get("total_cost_usd"))
+    claimed_run_ids = {
+        str(row.get("run_id") or "")
+        for row in execution_rows
+        if row.get("run_id")
+    }
+    known_task_names = sorted(rows_by_task.keys())
+
+    for row in task_rows:
+        task_name = str(row.get("name") or "").strip()
+        rows_by_task[task_name] = {
+            "task_name": task_name,
+            "recent_runs": _safe_int(row.get("recent_runs")),
+            "last_run_at": row["last_run_at"].isoformat() if row.get("last_run_at") else None,
+            "last_status": str(row.get("last_status") or "") or None,
+            "model_call_count": 0,
+            "total_input_tokens": 0,
+            "total_billable_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cost_usd": 0.0,
+            "avg_cost_per_run": None,
+            "successful_items": None,
+            "avg_cost_per_successful_item": None,
+            "rows_processed": None,
+            "rows_skipped": None,
+            "rows_reprocessed": None,
+            "retry_count": 0,
+            "failure_count": _safe_int(row.get("recent_failures")),
+            "reprocess_pct": None,
+            "top_trigger_reason": None,
+        }
+
+    for row in execution_rows:
+        task_name = str(row.get("task_name") or "").strip()
+        bucket = rows_by_task.setdefault(
+            task_name,
+            {
+                "task_name": task_name,
+                "recent_runs": 0,
+                "last_run_at": row["started_at"].isoformat() if row.get("started_at") else None,
+                "last_status": str(row.get("status") or "") or None,
+                "model_call_count": 0,
+                "total_input_tokens": 0,
+                "total_billable_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cost_usd": 0.0,
+                "avg_cost_per_run": None,
+                "successful_items": None,
+                "avg_cost_per_successful_item": None,
+                "rows_processed": None,
+                "rows_skipped": None,
+                "rows_reprocessed": None,
+                "retry_count": 0,
+                "failure_count": 0,
+                "reprocess_pct": None,
+                "top_trigger_reason": None,
+            },
+        )
+        bucket["retry_count"] += _safe_int(row.get("retry_count"))
+        payload = _parse_task_result_payload(row.get("result_text"))
+        metadata = _normalize_metadata(row.get("metadata"))
+        normalized = _normalize_burn_payload(task_name, payload, metadata)
+        _add_nullable_metric(bucket, "rows_processed", normalized.get("rows_processed"))
+        _add_nullable_metric(bucket, "rows_skipped", normalized.get("rows_skipped"))
+        _add_nullable_metric(bucket, "rows_reprocessed", normalized.get("rows_reprocessed"))
+        _add_nullable_metric(bucket, "successful_items", normalized.get("successful_items"))
+
+        trigger_reason = str(normalized.get("trigger_reason") or "").strip()
+        if trigger_reason:
+            payload_trigger_counts.setdefault(task_name, Counter())[trigger_reason] += 1
+
+        usage = usage_by_run.get(str(row.get("run_id") or ""))
+        if usage:
+            bucket["model_call_count"] += _safe_int(usage.get("model_call_count"))
+            bucket["total_input_tokens"] += _safe_int(usage.get("total_input_tokens"))
+            bucket["total_billable_input_tokens"] += _safe_int(usage.get("total_billable_input_tokens"))
+            bucket["total_output_tokens"] += _safe_int(usage.get("total_output_tokens"))
+            bucket["total_cost_usd"] += _safe_float(usage.get("total_cost_usd"))
+
+    for row in llm_usage_rows:
+        run_id = str(row.get("run_id") or "").strip()
+        if not run_id or run_id in claimed_run_ids:
+            continue
+        task_name = _task_name_from_span_name(str(row.get("span_name") or ""), known_task_names)
+        if not task_name:
+            continue
+        last_call_at = row.get("last_call_at")
+        bucket = rows_by_task.setdefault(
+            task_name,
+            {
+                "task_name": task_name,
+                "recent_runs": 0,
+                "last_run_at": last_call_at.isoformat() if last_call_at else None,
+                "last_status": "manual",
+                "model_call_count": 0,
+                "total_input_tokens": 0,
+                "total_billable_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cost_usd": 0.0,
+                "avg_cost_per_run": None,
+                "successful_items": None,
+                "avg_cost_per_successful_item": None,
+                "rows_processed": None,
+                "rows_skipped": None,
+                "rows_reprocessed": None,
+                "retry_count": None,
+                "failure_count": None,
+                "reprocess_pct": None,
+                "top_trigger_reason": None,
+            },
+        )
+        if isinstance(bucket.get("recent_runs"), int):
+            bucket["recent_runs"] = _safe_int(bucket.get("recent_runs")) + 1
+        else:
+            bucket["recent_runs"] = 1
+        current_last_run_at = str(bucket.get("last_run_at") or "").strip()
+        if last_call_at and (not current_last_run_at or last_call_at.isoformat() > current_last_run_at):
+            bucket["last_run_at"] = last_call_at.isoformat()
+            bucket["last_status"] = "manual"
+        bucket["model_call_count"] += _safe_int(row.get("model_call_count"))
+        bucket["total_input_tokens"] += _safe_int(row.get("total_input_tokens"))
+        bucket["total_billable_input_tokens"] += _safe_int(row.get("total_billable_input_tokens"))
+        bucket["total_output_tokens"] += _safe_int(row.get("total_output_tokens"))
+        bucket["total_cost_usd"] += _safe_float(row.get("total_cost_usd"))
+        manual_trigger_counts.setdefault(task_name, Counter())["manual/scripted execution"] += 1
+
+    for row in visibility_rows:
+        task_name = str(row.get("task_name") or "").strip()
+        trigger_reason = str(row.get("trigger_reason") or "").strip()
+        if not task_name or not trigger_reason:
+            continue
+        visibility_trigger_counts.setdefault(task_name, Counter())[trigger_reason] += _safe_int(
+            row.get("trigger_count")
+        )
+
+    budget_summary = {
+        "vendor_rejections": 0,
+        "cross_vendor_rejections": 0,
+        "last_rejection_at": None,
+        "max_vendor_estimated_input_tokens": None,
+        "max_vendor_cap": None,
+        "max_cross_vendor_estimated_input_tokens": None,
+        "max_cross_vendor_cap": None,
+        "rows": [],
+    }
+    for row in budget_rejection_rows:
+        artifact_type = str(row.get("artifact_type") or "").strip()
+        estimated_input_tokens, cap = _parse_input_budget_details(row.get("blocking_issues"))
+        created_at = row.get("created_at")
+        if artifact_type == "reasoning_synthesis":
+            budget_summary["vendor_rejections"] += 1
+            if estimated_input_tokens is not None:
+                prior_estimate = budget_summary["max_vendor_estimated_input_tokens"]
+                if prior_estimate is None or estimated_input_tokens > prior_estimate:
+                    budget_summary["max_vendor_estimated_input_tokens"] = estimated_input_tokens
+            if cap is not None:
+                prior_cap = budget_summary["max_vendor_cap"]
+                if prior_cap is None or cap > prior_cap:
+                    budget_summary["max_vendor_cap"] = cap
+        elif artifact_type == "cross_vendor_reasoning":
+            budget_summary["cross_vendor_rejections"] += 1
+            if estimated_input_tokens is not None:
+                prior_estimate = budget_summary["max_cross_vendor_estimated_input_tokens"]
+                if prior_estimate is None or estimated_input_tokens > prior_estimate:
+                    budget_summary["max_cross_vendor_estimated_input_tokens"] = estimated_input_tokens
+            if cap is not None:
+                prior_cap = budget_summary["max_cross_vendor_cap"]
+                if prior_cap is None or cap > prior_cap:
+                    budget_summary["max_cross_vendor_cap"] = cap
+        if created_at and (
+            budget_summary["last_rejection_at"] is None
+            or created_at.isoformat() > str(budget_summary["last_rejection_at"])
+        ):
+            budget_summary["last_rejection_at"] = created_at.isoformat()
+        if len(budget_summary["rows"]) < 50:
+            budget_summary["rows"].append({
+                "artifact_type": artifact_type,
+                "artifact_label": (
+                    "Cross-vendor reasoning"
+                    if artifact_type == "cross_vendor_reasoning"
+                    else "Vendor reasoning"
+                ),
+                "artifact_id": str(row.get("artifact_id") or ""),
+                "rejected_at": created_at.isoformat() if created_at else None,
+                "estimated_input_tokens": estimated_input_tokens,
+                "cap": cap,
+                "error_message": str(row.get("error_message") or "").strip() or None,
+            })
+
+    generic_last_call_at = generic_summary_row.get("last_call_at")
+    generic_top_pair = generic_pair_rows[0] if generic_pair_rows else None
+    generic_model_calls = _safe_int(generic_summary_row.get("model_call_count"))
+    generic_total_cost = round(_safe_float(generic_summary_row.get("total_cost_usd")), 6)
+    if generic_model_calls > 0 or generic_total_cost > 0:
+        source_name = str(generic_top_pair["source_name"]) if generic_top_pair else "unknown"
+        event_type = str(generic_top_pair["event_type"]) if generic_top_pair else "unknown"
+        rows_by_task["generic_reasoning"] = {
+            "task_name": "generic_reasoning",
+            "recent_runs": None,
+            "last_run_at": generic_last_call_at.isoformat() if generic_last_call_at else None,
+            "last_status": "event_driven",
+            "model_call_count": generic_model_calls,
+            "total_input_tokens": _safe_int(generic_summary_row.get("total_input_tokens")),
+            "total_billable_input_tokens": _safe_int(generic_summary_row.get("total_billable_input_tokens")),
+            "total_output_tokens": _safe_int(generic_summary_row.get("total_output_tokens")),
+            "total_cost_usd": generic_total_cost,
+            "avg_cost_per_run": None,
+            "successful_items": None,
+            "avg_cost_per_successful_item": None,
+            "rows_processed": None,
+            "rows_skipped": None,
+            "rows_reprocessed": None,
+            "retry_count": None,
+            "failure_count": None,
+            "reprocess_pct": None,
+            "top_trigger_reason": f"{source_name} | {event_type}",
+        }
+
+    cross_vendor_model_calls = _safe_int(cross_vendor_usage_row.get("model_call_count"))
+    cross_vendor_total_cost = round(_safe_float(cross_vendor_usage_row.get("total_cost_usd")), 6)
+    cross_vendor_succeeded = _safe_int(cross_vendor_attempt_row.get("succeeded_items"))
+    cross_vendor_failed = _safe_int(cross_vendor_attempt_row.get("failed_items"))
+    cross_vendor_budget_rejections = _safe_int(
+        cross_vendor_attempt_row.get("input_budget_rejections")
+    )
+    cross_vendor_last_call_at = cross_vendor_usage_row.get("last_call_at")
+    cross_vendor_last_attempt_at = cross_vendor_latest_attempt_row.get("created_at")
+    if (
+        cross_vendor_model_calls > 0
+        or cross_vendor_total_cost > 0
+        or cross_vendor_succeeded > 0
+        or cross_vendor_failed > 0
+        or cross_vendor_budget_rejections > 0
+    ):
+        latest_cross_vendor_at = None
+        if cross_vendor_last_call_at and cross_vendor_last_attempt_at:
+            latest_cross_vendor_at = max(cross_vendor_last_call_at, cross_vendor_last_attempt_at)
+        else:
+            latest_cross_vendor_at = cross_vendor_last_call_at or cross_vendor_last_attempt_at
+        latest_cross_vendor_status = "completed"
+        latest_attempt_status = str(cross_vendor_latest_attempt_row.get("status") or "").strip()
+        latest_attempt_failure_step = str(
+            cross_vendor_latest_attempt_row.get("failure_step") or ""
+        ).strip()
+        if cross_vendor_last_attempt_at and (
+            not cross_vendor_last_call_at or cross_vendor_last_attempt_at >= cross_vendor_last_call_at
+        ):
+            if latest_attempt_status == "rejected" and latest_attempt_failure_step == "input_budget":
+                latest_cross_vendor_status = "budget_rejected"
+            elif latest_attempt_status == "succeeded":
+                latest_cross_vendor_status = "completed"
+            elif latest_attempt_status:
+                latest_cross_vendor_status = latest_attempt_status
+        rows_by_task["b2b_reasoning_synthesis.cross_vendor"] = {
+            "task_name": "b2b_reasoning_synthesis.cross_vendor",
+            "recent_runs": None,
+            "last_run_at": latest_cross_vendor_at.isoformat() if latest_cross_vendor_at else None,
+            "last_status": latest_cross_vendor_status,
+            "model_call_count": cross_vendor_model_calls,
+            "total_input_tokens": _safe_int(cross_vendor_usage_row.get("total_input_tokens")),
+            "total_billable_input_tokens": _safe_int(
+                cross_vendor_usage_row.get("total_billable_input_tokens")
+            ),
+            "total_output_tokens": _safe_int(cross_vendor_usage_row.get("total_output_tokens")),
+            "total_cost_usd": cross_vendor_total_cost,
+            "avg_cost_per_run": None,
+            "successful_items": cross_vendor_succeeded if (
+                cross_vendor_succeeded > 0 or cross_vendor_failed > 0 or cross_vendor_budget_rejections > 0
+            ) else None,
+            "avg_cost_per_successful_item": None,
+            "rows_processed": (
+                cross_vendor_succeeded + cross_vendor_failed + cross_vendor_budget_rejections
+                if (cross_vendor_succeeded > 0 or cross_vendor_failed > 0 or cross_vendor_budget_rejections > 0)
+                else None
+            ),
+            "rows_skipped": cross_vendor_budget_rejections if cross_vendor_budget_rejections > 0 else None,
+            "rows_reprocessed": None,
+            "retry_count": None,
+            "failure_count": cross_vendor_failed,
+            "reprocess_pct": None,
+            "top_trigger_reason": (
+                "input_budget"
+                if cross_vendor_budget_rejections > 0
+                else "cross_vendor_synthesis"
+            ),
+        }
+
+    summary_cost = 0.0
+    summary_calls = 0
+    summary_runs = 0
+    summary_rows_processed = 0
+    summary_rows_reprocessed = 0
+    summary_processed_known = False
+    summary_reprocessed_known = False
+    finalized_rows: list[dict[str, Any]] = []
+
+    for task_name, bucket in rows_by_task.items():
+        recent_runs = bucket.get("recent_runs")
+        total_cost_usd = round(_safe_float(bucket.get("total_cost_usd")), 6)
+        successful_items = bucket.get("successful_items")
+        rows_processed = bucket.get("rows_processed")
+        rows_reprocessed = bucket.get("rows_reprocessed")
+
+        bucket["avg_cost_per_run"] = (
+            round(total_cost_usd / _safe_int(recent_runs), 6)
+            if isinstance(recent_runs, int) and recent_runs > 0 and total_cost_usd > 0
+            else None
+        )
+        bucket["avg_cost_per_successful_item"] = (
+            round(total_cost_usd / _safe_int(successful_items), 6)
+            if successful_items is not None and _safe_int(successful_items) > 0 and total_cost_usd > 0
+            else None
+        )
+        bucket["reprocess_pct"] = (
+            round(_safe_int(rows_reprocessed) / _safe_int(rows_processed), 4)
+            if rows_reprocessed is not None and rows_processed is not None and _safe_int(rows_processed) > 0
+            else None
+        )
+        bucket["top_trigger_reason"] = (
+            _dominant_counter_value(visibility_trigger_counts.get(task_name, Counter()))
+            or _dominant_counter_value(payload_trigger_counts.get(task_name, Counter()))
+            or _dominant_counter_value(manual_trigger_counts.get(task_name, Counter()))
+            or bucket.get("top_trigger_reason")
+            or "unknown"
+        )
+        bucket["total_cost_usd"] = total_cost_usd
+
+        summary_cost += total_cost_usd
+        summary_calls += _safe_int(bucket.get("model_call_count"))
+        if isinstance(recent_runs, int):
+            summary_runs += recent_runs
+        if rows_processed is not None:
+            summary_rows_processed += _safe_int(rows_processed)
+            summary_processed_known = True
+        if rows_reprocessed is not None:
+            summary_rows_reprocessed += _safe_int(rows_reprocessed)
+            summary_reprocessed_known = True
+        finalized_rows.append(bucket)
+
+    finalized_rows.sort(
+        key=lambda item: (
+            -_safe_float(item.get("total_cost_usd")),
+            -_safe_int(item.get("model_call_count")),
+            -_safe_int(item.get("recent_runs")),
+            str(item.get("task_name") or ""),
+        )
+    )
+
+    return {
+        "period_days": days,
+        "top_n": top_n,
+        "summary": {
+            "tracked_cost_usd": round(summary_cost, 6),
+            "model_call_count": summary_calls,
+            "recent_runs": summary_runs,
+            "rows_processed": summary_rows_processed if summary_processed_known else None,
+            "rows_reprocessed": summary_rows_reprocessed if summary_reprocessed_known else None,
+            "reprocess_pct": (
+                round(summary_rows_reprocessed / summary_rows_processed, 4)
+                if summary_processed_known and summary_reprocessed_known and summary_rows_processed > 0
+                else None
+            ),
+        },
+        "reasoning_budget_pressure": budget_summary,
+        "rows": finalized_rows[:top_n],
+    }
+
+
+@router.get("/generic-reasoning")
+async def generic_reasoning(
+    days: int = Query(default=30, ge=1, le=365),
+    top_n: int = Query(default=8, ge=1, le=50),
+):
+    """Generic reasoning-agent spend by source and event type."""
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    source_expr = _llm_usage_text_expr("source_name")
+    event_expr = _llm_usage_text_expr("event_type")
+    entity_type_expr = _llm_usage_text_expr("entity_type")
+    entity_id_expr = _llm_usage_text_expr("entity_id")
+    source_excludes = tuple(_GENERIC_REASONING_SOURCE_EXCLUDES)
+
+    summary_row = await _safe_fetchrow(
+        pool,
+        f"""
+        SELECT
+            COUNT(*) AS total_calls,
+            COALESCE(SUM(cost_usd), 0) AS total_cost,
+            COALESCE(SUM(billable_input_tokens), 0) AS total_billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS total_output_tokens
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND span_name = 'reasoning.process'
+          AND lower({source_expr}) <> ALL($2::text[])
+        """,
+        since,
+        source_excludes,
+    ) or {}
+
+    source_rows = await _safe_fetch(
+        pool,
+        f"""
+        SELECT
+            {source_expr} AS source_name,
+            COUNT(*) AS calls,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND span_name = 'reasoning.process'
+          AND lower({source_expr}) <> ALL($2::text[])
+        GROUP BY 1
+        ORDER BY COALESCE(SUM(cost_usd), 0) DESC, COUNT(*) DESC, 1
+        LIMIT $3
+        """,
+        since,
+        source_excludes,
+        top_n,
+    )
+    event_rows = await _safe_fetch(
+        pool,
+        f"""
+        SELECT
+            {event_expr} AS event_type,
+            COUNT(*) AS calls,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND span_name = 'reasoning.process'
+          AND lower({source_expr}) <> ALL($2::text[])
+        GROUP BY 1
+        ORDER BY COALESCE(SUM(cost_usd), 0) DESC, COUNT(*) DESC, 1
+        LIMIT $3
+        """,
+        since,
+        source_excludes,
+        top_n,
+    )
+    source_event_rows = await _safe_fetch(
+        pool,
+        f"""
+        SELECT
+            {source_expr} AS source_name,
+            {event_expr} AS event_type,
+            COUNT(*) AS calls,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND span_name = 'reasoning.process'
+          AND lower({source_expr}) <> ALL($2::text[])
+        GROUP BY 1, 2
+        ORDER BY COALESCE(SUM(cost_usd), 0) DESC, COUNT(*) DESC, 1, 2
+        LIMIT $3
+        """,
+        since,
+        source_excludes,
+        top_n,
+    )
+    entity_rows = await _safe_fetch(
+        pool,
+        f"""
+        SELECT
+            {entity_type_expr} AS entity_type,
+            {entity_id_expr} AS entity_id,
+            COUNT(*) AS calls,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(billable_input_tokens), 0) AS billable_input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens
+        FROM llm_usage
+        WHERE created_at >= $1
+          AND span_name = 'reasoning.process'
+          AND lower({source_expr}) <> ALL($2::text[])
+        GROUP BY 1, 2
+        ORDER BY COALESCE(SUM(cost_usd), 0) DESC, COUNT(*) DESC, 1, 2
+        LIMIT $3
+        """,
+        since,
+        source_excludes,
+        top_n,
+    )
+
+    top_source_name = str(source_rows[0]["source_name"]) if source_rows else None
+    top_event_type = str(event_rows[0]["event_type"]) if event_rows else None
+
+    return {
+        "period_days": days,
+        "top_n": top_n,
+        "summary": {
+            "total_cost_usd": round(_safe_float(summary_row.get("total_cost")), 6),
+            "total_calls": _safe_int(summary_row.get("total_calls")),
+            "total_billable_input_tokens": _safe_int(
+                summary_row.get("total_billable_input_tokens")
+            ),
+            "total_output_tokens": _safe_int(summary_row.get("total_output_tokens")),
+            "top_source_name": top_source_name,
+            "top_event_type": top_event_type,
+        },
+        "by_source": [
+            {
+                "source_name": str(row["source_name"]),
+                "calls": _safe_int(row["calls"]),
+                "cost_usd": round(_safe_float(row["cost_usd"]), 6),
+                "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
+                "output_tokens": _safe_int(row["output_tokens"]),
+            }
+            for row in source_rows
+        ],
+        "by_event_type": [
+            {
+                "event_type": str(row["event_type"]),
+                "calls": _safe_int(row["calls"]),
+                "cost_usd": round(_safe_float(row["cost_usd"]), 6),
+                "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
+                "output_tokens": _safe_int(row["output_tokens"]),
+            }
+            for row in event_rows
+        ],
+        "top_source_events": [
+            {
+                "source_name": str(row["source_name"]),
+                "event_type": str(row["event_type"]),
+                "calls": _safe_int(row["calls"]),
+                "cost_usd": round(_safe_float(row["cost_usd"]), 6),
+                "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
+                "output_tokens": _safe_int(row["output_tokens"]),
+            }
+            for row in source_event_rows
+        ],
+        "top_entities": [
+            {
+                "entity_type": str(row["entity_type"]),
+                "entity_id": str(row["entity_id"]),
+                "calls": _safe_int(row["calls"]),
+                "cost_usd": round(_safe_float(row["cost_usd"]), 6),
+                "billable_input_tokens": _safe_int(row["billable_input_tokens"]),
+                "output_tokens": _safe_int(row["output_tokens"]),
+            }
+            for row in entity_rows
+        ],
+    }
+
+
+@router.get("/reconciliation")
+async def cost_reconciliation(days: int = Query(default=30, ge=1, le=365)):
+    """Provider-vs-local reconciliation state for the cost dashboard."""
+    pool = _pool_or_503()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    since_date = since.date()
+    tracked_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            DATE(created_at AT TIME ZONE 'UTC') AS day,
+            COALESCE(model_provider, 'unknown') AS provider,
+            COALESCE(SUM(cost_usd), 0) AS tracked_cost_usd,
+            COUNT(*) AS calls
+        FROM llm_usage
+        WHERE created_at >= $1
+        GROUP BY day, model_provider
+        ORDER BY day DESC, provider ASC
+        """,
+        since,
+    )
+    provider_daily_rows = await _safe_fetch(
+        pool,
+        """
+        SELECT
+            provider,
+            cost_date::text AS day,
+            COALESCE(SUM(provider_cost_usd), 0) AS provider_cost_usd,
+            MAX(imported_at) AS imported_at
+        FROM llm_provider_daily_costs
+        WHERE cost_date >= $1::date
+        GROUP BY provider, cost_date
+        ORDER BY cost_date DESC, provider ASC
+        """,
+        since_date,
+    )
+    snapshot_rows = await _safe_fetch(
+        pool,
+        """
+        WITH latest_daily AS (
+            SELECT
+                provider,
+                DATE(snapshot_at AT TIME ZONE 'UTC') AS day,
+                snapshot_at,
+                total_usage_usd,
+                ROW_NUMBER() OVER (
+                    PARTITION BY provider, DATE(snapshot_at AT TIME ZONE 'UTC')
+                    ORDER BY snapshot_at DESC
+                ) AS rn
+            FROM llm_provider_usage_snapshots
+            WHERE snapshot_at >= ($1::date - INTERVAL '1 day')
+        ),
+        daily_max AS (
+            SELECT
+                provider,
+                day,
+                snapshot_at,
+                total_usage_usd
+            FROM latest_daily
+            WHERE rn = 1
+        ),
+        deltas AS (
+            SELECT
+                provider,
+                day,
+                snapshot_at,
+                total_usage_usd,
+                LAG(total_usage_usd) OVER (PARTITION BY provider ORDER BY day) AS prev_total_usage_usd
+            FROM daily_max
+        )
+        SELECT
+            provider,
+            day::text AS day,
+            CASE
+                WHEN prev_total_usage_usd IS NULL THEN NULL
+                ELSE GREATEST(total_usage_usd - prev_total_usage_usd, 0)
+            END AS provider_cost_usd,
+            snapshot_at AS imported_at
+        FROM deltas
+        WHERE day >= $1::date
+        ORDER BY day DESC, provider ASC
+        """,
+        since_date,
+    )
+
+    tracked_map: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in tracked_rows:
+        day = str(row["day"])
+        provider = str(row["provider"])
+        tracked_map[_reconciliation_row_key(day, provider)] = {
+            "date": day,
+            "provider": provider,
+            "tracked_cost_usd": round(_safe_float(row["tracked_cost_usd"]), 6),
+            "calls": _safe_int(row["calls"]),
+        }
+
+    provider_map: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in provider_daily_rows:
+        day = str(row["day"])
+        provider = str(row["provider"])
+        provider_map[_reconciliation_row_key(day, provider)] = {
+            "provider_cost_usd": round(_safe_float(row["provider_cost_usd"]), 6),
+            "status": "provider_daily_cost",
+        }
+    for row in snapshot_rows:
+        day = str(row["day"])
+        provider = str(row["provider"])
+        key = _reconciliation_row_key(day, provider)
+        if key in provider_map:
+            continue
+        provider_cost = row["provider_cost_usd"]
+        provider_map[key] = {
+            "provider_cost_usd": None if provider_cost is None else round(_safe_float(provider_cost), 6),
+            "status": "insufficient_snapshot_history" if provider_cost is None else "provider_snapshot_delta",
+        }
+
+    all_keys = sorted(
+        set(tracked_map.keys()) | set(provider_map.keys()),
+        key=lambda item: (item[0], item[1]),
+        reverse=True,
+    )
+    daily_rows: list[dict[str, Any]] = []
+    covered_tracked_keys: set[tuple[str, str]] = set()
+    provider_total = 0.0
+    provider_total_known = False
+    tracked_total = 0.0
+
+    for key in all_keys:
+        tracked = tracked_map.get(key, {})
+        provider = provider_map.get(key, {})
+        tracked_cost = round(_safe_float(tracked.get("tracked_cost_usd")), 6)
+        provider_cost = provider.get("provider_cost_usd")
+        if provider_cost is not None:
+            provider_total += _safe_float(provider_cost)
+            provider_total_known = True
+            if key in tracked_map:
+                covered_tracked_keys.add(key)
+        tracked_total += tracked_cost
+        delta_cost = None
+        delta_pct = None
+        if provider_cost is not None:
+            delta_cost = round(_safe_float(provider_cost) - tracked_cost, 6)
+            if _safe_float(provider_cost) > 0:
+                delta_pct = round((delta_cost / _safe_float(provider_cost)) * 100.0, 2)
+        daily_rows.append(
+            {
+                "date": tracked.get("date") or key[0],
+                "provider": tracked.get("provider") or key[1],
+                "status": provider.get("status", "missing_provider_data"),
+                "tracked_cost_usd": tracked_cost,
+                "provider_cost_usd": provider_cost,
+                "delta_cost_usd": delta_cost,
+                "delta_pct": delta_pct,
+                "calls": _safe_int(tracked.get("calls")),
+            }
+        )
+
+    tracked_keys = set(tracked_map.keys())
+    coverage_complete = (not tracked_keys) or tracked_keys.issubset(covered_tracked_keys)
+    if not provider_total_known:
+        status = "missing_provider_data"
+        provider_total_value = None
+        delta_total = None
+        delta_pct = None
+        message = "Provider billing totals are not yet stored locally for reconciliation."
+    elif not coverage_complete:
+        status = "partial_provider_data"
+        provider_total_value = round(provider_total, 6)
+        delta_total = None
+        delta_pct = None
+        message = "Some tracked provider rows still lack imported billing totals; daily rows show the available coverage."
+    else:
+        status_set = {str(row["status"]) for row in daily_rows}
+        if status_set == {"provider_daily_cost"}:
+            status = "provider_daily_cost"
+        elif status_set == {"provider_snapshot_delta"}:
+            status = "provider_snapshot_delta"
+        else:
+            status = "mixed_provider_data"
+        provider_total_value = round(provider_total, 6)
+        delta_total = round(provider_total - tracked_total, 6)
+        delta_pct = None
+        if provider_total > 0:
+            delta_pct = round((delta_total / provider_total) * 100.0, 2)
+        message = None
+
+    return {
+        "period_days": days,
+        "status": status,
+        "message": message,
+        "summary": {
+            "tracked_cost_usd": round(tracked_total, 6),
+            "provider_cost_usd": provider_total_value,
+            "delta_cost_usd": delta_total,
+            "delta_pct": delta_pct,
+        },
+        "daily_rows": daily_rows,
     }
 
 

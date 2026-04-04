@@ -884,6 +884,158 @@ export interface AdminCostB2bEfficiency {
   recent_runs: AdminCostB2bRunRow[]
 }
 
+export interface AdminCostGenericReasoningSourceRow {
+  source_name: string
+  calls: number
+  cost_usd: number
+  billable_input_tokens: number
+  output_tokens: number
+}
+
+export interface AdminCostGenericReasoningEventRow {
+  event_type: string
+  calls: number
+  cost_usd: number
+  billable_input_tokens: number
+  output_tokens: number
+}
+
+export interface AdminCostGenericReasoningSourceEventRow {
+  source_name: string
+  event_type: string
+  calls: number
+  cost_usd: number
+  billable_input_tokens: number
+  output_tokens: number
+}
+
+export interface AdminCostGenericReasoningEntityRow {
+  entity_type: string
+  entity_id: string
+  calls: number
+  cost_usd: number
+  billable_input_tokens: number
+  output_tokens: number
+}
+
+export interface AdminCostGenericReasoning {
+  period_days: number
+  top_n: number
+  summary: {
+    total_cost_usd: number
+    total_calls: number
+    total_billable_input_tokens: number
+    total_output_tokens: number
+    top_source_name: string | null
+    top_event_type: string | null
+  }
+  by_source: AdminCostGenericReasoningSourceRow[]
+  by_event_type: AdminCostGenericReasoningEventRow[]
+  top_source_events: AdminCostGenericReasoningSourceEventRow[]
+  top_entities: AdminCostGenericReasoningEntityRow[]
+}
+
+export interface AdminCostReconciliationRow {
+  date: string
+  provider: string
+  status: string
+  tracked_cost_usd: number
+  provider_cost_usd: number | null
+  delta_cost_usd: number | null
+  delta_pct: number | null
+  calls: number
+}
+
+export interface AdminCostReconciliation {
+  period_days: number
+  status: string
+  message: string | null
+  summary: {
+    tracked_cost_usd: number
+    provider_cost_usd: number | null
+    delta_cost_usd: number | null
+    delta_pct: number | null
+  }
+  daily_rows: AdminCostReconciliationRow[]
+}
+
+export interface AdminCostBurnRow {
+  task_name: string
+  recent_runs: number | null
+  last_run_at: string | null
+  last_status: string | null
+  model_call_count: number
+  total_input_tokens: number
+  total_billable_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  avg_cost_per_run: number | null
+  successful_items: number | null
+  avg_cost_per_successful_item: number | null
+  rows_processed: number | null
+  rows_skipped: number | null
+  rows_reprocessed: number | null
+  retry_count: number | null
+  failure_count: number | null
+  reprocess_pct: number | null
+  top_trigger_reason: string
+}
+
+export interface AdminCostBurnBudgetRow {
+  artifact_type: string
+  artifact_label: string
+  artifact_id: string
+  rejected_at: string | null
+  estimated_input_tokens: number | null
+  cap: number | null
+  error_message: string | null
+}
+
+export interface AdminCostBurnDashboard {
+  period_days: number
+  top_n: number
+  summary: {
+    tracked_cost_usd: number
+    model_call_count: number
+    recent_runs: number
+    rows_processed: number | null
+    rows_reprocessed: number | null
+    reprocess_pct: number | null
+  }
+  reasoning_budget_pressure: {
+    vendor_rejections: number
+    cross_vendor_rejections: number
+    last_rejection_at: string | null
+    max_vendor_estimated_input_tokens: number | null
+    max_vendor_cap: number | null
+    max_cross_vendor_estimated_input_tokens: number | null
+    max_cross_vendor_cap: number | null
+    rows: AdminCostBurnBudgetRow[]
+  }
+  rows: AdminCostBurnRow[]
+}
+
+export interface AdminCostReasoningActivityPhase {
+  span_name: string
+  pass_type: string
+  pass_number: number
+  calls: number
+  cost_usd: number
+  total_tokens: number
+  avg_duration_ms: number
+  changed_count: number
+}
+
+export interface AdminCostReasoningActivity {
+  period_days: number
+  phases: AdminCostReasoningActivityPhase[]
+  summary: {
+    total_cost_usd: number
+    total_tokens: number
+    total_calls: number
+  }
+}
+
 export interface AdminCostRecentCall {
   id: string
   span_name: string

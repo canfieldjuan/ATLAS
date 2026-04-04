@@ -783,7 +783,7 @@ function normalizeLabel(label: string | undefined, context: 'pain' | 'satisfacti
   return label
 }
 
-function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record<string, unknown> }) {
+function BattleCardDetail({ data }: { data: BattleCardViewModel }) {
   const weaknesses = data.weakness_analysis.length > 0 ? data.weakness_analysis : data.vendor_weaknesses
   const qualityClass = data.quality_status === 'sales_ready'
     ? 'bg-emerald-500/15 text-emerald-300'
@@ -805,7 +805,7 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
           data.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}` : '',
         ].filter(Boolean)}
       />
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-start">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-xs text-slate-400 mb-1">Churn Pressure</p>
           <p className="text-2xl font-bold text-red-400">{data.churn_pressure_score != null ? Math.round(data.churn_pressure_score) : '--'}</p>
@@ -824,14 +824,36 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
         </div>
       </div>
       {(qualityLabel || data.quality_score != null) && (
-        <div className="flex flex-wrap items-center gap-2">
-          {qualityLabel && (
-            <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${qualityClass}`}>
-              {qualityLabel}
-            </span>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {qualityLabel && (
+              <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${qualityClass}`}>
+                {qualityLabel}
+              </span>
+            )}
+            {data.quality_score != null && (
+              <span className="text-xs text-slate-400">quality score: <span className="text-white font-medium">{Math.round(data.quality_score)}</span></span>
+            )}
+          </div>
+          {data.quality_failed_checks.length > 0 && (
+            <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3">
+              <p className="text-xs font-medium text-rose-300 mb-1">Quality blockers</p>
+              <ul className="space-y-0.5">
+                {data.quality_failed_checks.map((check, i) => (
+                  <li key={i} className="text-xs text-rose-300/80">{check}</li>
+                ))}
+              </ul>
+            </div>
           )}
-          {data.quality_score != null && (
-            <span className="text-xs text-slate-400">quality score: <span className="text-white font-medium">{Math.round(data.quality_score)}</span></span>
+          {data.quality_warnings.length > 0 && data.quality_failed_checks.length === 0 && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+              <p className="text-xs font-medium text-amber-300 mb-1">Quality warnings</p>
+              <ul className="space-y-0.5">
+                {data.quality_warnings.map((w, i) => (
+                  <li key={i} className="text-xs text-amber-300/80">{w}</li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       )}
@@ -844,7 +866,7 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
 
       {data.objection_metrics && (
         <SectionCard title="Signal Metrics" icon={<Zap className="h-4 w-4 text-amber-400" />}>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 items-start">
             {data.objection_metrics.avg_urgency != null && (
               <div className="bg-slate-800/50 rounded-lg p-3 text-center">
                 <p className="text-xs text-slate-400 mb-1">Avg Urgency</p>
@@ -1182,7 +1204,7 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel; rawData: Record
           {data.evidence_depth_warning && (
             <p className="text-xs text-amber-300 mb-3">{data.evidence_depth_warning}</p>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs items-start">
             {data.evidence_conclusions.length > 0 && (
               <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3">
                 <p className="text-emerald-400 font-medium mb-1.5">Safe to Lead With</p>
@@ -2372,7 +2394,7 @@ export function SpecializedReportData({
   const normalized = normalizeReportObject(Array.isArray(normalizedValue) ? {} : (normalizedValue as Record<string, unknown> | null | undefined))
   if (reportType === 'challenger_brief') return <ChallengerBriefDetail data={toChallengerBriefViewModel(normalized)} />
   if (reportType === 'accounts_in_motion') return <AccountsInMotionDetail data={toAccountsInMotionViewModel(normalized)} />
-  if (reportType === 'battle_card') return <BattleCardDetail data={toBattleCardViewModel(normalized)} rawData={normalized} />
+  if (reportType === 'battle_card') return <BattleCardDetail data={toBattleCardViewModel(normalized)} />
   if (reportType === 'vendor_comparison' || reportType === 'account_comparison') {
     return <ComparisonReportDetail data={toComparisonReportViewModel(normalized)} rawData={normalized} />
   }

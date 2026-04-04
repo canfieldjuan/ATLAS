@@ -290,6 +290,70 @@ def test_build_evidence_vault_merges_pass2_rollups_into_output():
     assert vault["metric_snapshot"]["reviews_in_recent_window"] == 2
 
 
+def test_build_evidence_vault_filters_deprecated_and_low_trust_company_signals():
+    vault = build_evidence_vault(
+        vendor_name="Acme",
+        vs={
+            "total_reviews": 20,
+            "recommend_yes": 12,
+            "recommend_no": 8,
+            "avg_urgency": 5.5,
+        },
+        pain_entries=[],
+        feature_gap_entries=[],
+        quotes=[],
+        positive_entries=[],
+        product_profile=None,
+        keyword_spikes=None,
+        company_signals=[
+            {
+                "company": "Acme Corp",
+                "source": "trustpilot",
+                "confidence_score": 0.91,
+                "urgency": 8.0,
+            },
+            {
+                "company": "Budget Startup",
+                "source": "reddit",
+                "confidence_score": 0.21,
+                "urgency": 7.0,
+            },
+            {
+                "company": "Contoso",
+                "source": "g2",
+                "confidence_score": 0.74,
+                "urgency": 7.2,
+                "pain": "pricing",
+            },
+        ],
+        provenance=None,
+        data_context=None,
+        dm_rate=0.2,
+        price_rate=0.3,
+        analysis_window_days=30,
+        recent_window_days=30,
+    )
+
+    assert vault["company_signals"] == [
+        {
+            "company_name": "Contoso",
+            "signal_type": "churning",
+            "urgency_score": 7.2,
+            "pain_category": "pricing",
+            "buyer_role": None,
+            "decision_maker": None,
+            "seat_count": None,
+            "contract_end": None,
+            "buying_stage": None,
+            "review_id": "",
+            "source": "g2",
+            "confidence_score": 0.74,
+            "first_seen_at": None,
+            "last_seen_at": None,
+        }
+    ]
+
+
 def test_merge_canonical_company_signals_preserves_strongest_current_signal():
     merged = _merge_canonical_company_signals(
         current_high_intent=[

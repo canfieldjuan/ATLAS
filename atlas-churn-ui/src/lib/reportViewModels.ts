@@ -740,6 +740,8 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     llm_render_status: asString(value.llm_render_status),
     quality_status: asString(value.quality_status ?? asRecord(value.battle_card_quality).status),
     quality_score: asNumber(asRecord(value.battle_card_quality).score) ?? null,
+    quality_failed_checks: toStringArray(asRecord(value.battle_card_quality).failed_checks),
+    quality_warnings: toStringArray(asRecord(value.battle_card_quality).warnings),
     reasoning_source: asString(value.reasoning_source),
     reasoning_reference_ids: toReasoningReferenceIds(value.reference_ids ?? value.reasoning_reference_ids),
   }

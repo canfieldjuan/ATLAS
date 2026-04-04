@@ -29,7 +29,6 @@ _BUILTIN_TASKS = [
     ("invoice_overdue_check", "run", "invoice_overdue_check"),
     ("invoice_payment_reminders", "run", "invoice_payment_reminders"),
     ("monthly_invoice_generation", "run", "monthly_invoice_generation"),
-    ("reasoning_tick", "run", "reasoning_tick"),
     ("reasoning_reflection", "run", "reasoning_reflection"),
     ("weather_traffic_alerts", "run", "weather_traffic_alerts"),
     ("news_intelligence", "run", "news_intelligence"),
@@ -56,6 +55,7 @@ _BUILTIN_TASKS = [
     ("knowledge_graph_sync", "run", "knowledge_graph_sync"),
     ("ecosystem_analysis", "run", "ecosystem_analysis"),
     ("b2b_account_resolution", "run", "b2b_account_resolution"),
+    ("provider_cost_sync", "run", "llm_provider_cost_sync"),
     ("cleaning_sms_reminder", "run", "cleaning_sms_reminder"),
 ]
 

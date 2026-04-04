@@ -40,8 +40,12 @@ import type {
   AdminCostOperation,
   AdminCostVendor,
   AdminCostB2bEfficiency,
+  AdminCostBurnDashboard,
+  AdminCostGenericReasoning,
+  AdminCostReconciliation,
   AdminCostRecentCall,
   AdminCostCacheHealth,
+  AdminCostReasoningActivity,
   AdminCostRunDetail,
   AdminTaskHealthRow,
   DedupDecision,
@@ -54,6 +58,7 @@ const TENANT_BASE = `${API_BASE}/api/v1/b2b/tenant`
 const AFFILIATES_BASE = `${TENANT_BASE}/affiliates`
 const CAMPAIGNS_BASE = `${API_BASE}/api/v1/b2b/campaigns`
 const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
+const PREDICT_BASE = `${API_BASE}/api/v1/b2b/predict`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
@@ -614,6 +619,57 @@ export async function listTrackedVendors() {
   return get<{ vendors: TrackedVendor[]; count: number }>(TENANT_BASE, '/vendors')
 }
 
+export interface AccountsInMotionFeedItem {
+  company: string | null
+  vendor: string
+  watch_vendor: string
+  track_mode: string
+  watchlist_label: string | null
+  category: string | null
+  urgency: number
+  role_type: string | null
+  buying_stage: string | null
+  budget_authority: boolean | null
+  pain_categories: { category: string; severity: string }[]
+  evidence: string[]
+  alternatives_considering: { name: string; reason?: string }[]
+  contract_signal: string | null
+  reviewer_title: string | null
+  company_size_raw: string | null
+  quality_flags: string[]
+  opportunity_score: number | null
+  quote_match_type: string | null
+  confidence: number | null
+  source_distribution: Record<string, number>
+  enriched_at: string | null
+  employee_count: number | null
+  industry: string | null
+  annual_revenue: string | null
+  domain: string | null
+  contacts: Array<Record<string, unknown>>
+  contact_count: number
+  report_date: string | null
+  stale_days: number | null
+  is_stale: boolean
+  data_source: string | null
+}
+
+export async function fetchAccountsInMotionFeed(params?: {
+  min_urgency?: number
+  per_vendor_limit?: number
+  limit?: number
+}) {
+  return get<{
+    accounts: AccountsInMotionFeedItem[]
+    count: number
+    tracked_vendor_count: number
+    vendors_with_accounts: number
+    min_urgency: number
+    per_vendor_limit: number
+    freshest_report_date: string | null
+  }>(TENANT_BASE, '/accounts-in-motion-feed', params)
+}
+
 // ---------------------------------------------------------------------------
 // Briefing Review Queue (HITL)
 // ---------------------------------------------------------------------------
@@ -785,6 +841,32 @@ export async function fetchAdminCostB2bEfficiency(params?: {
   )
 }
 
+export async function fetchAdminCostBurnDashboard(params?: {
+  days?: number
+  top_n?: number
+}) {
+  return get<AdminCostBurnDashboard>(
+    ADMIN_COSTS_BASE,
+    '/burn-dashboard',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function fetchAdminCostGenericReasoning(params?: {
+  days?: number
+  top_n?: number
+}) {
+  return get<AdminCostGenericReasoning>(
+    ADMIN_COSTS_BASE,
+    '/generic-reasoning',
+    params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function fetchAdminCostReconciliation(days = 30) {
+  return get<AdminCostReconciliation>(ADMIN_COSTS_BASE, '/reconciliation', { days })
+}
+
 export async function fetchAdminCostRecent(params?: {
   limit?: number
   days?: number
@@ -804,6 +886,10 @@ export async function fetchAdminCostRecent(params?: {
 
 export async function fetchAdminCostCacheHealth(days = 30, top_n = 8) {
   return get<AdminCostCacheHealth>(ADMIN_COSTS_BASE, '/cache-health', { days, top_n })
+}
+
+export async function fetchAdminCostReasoningActivity(days = 30) {
+  return get<AdminCostReasoningActivity>(ADMIN_COSTS_BASE, '/reasoning-activity', { days })
 }
 
 export async function fetchAdminTaskHealth(days = 30) {
@@ -832,4 +918,122 @@ export async function runAutonomousTask(taskId: string, body?: Record<string, un
     `/${encodeURIComponent(taskId)}/run`,
     body,
   )
+}
+
+// ── Win/Loss Predictor ───────────────────────────────────────────────────
+
+export interface WinLossDataGate {
+  factor: string
+  required: number
+  actual: number
+  sufficient: boolean
+}
+
+export interface WinLossFactor {
+  name: string
+  score: number
+  weight: number
+  evidence: string
+  data_points: number
+  gated: boolean
+}
+
+export interface WinLossTrigger {
+  trigger: string
+  frequency: number
+  urgency: number
+  source: string
+}
+
+export interface WinLossQuote {
+  quote: string
+  source: string
+  role_type: string
+  urgency: number
+}
+
+export interface WinLossObjection {
+  objection: string
+  frequency: number
+  counter: string
+}
+
+export interface WinLossPrediction {
+  vendor_name: string
+  win_probability: number
+  confidence: string
+  verdict: string
+  is_gated: boolean
+  data_gates: WinLossDataGate[]
+  factors: WinLossFactor[]
+  switching_triggers: WinLossTrigger[]
+  proof_quotes: WinLossQuote[]
+  objections: WinLossObjection[]
+  displacement_targets: { vendor: string; mentions: number; driver: string; strength: string }[]
+  segment_match: { typical_sizes: unknown; typical_industries: unknown; size_match: number; industry_match: number } | null
+  data_coverage: Record<string, number>
+  weights_source: string
+  calibration_version: number | null
+  recommended_approach: string | null
+  lead_with: string[]
+  talking_points: string[]
+  timing_advice: string | null
+  risk_factors: string[]
+  prediction_id: string | null
+}
+
+export interface RecentPrediction {
+  prediction_id: string
+  vendor_name: string
+  win_probability: number
+  confidence: string
+  is_gated: boolean
+  created_at: string
+}
+
+export async function predictWinLoss(params: {
+  vendor_name: string
+  company_size?: string
+  industry?: string
+}) {
+  return post<WinLossPrediction>(PREDICT_BASE, '/win-loss', params)
+}
+
+export async function fetchRecentPredictions(limit: number = 10) {
+  return get<{ predictions: RecentPrediction[]; count: number }>(PREDICT_BASE, '/win-loss/recent', { limit })
+}
+
+export async function fetchPredictionById(predictionId: string) {
+  return get<WinLossPrediction>(PREDICT_BASE, `/win-loss/${encodeURIComponent(predictionId)}`)
+}
+
+export interface FactorComparison {
+  name: string
+  vendor_a_score: number
+  vendor_b_score: number
+  advantage: 'a' | 'b' | 'tie'
+}
+
+export interface WinLossCompareResponse {
+  vendor_a: WinLossPrediction
+  vendor_b: WinLossPrediction
+  easier_target: string
+  probability_delta: number
+  factor_comparison: FactorComparison[]
+}
+
+export async function compareWinLoss(params: {
+  vendor_a: string
+  vendor_b: string
+  company_size?: string
+  industry?: string
+}) {
+  return post<WinLossCompareResponse>(PREDICT_BASE, '/win-loss/compare', params)
+}
+
+export function downloadPredictionCsv(predictionId: string) {
+  const url = new URL(PREDICT_BASE + `/win-loss/${encodeURIComponent(predictionId)}/csv`, window.location.origin)
+  const token = localStorage.getItem('atlas_token')
+  if (token) url.searchParams.set('token', token)
+  window.open(url.toString(), '_blank')
 }

@@ -917,11 +917,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: scrape B2B review sites per configured targets."""
     cfg = settings.b2b_scrape
     if not cfg.enabled:
-        return {"_skip_synthesis": True, "skipped": "b2b_scrape disabled"}
+        return {
+            "_skip_synthesis": True,
+            "skipped": "b2b_scrape disabled",
+            "skip_reason": "B2B scrape intake disabled",
+            "trigger_reason": "B2B scrape intake disabled",
+        }
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return {"_skip_synthesis": True, "skipped": "db not ready"}
+        return {
+            "_skip_synthesis": True,
+            "skipped": "db not ready",
+            "skip_reason": "B2B scrape intake skipped -- database not ready",
+            "trigger_reason": "B2B scrape intake skipped -- database not ready",
+        }
 
     # Import here to avoid circular imports and lazy-load curl_cffi
     from ...services.scraping.client import get_scrape_client
@@ -978,6 +988,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "targets_due": 0,
             "targets_skipped_source_fit": len(source_fit_skipped),
             "skipped_targets": source_fit_skipped[:20],
+            "skip_reason": "No scrape targets due",
+            "trigger_reason": "No scrape targets due",
         }
 
     total_reviews = 0
@@ -1301,6 +1313,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ),
         "skipped_targets": source_fit_skipped[:20],
         "results": results_summary,
+        "skip_reason": "B2B scrape intake completed",
+        "trigger_reason": (
+            "B2B scrape intake completed -- new reviews inserted"
+            if total_inserted > 0
+            else "B2B scrape intake completed -- no new reviews inserted"
+        ),
     }
 
 

@@ -256,7 +256,7 @@ The intent router uses `all-MiniLM-L6-v2` (384-dim, CPU) for fast semantic class
 - `pattern_learning` / `preference_learning` — User behavior modeling
 - `anomaly_detection` — Churn signal anomaly alerting (every 15 min)
 - `knowledge_graph_sync` — Nightly Neo4j sync from conversation history
-- `reasoning_tick` / `reasoning_reflection` — Persistent reasoning updates
+- `reasoning_reflection` — Persistent reasoning updates
 
 All tasks support ntfy push notifications, per-task opt-out, and `_skip_synthesis` for empty results.
 

@@ -137,7 +137,10 @@ async def test_list_tenant_reports_excludes_stale_and_allows_global_rows(monkeyp
 async def test_list_leads_uses_event_recency_and_company_fallback(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
-    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(side_effect=[[{"vendor_name": "Acme"}], []]),
+    )
     user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
@@ -147,16 +150,21 @@ async def test_list_leads_uses_event_recency_and_company_fallback(monkeypatch):
     )
 
     assert result == {"leads": [], "count": 0}
-    sql = pool.fetch.await_args.args[0]
-    assert "COALESCE(reviewed_at, imported_at, enriched_at)" in sql
-    assert "COALESCE(NULLIF(BTRIM(reviewer_company), ''), NULLIF(BTRIM(reviewer_company_norm), ''))" in sql
+    sql = pool.fetch.await_args_list[-1].args[0]
+    assert "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)" in sql
+    assert "ar.confidence_label IN ('high', 'medium')" in sql
+    assert "ar.resolved_company_name" in sql
+    assert "r.reviewer_company AS raw_reviewer_company" in sql
 
 
 @pytest.mark.asyncio
 async def test_list_tenant_reviews_uses_event_recency_and_company_fallback(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
-    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(side_effect=[[{"vendor_name": "Acme"}], []]),
+    )
     user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
@@ -172,9 +180,10 @@ async def test_list_tenant_reviews_uses_event_recency_and_company_fallback(monke
     )
 
     assert result == {"reviews": [], "count": 0}
-    sql = pool.fetch.await_args.args[0]
-    assert "COALESCE(reviewed_at, imported_at, enriched_at)" in sql
-    assert "COALESCE(NULLIF(BTRIM(reviewer_company), ''), NULLIF(BTRIM(reviewer_company_norm), ''))" in sql
+    sql = pool.fetch.await_args_list[-1].args[0]
+    assert "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)" in sql
+    assert "r.reviewer_company ILIKE '%' || $3 || '%'" in sql
+    assert "ORDER BY (r.enrichment->>'urgency_score')::numeric DESC" in sql
 
 
 @pytest.mark.asyncio
@@ -316,3 +325,179 @@ async def test_get_vendor_target_prefers_new_report_types(monkeypatch):
     assert "report_type = ANY($2::text[])" in sql
     assert report_types[0] == "accounts_in_motion"
     assert "weekly_churn_feed" in report_types
+
+
+@pytest.mark.asyncio
+async def test_accounts_in_motion_feed_aggregates_tracked_vendor_reports(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Zendesk", "track_mode": "competitor", "label": "Support", "added_at": None},
+                {"vendor_name": "Intercom", "track_mode": "competitor", "label": None, "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        side_effect=[
+            {
+                "accounts": [
+                    {
+                        "company": "Acme Corp",
+                        "vendor": "Zendesk",
+                        "urgency": 8.5,
+                        "opportunity_score": 82,
+                        "pain_categories": [{"category": "pricing", "severity": ""}],
+                        "evidence": ["We need to move fast."],
+                    }
+                ],
+                "report_date": "2026-04-04",
+                "stale_days": 0,
+                "is_stale": False,
+                "data_source": "persisted_report",
+            },
+            {
+                "accounts": [
+                    {
+                        "company": "Bravo Ltd",
+                        "vendor": "Intercom",
+                        "urgency": 7.1,
+                        "opportunity_score": 70,
+                        "pain_categories": [{"category": "support", "severity": ""}],
+                        "evidence": ["Support quality dropped."],
+                    }
+                ],
+                "report_date": "2026-04-03",
+                "stale_days": 1,
+                "is_stale": True,
+                "data_source": "persisted_report",
+            },
+        ]
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        min_urgency=7,
+        per_vendor_limit=5,
+        limit=10,
+        user=user,
+    )
+
+    assert result["tracked_vendor_count"] == 2
+    assert result["vendors_with_accounts"] == 2
+    assert result["freshest_report_date"] == "2026-04-04"
+    assert result["accounts"][0]["company"] == "Acme Corp"
+    assert result["accounts"][0]["watch_vendor"] == "Zendesk"
+    assert result["accounts"][0]["watchlist_label"] == "Support"
+    assert result["accounts"][0]["is_stale"] is False
+    assert result["accounts"][1]["company"] == "Bravo Ltd"
+    helper.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_accounts_in_motion_feed_handles_empty_watchlist(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        min_urgency=mod.settings.b2b_churn.accounts_in_motion_min_urgency,
+        per_vendor_limit=mod.settings.b2b_churn.accounts_in_motion_max_per_vendor,
+        limit=mod.settings.b2b_churn.accounts_in_motion_feed_max_total,
+        user=user,
+    )
+
+    assert result == {
+        "accounts": [],
+        "count": 0,
+        "tracked_vendor_count": 0,
+        "vendors_with_accounts": 0,
+        "min_urgency": mod.settings.b2b_churn.accounts_in_motion_min_urgency,
+        "per_vendor_limit": mod.settings.b2b_churn.accounts_in_motion_max_per_vendor,
+        "freshest_report_date": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_accounts_in_motion_feed_sorts_and_applies_total_limit(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Zendesk", "track_mode": "competitor", "label": "Support", "added_at": None},
+                {"vendor_name": "Intercom", "track_mode": "competitor", "label": "Chat", "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        side_effect=[
+            {
+                "accounts": [
+                    {
+                        "company": "Bravo Ltd",
+                        "vendor": "Zendesk",
+                        "urgency": 8.1,
+                        "opportunity_score": 70,
+                        "pain_categories": [{"category": "pricing", "severity": ""}],
+                        "evidence": ["Budget pressure is rising."],
+                    },
+                    {
+                        "company": "Acme Corp",
+                        "vendor": "Zendesk",
+                        "urgency": 9.0,
+                        "opportunity_score": 85,
+                        "pain_categories": [{"category": "support", "severity": ""}],
+                        "evidence": ["We need a replacement this quarter."],
+                    },
+                ],
+                "report_date": "2026-04-04",
+                "stale_days": 0,
+                "is_stale": False,
+                "data_source": "persisted_report",
+            },
+            {
+                "accounts": [
+                    {
+                        "company": "Charlie Inc",
+                        "vendor": "Intercom",
+                        "urgency": 9.4,
+                        "opportunity_score": 90,
+                        "pain_categories": [{"category": "reliability", "severity": ""}],
+                        "evidence": ["We are actively evaluating alternatives."],
+                    }
+                ],
+                "report_date": "2026-04-03",
+                "stale_days": 2,
+                "is_stale": True,
+                "data_source": "persisted_report",
+            },
+        ]
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        min_urgency=7,
+        per_vendor_limit=5,
+        limit=2,
+        user=user,
+    )
+
+    assert result["count"] == 2
+    assert [row["company"] for row in result["accounts"]] == ["Acme Corp", "Bravo Ltd"]
+    assert all(row["is_stale"] is False for row in result["accounts"])

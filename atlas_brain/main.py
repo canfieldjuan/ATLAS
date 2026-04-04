@@ -760,8 +760,9 @@ async def _b2b_dashboard_deprecation_guard(request, call_next):
 
 @app.middleware("http")
 async def _inject_rate_limit_identity(request, call_next):
-    """Decode JWT for /api/v1/consumer/dashboard paths to feed slowapi key_func."""
-    if request.url.path.startswith("/api/v1/consumer/dashboard"):
+    """Decode JWT for rate-limited paths to feed slowapi key_func."""
+    path = request.url.path
+    if path.startswith("/api/v1/consumer/dashboard") or path.startswith("/api/v1/b2b/predict"):
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             try:

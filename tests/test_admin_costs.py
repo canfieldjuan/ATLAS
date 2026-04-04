@@ -14,8 +14,48 @@ class _FakePool:
         self.is_initialized = True
         self.last_fetch_query = ""
         self.last_fetch_args = ()
+        self.provider_daily_rows = []
+        self.provider_snapshot_rows = []
 
     async def fetchrow(self, query, *args):
+        if "artifact_type = 'cross_vendor_reasoning'" in query and "ORDER BY created_at DESC" in query:
+            return {
+                "status": "succeeded",
+                "failure_step": None,
+                "created_at": datetime(2026, 3, 31, 22, 31, tzinfo=timezone.utc),
+            }
+        if "artifact_type = 'cross_vendor_reasoning'" in query:
+            return {
+                "succeeded_items": 1,
+                "failed_items": 0,
+                "input_budget_rejections": 1,
+                "last_attempt_at": datetime(2026, 3, 31, 22, 30, tzinfo=timezone.utc),
+            }
+        if "span_name = 'task.b2b_reasoning_synthesis.cross_vendor'" in query:
+            return {
+                "model_call_count": 2,
+                "total_input_tokens": 1000,
+                "total_billable_input_tokens": 900,
+                "total_output_tokens": 150,
+                "total_cost_usd": Decimal("0.11"),
+                "last_call_at": datetime(2026, 3, 31, 22, 29, tzinfo=timezone.utc),
+            }
+        if "span_name = 'reasoning.process'" in query and "MAX(created_at) AS last_call_at" in query:
+            return {
+                "model_call_count": 12,
+                "total_input_tokens": 54000,
+                "total_billable_input_tokens": 42000,
+                "total_output_tokens": 9100,
+                "total_cost_usd": Decimal("1.75"),
+                "last_call_at": datetime(2026, 3, 31, 22, 30, tzinfo=timezone.utc),
+            }
+        if "span_name = 'reasoning.process'" in query and "total_billable_input_tokens" in query:
+            return {
+                "total_calls": 12,
+                "total_cost": Decimal("1.75"),
+                "total_billable_input_tokens": 42000,
+                "total_output_tokens": 9100,
+            }
         if "FROM task_executions e" in query and "JOIN scheduled_tasks t" in query:
             return {
                 "id": uuid4(),
@@ -125,6 +165,254 @@ class _FakePool:
     async def fetch(self, query, *args):
         self.last_fetch_query = query
         self.last_fetch_args = args
+        if "FROM scheduled_tasks t" in query and "COALESCE(stats.recent_runs, 0) AS recent_runs" in query:
+            return [
+                {
+                    "id": uuid4(),
+                    "name": "b2b_enrichment",
+                    "last_run_at": datetime(2026, 3, 31, 21, 55, tzinfo=timezone.utc),
+                    "last_status": "completed",
+                    "recent_runs": 1,
+                    "recent_failures": 0,
+                },
+                {
+                    "id": uuid4(),
+                    "name": "b2b_enrichment_repair",
+                    "last_run_at": datetime(2026, 3, 31, 22, 5, tzinfo=timezone.utc),
+                    "last_status": "completed",
+                    "recent_runs": 1,
+                    "recent_failures": 0,
+                },
+                {
+                    "id": uuid4(),
+                    "name": "b2b_reasoning_synthesis",
+                    "last_run_at": datetime(2026, 3, 31, 22, 10, tzinfo=timezone.utc),
+                    "last_status": "completed",
+                    "recent_runs": 1,
+                    "recent_failures": 0,
+                },
+            ]
+        if "SELECT\n            t.name AS task_name,\n            e.id::text AS run_id," in query:
+            return [
+                {
+                    "task_name": "b2b_enrichment",
+                    "run_id": "run-enrich-1",
+                    "status": "completed",
+                    "started_at": datetime(2026, 3, 31, 21, 55, tzinfo=timezone.utc),
+                    "retry_count": 0,
+                    "result_text": '{"reviews_processed": 10, "witness_count": 15, "generated": 8, "_skip_synthesis": "No new reviews pending enrichment"}',
+                    "metadata": {},
+                },
+                {
+                    "task_name": "b2b_enrichment_repair",
+                    "run_id": "run-repair-1",
+                    "status": "completed",
+                    "started_at": datetime(2026, 3, 31, 22, 5, tzinfo=timezone.utc),
+                    "retry_count": 1,
+                    "result_text": '{"reviews_processed": 5, "strict_discussion_candidates_dropped": 3, "low_signal_discussion_skipped": 3, "generated": 4}',
+                    "metadata": {},
+                },
+                {
+                    "task_name": "b2b_reasoning_synthesis",
+                    "run_id": "run-reason-1",
+                    "status": "completed",
+                    "started_at": datetime(2026, 3, 31, 22, 10, tzinfo=timezone.utc),
+                    "retry_count": 0,
+                    "result_text": '{"vendors_reasoned": 2, "vendors_skipped": 4, "cross_vendor_succeeded": 1, "generated": 3}',
+                    "metadata": {"source_name": "b2b_scheduler", "event_type": "nightly_reasoning"},
+                },
+            ]
+        if "COUNT(*) AS model_call_count" in query and "run_id IS NOT NULL" in query:
+            return [
+                {
+                    "run_id": "run-enrich-1",
+                    "span_name": "task.b2b_enrichment.tier1",
+                    "last_call_at": datetime(2026, 3, 31, 21, 55, tzinfo=timezone.utc),
+                    "model_call_count": 1,
+                    "total_input_tokens": 1100,
+                    "total_billable_input_tokens": 700,
+                    "total_output_tokens": 120,
+                    "total_cost_usd": Decimal("0.10"),
+                },
+                {
+                    "run_id": "run-repair-1",
+                    "span_name": "task.b2b_enrichment_repair.extraction",
+                    "last_call_at": datetime(2026, 3, 31, 22, 5, tzinfo=timezone.utc),
+                    "model_call_count": 1,
+                    "total_input_tokens": 900,
+                    "total_billable_input_tokens": 500,
+                    "total_output_tokens": 100,
+                    "total_cost_usd": Decimal("0.05"),
+                },
+                {
+                    "run_id": "run-reason-1",
+                    "span_name": "task.b2b_reasoning_synthesis",
+                    "last_call_at": datetime(2026, 3, 31, 22, 10, tzinfo=timezone.utc),
+                    "model_call_count": 1,
+                    "total_input_tokens": 2000,
+                    "total_billable_input_tokens": 1200,
+                    "total_output_tokens": 300,
+                    "total_cost_usd": Decimal("0.20"),
+                },
+                {
+                    "run_id": "manual-reason-1",
+                    "span_name": "task.b2b_reasoning_synthesis",
+                    "last_call_at": datetime(2026, 3, 31, 22, 20, tzinfo=timezone.utc),
+                    "model_call_count": 1,
+                    "total_input_tokens": 1500,
+                    "total_billable_input_tokens": 900,
+                    "total_output_tokens": 220,
+                    "total_cost_usd": Decimal("0.15"),
+                },
+            ]
+        if "FROM pipeline_visibility_events v" in query and "trigger_reason" in query:
+            return [
+                {
+                    "task_name": "b2b_enrichment_repair",
+                    "trigger_reason": "strict_discussion_gate",
+                    "trigger_count": 3,
+                },
+                {
+                    "task_name": "b2b_reasoning_synthesis",
+                    "trigger_reason": "thin_specific_witness_pool",
+                    "trigger_count": 2,
+                },
+            ]
+        if "FROM artifact_attempts" in query and "failure_step = 'input_budget'" in query:
+            return [
+                {
+                    "artifact_type": "reasoning_synthesis",
+                    "artifact_id": "Slack",
+                    "blocking_issues": [
+                        "input token budget exceeded: estimated_input_tokens=21000, cap=20000"
+                    ],
+                    "error_message": "Vendor reasoning prompt exceeded the configured input token cap",
+                    "created_at": datetime(2026, 3, 31, 22, 25, tzinfo=timezone.utc),
+                },
+                {
+                    "artifact_type": "cross_vendor_reasoning",
+                    "artifact_id": "resource_asymmetry:slack|teams",
+                    "blocking_issues": [
+                        "input token budget exceeded: estimated_input_tokens=12437, cap=12000"
+                    ],
+                    "error_message": "Cross-vendor prompt exceeded the configured input token cap",
+                    "created_at": datetime(2026, 3, 31, 22, 30, tzinfo=timezone.utc),
+                },
+            ]
+        if "FROM llm_provider_daily_costs" in query:
+            return self.provider_daily_rows
+        if "FROM llm_provider_usage_snapshots" in query and "latest_daily AS (" in query:
+            return self.provider_snapshot_rows
+        if "span_name = 'reasoning.process'" in query and "GROUP BY 1, 2" in query and "entity_id" not in query:
+            return [
+                {
+                    "source_name": "crm_provider",
+                    "event_type": "crm.interaction_logged",
+                    "calls": 8,
+                    "cost_usd": Decimal("1.25"),
+                    "billable_input_tokens": 30000,
+                    "output_tokens": 7000,
+                },
+                {
+                    "source_name": "email_intake",
+                    "event_type": "email.received",
+                    "calls": 4,
+                    "cost_usd": Decimal("0.5"),
+                    "billable_input_tokens": 12000,
+                    "output_tokens": 2100,
+                },
+            ]
+        if "span_name = 'reasoning.process'" in query and "GROUP BY 1, 2" in query and "entity_id" in query:
+            return [
+                {
+                    "entity_type": "contact",
+                    "entity_id": "contact-123",
+                    "calls": 7,
+                    "cost_usd": Decimal("1.2"),
+                    "billable_input_tokens": 28000,
+                    "output_tokens": 6500,
+                },
+                {
+                    "entity_type": "contact",
+                    "entity_id": "contact-999",
+                    "calls": 2,
+                    "cost_usd": Decimal("0.2"),
+                    "billable_input_tokens": 5000,
+                    "output_tokens": 900,
+                },
+            ]
+        if "span_name = 'reasoning.process'" in query and "GROUP BY 1" in query and "AS source_name" in query:
+            return [
+                {
+                    "source_name": "crm_provider",
+                    "calls": 8,
+                    "cost_usd": Decimal("1.25"),
+                    "billable_input_tokens": 30000,
+                    "output_tokens": 7000,
+                },
+                {
+                    "source_name": "email_intake",
+                    "calls": 4,
+                    "cost_usd": Decimal("0.5"),
+                    "billable_input_tokens": 12000,
+                    "output_tokens": 2100,
+                },
+            ]
+        if "span_name = 'reasoning.process'" in query and "GROUP BY 1" in query and "AS event_type" in query:
+            return [
+                {
+                    "event_type": "crm.interaction_logged",
+                    "calls": 8,
+                    "cost_usd": Decimal("1.25"),
+                    "billable_input_tokens": 30000,
+                    "output_tokens": 7000,
+                },
+                {
+                    "event_type": "email.received",
+                    "calls": 4,
+                    "cost_usd": Decimal("0.5"),
+                    "billable_input_tokens": 12000,
+                    "output_tokens": 2100,
+                },
+            ]
+        if "DATE(created_at AT TIME ZONE 'UTC') AS day" in query and "COALESCE(model_provider, 'unknown') AS provider" in query:
+            return [
+                {
+                    "day": "2026-03-31",
+                    "provider": "openrouter",
+                    "tracked_cost_usd": Decimal("1.75"),
+                    "calls": 12,
+                },
+                {
+                    "day": "2026-03-30",
+                    "provider": "openrouter",
+                    "tracked_cost_usd": Decimal("0.85"),
+                    "calls": 5,
+                },
+            ]
+        if "span_name LIKE 'reasoning.stratified.%'" in query:
+            return [
+                {
+                    "span_name": "reasoning.stratified.reason",
+                    "pass_type": "full",
+                    "pass_number": 1,
+                    "cost": Decimal("0.44"),
+                    "tokens": 4200,
+                    "calls": 3,
+                    "avg_duration_ms": 812.2,
+                    "changed_count": 1,
+                },
+                {
+                    "span_name": "reasoning.stratified.reason.ground",
+                    "pass_type": "ground",
+                    "pass_number": 2,
+                    "cost": Decimal("0.12"),
+                    "tokens": 1200,
+                    "calls": 1,
+                    "avg_duration_ms": 633.1,
+                    "changed_count": 0,
+                },
+            ]
         if "e.id AS execution_id" in query:
             return [
                 {
@@ -690,3 +978,143 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     assert run_rows["run-repair-1"]["secondary_write_hits"] == 1
     assert run_rows["run-repair-1"]["strict_discussion_candidates_dropped"] == 3
     assert run_rows["run-reason-1"]["reasoning_cost_usd"] == 0.2
+
+
+def test_burn_dashboard_rolls_up_task_runs_and_generic_reasoning(monkeypatch):
+    client, _ = _client(monkeypatch)
+    with client:
+        res = client.get("/admin/costs/burn-dashboard?days=30&top_n=10")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["period_days"] == 30
+    assert body["top_n"] == 10
+    assert body["summary"]["tracked_cost_usd"] == pytest.approx(2.36)
+    assert body["summary"]["model_call_count"] == 18
+    assert body["summary"]["recent_runs"] == 4
+    assert body["summary"]["rows_processed"] == 24
+    assert body["summary"]["rows_reprocessed"] == 5
+    assert body["summary"]["reprocess_pct"] == pytest.approx(5 / 24, rel=1e-3)
+    assert body["reasoning_budget_pressure"]["vendor_rejections"] == 1
+    assert body["reasoning_budget_pressure"]["cross_vendor_rejections"] == 1
+    assert body["reasoning_budget_pressure"]["last_rejection_at"] == "2026-03-31T22:30:00+00:00"
+    assert body["reasoning_budget_pressure"]["max_vendor_estimated_input_tokens"] == 21000
+    assert body["reasoning_budget_pressure"]["max_vendor_cap"] == 20000
+    assert body["reasoning_budget_pressure"]["max_cross_vendor_estimated_input_tokens"] == 12437
+    assert body["reasoning_budget_pressure"]["max_cross_vendor_cap"] == 12000
+    budget_rows = {row["artifact_type"]: row for row in body["reasoning_budget_pressure"]["rows"]}
+    assert budget_rows["reasoning_synthesis"]["artifact_label"] == "Vendor reasoning"
+    assert budget_rows["cross_vendor_reasoning"]["artifact_label"] == "Cross-vendor reasoning"
+
+    rows = {row["task_name"]: row for row in body["rows"]}
+    assert rows["generic_reasoning"]["model_call_count"] == 12
+    assert rows["generic_reasoning"]["recent_runs"] is None
+    assert rows["generic_reasoning"]["top_trigger_reason"] == "crm_provider | crm.interaction_logged"
+    assert rows["b2b_enrichment"]["rows_processed"] == 10
+    assert rows["b2b_enrichment"]["avg_cost_per_successful_item"] == pytest.approx(0.0125)
+    assert rows["b2b_enrichment"]["top_trigger_reason"] == "No new reviews pending enrichment"
+    assert rows["b2b_enrichment_repair"]["rows_processed"] == 5
+    assert rows["b2b_enrichment_repair"]["rows_skipped"] == 3
+    assert rows["b2b_enrichment_repair"]["rows_reprocessed"] == 5
+    assert rows["b2b_enrichment_repair"]["retry_count"] == 1
+    assert rows["b2b_enrichment_repair"]["reprocess_pct"] == pytest.approx(1.0)
+    assert rows["b2b_enrichment_repair"]["top_trigger_reason"] == "strict_discussion_gate"
+    assert rows["b2b_reasoning_synthesis"]["recent_runs"] == 2
+    assert rows["b2b_reasoning_synthesis"]["last_status"] == "manual"
+    assert rows["b2b_reasoning_synthesis"]["model_call_count"] == 2
+    assert rows["b2b_reasoning_synthesis"]["total_cost_usd"] == pytest.approx(0.35)
+    assert rows["b2b_reasoning_synthesis"]["rows_processed"] == 7
+    assert rows["b2b_reasoning_synthesis"]["rows_skipped"] == 4
+    assert rows["b2b_reasoning_synthesis"]["successful_items"] == 3
+    assert rows["b2b_reasoning_synthesis"]["top_trigger_reason"] == "thin_specific_witness_pool"
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["last_run_at"] == "2026-03-31T22:31:00+00:00"
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["last_status"] == "completed"
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["model_call_count"] == 2
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["total_cost_usd"] == pytest.approx(0.11)
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["rows_processed"] == 2
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["rows_skipped"] == 1
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["successful_items"] == 1
+    assert rows["b2b_reasoning_synthesis.cross_vendor"]["top_trigger_reason"] == "input_budget"
+
+
+def test_generic_reasoning_rolls_up_sources_events_and_entities(monkeypatch):
+    client, _ = _client(monkeypatch)
+    with client:
+        res = client.get("/admin/costs/generic-reasoning?days=30&top_n=5")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["period_days"] == 30
+    assert body["summary"]["total_cost_usd"] == 1.75
+    assert body["summary"]["total_calls"] == 12
+    assert body["summary"]["top_source_name"] == "crm_provider"
+    assert body["summary"]["top_event_type"] == "crm.interaction_logged"
+    assert body["by_source"][0]["source_name"] == "crm_provider"
+    assert body["by_event_type"][0]["event_type"] == "crm.interaction_logged"
+    assert body["top_source_events"][0]["source_name"] == "crm_provider"
+    assert body["top_entities"][0]["entity_id"] == "contact-123"
+
+
+def test_reconciliation_returns_missing_provider_data_state(monkeypatch):
+    client, _ = _client(monkeypatch)
+    with client:
+        res = client.get("/admin/costs/reconciliation?days=30")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "missing_provider_data"
+    assert body["summary"]["tracked_cost_usd"] == pytest.approx(2.6)
+    assert body["summary"]["provider_cost_usd"] is None
+    assert body["daily_rows"][0]["provider"] == "openrouter"
+    assert body["daily_rows"][0]["status"] == "missing_provider_data"
+
+
+def test_reconciliation_merges_provider_daily_rows_and_snapshot_deltas(monkeypatch):
+    client, pool = _client(monkeypatch)
+    pool.provider_daily_rows = [
+        {
+            "provider": "anthropic",
+            "day": "2026-03-31",
+            "provider_cost_usd": Decimal("0.40"),
+            "imported_at": datetime(2026, 3, 31, 23, 0, tzinfo=timezone.utc),
+        }
+    ]
+    pool.provider_snapshot_rows = [
+        {
+            "provider": "openrouter",
+            "day": "2026-03-31",
+            "provider_cost_usd": Decimal("2.00"),
+            "imported_at": datetime(2026, 3, 31, 23, 5, tzinfo=timezone.utc),
+        },
+        {
+            "provider": "openrouter",
+            "day": "2026-03-30",
+            "provider_cost_usd": Decimal("0.95"),
+            "imported_at": datetime(2026, 3, 30, 23, 5, tzinfo=timezone.utc),
+        },
+    ]
+    with client:
+        res = client.get("/admin/costs/reconciliation?days=30")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "mixed_provider_data"
+    assert body["summary"]["tracked_cost_usd"] == pytest.approx(2.6)
+    assert body["summary"]["provider_cost_usd"] == pytest.approx(3.35)
+    assert body["summary"]["delta_cost_usd"] == pytest.approx(0.75)
+
+    rows = {(row["date"], row["provider"]): row for row in body["daily_rows"]}
+    assert rows[("2026-03-31", "openrouter")]["status"] == "provider_snapshot_delta"
+    assert rows[("2026-03-31", "openrouter")]["delta_cost_usd"] == pytest.approx(0.25)
+    assert rows[("2026-03-30", "openrouter")]["status"] == "provider_snapshot_delta"
+    assert rows[("2026-03-30", "openrouter")]["delta_cost_usd"] == pytest.approx(0.1)
+    assert rows[("2026-03-31", "anthropic")]["status"] == "provider_daily_cost"
+    assert rows[("2026-03-31", "anthropic")]["tracked_cost_usd"] == pytest.approx(0.0)
+    assert rows[("2026-03-31", "anthropic")]["provider_cost_usd"] == pytest.approx(0.4)
+
+
+def test_reasoning_activity_exposes_legacy_stratified_spend(monkeypatch):
+    client, _ = _client(monkeypatch)
+    with client:
+        res = client.get("/admin/costs/reasoning-activity?days=30")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["summary"]["total_cost_usd"] == pytest.approx(0.56)
+    assert body["summary"]["total_calls"] == 4
+    assert body["phases"][0]["span_name"] == "reasoning.stratified.reason"

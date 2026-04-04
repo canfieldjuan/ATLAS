@@ -47,11 +47,14 @@ def _effective_is_admin(role: str | None, is_admin_flag: bool | None) -> bool:
 
 
 def _extract_token(request: Request) -> Optional[str]:
-    """Extract JWT from Authorization header or cookie."""
+    """Extract JWT from Authorization header, cookie, or query param."""
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:]
-    return request.cookies.get("atlas_token")
+    cookie = request.cookies.get("atlas_token")
+    if cookie:
+        return cookie
+    return request.query_params.get("token")
 
 
 async def require_auth(request: Request) -> AuthUser:
@@ -196,7 +199,7 @@ def require_plan(min_plan: str):
             )
         return user
 
-    return Depends(_check)
+    return _check
 
 
 def require_b2b_plan(min_plan: str):
@@ -222,4 +225,4 @@ def require_b2b_plan(min_plan: str):
             )
         return user
 
-    return Depends(_check)
+    return _check

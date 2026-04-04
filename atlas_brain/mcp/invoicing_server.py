@@ -23,8 +23,10 @@ Run:
     python -m atlas_brain.mcp.invoicing_server --sse    # SSE HTTP
 """
 
+import base64
 import json
 import logging
+import os
 import sys
 import uuid as _uuid
 from contextlib import asynccontextmanager
@@ -839,9 +841,6 @@ async def approve_and_send(
 
     Returns a summary of processed invoices.
     """
-    import base64
-    import os
-
     repo = _repo()
 
     # Resolve which invoices to process
@@ -853,8 +852,13 @@ async def approve_and_send(
         except json.JSONDecodeError:
             return json.dumps({"success": False, "error": "Invalid invoice_ids JSON"})
 
+        seen_ids: set[str] = set()
         for inv_ref in ids:
             inv_ref = str(inv_ref).strip()
+            if inv_ref in seen_ids:
+                logger.warning("approve_and_send: duplicate invoice %s, skipping", inv_ref)
+                continue
+            seen_ids.add(inv_ref)
             if _is_uuid(inv_ref):
                 inv = await repo.get_by_id(_uuid.UUID(inv_ref))
             else:
@@ -890,9 +894,9 @@ async def approve_and_send(
         customer_name = inv.get("customer_name", "Customer")
         customer_email = inv.get("customer_email")
 
-        if inv.get("status") not in ("draft", "sent"):
+        if inv.get("status") != "draft":
             results["skipped"] += 1
-            results["details"].append({"invoice": inv_num, "status": "skipped", "reason": f"status is {inv.get('status')}"})
+            results["details"].append({"invoice": inv_num, "status": "skipped", "reason": f"status is {inv.get('status')}, expected draft"})
             continue
 
         if not customer_email:
@@ -1013,8 +1017,6 @@ async def export_invoice_pdf(
 
     Returns the PDF file path and size.
     """
-    import os
-
     try:
         repo = _repo()
         if _is_uuid(invoice_id):

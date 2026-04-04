@@ -21,15 +21,26 @@ from ._google_news import is_google_news_wrapper_url, resolve_google_news_url
 logger = logging.getLogger("atlas.autonomous.tasks.news_intake")
 
 
+def _skip_result(reason: str, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "_skip_synthesis": True,
+        "skipped": reason,
+        "skip_reason": reason,
+        "trigger_reason": reason,
+    }
+    payload.update(extra)
+    return payload
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: poll news and store articles for daily intelligence."""
     cfg = settings.external_data
     if not cfg.enabled or not cfg.news_enabled:
-        return {"_skip_synthesis": True, "skipped": "external_data or news disabled"}
+        return _skip_result("News intake disabled")
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return {"_skip_synthesis": True, "skipped": "db not ready"}
+        return _skip_result("News intake skipped -- database not ready")
 
     # Load news watchlist items
     rows = await pool.fetch(
@@ -43,7 +54,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         """
     )
     if not rows:
-        return {"_skip_synthesis": True, "fetched": 0, "stored": 0}
+        return _skip_result("News intake skipped -- no watchlist keywords", fetched=0, stored=0)
 
     # Build keyword set and watchlist lookup
     all_keywords: set[str] = set()
@@ -83,7 +94,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         cfg.news_max_articles_per_poll, cfg,
     )
     if not articles:
-        return {"_skip_synthesis": True, "fetched": 0, "stored": 0}
+        return _skip_result("News intake skipped -- no articles fetched", fetched=0, stored=0)
 
     stored = 0
     for article in articles:
@@ -147,6 +158,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "_skip_synthesis": True,
         "fetched": len(articles),
         "stored": stored,
+        "skip_reason": (
+            "News intake completed -- no new articles stored"
+            if stored == 0
+            else "News intake completed"
+        ),
+        "trigger_reason": (
+            "News intake completed -- articles stored"
+            if stored > 0
+            else "News intake completed -- no new articles stored"
+        ),
     }
 
 
