@@ -98,6 +98,63 @@ async def test_dashboard_list_signals_overlays_synthesis_reasoning(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_list_signals_does_not_fallback_to_legacy_reasoning(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace(
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "vendor_name": "Zendesk",
+                    "product_category": "CRM",
+                    "total_reviews": 100,
+                    "churn_intent_count": 22,
+                    "avg_urgency_score": 6.4,
+                    "avg_rating_normalized": 0.4,
+                    "nps_proxy": -0.2,
+                    "price_complaint_rate": 0.18,
+                    "decision_maker_churn_rate": 0.12,
+                    "support_sentiment": -0.1,
+                    "legacy_support_score": -0.2,
+                    "new_feature_velocity": 0.3,
+                    "employee_growth_rate": 0.04,
+                    "keyword_spike_count": 2,
+                    "insider_signal_count": 1,
+                    "last_computed_at": None,
+                },
+            ]
+        ),
+        fetchrow=AsyncMock(
+            return_value={
+                "total_vendors": 1,
+                "high_urgency_count": 0,
+                "total_signal_reviews": 100,
+            }
+        ),
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(
+        mod,
+        "_load_reasoning_views_for_vendors",
+        AsyncMock(return_value={}),
+    )
+
+    result = await mod.list_signals(
+        vendor_name=None,
+        min_urgency=0,
+        category=None,
+        limit=20,
+        user=None,
+    )
+
+    signal = result["signals"][0]
+    assert signal["archetype"] is None
+    assert signal["archetype_confidence"] is None
+    assert signal["reasoning_mode"] is None
+    assert signal["reasoning_risk_level"] is None
+
+
+@pytest.mark.asyncio
 async def test_dashboard_get_signal_overlays_synthesis_detail(monkeypatch):
     from atlas_brain.api import b2b_dashboard as mod
 
@@ -172,6 +229,88 @@ async def test_dashboard_get_signal_overlays_synthesis_detail(monkeypatch):
     assert result["reasoning_executive_summary"] == "Pricing pressure is driving evaluation activity."
     assert result["reasoning_reference_ids"]["witness_ids"] == ["witness:test:1"]
     assert result["reasoning_source"] == "b2b_reasoning_synthesis"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_get_signal_does_not_fallback_to_legacy_reasoning(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace(
+        fetchrow=AsyncMock(
+            return_value={
+                "id": "sig-1",
+                "vendor_name": "Zendesk",
+                "product_category": "CRM",
+                "total_reviews": 100,
+                "negative_reviews": 30,
+                "churn_intent_count": 22,
+                "avg_urgency_score": 6.4,
+                "avg_rating_normalized": 0.4,
+                "nps_proxy": -0.2,
+                "price_complaint_rate": 0.18,
+                "decision_maker_churn_rate": 0.12,
+                "support_sentiment": -0.1,
+                "legacy_support_score": -0.2,
+                "new_feature_velocity": 0.3,
+                "employee_growth_rate": 0.04,
+                "top_pain_categories": [],
+                "top_competitors": [],
+                "top_feature_gaps": [],
+                "company_churn_list": [],
+                "quotable_evidence": [],
+                "top_use_cases": [],
+                "top_integration_stacks": [],
+                "budget_signal_summary": {},
+                "sentiment_distribution": {},
+                "buyer_authority_summary": {},
+                "timeline_summary": {},
+                "source_distribution": {},
+                "sample_review_ids": [],
+                "review_window_start": None,
+                "review_window_end": None,
+                "confidence_score": 0.4,
+                "archetype": "legacy_arch",
+                "archetype_confidence": 0.2,
+                "reasoning_mode": "legacy",
+                "falsification_conditions": [{"condition": "legacy"}],
+                "reasoning_risk_level": "low",
+                "reasoning_executive_summary": "legacy summary",
+                "reasoning_key_signals": ["legacy signal"],
+                "reasoning_uncertainty_sources": ["legacy uncertainty"],
+                "insider_signal_count": 1,
+                "insider_org_health_summary": None,
+                "insider_talent_drain_rate": None,
+                "insider_quotable_evidence": [],
+                "keyword_spike_count": 2,
+                "keyword_spike_keywords": [],
+                "keyword_trend_summary": None,
+                "last_computed_at": None,
+                "created_at": None,
+            }
+        ),
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(
+        mod,
+        "_load_reasoning_views_for_vendors",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_apply_field_overrides",
+        AsyncMock(side_effect=lambda pool, entity_type, entity_id, payload: payload),
+    )
+
+    result = await mod.get_signal("Zendesk", product_category=None, user=None)
+
+    assert result["archetype"] is None
+    assert result["archetype_confidence"] is None
+    assert result["reasoning_mode"] is None
+    assert result["reasoning_risk_level"] is None
+    assert result["falsification_conditions"] == []
+    assert result["reasoning_executive_summary"] is None
+    assert result["reasoning_key_signals"] == []
+    assert result["reasoning_uncertainty_sources"] == []
 
 
 @pytest.mark.asyncio

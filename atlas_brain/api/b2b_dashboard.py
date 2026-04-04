@@ -292,8 +292,7 @@ async def list_signals(
                snap.legacy_support_score AS legacy_support_score,
                snap.new_feature_velocity AS new_feature_velocity,
                snap.employee_growth_rate AS employee_growth_rate,
-               sig.archetype, sig.archetype_confidence, sig.reasoning_mode,
-               sig.reasoning_risk_level, sig.keyword_spike_count, sig.insider_signal_count,
+               sig.keyword_spike_count, sig.insider_signal_count,
                sig.last_computed_at
         FROM b2b_churn_signals sig
         LEFT JOIN LATERAL (
@@ -338,10 +337,10 @@ async def list_signals(
             "legacy_support_score": _safe_float(r["legacy_support_score"]),
             "new_feature_velocity": _safe_float(r["new_feature_velocity"]),
             "employee_growth_rate": _safe_float(r["employee_growth_rate"]),
-            "archetype": r["archetype"],
-            "archetype_confidence": _safe_float(r["archetype_confidence"]),
-            "reasoning_mode": r["reasoning_mode"],
-            "reasoning_risk_level": r["reasoning_risk_level"],
+            "archetype": None,
+            "archetype_confidence": None,
+            "reasoning_mode": None,
+            "reasoning_risk_level": None,
             "keyword_spike_count": r["keyword_spike_count"],
             "insider_signal_count": r["insider_signal_count"],
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
@@ -416,8 +415,7 @@ async def list_slow_burn_watchlist(
                    snap.legacy_support_score AS legacy_support_score,
                    snap.new_feature_velocity AS new_feature_velocity,
                    snap.employee_growth_rate AS employee_growth_rate,
-                   sig.archetype, sig.archetype_confidence, sig.reasoning_mode,
-                   sig.reasoning_risk_level, sig.keyword_spike_count, sig.insider_signal_count,
+                   sig.keyword_spike_count, sig.insider_signal_count,
                    sig.last_computed_at,
                    ROW_NUMBER() OVER (
                        PARTITION BY sig.vendor_name
@@ -442,8 +440,7 @@ async def list_slow_burn_watchlist(
                nps_proxy, price_complaint_rate, decision_maker_churn_rate,
                support_sentiment, legacy_support_score,
                new_feature_velocity, employee_growth_rate,
-               archetype, archetype_confidence, reasoning_mode,
-               reasoning_risk_level, keyword_spike_count, insider_signal_count,
+               keyword_spike_count, insider_signal_count,
                last_computed_at
         FROM ranked_signals
         WHERE vendor_row_rank = 1
@@ -473,10 +470,10 @@ async def list_slow_burn_watchlist(
             "legacy_support_score": _safe_float(r["legacy_support_score"]),
             "new_feature_velocity": _safe_float(r["new_feature_velocity"]),
             "employee_growth_rate": _safe_float(r["employee_growth_rate"]),
-            "archetype": r["archetype"],
-            "archetype_confidence": _safe_float(r["archetype_confidence"]),
-            "reasoning_mode": r["reasoning_mode"],
-            "reasoning_risk_level": r["reasoning_risk_level"],
+            "archetype": None,
+            "archetype_confidence": None,
+            "reasoning_mode": None,
+            "reasoning_risk_level": None,
             "keyword_spike_count": r["keyword_spike_count"],
             "insider_signal_count": r["insider_signal_count"],
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
@@ -605,14 +602,14 @@ async def get_signal(
         "review_window_start": str(row["review_window_start"]) if row["review_window_start"] else None,
         "review_window_end": str(row["review_window_end"]) if row["review_window_end"] else None,
         "confidence_score": _safe_float(row["confidence_score"], 0),
-        "archetype": row.get("archetype"),
-        "archetype_confidence": _safe_float(row.get("archetype_confidence")),
-        "reasoning_mode": row.get("reasoning_mode"),
-        "falsification_conditions": _safe_json(row.get("falsification_conditions")),
-        "reasoning_risk_level": row.get("reasoning_risk_level"),
-        "reasoning_executive_summary": row.get("reasoning_executive_summary"),
-        "reasoning_key_signals": _safe_json(row.get("reasoning_key_signals")),
-        "reasoning_uncertainty_sources": _safe_json(row.get("reasoning_uncertainty_sources")),
+        "archetype": None,
+        "archetype_confidence": None,
+        "reasoning_mode": None,
+        "falsification_conditions": [],
+        "reasoning_risk_level": None,
+        "reasoning_executive_summary": None,
+        "reasoning_key_signals": [],
+        "reasoning_uncertainty_sources": [],
         "insider_signal_count": row.get("insider_signal_count"),
         "insider_org_health_summary": row.get("insider_org_health_summary"),
         "insider_talent_drain_rate": _safe_float(row.get("insider_talent_drain_rate")),
@@ -772,14 +769,14 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
             "sentiment_distribution": _safe_json(signal_row["sentiment_distribution"]),
             "buyer_authority_summary": _safe_json(signal_row["buyer_authority_summary"]),
             "timeline_summary": _safe_json(signal_row["timeline_summary"]),
-            "archetype": signal_row.get("archetype"),
-            "archetype_confidence": _safe_float(signal_row.get("archetype_confidence")),
-            "reasoning_mode": signal_row.get("reasoning_mode"),
-            "falsification_conditions": _safe_json(signal_row.get("falsification_conditions")),
-            "reasoning_risk_level": signal_row.get("reasoning_risk_level"),
-            "reasoning_executive_summary": signal_row.get("reasoning_executive_summary"),
-            "reasoning_key_signals": _safe_json(signal_row.get("reasoning_key_signals")),
-            "reasoning_uncertainty_sources": _safe_json(signal_row.get("reasoning_uncertainty_sources")),
+            "archetype": None,
+            "archetype_confidence": None,
+            "reasoning_mode": None,
+            "falsification_conditions": [],
+            "reasoning_risk_level": None,
+            "reasoning_executive_summary": None,
+            "reasoning_key_signals": [],
+            "reasoning_uncertainty_sources": [],
             "insider_signal_count": signal_row.get("insider_signal_count"),
             "insider_org_health_summary": signal_row.get("insider_org_health_summary"),
             "insider_talent_drain_rate": _safe_float(signal_row.get("insider_talent_drain_rate")),
@@ -3687,7 +3684,6 @@ async def export_signals(
                snap.legacy_support_score AS legacy_support_score,
                snap.new_feature_velocity AS new_feature_velocity,
                snap.employee_growth_rate AS employee_growth_rate,
-               sig.archetype, sig.archetype_confidence, sig.reasoning_risk_level,
                sig.keyword_spike_count, sig.insider_signal_count,
                sig.last_computed_at
         FROM b2b_churn_signals sig
@@ -3721,15 +3717,24 @@ async def export_signals(
             "legacy_support_score": _safe_float(r["legacy_support_score"], ""),
             "new_feature_velocity": _safe_float(r["new_feature_velocity"], ""),
             "employee_growth_rate": _safe_float(r["employee_growth_rate"], ""),
-            "archetype": r["archetype"] or "",
-            "archetype_confidence": _safe_float(r["archetype_confidence"], ""),
-            "reasoning_risk_level": r["reasoning_risk_level"] or "",
+            "archetype": "",
+            "archetype_confidence": "",
+            "reasoning_risk_level": "",
             "keyword_spike_count": r["keyword_spike_count"] if r["keyword_spike_count"] is not None else "",
             "insider_signal_count": r["insider_signal_count"] if r["insider_signal_count"] is not None else "",
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else "",
         }
         for r in rows
     ]
+
+    reasoning_views = await _load_reasoning_views_for_vendors(
+        pool,
+        [row["vendor_name"] for row in rows if row.get("vendor_name")],
+    )
+    for row in data:
+        view = reasoning_views.get(_normalize_vendor_name(row.get("vendor_name")))
+        if view is not None:
+            _overlay_reasoning_summary_from_view(row, view)
 
     return _csv_response(data, "churn_signals.csv")
 
