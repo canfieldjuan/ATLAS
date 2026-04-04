@@ -1281,6 +1281,16 @@ def _make_valid_synthesis(packet=None):
             "data_gaps": [],
             "citations": [],
         },
+        "vendor_core_reasoning": {
+            "why_they_stay": {
+                "strengths": [
+                    {"area": "Ecosystem breadth", "evidence": "Multiple integrations"},
+                ],
+            },
+            "confidence_posture": {
+                "limits": ["Limited insider signals"],
+            },
+        },
         "meta": {
             "evidence_window_start": "2025-12-01",
             "evidence_window_end": "2026-03-15",
@@ -5072,9 +5082,9 @@ class TestReasoningSynthesisTask:
         def _capture_normalize(synthesis, packet):
             normalize_packets.append(packet)
             return real_normalize(synthesis, packet)
-        def _capture_validate(synthesis, packet=None):
+        def _capture_validate(synthesis, packet=None, **kwargs):
             validate_packets.append(packet)
-            return real_validate(synthesis, packet)
+            return real_validate(synthesis, packet, **kwargs)
         monkeypatch.setattr(
             validation_mod, "normalize_synthesis_source_ids", _capture_normalize,
         )
@@ -5178,9 +5188,9 @@ class TestReasoningSynthesisTask:
             compress_calls.append(kwargs)
             return real_compress_vendor_pools(vendor_name, layers, **kwargs)
 
-        def _capture_validate(synthesis, packet=None):
+        def _capture_validate(synthesis, packet=None, **kwargs):
             validate_packets.append(packet)
-            return real_validate(synthesis, packet)
+            return real_validate(synthesis, packet, **kwargs)
 
         monkeypatch.setattr(
             "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",

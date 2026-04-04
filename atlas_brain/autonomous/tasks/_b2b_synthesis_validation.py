@@ -1391,6 +1391,9 @@ def _check_high_confidence_without_evidence(
 def validate_synthesis(
     synthesis: dict[str, Any],
     packet: Any | None = None,
+    *,
+    schema_version: str = "",
+    governance_blocking: bool | None = None,
 ) -> ValidationResult:
     """Validate a parsed synthesis dict.
 
@@ -1400,6 +1403,13 @@ def validate_synthesis(
         The parsed LLM output.
     packet : CompressedPacket, optional
         The input packet (for source_id and value verification).
+    schema_version : str, optional
+        Code-controlled schema version. Used for governance gate if
+        governance_blocking is not explicitly set.
+    governance_blocking : bool, optional
+        Explicitly enable/disable binding governance. When None,
+        derived from schema_version >= "2.3" or always True for
+        current production versions.
 
     Returns
     -------
@@ -1435,9 +1445,14 @@ def validate_synthesis(
     _check_trigger_types(normalized, result)
     _check_category_reasoning(normalized, result)
 
-    # Phase 3 governance checks -- blocking for schema >= 2.3, warning for older
-    _schema_raw = str(synthesis.get("schema_version") or "2.1")
-    _governance_blocking = _schema_raw >= "2.3"
+    # Phase 3 governance checks -- blocking when explicitly enabled or for
+    # current production versions. Warnings-only for legacy/older rows.
+    if governance_blocking is None:
+        _schema_raw = schema_version or str(synthesis.get("schema_version") or "2.1")
+        # Current production synthesis always gets binding governance
+        _governance_blocking = _schema_raw in ("v2", "2.3") or _schema_raw >= "2.3"
+    else:
+        _governance_blocking = governance_blocking
     _check_metric_ledger_numbers(normalized, packet, result)
     _check_contradiction_hedging(normalized, packet, result, governance_blocking=_governance_blocking)
     _check_why_they_stay(normalized, packet, result, governance_blocking=_governance_blocking)

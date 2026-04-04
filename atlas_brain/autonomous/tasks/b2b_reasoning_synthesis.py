@@ -1329,7 +1329,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         synthesis = None
                     else:
                         parsed = normalize_synthesis_source_ids(parsed, prompt_packet)
-                        vresult = validate_synthesis(parsed, prompt_packet)
+                        vresult = validate_synthesis(parsed, prompt_packet, governance_blocking=True)
                         if vresult.is_valid:
                             synthesis = parsed
                             last_validation = vresult
@@ -1540,7 +1540,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 # Store in both meta (canonical) and top-level (quality gate reads it)
                 synthesis.setdefault("meta", {})["lean_mode"] = lean_mode_info
                 synthesis["_lean_mode"] = lean_mode_info
-            persisted_vresult = validate_synthesis(synthesis, packet)
+            persisted_vresult = validate_synthesis(synthesis, packet, governance_blocking=True)
             if not persisted_vresult.is_valid:
                 logger.warning(
                     "Persisted reasoning synthesis for %s failed validation: %s",
