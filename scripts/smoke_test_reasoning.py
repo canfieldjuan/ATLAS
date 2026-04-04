@@ -85,16 +85,20 @@ async def run_smoke_test(vendor_name: str | None = None) -> dict:
     )
     from datetime import date
 
-    view = await load_best_reasoning_view(pool, vendor_name)
+    view = await load_best_reasoning_view(
+        pool,
+        vendor_name,
+        allow_legacy_fallback=False,
+    )
     if view is None:
-        fail("load_best_reasoning_view returned None")
+        fail("load_best_reasoning_view returned None (no synthesis row found)")
         return results
     ok("load_best_reasoning_view returned a view")
 
-    if view.schema_version in ("v2", "legacy"):
+    if view.schema_version == "v2":
         ok(f"schema_version = {view.schema_version}")
     else:
-        warn(f"schema_version = {view.schema_version} (expected v2 or legacy)")
+        warn(f"schema_version = {view.schema_version} (expected v2)")
 
     if view.as_of_date:
         ok(f"as_of_date = {view.as_of_date}")
