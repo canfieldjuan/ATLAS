@@ -26,6 +26,7 @@ import logging
 import time
 from datetime import date, datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from ...config import settings
 from ...storage.database import get_db_pool
@@ -633,6 +634,55 @@ def _task_run_id(task: ScheduledTask | Any) -> str | None:
     return _task_execution_run_id(task)
 
 
+def _metadata_text_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        value = [item.strip() for item in value.split(",")]
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value or []:
+        text = str(item or "").strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
+def _metadata_vendor_pairs(value: Any) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in value or []:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        vendor_a = str(item[0] or "").strip()
+        vendor_b = str(item[1] or "").strip()
+        if not vendor_a or not vendor_b or vendor_a.lower() == vendor_b.lower():
+            continue
+        normalized = tuple(sorted((vendor_a.lower(), vendor_b.lower())))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        pairs.append((vendor_a, vendor_b))
+    return pairs
+
+
+def _competitive_scope_metadata(task: ScheduledTask | Any) -> dict[str, Any]:
+    metadata = getattr(task, "metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if str(metadata.get("scope_type") or "").strip() != "competitive_set":
+        return {}
+    return {
+        "scope_id": str(metadata.get("scope_id") or "").strip(),
+        "scope_vendor_names": _metadata_text_list(metadata.get("scope_vendor_names")),
+        "scope_pairwise_pairs": _metadata_vendor_pairs(metadata.get("scope_pairwise_pairs")),
+        "scope_category_names": _metadata_text_list(metadata.get("scope_category_names")),
+        "scope_asymmetry_pairs": _metadata_vendor_pairs(metadata.get("scope_asymmetry_pairs")),
+        "scope_trigger": str(metadata.get("scope_trigger") or "manual").strip() or "manual",
+        "scope_name": str(metadata.get("scope_name") or "").strip(),
+    }
+
+
 def _coerce_timestamptz(value: Any) -> Any:
     if isinstance(value, datetime):
         return value
@@ -818,10 +868,169 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: generate reasoning synthesis per vendor."""
     cfg = settings.b2b_churn
     run_id = _task_run_id(task)
+    scope_meta = _competitive_scope_metadata(task)
+    scope_id = scope_meta.get("scope_id") or ""
+    scope_vendor_names = scope_meta.get("scope_vendor_names") or []
+    scope_pairwise_pairs = scope_meta.get("scope_pairwise_pairs") or []
+    scope_category_names = scope_meta.get("scope_category_names") or []
+    scope_asymmetry_pairs = scope_meta.get("scope_asymmetry_pairs") or []
+    scope_trigger = scope_meta.get("scope_trigger") or "manual"
+
+    async def _finalize_scope_result(result: dict[str, Any]) -> dict[str, Any]:
+        if not scope_id:
+            return result
+        try:
+            from ...storage.repositories.competitive_set import get_competitive_set_repo
+
+            status = "succeeded"
+            if result.get("vendors_failed") and result.get("vendors_reasoned"):
+                status = "partial"
+            elif result.get("vendors_failed") and not result.get("vendors_reasoned"):
+                status = "failed"
+            await get_competitive_set_repo().mark_run_completed(
+                UUID(scope_id),
+                status=status,
+                summary={
+                    "run_id": run_id,
+                    "trigger": scope_trigger,
+                    **result,
+                },
+            )
+        except Exception:
+            logger.debug(
+                "Failed to finalize competitive set run %s",
+                scope_id,
+                exc_info=True,
+            )
+        return result
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return {"_skip_synthesis": "DB not ready"}
+        return await _finalize_scope_result({"_skip_synthesis": "DB not ready"})
+
+    if scope_id:
+        try:
+            from ...storage.repositories.competitive_set import get_competitive_set_repo
+
+            await get_competitive_set_repo().mark_run_started(
+                UUID(scope_id),
+                run_id=run_id,
+                trigger=scope_trigger,
+                execution_id=str((task.metadata or {}).get("_execution_id") or "") or None,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to mark competitive set run started %s",
+                scope_id,
+                exc_info=True,
+            )
+
+    scheduled_scope_strategy = str(
+        ((task.metadata or {}).get("scheduled_scope_strategy") or "")
+    ).strip()
+    if not scope_id and scheduled_scope_strategy == "competitive_sets":
+        from ...services.b2b_competitive_sets import (
+            build_competitive_set_plan,
+            load_vendor_category_map,
+            plan_to_synthesis_metadata,
+        )
+        from ...storage.repositories.competitive_set import get_competitive_set_repo
+
+        repo = get_competitive_set_repo()
+        due_sets = await repo.list_due_scheduled(
+            limit=max(1, int(getattr(cfg, "competitive_set_refresh_batch_size", 10))),
+        )
+        if not due_sets:
+            return {"_skip_synthesis": "No due competitive sets"}
+
+        aggregate = {
+            "competitive_sets_processed": 0,
+            "competitive_sets_failed": 0,
+            "vendors_total": 0,
+            "vendors_reasoned": 0,
+            "vendors_failed": 0,
+            "vendors_skipped": 0,
+            "cross_vendor_succeeded": 0,
+            "cross_vendor_failed": 0,
+            "total_tokens": 0,
+            "competitive_set_ids": [str(item.id) for item in due_sets],
+        }
+        for competitive_set in due_sets:
+            try:
+                category_by_vendor = await load_vendor_category_map(
+                    pool,
+                    [competitive_set.focal_vendor_name, *competitive_set.competitor_vendor_names],
+                )
+                plan = build_competitive_set_plan(
+                    competitive_set,
+                    category_by_vendor=category_by_vendor,
+                )
+                scoped_task = ScheduledTask(
+                    id=task.id,
+                    name=task.name,
+                    task_type=task.task_type,
+                    schedule_type=task.schedule_type,
+                    description=task.description,
+                    prompt=task.prompt,
+                    agent_type=task.agent_type,
+                    cron_expression=task.cron_expression,
+                    interval_seconds=task.interval_seconds,
+                    run_at=task.run_at,
+                    timezone=task.timezone,
+                    enabled=task.enabled,
+                    max_retries=task.max_retries,
+                    retry_delay_seconds=task.retry_delay_seconds,
+                    timeout_seconds=task.timeout_seconds,
+                    metadata={
+                        **(task.metadata or {}),
+                        **plan_to_synthesis_metadata(plan),
+                        "scope_name": competitive_set.name,
+                        "scope_trigger": "scheduled",
+                        "run_id": f"{run_id}:{competitive_set.id}",
+                    },
+                    created_at=task.created_at,
+                    updated_at=task.updated_at,
+                    last_run_at=task.last_run_at,
+                    next_run_at=task.next_run_at,
+                )
+                child_result = await run(scoped_task)
+            except Exception:
+                logger.exception(
+                    "Competitive set synthesis scan failed for %s",
+                    competitive_set.id,
+                )
+                aggregate["competitive_sets_failed"] += 1
+                try:
+                    await repo.mark_run_completed(
+                        competitive_set.id,
+                        status="failed",
+                        summary={
+                            "run_id": f"{run_id}:{competitive_set.id}",
+                            "trigger": "scheduled",
+                            "error": "Competitive-set scan raised an exception before synthesis",
+                        },
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to mark competitive set failure %s",
+                        competitive_set.id,
+                        exc_info=True,
+                    )
+                continue
+            aggregate["competitive_sets_processed"] += 1
+            if child_result.get("vendors_failed") and not child_result.get("vendors_reasoned"):
+                aggregate["competitive_sets_failed"] += 1
+            for key in (
+                "vendors_total",
+                "vendors_reasoned",
+                "vendors_failed",
+                "vendors_skipped",
+                "cross_vendor_succeeded",
+                "cross_vendor_failed",
+                "total_tokens",
+            ):
+                aggregate[key] += int(child_result.get(key, 0) or 0)
+        return aggregate
 
     from ._b2b_shared import fetch_all_pool_layers
 
@@ -840,22 +1049,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     if not vendor_pools:
-        return {"_skip_synthesis": "No pool data available"}
+        return await _finalize_scope_result({"_skip_synthesis": "No pool data available"})
 
-    # Optional vendor filter: task.metadata.test_vendors or config
+    # Optional vendor filter: scoped competitive set or legacy test_vendors.
     test_vendors = (task.metadata or {}).get("test_vendors")
-    if test_vendors:
-        if isinstance(test_vendors, str):
-            test_vendors = [v.strip() for v in test_vendors.split(",")]
-        vendor_set = set(v.lower() for v in test_vendors)
+    filter_vendors = scope_vendor_names[:] or _metadata_text_list(test_vendors)
+    if filter_vendors:
+        vendor_set = {v.lower() for v in filter_vendors}
         vendor_pools = {
             k: v for k, v in vendor_pools.items()
             if k.lower() in vendor_set
         }
         logger.info(
-            "Filtered to %d test vendors: %s",
+            "Filtered reasoning synthesis to %d vendors: %s",
             len(vendor_pools), sorted(vendor_pools.keys()),
         )
+    if scope_vendor_names and not vendor_pools:
+        return await _finalize_scope_result({
+            "vendors_total": 0,
+            "vendors_reasoned": 0,
+            "vendors_failed": 0,
+            "vendors_skipped": 0,
+            "_skip_synthesis": "Competitive set scope has no matching vendor pools",
+        })
 
     # Check for existing synthesis to skip unchanged vendors
     existing = await pool.fetch(
@@ -980,7 +1196,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not vendors_to_reason and not (
         cfg.cross_vendor_synthesis_enabled and force_cross_vendor
     ):
-        return {
+        return await _finalize_scope_result({
             "vendors_total": len(vendor_pools),
             "vendors_reasoned": 0,
             "vendors_failed": 0,
@@ -994,7 +1210,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "vendors_rerun_missing_reference_ids": rerun_reason_counts["missing_reference_ids"],
             "vendors_forced": rerun_reason_counts["forced"],
             "_skip_synthesis": "All vendors unchanged",
-        }
+        })
     if not vendors_to_reason and cfg.cross_vendor_synthesis_enabled and force_cross_vendor:
         logger.info(
             "Reasoning synthesis v2: vendor phase skipped; force_cross_vendor enabled",
@@ -1016,7 +1232,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         auto_activate_ollama=False,
     )
     if llm is None:
-        return {"_skip_synthesis": "No LLM available for reasoning synthesis"}
+        return await _finalize_scope_result(
+            {"_skip_synthesis": "No LLM available for reasoning synthesis"}
+        )
 
     from ...reasoning.single_pass_prompts.reasoning_synthesis import (
         REASONING_SYNTHESIS_PROMPT,
@@ -1773,7 +1991,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     xv_rejected_input_budget = 0
 
     run_cross_vendor = bool(cfg.cross_vendor_synthesis_enabled)
-    if test_vendors and not force_cross_vendor:
+    scope_has_cross_vendor = bool(
+        scope_pairwise_pairs or scope_category_names or scope_asymmetry_pairs
+    )
+    if filter_vendors and not force_cross_vendor and not scope_has_cross_vendor:
         run_cross_vendor = False
 
     if run_cross_vendor:
@@ -1787,6 +2008,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 window_days=window_days,
                 run_id=run_id,
                 force=force_cross_vendor,
+                scope_pairwise_pairs=scope_pairwise_pairs,
+                scope_category_names=scope_category_names,
+                scope_asymmetry_pairs=scope_asymmetry_pairs,
             )
             total_tokens += xv_tokens
         except Exception:
@@ -1801,7 +2025,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         total_tokens, elapsed,
     )
 
-    return {
+    return await _finalize_scope_result({
         "vendors_total": len(vendor_pools),
         "vendors_reasoned": succeeded,
         "vendors_failed": failed,
@@ -1829,7 +2053,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "cross_vendor_failed": xv_failed,
         "cross_vendor_tokens": xv_tokens,
         "cross_vendor_mirrored": xv_mirrored,
-    }
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1849,6 +2073,9 @@ async def _run_cross_vendor_synthesis(
     window_days: int,
     run_id: str | None = None,
     force: bool = False,
+    scope_pairwise_pairs: list[tuple[str, str]] | None = None,
+    scope_category_names: list[str] | None = None,
+    scope_asymmetry_pairs: list[tuple[str, str]] | None = None,
 ) -> tuple[int, int, int, int]:
     """Run cross-vendor synthesis: battles, councils, asymmetry.
 
@@ -2126,35 +2353,73 @@ async def _run_cross_vendor_synthesis(
         if (ev or {}).get("product_category"):
             category_vendor_lookup[vname] = {}
 
-    # --- Select targets ---
-    battles = await select_battles(
-        pool,
-        displacement_edges,
-        evidence_lookup,
-        product_profiles=product_profiles,
-        max_battles=cfg.cross_vendor_max_battles,
-        min_context_score=cfg.cross_vendor_battle_min_context_score,
-    )
-    categories = select_categories(
-        ecosystem_evidence,
-        category_vendor_lookup,
-        evidence_lookup,
-        min_vendors=cfg.cross_vendor_category_min_vendors,
-        min_context_vendors=cfg.cross_vendor_category_min_context_vendors,
-        min_displacement_intensity=cfg.cross_vendor_category_min_displacement_intensity,
-        max_categories=cfg.cross_vendor_max_categories,
-    )
-    asymmetry_pairs = await select_asymmetry_pairs(
-        vendor_scores,
-        evidence_lookup,
-        product_profiles,
-        max_pairs=cfg.cross_vendor_max_asymmetry,
-        pressure_delta_max=cfg.cross_vendor_asymmetry_pressure_delta_max,
-        review_ratio_min=cfg.cross_vendor_asymmetry_review_ratio_min,
-        segment_divergence_bonus=cfg.cross_vendor_asymmetry_segment_divergence_bonus,
-        min_divergence_score=cfg.cross_vendor_asymmetry_min_divergence_score,
-        min_context_score=cfg.cross_vendor_asymmetry_min_context_score,
-    )
+    scoped_pairwise = scope_pairwise_pairs or []
+    scoped_categories = _metadata_text_list(scope_category_names or [])
+    scoped_asymmetry = scope_asymmetry_pairs or []
+
+    if scoped_pairwise or scoped_categories or scoped_asymmetry:
+        edge_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+        for edge in displacement_edges:
+            pair = tuple(
+                sorted(
+                    [
+                        str(edge.get("from_vendor") or "").strip().lower(),
+                        str(edge.get("to_vendor") or "").strip().lower(),
+                    ]
+                )
+            )
+            if len(pair) == 2 and pair not in edge_lookup:
+                edge_lookup[pair] = edge
+        battles = []
+        for vendor_a, vendor_b in scoped_pairwise:
+            if vendor_a not in vendor_pools or vendor_b not in vendor_pools:
+                continue
+            edge = edge_lookup.get(tuple(sorted((vendor_a.lower(), vendor_b.lower()))), {})
+            battles.append((vendor_a, vendor_b, edge))
+        categories = []
+        for category_name in scoped_categories:
+            ecosystem = ecosystem_evidence.get(category_name) or ecosystem_evidence.get(str(category_name or "").strip())
+            if ecosystem is None:
+                for key, value in ecosystem_evidence.items():
+                    if str(key or "").strip().lower() == str(category_name or "").strip().lower():
+                        ecosystem = value
+                        break
+            if ecosystem is not None:
+                categories.append((category_name, ecosystem))
+        asymmetry_pairs = [
+            (vendor_a, vendor_b)
+            for vendor_a, vendor_b in scoped_asymmetry
+            if vendor_a in vendor_pools and vendor_b in vendor_pools
+        ]
+    else:
+        battles = await select_battles(
+            pool,
+            displacement_edges,
+            evidence_lookup,
+            product_profiles=product_profiles,
+            max_battles=cfg.cross_vendor_max_battles,
+            min_context_score=cfg.cross_vendor_battle_min_context_score,
+        )
+        categories = select_categories(
+            ecosystem_evidence,
+            category_vendor_lookup,
+            evidence_lookup,
+            min_vendors=cfg.cross_vendor_category_min_vendors,
+            min_context_vendors=cfg.cross_vendor_category_min_context_vendors,
+            min_displacement_intensity=cfg.cross_vendor_category_min_displacement_intensity,
+            max_categories=cfg.cross_vendor_max_categories,
+        )
+        asymmetry_pairs = await select_asymmetry_pairs(
+            vendor_scores,
+            evidence_lookup,
+            product_profiles,
+            max_pairs=cfg.cross_vendor_max_asymmetry,
+            pressure_delta_max=cfg.cross_vendor_asymmetry_pressure_delta_max,
+            review_ratio_min=cfg.cross_vendor_asymmetry_review_ratio_min,
+            segment_divergence_bonus=cfg.cross_vendor_asymmetry_segment_divergence_bonus,
+            min_divergence_score=cfg.cross_vendor_asymmetry_min_divergence_score,
+            min_context_score=cfg.cross_vendor_asymmetry_min_context_score,
+        )
 
     logger.info(
         "Cross-vendor synthesis targets: %d battles, %d councils, %d asymmetries",

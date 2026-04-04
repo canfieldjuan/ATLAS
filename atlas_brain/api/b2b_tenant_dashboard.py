@@ -19,9 +19,15 @@ from ..auth.dependencies import AuthUser, require_auth, require_b2b_plan
 from ..autonomous.tasks.b2b_campaign_generation import (
     generate_campaigns as _generate_campaigns,
 )
+from ..autonomous.scheduler import get_task_scheduler
 from ..config import settings
 from ..services.scraping.target_provisioning import (
     provision_vendor_onboarding_targets,
+)
+from ..services.b2b_competitive_sets import (
+    build_competitive_set_plan,
+    load_vendor_category_map,
+    plan_to_synthesis_metadata,
 )
 from ..services.tracked_vendor_sources import (
     MANUAL_DIRECT_SOURCE_KEY,
@@ -30,6 +36,8 @@ from ..services.tracked_vendor_sources import (
     upsert_tracked_vendor_source,
 )
 from ..services.vendor_registry import resolve_vendor_name
+from ..storage.repositories.competitive_set import get_competitive_set_repo
+from ..storage.repositories.scheduled_task import get_scheduled_task_repo
 from ..storage.database import get_db_pool
 from .b2b_dashboard import (
     _list_accounts_in_motion_from_report,
@@ -90,6 +98,97 @@ def _is_admin_user(user: AuthUser | None) -> bool:
     return str(getattr(user, "role", "")).lower() in {"owner", "admin"}
 
 
+async def _tracked_vendor_map(pool, account_id: _uuid.UUID) -> dict[str, dict]:
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name, track_mode, label
+        FROM tracked_vendors
+        WHERE account_id = $1
+        ORDER BY added_at ASC
+        """,
+        account_id,
+    )
+    return {
+        str(row["vendor_name"]).strip().lower(): {
+            "vendor_name": row["vendor_name"],
+            "track_mode": row["track_mode"],
+            "label": row["label"],
+        }
+        for row in rows
+    }
+
+
+async def _canonical_competitive_set_payload(
+    pool,
+    account_id: _uuid.UUID,
+    *,
+    name: str,
+    focal_vendor_name: str,
+    competitor_vendor_names: list[str],
+    refresh_mode: str,
+    refresh_interval_hours: int | None,
+) -> dict[str, Any]:
+    name = str(name or "").strip()
+    focal_vendor_name = await resolve_vendor_name(focal_vendor_name)
+    competitors = [await resolve_vendor_name(vendor_name) for vendor_name in (competitor_vendor_names or [])]
+    deduped_competitors: list[str] = []
+    seen: set[str] = {focal_vendor_name.lower()}
+    for vendor_name in competitors:
+        key = vendor_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_competitors.append(vendor_name)
+    if len(deduped_competitors) > settings.b2b_churn.competitive_set_max_competitors:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Competitive set exceeds max competitors "
+                f"({settings.b2b_churn.competitive_set_max_competitors})"
+            ),
+        )
+    tracked = await _tracked_vendor_map(pool, account_id)
+    missing = [
+        vendor_name
+        for vendor_name in [focal_vendor_name, *deduped_competitors]
+        if vendor_name.lower() not in tracked
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "All competitive-set vendors must already be tracked. Missing: "
+                + ", ".join(missing)
+            ),
+        )
+    if refresh_mode == "scheduled" and refresh_interval_hours is None:
+        raise HTTPException(status_code=400, detail="refresh_interval_hours required for scheduled competitive sets")
+    if refresh_mode == "manual":
+        refresh_interval_hours = None
+    return {
+        "name": name,
+        "focal_vendor_name": focal_vendor_name,
+        "competitor_vendor_names": deduped_competitors,
+        "refresh_mode": refresh_mode,
+        "refresh_interval_hours": refresh_interval_hours,
+    }
+
+
+async def _competitive_set_plan_payload(pool, competitive_set) -> dict[str, Any]:
+    vendor_names = [competitive_set.focal_vendor_name, *competitive_set.competitor_vendor_names]
+    category_by_vendor = await load_vendor_category_map(pool, vendor_names)
+    plan = build_competitive_set_plan(
+        competitive_set,
+        category_by_vendor=category_by_vendor,
+    )
+    payload = plan.to_dict()
+    payload["category_by_vendor"] = {
+        vendor_name: category_by_vendor.get(vendor_name.lower()) or None
+        for vendor_name in vendor_names
+    }
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Request/Response schemas
 # ---------------------------------------------------------------------------
@@ -129,6 +228,37 @@ class AccountDeepDiveRequest(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=200)
     window_days: int = Field(90, ge=1, le=3650)
     persist: bool = True
+
+
+class CompetitiveSetRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    focal_vendor_name: str = Field(..., min_length=1, max_length=256)
+    competitor_vendor_names: list[str] = Field(default_factory=list)
+    active: bool = True
+    refresh_mode: str = Field(default="manual", pattern="^(manual|scheduled)$")
+    refresh_interval_hours: int | None = Field(default=None, ge=1, le=720)
+    vendor_synthesis_enabled: bool = True
+    pairwise_enabled: bool = True
+    category_council_enabled: bool = False
+    asymmetry_enabled: bool = False
+
+
+class CompetitiveSetUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    focal_vendor_name: str | None = Field(default=None, min_length=1, max_length=256)
+    competitor_vendor_names: list[str] | None = None
+    active: bool | None = None
+    refresh_mode: str | None = Field(default=None, pattern="^(manual|scheduled)$")
+    refresh_interval_hours: int | None = Field(default=None, ge=1, le=720)
+    vendor_synthesis_enabled: bool | None = None
+    pairwise_enabled: bool | None = None
+    category_council_enabled: bool | None = None
+    asymmetry_enabled: bool | None = None
+
+
+class CompetitiveSetRunRequest(BaseModel):
+    force: bool = False
+    force_cross_vendor: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +485,177 @@ async def search_available_vendors(
             for r in rows
         ],
         "count": len(rows),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Competitive sets (scoped synthesis control)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/competitive-sets")
+async def list_competitive_sets(
+    include_inactive: bool = Query(False),
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    repo = get_competitive_set_repo()
+    sets = await repo.list_for_account(
+        _uuid.UUID(user.account_id),
+        include_inactive=include_inactive,
+    )
+    return {"competitive_sets": [item.to_dict() for item in sets], "count": len(sets)}
+
+
+@router.post("/competitive-sets", status_code=201)
+async def create_competitive_set(
+    req: CompetitiveSetRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    repo = get_competitive_set_repo()
+    existing_name = await repo.get_by_name_for_account(_uuid.UUID(user.account_id), req.name)
+    if existing_name:
+        raise HTTPException(status_code=409, detail="Competitive set name already exists")
+    payload = await _canonical_competitive_set_payload(
+        pool,
+        _uuid.UUID(user.account_id),
+        name=req.name,
+        focal_vendor_name=req.focal_vendor_name,
+        competitor_vendor_names=req.competitor_vendor_names,
+        refresh_mode=req.refresh_mode,
+        refresh_interval_hours=req.refresh_interval_hours,
+    )
+    created = await repo.create(
+        account_id=_uuid.UUID(user.account_id),
+        active=req.active,
+        vendor_synthesis_enabled=req.vendor_synthesis_enabled,
+        pairwise_enabled=req.pairwise_enabled,
+        category_council_enabled=req.category_council_enabled,
+        asymmetry_enabled=req.asymmetry_enabled,
+        **payload,
+    )
+    return created.to_dict()
+
+
+@router.put("/competitive-sets/{competitive_set_id}")
+async def update_competitive_set(
+    competitive_set_id: _uuid.UUID,
+    req: CompetitiveSetUpdateRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    repo = get_competitive_set_repo()
+    existing = await repo.get_by_id_for_account(competitive_set_id, _uuid.UUID(user.account_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Competitive set not found")
+    next_name = req.name if req.name is not None else existing.name
+    existing_name = await repo.get_by_name_for_account(_uuid.UUID(user.account_id), next_name)
+    if existing_name and existing_name.id != competitive_set_id:
+        raise HTTPException(status_code=409, detail="Competitive set name already exists")
+    canonical = await _canonical_competitive_set_payload(
+        pool,
+        _uuid.UUID(user.account_id),
+        name=next_name,
+        focal_vendor_name=(
+            req.focal_vendor_name
+            if req.focal_vendor_name is not None
+            else existing.focal_vendor_name
+        ),
+        competitor_vendor_names=(
+            req.competitor_vendor_names
+            if req.competitor_vendor_names is not None
+            else existing.competitor_vendor_names
+        ),
+        refresh_mode=req.refresh_mode if req.refresh_mode is not None else existing.refresh_mode,
+        refresh_interval_hours=(
+            req.refresh_interval_hours
+            if req.refresh_interval_hours is not None or (req.refresh_mode == "manual")
+            else existing.refresh_interval_hours
+        ),
+    )
+    updated = await repo.update(
+        competitive_set_id,
+        active=req.active,
+        vendor_synthesis_enabled=req.vendor_synthesis_enabled,
+        pairwise_enabled=req.pairwise_enabled,
+        category_council_enabled=req.category_council_enabled,
+        asymmetry_enabled=req.asymmetry_enabled,
+        **canonical,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Competitive set not found")
+    return updated.to_dict()
+
+
+@router.delete("/competitive-sets/{competitive_set_id}")
+async def delete_competitive_set(
+    competitive_set_id: _uuid.UUID,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    repo = get_competitive_set_repo()
+    existing = await repo.get_by_id_for_account(competitive_set_id, _uuid.UUID(user.account_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Competitive set not found")
+    deleted = await repo.delete(competitive_set_id)
+    return {"deleted": deleted, "competitive_set_id": str(competitive_set_id)}
+
+
+@router.get("/competitive-sets/{competitive_set_id}/plan")
+async def preview_competitive_set_plan(
+    competitive_set_id: _uuid.UUID,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    repo = get_competitive_set_repo()
+    existing = await repo.get_by_id_for_account(competitive_set_id, _uuid.UUID(user.account_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Competitive set not found")
+    plan = await _competitive_set_plan_payload(pool, existing)
+    return {"competitive_set": existing.to_dict(), "plan": plan}
+
+
+@router.post("/competitive-sets/{competitive_set_id}/run", status_code=202)
+async def run_competitive_set_now(
+    competitive_set_id: _uuid.UUID,
+    req: CompetitiveSetRunRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    repo = get_competitive_set_repo()
+    competitive_set = await repo.get_by_id_for_account(competitive_set_id, _uuid.UUID(user.account_id))
+    if not competitive_set:
+        raise HTTPException(status_code=404, detail="Competitive set not found")
+    plan = build_competitive_set_plan(
+        competitive_set,
+        category_by_vendor=await load_vendor_category_map(
+            pool,
+            [competitive_set.focal_vendor_name, *competitive_set.competitor_vendor_names],
+        ),
+    )
+    task_repo = get_scheduled_task_repo()
+    synthesis_task = await task_repo.get_by_name("b2b_reasoning_synthesis")
+    if not synthesis_task:
+        raise HTTPException(status_code=503, detail="b2b_reasoning_synthesis task is not registered")
+    synthesis_task.metadata = {
+        **(synthesis_task.metadata or {}),
+        **plan_to_synthesis_metadata(plan),
+        "scope_name": competitive_set.name,
+        "scope_trigger": "manual",
+        "force": req.force,
+        "force_cross_vendor": req.force_cross_vendor,
+    }
+    scheduler = get_task_scheduler()
+    result = await scheduler.run_now(synthesis_task)
+    return {
+        **result,
+        "competitive_set_id": str(competitive_set_id),
+        "plan": plan.to_dict(),
     }
 
 

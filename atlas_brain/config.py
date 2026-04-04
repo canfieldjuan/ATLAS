@@ -3045,6 +3045,24 @@ class B2BChurnConfig(BaseSettings):
         le=50,
         description="Max displacement flows included in a category-council packet",
     )
+    competitive_set_max_competitors: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max competitors allowed in one scoped competitive set",
+    )
+    competitive_set_refresh_interval_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86400,
+        description="How often the scheduled competitive-set refresher scans for due scoped synthesis runs",
+    )
+    competitive_set_refresh_batch_size: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Max competitive sets processed in one scheduled synthesis scanner run",
+    )
 
     scorecard_narrative_concurrency: int = Field(default=6, description="Max concurrent LLM calls during scorecard narrative generation")
 

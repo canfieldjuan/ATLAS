@@ -600,6 +600,52 @@ class TaskExecution:
 
 
 @dataclass
+class CompetitiveSet:
+    """Operator-defined vendor scope for competitive synthesis."""
+
+    id: UUID
+    account_id: UUID
+    name: str
+    focal_vendor_name: str
+    competitor_vendor_names: list[str] = field(default_factory=list)
+    active: bool = True
+    refresh_mode: str = "manual"
+    refresh_interval_hours: Optional[int] = None
+    vendor_synthesis_enabled: bool = True
+    pairwise_enabled: bool = True
+    category_council_enabled: bool = False
+    asymmetry_enabled: bool = False
+    last_run_at: Optional[datetime] = None
+    last_success_at: Optional[datetime] = None
+    last_run_status: Optional[str] = None
+    last_run_summary: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "account_id": str(self.account_id),
+            "name": self.name,
+            "focal_vendor_name": self.focal_vendor_name,
+            "competitor_vendor_names": self.competitor_vendor_names,
+            "active": self.active,
+            "refresh_mode": self.refresh_mode,
+            "refresh_interval_hours": self.refresh_interval_hours,
+            "vendor_synthesis_enabled": self.vendor_synthesis_enabled,
+            "pairwise_enabled": self.pairwise_enabled,
+            "category_council_enabled": self.category_council_enabled,
+            "asymmetry_enabled": self.asymmetry_enabled,
+            "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
+            "last_success_at": self.last_success_at.isoformat() if self.last_success_at else None,
+            "last_run_status": self.last_run_status,
+            "last_run_summary": self.last_run_summary,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+
+@dataclass
 class PresenceEvent:
     """A presence state transition event."""
 

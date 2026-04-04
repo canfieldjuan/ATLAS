@@ -596,6 +596,46 @@ export interface TrackedVendor {
   nps_proxy: number | null
 }
 
+export interface CompetitiveSet {
+  id: string
+  account_id: string
+  name: string
+  focal_vendor_name: string
+  competitor_vendor_names: string[]
+  active: boolean
+  refresh_mode: 'manual' | 'scheduled'
+  refresh_interval_hours: number | null
+  vendor_synthesis_enabled: boolean
+  pairwise_enabled: boolean
+  category_council_enabled: boolean
+  asymmetry_enabled: boolean
+  last_run_at: string | null
+  last_success_at: string | null
+  last_run_status: 'running' | 'succeeded' | 'partial' | 'failed' | null
+  last_run_summary: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface CompetitiveSetPlan {
+  competitive_set_id: string
+  focal_vendor_name: string
+  vendor_names: string[]
+  pairwise_pairs: string[][]
+  category_names: string[]
+  asymmetry_pairs: string[][]
+  vendor_synthesis_enabled: boolean
+  pairwise_enabled: boolean
+  category_council_enabled: boolean
+  asymmetry_enabled: boolean
+  vendor_job_count: number
+  pairwise_job_count: number
+  category_job_count: number
+  asymmetry_job_count: number
+  estimated_total_jobs: number
+  category_by_vendor?: Record<string, string | null>
+}
+
 export interface VendorSearchResult {
   vendor_name: string
   product_category: string | null
@@ -617,6 +657,63 @@ export async function removeTrackedVendor(vendor_name: string) {
 
 export async function listTrackedVendors() {
   return get<{ vendors: TrackedVendor[]; count: number }>(TENANT_BASE, '/vendors')
+}
+
+export async function listCompetitiveSets(include_inactive: boolean = false) {
+  return get<{ competitive_sets: CompetitiveSet[]; count: number }>(
+    TENANT_BASE,
+    '/competitive-sets',
+    { include_inactive },
+  )
+}
+
+export async function createCompetitiveSet(body: {
+  name: string
+  focal_vendor_name: string
+  competitor_vendor_names: string[]
+  active?: boolean
+  refresh_mode?: 'manual' | 'scheduled'
+  refresh_interval_hours?: number | null
+  vendor_synthesis_enabled?: boolean
+  pairwise_enabled?: boolean
+  category_council_enabled?: boolean
+  asymmetry_enabled?: boolean
+}) {
+  return post<CompetitiveSet>(TENANT_BASE, '/competitive-sets', body)
+}
+
+export async function updateCompetitiveSet(
+  competitiveSetId: string,
+  body: Record<string, unknown>,
+) {
+  return put<CompetitiveSet>(TENANT_BASE, `/competitive-sets/${encodeURIComponent(competitiveSetId)}`, body)
+}
+
+export async function deleteCompetitiveSet(competitiveSetId: string) {
+  return del<{ deleted: boolean; competitive_set_id: string }>(
+    TENANT_BASE,
+    `/competitive-sets/${encodeURIComponent(competitiveSetId)}`,
+  )
+}
+
+export async function fetchCompetitiveSetPlan(competitiveSetId: string) {
+  return get<{ competitive_set: CompetitiveSet; plan: CompetitiveSetPlan }>(
+    TENANT_BASE,
+    `/competitive-sets/${encodeURIComponent(competitiveSetId)}/plan`,
+  )
+}
+
+export async function runCompetitiveSetNow(
+  competitiveSetId: string,
+  body?: { force?: boolean; force_cross_vendor?: boolean },
+) {
+  return post<{
+    execution_id: string | null
+    status: string
+    message: string
+    competitive_set_id: string
+    plan: CompetitiveSetPlan
+  }>(TENANT_BASE, `/competitive-sets/${encodeURIComponent(competitiveSetId)}/run`, body)
 }
 
 export interface AccountsInMotionFeedItem {

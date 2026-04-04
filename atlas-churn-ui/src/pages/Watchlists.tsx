@@ -19,19 +19,26 @@ import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import {
   addTrackedVendor,
+  createCompetitiveSet,
+  deleteCompetitiveSet,
   fetchAccountsInMotionFeed,
   fetchSlowBurnWatchlist,
   listTrackedVendors,
+  listCompetitiveSets,
   removeTrackedVendor,
+  runCompetitiveSetNow,
   searchAvailableVendors,
   type AccountsInMotionFeedItem,
+  type CompetitiveSet,
   type TrackedVendor,
+  updateCompetitiveSet,
   type VendorSearchResult,
 } from '../api/client'
 import type { ChurnSignal } from '../types'
 
 interface WatchlistsData {
   vendors: TrackedVendor[]
+  competitiveSets: CompetitiveSet[]
   feed: ChurnSignal[]
   accounts: AccountsInMotionFeedItem[]
   vendorsWithAccounts: number
@@ -71,8 +78,22 @@ export default function Watchlists() {
   const [label, setLabel] = useState('')
   const [submittingVendor, setSubmittingVendor] = useState<string | null>(null)
   const [removingVendor, setRemovingVendor] = useState<string | null>(null)
+  const [savingCompetitiveSet, setSavingCompetitiveSet] = useState(false)
+  const [runningCompetitiveSetId, setRunningCompetitiveSetId] = useState<string | null>(null)
+  const [deletingCompetitiveSetId, setDeletingCompetitiveSetId] = useState<string | null>(null)
+  const [editingCompetitiveSetId, setEditingCompetitiveSetId] = useState<string | null>(null)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [competitiveSetName, setCompetitiveSetName] = useState('')
+  const [competitiveSetFocal, setCompetitiveSetFocal] = useState('')
+  const [competitiveSetCompetitors, setCompetitiveSetCompetitors] = useState<string[]>([])
+  const [competitiveSetRefreshMode, setCompetitiveSetRefreshMode] = useState<'manual' | 'scheduled'>('manual')
+  const [competitiveSetRefreshHours, setCompetitiveSetRefreshHours] = useState('24')
+  const [competitiveSetActive, setCompetitiveSetActive] = useState(true)
+  const [competitiveSetVendorEnabled, setCompetitiveSetVendorEnabled] = useState(true)
+  const [competitiveSetPairwiseEnabled, setCompetitiveSetPairwiseEnabled] = useState(true)
+  const [competitiveSetCategoryEnabled, setCompetitiveSetCategoryEnabled] = useState(false)
+  const [competitiveSetAsymmetryEnabled, setCompetitiveSetAsymmetryEnabled] = useState(false)
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -83,13 +104,15 @@ export default function Watchlists() {
 
   const { data, loading, error, refresh, refreshing } = useApiData<WatchlistsData>(
     async () => {
-      const [tracked, feed, accounts] = await Promise.all([
+      const [tracked, trackedSets, feed, accounts] = await Promise.all([
         listTrackedVendors(),
+        listCompetitiveSets(true),
         fetchSlowBurnWatchlist(),
         fetchAccountsInMotionFeed(),
       ])
       return {
         vendors: tracked.vendors,
+        competitiveSets: trackedSets.competitive_sets,
         feed: feed.signals,
         accounts: accounts.accounts,
         vendorsWithAccounts: accounts.vendors_with_accounts,
@@ -112,6 +135,7 @@ export default function Watchlists() {
   )
 
   const trackedVendors = data?.vendors ?? []
+  const competitiveSets = data?.competitiveSets ?? []
   const feed = data?.feed ?? []
   const accounts = data?.accounts ?? []
   const vendorsWithAccounts = data?.vendorsWithAccounts ?? 0
@@ -123,6 +147,24 @@ export default function Watchlists() {
     (vendor) => !trackedNames.has(vendor.vendor_name.toLowerCase()),
   )
   const freshestAccountsReportDate = data?.freshestAccountsReportDate ?? null
+  const focalOptions = trackedVendors
+  const competitorOptions = trackedVendors.filter(
+    (vendor) => vendor.vendor_name !== competitiveSetFocal,
+  )
+
+  function resetCompetitiveSetForm() {
+    setEditingCompetitiveSetId(null)
+    setCompetitiveSetName('')
+    setCompetitiveSetFocal('')
+    setCompetitiveSetCompetitors([])
+    setCompetitiveSetRefreshMode('manual')
+    setCompetitiveSetRefreshHours('24')
+    setCompetitiveSetActive(true)
+    setCompetitiveSetVendorEnabled(true)
+    setCompetitiveSetPairwiseEnabled(true)
+    setCompetitiveSetCategoryEnabled(false)
+    setCompetitiveSetAsymmetryEnabled(false)
+  }
 
   async function handleAddVendor(vendorName: string) {
     setSubmittingVendor(vendorName)
@@ -155,6 +197,89 @@ export default function Watchlists() {
       setActionError(err instanceof Error ? err.message : 'Failed to remove vendor')
     } finally {
       setRemovingVendor(null)
+    }
+  }
+
+  function loadCompetitiveSetForEdit(item: CompetitiveSet) {
+    setEditingCompetitiveSetId(item.id)
+    setCompetitiveSetName(item.name)
+    setCompetitiveSetFocal(item.focal_vendor_name)
+    setCompetitiveSetCompetitors(item.competitor_vendor_names)
+    setCompetitiveSetRefreshMode(item.refresh_mode)
+    setCompetitiveSetRefreshHours(String(item.refresh_interval_hours ?? 24))
+    setCompetitiveSetActive(item.active)
+    setCompetitiveSetVendorEnabled(item.vendor_synthesis_enabled)
+    setCompetitiveSetPairwiseEnabled(item.pairwise_enabled)
+    setCompetitiveSetCategoryEnabled(item.category_council_enabled)
+    setCompetitiveSetAsymmetryEnabled(item.asymmetry_enabled)
+  }
+
+  async function handleSaveCompetitiveSet() {
+    setSavingCompetitiveSet(true)
+    setActionError(null)
+    setActionMessage(null)
+    const payload = {
+      name: competitiveSetName.trim(),
+      focal_vendor_name: competitiveSetFocal,
+      competitor_vendor_names: competitiveSetCompetitors,
+      active: competitiveSetActive,
+      refresh_mode: competitiveSetRefreshMode,
+      refresh_interval_hours: competitiveSetRefreshMode === 'scheduled'
+        ? Number.parseInt(competitiveSetRefreshHours, 10) || 24
+        : null,
+      vendor_synthesis_enabled: competitiveSetVendorEnabled,
+      pairwise_enabled: competitiveSetPairwiseEnabled,
+      category_council_enabled: competitiveSetCategoryEnabled,
+      asymmetry_enabled: competitiveSetAsymmetryEnabled,
+    }
+    try {
+      if (editingCompetitiveSetId) {
+        await updateCompetitiveSet(editingCompetitiveSetId, payload)
+        setActionMessage(`Updated competitive set ${payload.name}`)
+      } else {
+        await createCompetitiveSet(payload)
+        setActionMessage(`Created competitive set ${payload.name}`)
+      }
+      resetCompetitiveSetForm()
+      refresh()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to save competitive set')
+    } finally {
+      setSavingCompetitiveSet(false)
+    }
+  }
+
+  async function handleDeleteCompetitiveSet(item: CompetitiveSet) {
+    if (!confirm(`Delete competitive set ${item.name}?`)) return
+    setDeletingCompetitiveSetId(item.id)
+    setActionError(null)
+    setActionMessage(null)
+    try {
+      await deleteCompetitiveSet(item.id)
+      if (editingCompetitiveSetId === item.id) resetCompetitiveSetForm()
+      setActionMessage(`Deleted competitive set ${item.name}`)
+      refresh()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to delete competitive set')
+    } finally {
+      setDeletingCompetitiveSetId(null)
+    }
+  }
+
+  async function handleRunCompetitiveSet(item: CompetitiveSet) {
+    setRunningCompetitiveSetId(item.id)
+    setActionError(null)
+    setActionMessage(null)
+    try {
+      const result = await runCompetitiveSetNow(item.id)
+      setActionMessage(
+        `${item.name} refresh started${result.execution_id ? ` (${result.execution_id})` : ''}`,
+      )
+      refresh()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to start competitive-set refresh')
+    } finally {
+      setRunningCompetitiveSetId(null)
     }
   }
 
@@ -571,6 +696,221 @@ export default function Watchlists() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-4">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-medium text-white">Competitive Sets</h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Define a focal vendor and exact competitors, then refresh synthesis only for that scope instead of the full vendor universe.
+                </p>
+              </div>
+              {editingCompetitiveSetId ? (
+                <button
+                  onClick={resetCompetitiveSetForm}
+                  className="rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                >
+                  Cancel edit
+                </button>
+              ) : null}
+            </div>
+
+            <div className="space-y-3">
+              <label className="space-y-1">
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Set Name</span>
+                <input
+                  type="text"
+                  value={competitiveSetName}
+                  onChange={(event) => setCompetitiveSetName(event.target.value)}
+                  placeholder="Salesforce core competitors"
+                  className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+                />
+              </label>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Focal Vendor</span>
+                  <select
+                    value={competitiveSetFocal}
+                    onChange={(event) => {
+                      setCompetitiveSetFocal(event.target.value)
+                      setCompetitiveSetCompetitors((current) => current.filter((item) => item !== event.target.value))
+                    }}
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                  >
+                    <option value="">Select tracked vendor</option>
+                    {focalOptions.map((vendor) => (
+                      <option key={vendor.id} value={vendor.vendor_name}>
+                        {vendor.vendor_name} · {vendor.track_mode}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Refresh Mode</span>
+                  <select
+                    value={competitiveSetRefreshMode}
+                    onChange={(event) => setCompetitiveSetRefreshMode(event.target.value as 'manual' | 'scheduled')}
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                  >
+                    <option value="manual">Manual</option>
+                    <option value="scheduled">Scheduled</option>
+                  </select>
+                </label>
+              </div>
+
+              {competitiveSetRefreshMode === 'scheduled' ? (
+                <label className="space-y-1">
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Refresh Every (Hours)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={competitiveSetRefreshHours}
+                    onChange={(event) => setCompetitiveSetRefreshHours(event.target.value)}
+                    className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+                  />
+                </label>
+              ) : null}
+
+              <div className="space-y-2 rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Tracked Competitors</div>
+                <div className="grid gap-2">
+                  {competitorOptions.length === 0 ? (
+                    <div className="text-sm text-slate-500">Add tracked vendors first, then choose the ones to compare against the focal vendor.</div>
+                  ) : competitorOptions.map((vendor) => (
+                    <label key={vendor.id} className="flex items-center gap-2 text-sm text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={competitiveSetCompetitors.includes(vendor.vendor_name)}
+                        onChange={(event) => {
+                          setCompetitiveSetCompetitors((current) => {
+                            if (event.target.checked) return [...current, vendor.vendor_name]
+                            return current.filter((item) => item !== vendor.vendor_name)
+                          })
+                        }}
+                        className="rounded border-slate-600 bg-slate-900 text-cyan-400 focus:ring-cyan-500"
+                      />
+                      <span>{vendor.vendor_name}</span>
+                      <span className="text-xs text-slate-500">{vendor.track_mode}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                  <input type="checkbox" checked={competitiveSetActive} onChange={(event) => setCompetitiveSetActive(event.target.checked)} />
+                  Active
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                  <input type="checkbox" checked={competitiveSetVendorEnabled} onChange={(event) => setCompetitiveSetVendorEnabled(event.target.checked)} />
+                  Vendor synthesis
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                  <input type="checkbox" checked={competitiveSetPairwiseEnabled} onChange={(event) => setCompetitiveSetPairwiseEnabled(event.target.checked)} />
+                  Pairwise
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                  <input type="checkbox" checked={competitiveSetCategoryEnabled} onChange={(event) => setCompetitiveSetCategoryEnabled(event.target.checked)} />
+                  Category council
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2 text-sm text-slate-300 sm:col-span-2">
+                  <input type="checkbox" checked={competitiveSetAsymmetryEnabled} onChange={(event) => setCompetitiveSetAsymmetryEnabled(event.target.checked)} />
+                  Resource asymmetry
+                </label>
+              </div>
+
+              <button
+                onClick={handleSaveCompetitiveSet}
+                disabled={
+                  savingCompetitiveSet
+                  || !competitiveSetName.trim()
+                  || !competitiveSetFocal
+                  || competitiveSetCompetitors.length === 0
+                }
+                className="inline-flex items-center gap-2 rounded-lg bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" />
+                {editingCompetitiveSetId ? 'Update competitive set' : 'Create competitive set'}
+              </button>
+            </div>
+
+            <div className="mt-5 space-y-3">
+              {competitiveSets.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-700/50 px-3 py-4 text-sm text-slate-500">
+                  No competitive sets yet. Build one from your tracked vendors to keep synthesis scoped to the exact vendors you care about.
+                </div>
+              ) : competitiveSets.map((item) => {
+                const competitorCount = item.competitor_vendor_names.length
+                const vendorJobCount = item.vendor_synthesis_enabled ? competitorCount + 1 : 0
+                const pairwiseJobCount = item.pairwise_enabled ? competitorCount : 0
+                const asymmetryJobCount = item.asymmetry_enabled ? competitorCount : 0
+                return (
+                  <div key={item.id} className="rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-white">{item.name}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Focal: {item.focal_vendor_name} · {competitorCount} competitors · {item.refresh_mode}
+                          {item.refresh_mode === 'scheduled' && item.refresh_interval_hours
+                            ? ` every ${item.refresh_interval_hours}h`
+                            : ''}
+                        </div>
+                      </div>
+                      <span
+                        className={clsx(
+                          'rounded-full px-2 py-0.5 text-[11px] font-medium',
+                          item.last_run_status === 'succeeded' && 'bg-emerald-500/10 text-emerald-300',
+                          item.last_run_status === 'partial' && 'bg-amber-500/10 text-amber-300',
+                          item.last_run_status === 'failed' && 'bg-rose-500/10 text-rose-300',
+                          item.last_run_status === 'running' && 'bg-cyan-500/10 text-cyan-300',
+                          !item.last_run_status && 'bg-slate-800 text-slate-300',
+                        )}
+                      >
+                        {item.last_run_status ?? 'never run'}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
+                      <span>{vendorJobCount} vendor jobs</span>
+                      <span>{pairwiseJobCount} pairwise jobs</span>
+                      {item.category_council_enabled ? <span>category council enabled</span> : null}
+                      {item.asymmetry_enabled ? <span>{asymmetryJobCount} asymmetry pairs</span> : null}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {item.competitor_vendor_names.map((vendorName) => (
+                        <span key={vendorName} className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300">
+                          {vendorName}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        onClick={() => handleRunCompetitiveSet(item)}
+                        disabled={runningCompetitiveSetId === item.id}
+                        className="rounded-md bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+                      >
+                        Run now
+                      </button>
+                      <button
+                        onClick={() => loadCompetitiveSetForEdit(item)}
+                        className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteCompetitiveSet(item)}
+                        disabled={deletingCompetitiveSetId === item.id}
+                        className="rounded-md bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
