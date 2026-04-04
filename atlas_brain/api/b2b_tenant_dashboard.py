@@ -539,10 +539,21 @@ async def list_tenant_signals(
             "legacy_support_score": _safe_float(r["legacy_support_score"]),
             "new_feature_velocity": _safe_float(r["new_feature_velocity"]),
             "employee_growth_rate": _safe_float(r["employee_growth_rate"]),
+            "archetype": None,
+            "archetype_confidence": None,
+            "reasoning_mode": None,
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
         }
         for r in rows
     ]
+    reasoning_views = await _load_reasoning_views_for_vendors(
+        pool,
+        [signal.get("vendor_name", "") for signal in signals],
+    )
+    for signal in signals:
+        view = reasoning_views.get(_normalize_vendor_name(signal.get("vendor_name")))
+        if view is not None:
+            _overlay_reasoning_summary_from_view(signal, view)
 
     return {
         "signals": signals,
@@ -605,7 +616,6 @@ async def list_tenant_slow_burn_watchlist(
                    snap.legacy_support_score AS legacy_support_score,
                    snap.new_feature_velocity AS new_feature_velocity,
                    snap.employee_growth_rate AS employee_growth_rate,
-                   sig.archetype, sig.archetype_confidence, sig.reasoning_mode,
                    sig.last_computed_at,
                    ROW_NUMBER() OVER (
                        PARTITION BY sig.vendor_name
@@ -630,7 +640,6 @@ async def list_tenant_slow_burn_watchlist(
                nps_proxy, price_complaint_rate, decision_maker_churn_rate,
                support_sentiment, legacy_support_score,
                new_feature_velocity, employee_growth_rate,
-               archetype, archetype_confidence, reasoning_mode,
                last_computed_at
         FROM ranked_signals
         WHERE vendor_row_rank = 1
@@ -660,9 +669,9 @@ async def list_tenant_slow_burn_watchlist(
             "legacy_support_score": _safe_float(r["legacy_support_score"]),
             "new_feature_velocity": _safe_float(r["new_feature_velocity"]),
             "employee_growth_rate": _safe_float(r["employee_growth_rate"]),
-            "archetype": r["archetype"],
-            "archetype_confidence": _safe_float(r["archetype_confidence"]),
-            "reasoning_mode": r["reasoning_mode"],
+            "archetype": None,
+            "archetype_confidence": None,
+            "reasoning_mode": None,
             "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
         }
         for r in rows

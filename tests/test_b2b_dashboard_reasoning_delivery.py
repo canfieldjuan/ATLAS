@@ -544,6 +544,64 @@ async def test_tenant_get_vendor_detail_overlays_synthesis_detail(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tenant_list_signals_does_not_fallback_to_legacy_reasoning(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "vendor_name": "Zendesk",
+                    "product_category": "CRM",
+                    "total_reviews": 100,
+                    "churn_intent_count": 22,
+                    "avg_urgency_score": 6.4,
+                    "avg_rating_normalized": 0.4,
+                    "nps_proxy": -0.2,
+                    "price_complaint_rate": 0.18,
+                    "decision_maker_churn_rate": 0.12,
+                    "support_sentiment": -0.1,
+                    "legacy_support_score": -0.2,
+                    "new_feature_velocity": 0.3,
+                    "employee_growth_rate": 0.04,
+                    "last_computed_at": None,
+                },
+            ]
+        ),
+        fetchrow=AsyncMock(
+            return_value={
+                "total_vendors": 1,
+                "high_urgency_count": 0,
+                "total_signal_reviews": 100,
+            }
+        ),
+    )
+    user = SimpleNamespace(account_id="acct-1", product="b2b_retention", role="owner", is_admin=False)
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", False, raising=False)
+    monkeypatch.setattr(mod, "_tenant_params", lambda _user: [])
+    monkeypatch.setattr(mod, "_vendor_scope_sql", lambda idx, _user: "TRUE")
+    monkeypatch.setattr(
+        mod,
+        "_load_reasoning_views_for_vendors",
+        AsyncMock(return_value={}),
+    )
+
+    result = await mod.list_tenant_signals(
+        vendor_name=None,
+        min_urgency=0,
+        category=None,
+        limit=20,
+        user=user,
+    )
+
+    signal = result["signals"][0]
+    assert signal["archetype"] is None
+    assert signal["archetype_confidence"] is None
+    assert signal["reasoning_mode"] is None
+
+
+@pytest.mark.asyncio
 async def test_dashboard_vendor_profile_only_uses_trusted_account_resolution(monkeypatch):
     from atlas_brain.api import b2b_dashboard as mod
 
