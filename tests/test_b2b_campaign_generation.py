@@ -596,8 +596,7 @@ async def test_generate_challenger_campaigns_uses_mode_aware_briefing_context(mo
     assert payload["briefing_context"]["priority_account_names"] == ["Gamma Co"]
     assert payload["briefing_context"]["top_displacement_targets"] == ["IncumbentCRM"]
     assert payload["briefing_context"]["trend"] == "increasing"
-    # pricing_shock legacy archetype maps to price_squeeze wedge
-    assert payload["incumbent_archetypes"]["price_squeeze"] == ["IncumbentCRM"]
+    assert "incumbent_archetypes" not in payload
     assert result["generated"] == 2
 
 

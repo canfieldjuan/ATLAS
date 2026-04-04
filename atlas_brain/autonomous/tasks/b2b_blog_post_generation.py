@@ -2306,6 +2306,7 @@ async def _rerank_topic_candidates_with_reasoning(
                 pool, list(vendor_set),
                 as_of=as_of,
                 analysis_window_days=analysis_window_days,
+                allow_legacy_fallback=False,
             )
         except Exception:
             logger.debug("Reasoning reranker: synthesis lookup failed, skipping", exc_info=True)
@@ -3403,6 +3404,7 @@ async def _load_pool_layers_for_blog(
                 pool, view_names,
                 as_of=today,
                 analysis_window_days=window_days,
+                allow_legacy_fallback=False,
             )
             data["synthesis_views"] = synth_views
         except Exception:

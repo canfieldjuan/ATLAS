@@ -53,7 +53,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
         all_vendors = [r["vendor_name"] for r in vendor_rows if r["vendor_name"]]
         if all_vendors:
-            views = await load_best_reasoning_views(pool, all_vendors, as_of=today)
+            views = await load_best_reasoning_views(
+                pool,
+                all_vendors,
+                as_of=today,
+                allow_legacy_fallback=False,
+            )
             synth_lookup = build_reasoning_lookup_from_views(views)
         else:
             synth_lookup = {}

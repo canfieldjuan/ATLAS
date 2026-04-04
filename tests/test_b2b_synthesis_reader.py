@@ -181,6 +181,22 @@ class TestLegacyReasoningToContracts:
         cn = result["reasoning_contracts"]["vendor_core_reasoning"]["causal_narrative"]
         assert cn["confidence"] == "medium"
 
+    def test_missing_confidence_defaults_non_empty_section_to_medium(self):
+        view = load_synthesis_view(
+            {
+                "reasoning_contracts": {
+                    "schema_version": "v1",
+                    "account_reasoning": {
+                        "market_summary": "Two accounts are actively evaluating alternatives.",
+                        "top_accounts": [{"name": "Acme Corp"}],
+                    },
+                },
+            },
+            "Acme",
+        )
+        assert view.confidence("account_reasoning") == "medium"
+        assert view.should_suppress("account_reasoning") is False
+
     def test_archetype_mapped_to_wedge(self):
         """pricing_shock -> price_squeeze, feature_gap -> feature_parity."""
         legacy_pricing = _make_legacy_row(archetype="pricing_shock")

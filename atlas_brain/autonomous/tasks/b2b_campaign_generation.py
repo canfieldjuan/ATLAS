@@ -2389,7 +2389,11 @@ async def _generate_vendor_campaigns(
         # Load reasoning context (synthesis-first, legacy fallback)
         from ._b2b_synthesis_reader import load_best_reasoning_view
 
-        vendor_reasoning = await load_best_reasoning_view(pool, vendor_name)
+        vendor_reasoning = await load_best_reasoning_view(
+            pool,
+            vendor_name,
+            allow_legacy_fallback=False,
+        )
         if vendor_reasoning is not None:
             _inject_reasoning_campaign_context(
                 vendor_ctx,
@@ -3124,7 +3128,11 @@ async def _generate_challenger_campaigns(
         if incumbent_names:
             from ._b2b_synthesis_reader import load_best_reasoning_views
 
-            inc_views = await load_best_reasoning_views(pool, incumbent_names)
+            inc_views = await load_best_reasoning_views(
+                pool,
+                incumbent_names,
+                allow_legacy_fallback=False,
+            )
             if inc_views:
                 by_archetype: dict[str, list[str]] = {}
                 incumbent_reasoning: dict[str, dict[str, Any]] = {}

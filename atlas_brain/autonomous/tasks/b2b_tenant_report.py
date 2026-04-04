@@ -1141,6 +1141,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 vendor_names,
                 as_of=today,
                 analysis_window_days=cfg.intelligence_window_days,
+                allow_legacy_fallback=False,
             )
             if reasoning_views:
                 prior_reasoning = await load_prior_reasoning_snapshots(

@@ -372,7 +372,15 @@ class SynthesisView:
     def confidence(self, section: str) -> str:
         """Get the confidence level for a section."""
         sec = self.section(section)
-        return sec.get("confidence", "insufficient")
+        conf = sec.get("confidence")
+        if isinstance(conf, str) and conf.strip():
+            return conf
+        # Backward compatibility: older minimal contracts may omit an explicit
+        # confidence field. Treat non-empty sections as usable instead of
+        # suppressing them as "insufficient" by default.
+        if sec:
+            return "medium"
+        return "insufficient"
 
     def should_suppress(self, section: str, vendor_evidence: dict[str, Any] | None = None) -> bool:
         """True if section should not display.
@@ -1321,6 +1329,7 @@ async def load_best_reasoning_view(
     *,
     as_of: date | None = None,
     analysis_window_days: int = 30,
+    allow_legacy_fallback: bool = True,
 ) -> SynthesisView | None:
     """Load the best available reasoning for a vendor.
 
@@ -1382,6 +1391,9 @@ async def load_best_reasoning_view(
                 as_of_date=synth_row["as_of_date"],
             )
 
+    if not allow_legacy_fallback:
+        return None
+
     # --- Fall back to legacy churn signals ---------------------------------
     if as_of is not None:
         legacy_row = await pool.fetchrow(
@@ -1440,6 +1452,7 @@ async def discover_reasoning_vendor_names(
     *,
     as_of: date,
     analysis_window_days: int = 90,
+    include_legacy: bool = True,
 ) -> list[str]:
     """Return the union of vendor names with synthesis or legacy reasoning rows."""
     synth_names = await pool.fetch(
@@ -1447,6 +1460,11 @@ async def discover_reasoning_vendor_names(
         "WHERE as_of_date <= $1 AND analysis_window_days = $2",
         as_of, analysis_window_days,
     )
+    if not include_legacy:
+        return list({
+            r["vendor_name"] for r in synth_names
+            if r.get("vendor_name")
+        })
     legacy_names = await pool.fetch(
         "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
         "WHERE archetype IS NOT NULL",
@@ -1463,6 +1481,7 @@ async def load_best_reasoning_views(
     *,
     as_of: date | None = None,
     analysis_window_days: int = 30,
+    allow_legacy_fallback: bool = True,
 ) -> dict[str, SynthesisView]:
     """Batch-load best reasoning for multiple vendors.
 
@@ -1529,6 +1548,9 @@ async def load_best_reasoning_views(
             as_of_date=row["as_of_date"],
         )
         covered.add(vname.lower())
+
+    if not allow_legacy_fallback:
+        return views
 
     # --- Bulk legacy fallback for remaining vendors ------------------------
     remaining = [v for v in vendor_names if v.lower() not in covered]

@@ -510,7 +510,11 @@ async def _fetch_synthesis_view(
     from ._b2b_synthesis_reader import load_best_reasoning_view
 
     return await load_best_reasoning_view(
-        pool, vendor, as_of=today, analysis_window_days=analysis_window_days,
+        pool,
+        vendor,
+        as_of=today,
+        analysis_window_days=analysis_window_days,
+        allow_legacy_fallback=False,
     )
 
 

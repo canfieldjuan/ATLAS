@@ -147,7 +147,11 @@ async def campaign_specificity_context_resolution_with_fallback(
 
     from ..autonomous.tasks._b2b_synthesis_reader import load_best_reasoning_view
 
-    view = await load_best_reasoning_view(pool, vendor_name)
+    view = await load_best_reasoning_view(
+        pool,
+        vendor_name,
+        allow_legacy_fallback=False,
+    )
     if view is None:
         return {
             **primary_resolution,
@@ -157,7 +161,7 @@ async def campaign_specificity_context_resolution_with_fallback(
             "context": context,
         }
     fallback_context = campaign_specificity_from_consumer_context(
-        view.consumer_context("campaign")
+        view.filtered_consumer_context("campaign")
     )
     merged_context = merge_specificity_contexts(
         context,

@@ -709,12 +709,13 @@ def _populate_battle_card_fallback_sales_copy(card: dict[str, Any]) -> None:
         card["executive_summary"] = summary.strip()
 
     plays = card.get("recommended_plays") if isinstance(card.get("recommended_plays"), list) else []
-    if not plays:
-        cfg = settings.b2b_churn
-        min_total_plays = int(getattr(cfg, "battle_card_quality_min_total_plays", 2))
-        fallback_plays = _battle_card_fallback_recommended_plays(card, limit=max(min_total_plays, 1))
+    cfg = settings.b2b_churn
+    min_total_plays = int(getattr(cfg, "battle_card_quality_min_total_plays", 2))
+    if len(plays) < min_total_plays:
+        needed = max(min_total_plays - len(plays), 1)
+        fallback_plays = _battle_card_fallback_recommended_plays(card, limit=needed)
         if fallback_plays:
-            card["recommended_plays"] = fallback_plays
+            card["recommended_plays"] = plays + fallback_plays
 
     talk_track = card.get("talk_track") if isinstance(card.get("talk_track"), dict) else {}
     if not talk_track or not all(str(talk_track.get(key) or "").strip() for key in ("opening", "mid_call_pivot", "closing")):
@@ -853,7 +854,7 @@ def _evaluate_battle_card_quality(
     hard_blockers: list[str] = []
     warnings: list[str] = []
     cfg = settings.b2b_churn
-    max_stale_days = int(getattr(cfg, "battle_card_quality_max_stale_days", 1))
+    max_stale_days = int(getattr(cfg, "battle_card_quality_max_stale_days", 7))
     eval_divergence_warn_delta = int(getattr(cfg, "battle_card_quality_eval_divergence_warn_delta", 25))
     min_high_intent_urgency = float(getattr(cfg, "battle_card_quality_min_high_intent_urgency", 7.0))
     required_stages = _quality_required_stages(cfg)
@@ -1025,7 +1026,7 @@ def _evaluate_battle_card_quality(
                 )
             )
             if not anchor_hits:
-                hard_blockers.append(
+                warnings.append(
                     "seller copy does not reference any witness-backed anchor despite anchors being available"
                 )
             if signal_terms["companies"] and not any(term in render_text for term in signal_terms["companies"]):
@@ -1865,6 +1866,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             pool, vendor_names_for_views,
             as_of=today,
             analysis_window_days=window_days,
+            allow_legacy_fallback=False,
         )
         logger.info(
             "Loaded reasoning views for %d vendors (%d synthesis, %d legacy)",

@@ -1836,7 +1836,11 @@ async def build_vendor_briefing(
     ):
         from ._b2b_synthesis_reader import load_best_reasoning_view
 
-        reasoning_view = await load_best_reasoning_view(pool, vendor_name)
+        reasoning_view = await load_best_reasoning_view(
+            pool,
+            vendor_name,
+            allow_legacy_fallback=False,
+        )
         if reasoning_view is not None:
             if _apply_synthesis_view_to_briefing(briefing, reasoning_view):
                 briefing["data_sources"]["reasoning_synthesis"] = True
@@ -1986,7 +1990,11 @@ async def build_vendor_briefing(
     try:
         if reasoning_view is None:
             from ._b2b_synthesis_reader import load_best_reasoning_view
-            reasoning_view = await load_best_reasoning_view(pool, vendor_name)
+            reasoning_view = await load_best_reasoning_view(
+                pool,
+                vendor_name,
+                allow_legacy_fallback=False,
+            )
         if reasoning_view is not None:
             wedge = reasoning_view.primary_wedge
             cn = reasoning_view.section("causal_narrative")
@@ -2107,7 +2115,11 @@ async def _fetch_reasoning_synthesis(pool: Any, vendor_name: str) -> dict[str, A
     """
     from ._b2b_synthesis_reader import load_best_reasoning_view
 
-    view = await load_best_reasoning_view(pool, vendor_name)
+    view = await load_best_reasoning_view(
+        pool,
+        vendor_name,
+        allow_legacy_fallback=False,
+    )
     if view is None:
         return None
     # Return materialized contracts as the raw dict for the existing applier
