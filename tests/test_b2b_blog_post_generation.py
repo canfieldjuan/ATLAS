@@ -1293,7 +1293,7 @@ async def test_reranker_pure_category_batch_resolves_vendors():
         q = str(query)
         if "b2b_reasoning_synthesis" in q and "DISTINCT vendor_name" not in q:
             return synth_rows
-        if "b2b_churn_signals" in q and "product_category" in q:
+        if "b2b_product_profiles" in q and "product_category" in q:
             return cat_vendor_rows
         if "b2b_churn_signals" in q:
             return []

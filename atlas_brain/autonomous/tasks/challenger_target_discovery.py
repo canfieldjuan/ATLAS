@@ -98,13 +98,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         # Fetch incumbent archetypes to understand *why* the challenger is winning
         incumbent_archetypes: dict[str, list[str]] = {}
         if losing_vendors:
-            arch_rows = await pool.fetch(
-                "SELECT vendor_name, archetype FROM b2b_churn_signals "
-                "WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
-                losing_vendors,
-            )
-            for r in arch_rows:
-                incumbent_archetypes.setdefault(r["archetype"], []).append(r["vendor_name"])
+            try:
+                from ._b2b_synthesis_reader import load_best_reasoning_views
+
+                views = await load_best_reasoning_views(
+                    pool,
+                    losing_vendors,
+                    as_of=today,
+                    allow_legacy_fallback=False,
+                )
+            except Exception:
+                views = {}
+            for vendor_name, view in views.items():
+                wedge = view.primary_wedge
+                label = wedge.value if wedge else (
+                    view.section("causal_narrative").get("primary_wedge", "")
+                )
+                if label:
+                    incumbent_archetypes.setdefault(label, []).append(vendor_name)
 
         notes_text = (
             f"Auto-discovered from displacement data: {total_mentions} mentions across {len(losing_vendors)} flows"

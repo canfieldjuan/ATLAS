@@ -2280,14 +2280,11 @@ async def _rerank_topic_candidates_with_reasoning(
                 cat_vendor_rows = await pool.fetch(
                     """
                     SELECT DISTINCT vendor_name, product_category
-                    FROM b2b_churn_signals
+                    FROM b2b_product_profiles
                     WHERE LOWER(product_category) = ANY($1)
-                      AND archetype IS NOT NULL
-                      AND last_computed_at::date <= $2
                     ORDER BY vendor_name
                     """,
                     [c.lower() for c in cat_vendors_needed],
-                    _as_of_filter,
                 )
                 for row in cat_vendor_rows:
                     vn = row.get("vendor_name")
@@ -3387,12 +3384,10 @@ async def _load_pool_layers_for_blog(
         if category_name:
             try:
                 cat_rows = await pool.fetch(
-                    "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
+                    "SELECT DISTINCT vendor_name FROM b2b_product_profiles "
                     "WHERE LOWER(product_category) = LOWER($1) "
-                    "AND archetype IS NOT NULL "
-                    "AND last_computed_at::date <= $2 "
                     "LIMIT 10",
-                    category_name, today,
+                    category_name,
                 )
                 view_names = [r["vendor_name"] for r in cat_rows if r.get("vendor_name")]
             except Exception:
