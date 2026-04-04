@@ -2454,8 +2454,7 @@ async def _fetch_churn_signals(pool: Any, vendor_name: str) -> dict | None:
                avg_urgency_score, top_pain_categories, top_competitors,
                top_feature_gaps, price_complaint_rate,
                decision_maker_churn_rate, company_churn_list,
-               quotable_evidence, product_category,
-               archetype, archetype_confidence, falsification_conditions
+               quotable_evidence, product_category
         FROM b2b_churn_signals
         WHERE LOWER(vendor_name) = LOWER($1)
         ORDER BY last_computed_at DESC

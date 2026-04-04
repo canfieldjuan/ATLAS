@@ -407,17 +407,12 @@ async def _fetch_review_pain_quotes(
     )
 
 
-async def _fetch_churn_signal(pool, vendor: str, today: date) -> dict | None:
-    """Fetch the latest churn signal for a vendor.
+async def _fetch_churn_signal(pool, vendor: str) -> dict | None:
+    """Fetch the latest churn-signal metrics for a vendor.
 
-    The b2b_churn_signals table uses:
-    - reasoning_risk_level (not risk_level)
-    - reasoning_key_signals (not key_signals)
-    - decision_maker_churn_rate (not dm_churn_rate)
-    - last_computed_at (no signal_date column)
-    churn_pressure_score and sentiment_direction live in the battle card
-    intelligence_data, not in this table. We read what we can from the
-    signal row and supplement from the battle card later.
+    These metrics are deterministic signal inputs. The reasoning-shaped
+    columns on ``b2b_churn_signals`` remain compatibility-only and are
+    only used when no synthesis view is available.
     """
     row = await pool.fetchrow(
         """
@@ -1963,7 +1958,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 _fetch_displacement_detail(pool, incumbent, challenger, window_days),
                 _fetch_product_profile(pool, incumbent),
                 _fetch_product_profile(pool, challenger),
-                _fetch_churn_signal(pool, incumbent, today),
+                _fetch_churn_signal(pool, incumbent),
                 _fetch_synthesis_view(pool, incumbent, today, window_days),
                 _resolve_cross_vendor_battle(
                     pool, incumbent, challenger, today, xv_lookup,
