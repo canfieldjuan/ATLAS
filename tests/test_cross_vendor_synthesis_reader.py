@@ -220,6 +220,8 @@ async def test_load_best_cross_vendor_lookup_is_synthesis_only_by_default(monkey
 
 @pytest.mark.asyncio
 async def test_load_best_cross_vendor_lookup_merges_legacy_when_opted_in(monkeypatch):
+    from atlas_brain.autonomous import visibility as visibility_mod
+
     async def _fake_reconstruct(pool, as_of=None):
         return {
             "battles": {
@@ -235,6 +237,8 @@ async def test_load_best_cross_vendor_lookup_merges_legacy_when_opted_in(monkeyp
         "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_cross_vendor_lookup",
         _fake_reconstruct,
     )
+    emit = AsyncMock()
+    monkeypatch.setattr(visibility_mod, "emit_event", emit)
     pool = FakePool([
         _make_row(
             "pairwise_battle",
@@ -257,6 +261,8 @@ async def test_load_best_cross_vendor_lookup_merges_legacy_when_opted_in(monkeyp
 
     assert lookup["battles"][("A", "B")]["conclusion"]["conclusion"] == "Synthesis battle"
     assert lookup["councils"]["CRM"]["conclusion"]["conclusion"] == "Legacy council"
+    emit.assert_awaited_once()
+    assert emit.await_args.kwargs["reason_code"] == "legacy_cross_vendor_fallback"
 
 
 def test_build_cross_vendor_conclusions_for_vendor_includes_council_refs():

@@ -260,8 +260,13 @@ class TestLoadBestReasoningView:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_legacy(self):
+        from atlas_brain.autonomous import visibility as visibility_mod
+
         legacy = _make_legacy_row()
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
+        emit = AsyncMock()
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(visibility_mod, "emit_event", emit)
 
         view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
 
@@ -270,6 +275,9 @@ class TestLoadBestReasoningView:
         cn = view.section("causal_narrative")
         assert cn["primary_wedge"] == "price_squeeze"
         assert cn["summary"] == "Churn pressure from pricing."
+        emit.assert_awaited_once()
+        assert emit.await_args.kwargs["reason_code"] == "legacy_reasoning_view_fallback"
+        monkeypatch.undo()
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_data(self):
@@ -395,9 +403,14 @@ class TestLoadBestReasoningViews:
     @pytest.mark.asyncio
     async def test_batch_mixed_sources(self):
         """Vendor A from synthesis, Vendor B from legacy fallback."""
+        from atlas_brain.autonomous import visibility as visibility_mod
+
         synth_rows = [_make_synthesis_row(vendor_name="VendorA")]
         legacy_rows = [_make_legacy_row(vendor_name="VendorB")]
         pool = _mock_pool(synth_rows=synth_rows, legacy_rows=legacy_rows)
+        emit = AsyncMock()
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(visibility_mod, "emit_event", emit)
 
         views = await load_best_reasoning_views(pool, ["VendorA", "VendorB"], allow_legacy_fallback=True)
 
@@ -405,6 +418,9 @@ class TestLoadBestReasoningViews:
         assert views["VendorA"].schema_version == "v2"
         assert "VendorB" in views
         assert views["VendorB"].schema_version == "legacy"
+        emit.assert_awaited_once()
+        assert emit.await_args.kwargs["reason_code"] == "legacy_reasoning_batch_fallback"
+        monkeypatch.undo()
 
     @pytest.mark.asyncio
     async def test_batch_empty(self):

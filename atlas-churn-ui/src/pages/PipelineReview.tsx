@@ -38,8 +38,20 @@ import type {
   AdminCostSourceEfficiencyRow,
   AdminCostB2bRunRow,
   AdminCostB2bEfficiency,
+  AdminCostBurnDashboard,
+  AdminCostBurnBudgetRow,
+  AdminCostBurnRow,
+  AdminCostGenericReasoning,
+  AdminCostGenericReasoningSourceRow,
+  AdminCostGenericReasoningEventRow,
+  AdminCostGenericReasoningSourceEventRow,
+  AdminCostGenericReasoningEntityRow,
+  AdminCostReconciliation,
+  AdminCostReconciliationRow,
   AdminCostRecentCall,
   AdminCostCacheHealth,
+  AdminCostReasoningActivity,
+  AdminCostReasoningActivityPhase,
   AdminCostBatchStage,
   AdminCostStaleBatchJob,
   AdminCostStaleBatchClaim,
@@ -65,8 +77,12 @@ import {
   fetchAdminCostByOperation,
   fetchAdminCostByVendor,
   fetchAdminCostB2bEfficiency,
+  fetchAdminCostBurnDashboard,
+  fetchAdminCostGenericReasoning,
+  fetchAdminCostReconciliation,
   fetchAdminCostRecent,
   fetchAdminCostCacheHealth,
+  fetchAdminCostReasoningActivity,
   fetchAdminCostRun,
   fetchAdminTaskHealth,
   runAutonomousTask,
@@ -78,6 +94,8 @@ const EXTRACTION_HEALTH_TOP_N = 12
 const COST_VENDOR_LIMIT = 100
 const B2B_EFFICIENCY_TOP_N = 25
 const B2B_EFFICIENCY_RUN_LIMIT = 25
+const BURN_DASHBOARD_TOP_N = 25
+const GENERIC_REASONING_TOP_N = 8
 const RECON_TASK_NAME = 'b2b_campaign_batch_reconciliation'
 
 // ---------------------------------------------------------------------------
@@ -163,6 +181,14 @@ function formatCurrency(value: number | null | undefined): string {
 
 function formatMaybeCurrency(value: number | null | undefined): string {
   return value == null ? '--' : formatCurrency(value)
+}
+
+function formatMaybeNumber(value: number | null | undefined): string {
+  return value == null ? '--' : formatNumber(value)
+}
+
+function formatMaybePercent(value: number | null | undefined): string {
+  return value == null ? '--' : `${(value * 100).toFixed(1)}%`
 }
 
 function formatCompactTokens(value: number | null | undefined): string {
@@ -1325,6 +1351,61 @@ function AuditTab() {
     [stageFilter, severityFilter],
   )
 
+  const {
+    data: legacyData,
+    loading: legacyLoading,
+    error: legacyError,
+  } = useApiData(
+    () =>
+      fetchVisibilityEvents({
+        limit: 100,
+        hours: 720,
+        event_type: 'legacy_reasoning_opt_in',
+      }),
+    [],
+  )
+
+  const legacyEvents = legacyData?.events ?? []
+  const legacyViewFallbacks = legacyEvents.filter((event) => event.reason_code === 'legacy_reasoning_view_fallback')
+  const legacyBatchFallbacks = legacyEvents.filter((event) => event.reason_code === 'legacy_reasoning_batch_fallback')
+  const legacyDiscoveryEvents = legacyEvents.filter((event) => event.reason_code === 'legacy_reasoning_vendor_discovery')
+  const legacyCrossVendorFallbacks = legacyEvents.filter((event) => event.reason_code === 'legacy_cross_vendor_fallback')
+
+  const legacyColumns: Column<VisibilityEvent>[] = [
+    {
+      key: 'reason_code',
+      header: 'Reason',
+      render: (r) => (
+        <span className="text-xs text-slate-300">{formatVisibilityCode(r.reason_code)}</span>
+      ),
+    },
+    {
+      key: 'summary',
+      header: 'Summary',
+      render: (r) => (
+        <div className="max-w-sm">
+          <span className="text-xs text-slate-400 line-clamp-1">{r.summary}</span>
+        </div>
+      ),
+    },
+    {
+      key: 'entity',
+      header: 'Entity',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{r.entity_type}: {truncateLabel(r.entity_id, 36)}</span>
+      ),
+    },
+    {
+      key: 'occurred_at',
+      header: 'Time',
+      render: (r) => (
+        <span className="text-xs text-slate-400">{formatTs(r.occurred_at)}</span>
+      ),
+      sortable: true,
+      sortValue: (r) => r.occurred_at,
+    },
+  ]
+
   const columns: Column<VisibilityEvent>[] = [
     {
       key: 'severity',
@@ -1392,6 +1473,63 @@ function AuditTab() {
 
   return (
     <div className="space-y-4">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Legacy Compatibility</h3>
+            <p className="text-xs text-slate-500">
+              Explicit legacy reasoning opt-ins seen in the last 30 days
+            </p>
+          </div>
+        </div>
+        {legacyError && (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+            {legacyError.message}
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <StatCard
+            label="Single-Vendor Fallbacks"
+            value={legacyLoading ? '--' : formatNumber(legacyViewFallbacks.length)}
+            icon={<AlertTriangle className="h-5 w-5" />}
+            sub="load_best_reasoning_view"
+            skeleton={legacyLoading}
+          />
+          <StatCard
+            label="Batch Fallbacks"
+            value={legacyLoading ? '--' : formatNumber(legacyBatchFallbacks.length)}
+            icon={<Database className="h-5 w-5" />}
+            sub="load_best_reasoning_views"
+            skeleton={legacyLoading}
+          />
+          <StatCard
+            label="Discovery Opt-Ins"
+            value={legacyLoading ? '--' : formatNumber(legacyDiscoveryEvents.length)}
+            icon={<Building2 className="h-5 w-5" />}
+            sub="include_legacy vendor discovery"
+            skeleton={legacyLoading}
+          />
+          <StatCard
+            label="Cross-Vendor Fallbacks"
+            value={legacyLoading ? '--' : formatNumber(legacyCrossVendorFallbacks.length)}
+            icon={<GitCompareArrows className="h-5 w-5" />}
+            sub="allow_legacy_fallback"
+            skeleton={legacyLoading}
+          />
+        </div>
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          {legacyLoading ? (
+            <DataTable columns={legacyColumns} data={[]} skeletonRows={4} />
+          ) : (
+            <DataTable
+              columns={legacyColumns}
+              data={legacyEvents.slice(0, 10)}
+              emptyMessage="No explicit legacy opt-ins recorded"
+            />
+          )}
+        </div>
+      </div>
+
       <div className="flex items-center gap-4">
         <Filter className="h-4 w-4 text-slate-500" />
         <FilterSelect
@@ -1405,6 +1543,7 @@ function AuditTab() {
             { value: 'battle_cards', label: 'Battle Cards' },
             { value: 'blog', label: 'Blog' },
             { value: 'reports', label: 'Reports' },
+            { value: 'compatibility', label: 'Compatibility' },
             { value: 'task_execution', label: 'Task Execution' },
           ]}
         />
@@ -1548,6 +1687,53 @@ function CostsTab() {
       }),
     [days],
   )
+  const {
+    data: burnDashboard,
+    loading: burnDashboardLoading,
+    error: burnDashboardError,
+    refreshing: burnDashboardRefreshing,
+  } = useApiData<AdminCostBurnDashboard>(
+    () =>
+      fetchAdminCostBurnDashboard({
+        days: Number(days),
+        top_n: BURN_DASHBOARD_TOP_N,
+      }),
+    [days],
+  )
+  const {
+    data: genericReasoning,
+    loading: genericReasoningLoading,
+    error: genericReasoningError,
+    refresh: refreshGenericReasoning,
+    refreshing: genericReasoningRefreshing,
+  } = useApiData<AdminCostGenericReasoning>(
+    () =>
+      fetchAdminCostGenericReasoning({
+        days: Number(days),
+        top_n: GENERIC_REASONING_TOP_N,
+      }),
+    [days],
+  )
+  const {
+    data: reconciliation,
+    loading: reconciliationLoading,
+    error: reconciliationError,
+    refresh: refreshReconciliation,
+    refreshing: reconciliationRefreshing,
+  } = useApiData<AdminCostReconciliation>(
+    () => fetchAdminCostReconciliation(Number(days)),
+    [days],
+  )
+  const {
+    data: reasoningActivity,
+    loading: reasoningActivityLoading,
+    error: reasoningActivityError,
+    refresh: refreshReasoningActivity,
+    refreshing: reasoningActivityRefreshing,
+  } = useApiData<AdminCostReasoningActivity>(
+    () => fetchAdminCostReasoningActivity(Number(days)),
+    [days],
+  )
 
   const {
     data: cacheHealth,
@@ -1592,11 +1778,43 @@ function CostsTab() {
   const vendorPasses = b2bEfficiency?.vendor_passes ?? []
   const sourceEfficiency = b2bEfficiency?.source_efficiency ?? []
   const recentPipelineRuns = b2bEfficiency?.recent_runs ?? []
+  const burnRows = burnDashboard?.rows ?? []
+  const burnBudgetRows = burnDashboard?.reasoning_budget_pressure.rows ?? []
+  const genericReasoningSources = genericReasoning?.by_source ?? []
+  const genericReasoningEvents = genericReasoning?.by_event_type ?? []
+  const genericReasoningPairs = genericReasoning?.top_source_events ?? []
+  const genericReasoningEntities = genericReasoning?.top_entities ?? []
   const recentCalls = data?.recent ?? []
-  const unifiedError = error || vendorsError || b2bEfficiencyError || cacheHealthError || taskHealthError
-  const unifiedLoading = loading || vendorsLoading || b2bEfficiencyLoading || cacheHealthLoading || taskHealthLoading
+  const unifiedError =
+    error ||
+    vendorsError ||
+    b2bEfficiencyError ||
+    burnDashboardError ||
+    genericReasoningError ||
+    reconciliationError ||
+    reasoningActivityError ||
+    cacheHealthError ||
+    taskHealthError
+  const unifiedLoading =
+    loading ||
+    vendorsLoading ||
+    b2bEfficiencyLoading ||
+    burnDashboardLoading ||
+    genericReasoningLoading ||
+    reconciliationLoading ||
+    reasoningActivityLoading ||
+    cacheHealthLoading ||
+    taskHealthLoading
   const unifiedRefreshing =
-    refreshing || vendorsRefreshing || b2bEfficiencyRefreshing || cacheHealthRefreshing || taskHealthRefreshing
+    refreshing ||
+    vendorsRefreshing ||
+    b2bEfficiencyRefreshing ||
+    burnDashboardRefreshing ||
+    genericReasoningRefreshing ||
+    reconciliationRefreshing ||
+    reasoningActivityRefreshing ||
+    cacheHealthRefreshing ||
+    taskHealthRefreshing
   const reconcilerTask = (taskHealthRows ?? []).find((row) => row.name === RECON_TASK_NAME) ?? null
   const providerOptions = Array.from(
     new Set(
@@ -1622,6 +1840,256 @@ function CostsTab() {
   const statusOptions = Array.from(
     new Set(recentCalls.map((row) => row.status).map((value) => value.trim()).filter(Boolean)),
   ).sort()
+
+  const reconciliationColumns: Column<AdminCostReconciliationRow>[] = [
+    {
+      key: 'date',
+      header: 'Day',
+      render: (row) => <span className="text-sm text-white">{row.date}</span>,
+      sortable: true,
+      sortValue: (row) => row.date,
+    },
+    {
+      key: 'provider',
+      header: 'Provider',
+      render: (row) => <span className="text-xs text-slate-300">{row.provider}</span>,
+      sortable: true,
+      sortValue: (row) => row.provider,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge status={row.status} />,
+      sortable: true,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: 'tracked_cost_usd',
+      header: 'Tracked',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.tracked_cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.tracked_cost_usd,
+    },
+    {
+      key: 'provider_cost_usd',
+      header: 'Provider',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeCurrency(row.provider_cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.provider_cost_usd ?? -1,
+    },
+    {
+      key: 'delta_cost_usd',
+      header: 'Delta',
+      render: (row) => <span className="text-xs text-amber-300">{formatMaybeCurrency(row.delta_cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.delta_cost_usd ?? -1,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+  ]
+
+  const genericReasoningSourceColumns: Column<AdminCostGenericReasoningSourceRow>[] = [
+    {
+      key: 'source_name',
+      header: 'Source',
+      render: (row) => <span className="text-sm text-white">{row.source_name}</span>,
+      sortable: true,
+      sortValue: (row) => row.source_name,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+  ]
+
+  const genericReasoningEventColumns: Column<AdminCostGenericReasoningEventRow>[] = [
+    {
+      key: 'event_type',
+      header: 'Event Type',
+      render: (row) => <span className="text-sm text-white">{row.event_type}</span>,
+      sortable: true,
+      sortValue: (row) => row.event_type,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+  ]
+
+  const genericReasoningPairColumns: Column<AdminCostGenericReasoningSourceEventRow>[] = [
+    {
+      key: 'pair',
+      header: 'Source / Event',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{row.source_name}</p>
+          <p className="truncate text-xs text-slate-500">{row.event_type}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.source_name}:${row.event_type}`,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+  ]
+
+  const genericReasoningEntityColumns: Column<AdminCostGenericReasoningEntityRow>[] = [
+    {
+      key: 'entity',
+      header: 'Entity',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{truncateLabel(row.entity_id, 40)}</p>
+          <p className="truncate text-xs text-slate-500">{row.entity_type}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.entity_type}:${row.entity_id}`,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+  ]
+
+  const stratifiedReasoningColumns: Column<AdminCostReasoningActivityPhase>[] = [
+    {
+      key: 'span_name',
+      header: 'Phase',
+      render: (row) => (
+        <div className="max-w-[260px]">
+          <p className="truncate text-sm text-white">{row.span_name}</p>
+          <p className="truncate text-xs text-slate-500">{row.pass_type} pass {row.pass_number}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.pass_number}:${row.span_name}`,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'total_tokens',
+      header: 'Tokens',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.total_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_tokens,
+    },
+    {
+      key: 'changed_count',
+      header: 'Changed',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.changed_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.changed_count,
+    },
+  ]
 
   const exactStageColumns: Column<AdminCostExactCacheStage>[] = [
     {
@@ -2297,6 +2765,156 @@ function CostsTab() {
     },
   ]
 
+  const burnColumns: Column<AdminCostBurnRow>[] = [
+    {
+      key: 'task_name',
+      header: 'Task',
+      render: (row) => (
+        <div className="max-w-[240px]">
+          <p className="truncate text-sm text-white">{row.task_name}</p>
+          <p className="truncate text-xs text-slate-500">{formatTs(row.last_run_at)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.task_name,
+    },
+    {
+      key: 'recent_runs',
+      header: 'Runs',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeNumber(row.recent_runs)}</span>,
+      sortable: true,
+      sortValue: (row) => row.recent_runs ?? -1,
+    },
+    {
+      key: 'last_status',
+      header: 'Status',
+      render: (row) =>
+        row.last_status ? <StatusBadge status={row.last_status} /> : <span className="text-xs text-slate-500">--</span>,
+      sortable: true,
+      sortValue: (row) => row.last_status || '',
+    },
+    {
+      key: 'model_call_count',
+      header: 'Model Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.model_call_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.model_call_count,
+    },
+    {
+      key: 'total_billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.total_billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_billable_input_tokens,
+    },
+    {
+      key: 'total_output_tokens',
+      header: 'Out',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.total_output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_output_tokens,
+    },
+    {
+      key: 'total_cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.total_cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.total_cost_usd,
+    },
+    {
+      key: 'rows_processed',
+      header: 'Processed',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeNumber(row.rows_processed)}</span>,
+      sortable: true,
+      sortValue: (row) => row.rows_processed ?? -1,
+    },
+    {
+      key: 'rows_skipped',
+      header: 'Skipped',
+      render: (row) => <span className="text-xs text-amber-300">{formatMaybeNumber(row.rows_skipped)}</span>,
+      sortable: true,
+      sortValue: (row) => row.rows_skipped ?? -1,
+    },
+    {
+      key: 'rows_reprocessed',
+      header: 'Reprocessed',
+      render: (row) => <span className="text-xs text-amber-300">{formatMaybeNumber(row.rows_reprocessed)}</span>,
+      sortable: true,
+      sortValue: (row) => row.rows_reprocessed ?? -1,
+    },
+    {
+      key: 'retry_count',
+      header: 'Retries',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeNumber(row.retry_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.retry_count ?? -1,
+    },
+    {
+      key: 'avg_cost_per_successful_item',
+      header: 'Cost / Success',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeCurrency(row.avg_cost_per_successful_item)}</span>,
+      sortable: true,
+      sortValue: (row) => row.avg_cost_per_successful_item ?? -1,
+    },
+    {
+      key: 'reprocess_pct',
+      header: 'Reprocess %',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybePercent(row.reprocess_pct)}</span>,
+      sortable: true,
+      sortValue: (row) => row.reprocess_pct ?? -1,
+    },
+    {
+      key: 'top_trigger_reason',
+      header: 'Top Trigger',
+      render: (row) => <span className="text-xs text-slate-400">{truncateLabel(row.top_trigger_reason, 36)}</span>,
+      sortable: true,
+      sortValue: (row) => row.top_trigger_reason,
+    },
+  ]
+
+  const burnBudgetColumns: Column<AdminCostBurnBudgetRow>[] = [
+    {
+      key: 'artifact_label',
+      header: 'Scope',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="truncate text-sm text-white">{row.artifact_label}</p>
+          <p className="truncate text-xs text-slate-500">{truncateLabel(row.artifact_id, 52)}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.artifact_label,
+    },
+    {
+      key: 'rejected_at',
+      header: 'Rejected',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.rejected_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.rejected_at || '',
+    },
+    {
+      key: 'estimated_input_tokens',
+      header: 'Estimated In',
+      render: (row) => <span className="text-xs text-slate-300">{formatMaybeNumber(row.estimated_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.estimated_input_tokens ?? -1,
+    },
+    {
+      key: 'cap',
+      header: 'Cap',
+      render: (row) => <span className="text-xs text-amber-300">{formatMaybeNumber(row.cap)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cap ?? -1,
+    },
+    {
+      key: 'error_message',
+      header: 'Reason',
+      render: (row) => <span className="text-xs text-slate-400">{truncateLabel(row.error_message || '--', 56)}</span>,
+      sortable: true,
+      sortValue: (row) => row.error_message || '',
+    },
+  ]
+
   const recentColumns: Column<AdminCostRecentCall>[] = [
     {
       key: 'created_at',
@@ -2767,6 +3385,9 @@ function CostsTab() {
             refresh()
             refreshVendors()
             refreshB2bEfficiency()
+            refreshGenericReasoning()
+            refreshReconciliation()
+            refreshReasoningActivity()
             refreshCacheHealth()
             refreshTaskHealth()
             if (activeRunId) refreshRunDetail()
@@ -3288,6 +3909,250 @@ function CostsTab() {
           value={formatNumber(data?.summary.cache_hit_calls)}
           icon={<RefreshCw className="h-4 w-4" />}
           skeleton={loading}
+        />
+      </div>
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-700/50">
+          <h2 className="text-sm font-medium text-white">Burn Dashboard</h2>
+          <p className="text-xs text-slate-500">
+            Per-job burn across scheduled tasks and generic event-driven reasoning. This section is window-only and independent of provider/model/span filters.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-4">
+          <StatCard
+            label="Tracked Cost"
+            value={formatCurrency(burnDashboard?.summary.tracked_cost_usd)}
+            icon={<DollarSign className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+          <StatCard
+            label="Model Calls"
+            value={formatNumber(burnDashboard?.summary.model_call_count)}
+            icon={<Cpu className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+          <StatCard
+            label="Runs"
+            value={formatNumber(burnDashboard?.summary.recent_runs)}
+            icon={<Workflow className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+          <StatCard
+            label="Reprocess %"
+            value={formatMaybePercent(burnDashboard?.summary.reprocess_pct)}
+            sub={
+              burnDashboard?.summary.rows_processed != null
+                ? `${formatMaybeNumber(burnDashboard?.summary.rows_reprocessed)} / ${formatMaybeNumber(burnDashboard?.summary.rows_processed)} rows`
+                : undefined
+            }
+            icon={<GitCompareArrows className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-4">
+          <StatCard
+            label="Vendor Budget Rejects"
+            value={formatNumber(burnDashboard?.reasoning_budget_pressure.vendor_rejections)}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+          <StatCard
+            label="Cross-Vendor Rejects"
+            value={formatNumber(burnDashboard?.reasoning_budget_pressure.cross_vendor_rejections)}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+          <StatCard
+            label="Max Cross-Vendor In"
+            value={formatMaybeNumber(burnDashboard?.reasoning_budget_pressure.max_cross_vendor_estimated_input_tokens)}
+            sub={
+              burnDashboard?.reasoning_budget_pressure.max_cross_vendor_cap != null
+                ? `cap ${formatMaybeNumber(burnDashboard?.reasoning_budget_pressure.max_cross_vendor_cap)}`
+                : undefined
+            }
+            icon={<Cpu className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+          <StatCard
+            label="Last Budget Reject"
+            value={formatTs(burnDashboard?.reasoning_budget_pressure.last_rejection_at) || '--'}
+            icon={<Clock className="h-4 w-4" />}
+            skeleton={burnDashboardLoading}
+          />
+        </div>
+        <DataTable
+          columns={burnBudgetColumns}
+          data={burnBudgetRows}
+          emptyMessage="No reasoning budget rejections in the selected window"
+        />
+        <DataTable
+          columns={burnColumns}
+          data={burnRows}
+          emptyMessage="No task burn rows in the selected window"
+        />
+      </div>
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-700/50">
+          <h2 className="text-sm font-medium text-white">Provider Reconciliation</h2>
+          <p className="text-xs text-slate-500">
+            Compares local tracked spend to normalized provider totals. This section is window-only and independent of provider/model/span filters.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-4">
+          <StatCard
+            label="Tracked Cost"
+            value={formatCurrency(reconciliation?.summary.tracked_cost_usd)}
+            icon={<DollarSign className="h-4 w-4" />}
+            skeleton={reconciliationLoading}
+          />
+          <StatCard
+            label="Provider Cost"
+            value={formatMaybeCurrency(reconciliation?.summary.provider_cost_usd)}
+            icon={<DollarSign className="h-4 w-4" />}
+            skeleton={reconciliationLoading}
+          />
+          <StatCard
+            label="Delta"
+            value={formatMaybeCurrency(reconciliation?.summary.delta_cost_usd)}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={reconciliationLoading}
+          />
+          <StatCard
+            label="Status"
+            value={reconciliation?.status || '--'}
+            sub={reconciliation?.message || undefined}
+            icon={<Shield className="h-4 w-4" />}
+            skeleton={reconciliationLoading}
+          />
+        </div>
+        {reconciliation?.message ? (
+          <div className="border-b border-slate-700/50 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
+            {reconciliation.message}
+          </div>
+        ) : null}
+        <DataTable
+          columns={reconciliationColumns}
+          data={reconciliation?.daily_rows ?? []}
+          emptyMessage="No reconciliation rows in the selected window"
+        />
+      </div>
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-700/50">
+          <h2 className="text-sm font-medium text-white">Generic Reasoning</h2>
+          <p className="text-xs text-slate-500">
+            Tracks generic reasoning-agent spend by source, event type, and dominant entities. This section is window-only and independent of provider/model/span filters.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-4">
+          <StatCard
+            label="Generic Cost"
+            value={formatCurrency(genericReasoning?.summary.total_cost_usd)}
+            icon={<DollarSign className="h-4 w-4" />}
+            skeleton={genericReasoningLoading}
+          />
+          <StatCard
+            label="Generic Calls"
+            value={formatNumber(genericReasoning?.summary.total_calls)}
+            icon={<Cpu className="h-4 w-4" />}
+            skeleton={genericReasoningLoading}
+          />
+          <StatCard
+            label="Top Source"
+            value={genericReasoning?.summary.top_source_name || '--'}
+            icon={<Database className="h-4 w-4" />}
+            skeleton={genericReasoningLoading}
+          />
+          <StatCard
+            label="Top Event Type"
+            value={genericReasoning?.summary.top_event_type || '--'}
+            icon={<Workflow className="h-4 w-4" />}
+            skeleton={genericReasoningLoading}
+          />
+        </div>
+        <div className="grid gap-4 p-4 xl:grid-cols-2">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Generic Reasoning By Source</h3>
+              <p className="text-xs text-slate-500">Source systems driving generic reasoning spend.</p>
+            </div>
+            <DataTable
+              columns={genericReasoningSourceColumns}
+              data={genericReasoningSources}
+              emptyMessage="No generic reasoning source rows in the selected window"
+            />
+          </div>
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Generic Reasoning By Event Type</h3>
+              <p className="text-xs text-slate-500">Event classes that are triggering generic reasoning calls.</p>
+            </div>
+            <DataTable
+              columns={genericReasoningEventColumns}
+              data={genericReasoningEvents}
+              emptyMessage="No generic reasoning event rows in the selected window"
+            />
+          </div>
+        </div>
+        <div className="grid gap-4 border-t border-slate-700/50 p-4 xl:grid-cols-2">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Top Source / Event Pairs</h3>
+              <p className="text-xs text-slate-500">Most expensive combined generic reasoning triggers.</p>
+            </div>
+            <DataTable
+              columns={genericReasoningPairColumns}
+              data={genericReasoningPairs}
+              emptyMessage="No generic reasoning source/event pairs in the selected window"
+            />
+          </div>
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Dominant Entities</h3>
+              <p className="text-xs text-slate-500">Top entity ids attached to generic reasoning spend.</p>
+            </div>
+            <DataTable
+              columns={genericReasoningEntityColumns}
+              data={genericReasoningEntities}
+              emptyMessage="No dominant generic reasoning entities in the selected window"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-700/50">
+          <h2 className="text-sm font-medium text-white">Legacy Stratified Reasoning</h2>
+          <p className="text-xs text-slate-500">
+            Explicitly tracks any remaining stratified reasoning spend in the selected window.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-3">
+          <StatCard
+            label="Stratified Cost"
+            value={formatCurrency(reasoningActivity?.summary.total_cost_usd)}
+            icon={<DollarSign className="h-4 w-4" />}
+            skeleton={reasoningActivityLoading}
+          />
+          <StatCard
+            label="Stratified Calls"
+            value={formatNumber(reasoningActivity?.summary.total_calls)}
+            icon={<Cpu className="h-4 w-4" />}
+            skeleton={reasoningActivityLoading}
+          />
+          <StatCard
+            label="Stratified Tokens"
+            value={formatCompactTokens(reasoningActivity?.summary.total_tokens)}
+            icon={<Database className="h-4 w-4" />}
+            skeleton={reasoningActivityLoading}
+          />
+        </div>
+        <DataTable
+          columns={stratifiedReasoningColumns}
+          data={reasoningActivity?.phases ?? []}
+          emptyMessage="No stratified reasoning spend in the selected window"
         />
       </div>
 

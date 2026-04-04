@@ -22,6 +22,36 @@ from typing import Any
 logger = logging.getLogger("atlas.autonomous.tasks._b2b_cross_vendor_synthesis")
 
 
+async def _emit_legacy_cross_vendor_opt_in(
+    pool,
+    *,
+    reason_code: str,
+    entity_id: str,
+    summary: str,
+    detail: dict[str, Any],
+) -> None:
+    try:
+        from ..visibility import emit_event
+
+        await emit_event(
+            pool,
+            stage="compatibility",
+            event_type="legacy_reasoning_opt_in",
+            entity_type="cross_vendor_lookup",
+            entity_id=entity_id,
+            summary=summary,
+            severity="warning",
+            actionable=False,
+            artifact_type="reasoning_compatibility",
+            reason_code=reason_code,
+            detail=detail,
+            source_table="b2b_cross_vendor_conclusions",
+            source_id=entity_id,
+        )
+    except Exception:
+        logger.debug("Failed to emit legacy cross-vendor opt-in event", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Vendor name helpers
 # ---------------------------------------------------------------------------
@@ -995,6 +1025,26 @@ async def load_best_cross_vendor_lookup(
         primary=synthesis_lookup,
         fallback=legacy_lookup,
     )
+    if allow_legacy_fallback:
+        battle_count = len((legacy_lookup or {}).get("battles", {}) or {})
+        council_count = len((legacy_lookup or {}).get("councils", {}) or {})
+        asymmetry_count = len((legacy_lookup or {}).get("asymmetries", {}) or {})
+        fallback_count = battle_count + council_count + asymmetry_count
+        if fallback_count > 0:
+            await _emit_legacy_cross_vendor_opt_in(
+                pool,
+                reason_code="legacy_cross_vendor_fallback",
+                entity_id=f"{as_of.isoformat() if as_of is not None else 'latest'}:{analysis_window_days}",
+                summary=f"Legacy cross-vendor fallback used for {fallback_count} entries",
+                detail={
+                    "as_of": as_of.isoformat() if as_of is not None else None,
+                    "analysis_window_days": analysis_window_days,
+                    "fallback_entry_count": fallback_count,
+                    "battle_count": battle_count,
+                    "council_count": council_count,
+                    "asymmetry_count": asymmetry_count,
+                },
+            )
     try:
         pairwise_reference_fallbacks = await _fetch_pairwise_reference_fallbacks(
             pool,

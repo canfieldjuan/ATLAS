@@ -1323,6 +1323,37 @@ def _confidence_label_to_numeric(confidence_label: str) -> float:
     }.get(str(confidence_label or "").strip().lower(), 0.0)
 
 
+async def _emit_legacy_reasoning_opt_in(
+    pool,
+    *,
+    reason_code: str,
+    entity_type: str,
+    entity_id: str,
+    summary: str,
+    detail: dict[str, Any],
+) -> None:
+    try:
+        from ..visibility import emit_event
+
+        await emit_event(
+            pool,
+            stage="compatibility",
+            event_type="legacy_reasoning_opt_in",
+            entity_type=entity_type,
+            entity_id=entity_id,
+            summary=summary,
+            severity="warning",
+            actionable=False,
+            artifact_type="reasoning_compatibility",
+            reason_code=reason_code,
+            detail=detail,
+            source_table="b2b_churn_signals",
+            source_id=entity_id,
+        )
+    except Exception:
+        _logger.debug("Failed to emit legacy reasoning opt-in event", exc_info=True)
+
+
 async def load_best_reasoning_view(
     pool,
     vendor_name: str,
@@ -1431,6 +1462,19 @@ async def load_best_reasoning_view(
 
     legacy_dict = dict(legacy_row)
     raw = legacy_reasoning_to_contracts(legacy_dict, vendor_name=vendor_name)
+    await _emit_legacy_reasoning_opt_in(
+        pool,
+        reason_code="legacy_reasoning_view_fallback",
+        entity_type="vendor",
+        entity_id=vendor_name,
+        summary=f"Legacy reasoning fallback used for {vendor_name}",
+        detail={
+            "vendor_name": vendor_name,
+            "compatibility_target": "load_best_reasoning_view",
+            "as_of": as_of.isoformat() if as_of is not None else None,
+            "analysis_window_days": analysis_window_days,
+        },
+    )
 
     as_of_date = None
     lca = legacy_row.get("last_computed_at")
@@ -1474,6 +1518,29 @@ async def discover_reasoning_vendor_names(
         "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
         "WHERE archetype IS NOT NULL",
     )
+    legacy_only = {
+        str(r["vendor_name"])
+        for r in legacy_names
+        if r.get("vendor_name")
+    } - {
+        str(r["vendor_name"])
+        for r in synth_names
+        if r.get("vendor_name")
+    }
+    if legacy_only:
+        await _emit_legacy_reasoning_opt_in(
+            pool,
+            reason_code="legacy_reasoning_vendor_discovery",
+            entity_type="reasoning_vendor_discovery",
+            entity_id=f"{as_of.isoformat()}:{analysis_window_days}",
+            summary=f"Legacy vendor discovery included {len(legacy_only)} vendor names",
+            detail={
+                "as_of": as_of.isoformat(),
+                "analysis_window_days": analysis_window_days,
+                "legacy_vendor_count": len(legacy_only),
+                "sample_vendors": sorted(legacy_only)[:10],
+            },
+        )
     return list({
         r["vendor_name"] for r in (*synth_names, *legacy_names)
         if r.get("vendor_name")
@@ -1616,6 +1683,26 @@ async def load_best_reasoning_views(
             vendor_name=vname,
             schema_version="legacy",
             as_of_date=as_of_date,
+        )
+    legacy_vendor_names = [
+        str(row["vendor_name"])
+        for row in legacy_rows
+        if row.get("vendor_name") and row.get("archetype")
+    ]
+    if legacy_vendor_names:
+        await _emit_legacy_reasoning_opt_in(
+            pool,
+            reason_code="legacy_reasoning_batch_fallback",
+            entity_type="reasoning_vendor_batch",
+            entity_id=f"{as_of.isoformat() if as_of is not None else 'latest'}:{analysis_window_days}",
+            summary=f"Legacy reasoning fallback used for {len(legacy_vendor_names)} vendors in batch load",
+            detail={
+                "vendor_count": len(legacy_vendor_names),
+                "vendors": legacy_vendor_names[:25],
+                "as_of": as_of.isoformat() if as_of is not None else None,
+                "analysis_window_days": analysis_window_days,
+                "compatibility_target": "load_best_reasoning_views",
+            },
         )
 
     return views
