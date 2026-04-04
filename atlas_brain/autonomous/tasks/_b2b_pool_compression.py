@@ -81,15 +81,6 @@ _REASONING_CORE_AGGREGATE_LABELS = frozenset({
     "enrichment_window_end",
 })
 
-_REASONING_CONTEXT_LIMITS = {
-    "segment": 2,
-    "temporal": 2,
-    "displacement": 2,
-    "category": 1,
-    "accounts": 3,
-}
-
-
 def _approx_payload_tokens(value: Any) -> int:
     """Approximate token count for a compact JSON payload fragment."""
     serialized = json.dumps(
@@ -382,32 +373,153 @@ class CompressedPacket:
         to witnesses while preserving the labels and shortlist context
         needed for segment/account/displacement reasoning.
         """
-        payload = self.to_llm_payload(
-            compact_metric_ledger=compact_metric_ledger,
-            compact_aggregates=compact_aggregates,
-            include_contradiction_rows=include_contradiction_rows,
-            include_minority_signals=include_minority_signals,
-            include_section_packets=include_section_packets,
-        )
-        for pool_name in self.pools:
-            payload.pop(pool_name, None)
+        payload: dict[str, Any] = {}
+        if include_contradiction_rows and self.contradiction_rows:
+            payload["contradiction_rows"] = self.contradiction_rows
+        if include_minority_signals and self.minority_signals:
+            payload["minority_signals"] = self.minority_signals
+        if self.coverage_gaps:
+            payload["coverage_gaps"] = self.coverage_gaps
+        if self.retention_proof:
+            payload["retention_proof"] = self.retention_proof
+        if self.witness_pack:
+            payload["witness_pack"] = self.witness_pack
+        if include_section_packets and self.section_packets:
+            payload["section_packets"] = self._reasoning_section_packets()
 
-        compact_context: dict[str, list[dict[str, Any]]] = {}
-        for pool_name, limit in _REASONING_CONTEXT_LIMITS.items():
-            projected: list[dict[str, Any]] = []
-            for item in self.pools.get(pool_name) or []:
-                entry = _compact_reasoning_context_entry(pool_name, item)
-                if entry:
-                    projected.append(entry)
-                if len(projected) >= limit:
-                    break
-            if projected:
-                compact_context[pool_name] = projected
-
-        if compact_context:
-            payload["compact_context"] = compact_context
-        payload["payload_profile"] = "witness_first_v1"
+        payload["payload_profile"] = "witness_first_v2"
         return payload
+
+    def _reasoning_section_packets(self) -> dict[str, Any]:
+        packets = json.loads(json.dumps(self.section_packets, default=str))
+        packets.setdefault("segment_packet", {})
+        packets.setdefault("timing_packet", {})
+        packets.setdefault("displacement_packet", {})
+        packets.setdefault("account_packet", {})
+        packets.setdefault("category_packet", {})
+        packets.setdefault("retention_packet", {})
+
+        packets["segment_packet"]["priority_segment_candidates"] = self._segment_candidates()
+        packets["timing_packet"]["numeric_support"] = {
+            "active_eval_signals": self._aggregate_wrapper("active_eval_signal_count"),
+        }
+        packets["timing_packet"]["trigger_candidates"] = self._temporal_candidates()
+        packets["displacement_packet"]["numeric_support"] = {
+            "switch_volume": self._aggregate_wrapper("total_explicit_switches"),
+            "active_evaluation_volume": self._aggregate_wrapper("total_active_evaluations"),
+            "displacement_mention_volume": self._aggregate_wrapper("displacement_mention_count"),
+        }
+        packets["displacement_packet"]["destination_candidates"] = self._displacement_candidates()
+        packets["account_packet"]["numeric_support"] = {
+            "total_accounts": self._aggregate_wrapper("total_accounts"),
+            "high_intent_count": self._aggregate_wrapper("high_intent_count"),
+            "active_eval_count": self._aggregate_wrapper("active_eval_signal_count"),
+        }
+        packets["account_packet"]["top_accounts"] = self._account_candidates()
+        packets["category_packet"]["regime_candidates"] = self._category_candidates()
+        packets["retention_packet"]["strength_candidates"] = self._retention_candidates()
+        return packets
+
+    def _aggregate_wrapper(self, label: str) -> dict[str, Any] | None:
+        for agg in self.aggregates:
+            if agg.label == label:
+                return {"value": agg.value, "source_id": agg.source_id}
+        return None
+
+    def _segment_candidates(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for item in self.pools.get("segment") or []:
+            entry = _compact_reasoning_context_entry("segment", item)
+            if not entry:
+                continue
+            label = (
+                entry.get("role_type")
+                or entry.get("department")
+                or entry.get("use_case")
+                or entry.get("segment")
+                or entry.get("duration")
+            )
+            if not label:
+                continue
+            candidates.append({
+                "_sid": entry.get("_sid"),
+                "kind": entry.get("kind"),
+                "label": label,
+                "churn_rate": entry.get("churn_rate"),
+                "review_count": entry.get("review_count") or entry.get("count"),
+            })
+            if len(candidates) >= 3:
+                break
+        return candidates
+
+    def _temporal_candidates(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for item in self.pools.get("temporal") or []:
+            entry = _compact_reasoning_context_entry("temporal", item)
+            if not entry:
+                continue
+            candidates.append(entry)
+            if len(candidates) >= 3:
+                break
+        return candidates
+
+    def _displacement_candidates(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for item in self.pools.get("displacement") or []:
+            entry = _compact_reasoning_context_entry("displacement", item)
+            if not entry:
+                continue
+            candidates.append({
+                "_sid": entry.get("_sid"),
+                "to_vendor": entry.get("to_vendor"),
+                "mention_count": entry.get("mention_count"),
+                "explicit_switch_count": entry.get("explicit_switch_count"),
+                "active_evaluation_count": entry.get("active_evaluation_count"),
+                "primary_driver": entry.get("primary_driver"),
+            })
+            if len(candidates) >= 3:
+                break
+        return candidates
+
+    def _account_candidates(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for item in self.pools.get("accounts") or []:
+            entry = _compact_reasoning_context_entry("accounts", item)
+            if not entry:
+                continue
+            candidates.append({
+                "name": entry.get("name"),
+                "intent_score": entry.get("intent_score"),
+                "source_id": entry.get("_sid"),
+                "buying_stage": entry.get("buying_stage"),
+                "decision_maker": entry.get("decision_maker"),
+            })
+            if len(candidates) >= 3:
+                break
+        return candidates
+
+    def _category_candidates(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for item in self.pools.get("category") or []:
+            entry = _compact_reasoning_context_entry("category", item)
+            if not entry:
+                continue
+            candidates.append(entry)
+            if len(candidates) >= 2:
+                break
+        return candidates
+
+    def _retention_candidates(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for entry in self.retention_proof or []:
+            candidates.append({
+                "_sid": entry.get("_sid"),
+                "area": entry.get("area"),
+                "evidence": entry.get("evidence"),
+            })
+            if len(candidates) >= 3:
+                break
+        return candidates
 
     def reasoning_payload_component_tokens(
         self,

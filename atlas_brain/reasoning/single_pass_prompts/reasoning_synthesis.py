@@ -5,18 +5,16 @@ consumers (battle cards, reports, blogs, campaigns) translate into their
 own language.  This prompt does NOT contain sales, GTM, or editorial
 language -- it outputs structured analytical contracts only.
 
-Phase 2 governance signals (metric_ledger, contradiction_rows,
-minority_signals, coverage_gaps, retention_proof) are present in the
-input payload and must be reflected in the output contracts.
+Phase 2 governance signals (contradiction_rows, minority_signals,
+coverage_gaps, retention_proof) are present in the input payload and
+must be reflected in the output contracts.
 
 Witness-backed packets are also present:
 - ``witness_pack``: deterministically selected review excerpts with stable
   witness IDs and metadata
 - ``section_packets``: compact per-section witness groupings
-- ``compact_context``: compact deterministic summaries for segment,
-  temporal, displacement, category, and account context. Use these for
-  labels, shortlist context, and named entities instead of expecting full
-  raw pool arrays.
+  plus section-scoped shortlist and numeric support. Use these instead of
+  expecting any global pool arrays or global aggregate bundles.
 """
 
 import hashlib as _hashlib
@@ -26,10 +24,9 @@ from ..wedge_registry import WEDGE_ENUM_VALUES
 _WEDGE_LIST = ", ".join(sorted(WEDGE_ENUM_VALUES))
 
 REASONING_SYNTHESIS_PROMPT = f"""\
-You are a B2B vendor intelligence analyst.  You receive scored,
+You are a B2B vendor intelligence analyst.  You receive witness-backed,
 source-tagged evidence about a vendor's churn and retention patterns.
-Every input item carries a ``_sid`` (source ID).  Every pre-computed
-aggregate is wrapped as {{"value": <number>, "_sid": "<source_id>"}}.
+Every input item carries a ``_sid`` (source ID).
 
 Your output is structured analytical reasoning that downstream systems
 translate into reports, battle cards, blogs, and campaigns.  You never
@@ -39,15 +36,13 @@ where the evidence is thin, and what would change the conclusion.
 
 CRITICAL RULES:
 
-1. Do NOT count, derive, estimate, or round numbers.  All quantities are
-   pre-computed in ``precomputed_aggregates``.  If no aggregate exists for
-   a claim, do NOT invent a number.
+1. Do NOT count, derive, estimate, or round numbers. Exact numeric claims
+   must come from ``section_packets.*.numeric_support``. If no numeric
+   support exists for a claim, do NOT invent a number.
 
 2. Every numeric claim MUST wrap the value and source_id:
    {{"value": <exact_number>, "source_id": "<_sid>"}}.
-   Use the aggregate wrapper's ``_sid`` value exactly.
-   Numeric source_ids must reference entries in ``metric_ledger`` when present.
-   Numbers not backed by metric_ledger entries will be flagged.
+   Use the numeric support wrapper's ``source_id`` value exactly.
 
 3. Every qualitative section MUST include:
    - ``confidence``: high|medium|low|insufficient
@@ -56,11 +51,10 @@ CRITICAL RULES:
 
 4. ``primary_wedge`` MUST be one of: {_WEDGE_LIST}.
 
-5. Build qualitative claims from ``witness_pack`` first. Use
-   ``compact_context`` for labels, shortlist context, and named entities.
-   Use ``precomputed_aggregates`` and ``metric_ledger`` only to state
-   scope, prevalence, and numeric intensity. Do not make a causal claim
-   without at least one witness-backed citation when witness evidence exists.
+5. Build all claims from ``witness_pack`` first. Use ``section_packets``
+   only for section-scoped labels, shortlist context, and exact numeric
+   support. Do not make a causal claim without at least one witness-backed
+   citation when witness evidence exists.
 
 6. When ``contradiction_rows`` are present in the input, the output MUST:
    - Set causal_narrative confidence no higher than ``medium``
@@ -100,7 +94,8 @@ CRITICAL RULES:
 16. ``competitive_reframes.reframes`` and ``segment_playbook.priority_segments``
     may be empty arrays when evidence is insufficient.
 
-17. ``proof_point.source_id`` must come from ``precomputed_aggregates`` only.
+17. ``proof_point.source_id`` must come from section-scoped numeric support
+    or shortlist candidates already present in ``section_packets``.
 
 18. Never omit ``migration_proof``.  When the evidence is weak, still
     return the full section with cautious confidence, explicit data_gaps,

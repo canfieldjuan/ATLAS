@@ -1060,7 +1060,7 @@ class TestNeutralPrompt:
         assert "coverage_gaps" in REASONING_SYNTHESIS_PROMPT
         assert "retention_proof" in REASONING_SYNTHESIS_PROMPT
         assert "minority_signals" in REASONING_SYNTHESIS_PROMPT
-        assert "metric_ledger" in REASONING_SYNTHESIS_PROMPT
+        assert "metric_ledger" not in REASONING_SYNTHESIS_PROMPT
 
     def test_prompt_mentions_witness_packets(self):
         from atlas_brain.reasoning.single_pass_prompts.reasoning_synthesis import (
@@ -4219,9 +4219,9 @@ class TestReasoningSynthesisTask:
         first_payload = json.loads(first_call["messages"][1].content)
         assert first_call["max_tokens"] == 2048
         assert first_call["temperature"] == 0.0
-        assert "value" not in first_payload["metric_ledger"][0]
-        assert "allowed_surfaces" not in first_payload["metric_ledger"][0]
-        assert "time_window_days" not in first_payload["metric_ledger"][0]
+        assert "metric_ledger" not in first_payload
+        assert "precomputed_aggregates" not in first_payload
+        assert first_payload["section_packets"]["displacement_packet"]["numeric_support"]["switch_volume"]["source_id"]
         assert any(
             msg.role == "user" and "previous response was rejected" in msg.content
             for msg in retry_messages
@@ -5348,9 +5348,7 @@ class TestReasoningSynthesisTask:
         component_tokens = persisted["meta"]["payload_component_tokens"]
         assert component_tokens["payload_profile"] > 0
         assert component_tokens["witness_pack"] > 0
-        assert component_tokens["precomputed_aggregates"] > 0
-        assert component_tokens["metric_ledger"] > 0
-        assert component_tokens["compact_context"] > 0
+        assert component_tokens["coverage_gaps"] > 0
         assert "section_packets" not in component_tokens
         assert "contradiction_rows" not in component_tokens
         assert "minority_signals" not in component_tokens
@@ -5456,21 +5454,10 @@ class TestReasoningSynthesisTask:
         assert result["vendors_reasoned"] == 1
         assert compress_calls[0]["max_items_per_pool"] == 4
         payload = json.loads(fake_llm.calls[0][1].content)
-        payload_aggregate_ids = {
-            str(entry.get("_sid") or "")
-            for entry in payload["precomputed_aggregates"].values()
-        }
-        validation_aggregate_ids = {
-            agg.source_id for agg in validate_packets[0].aggregates
-        }
-        assert validation_aggregate_ids == payload_aggregate_ids
-        payload_metric_ids = {
-            str(entry.get("_sid") or "") for entry in payload["metric_ledger"]
-        }
-        validation_metric_ids = {
-            str(entry.get("_sid") or "") for entry in validate_packets[0].metric_ledger
-        }
-        assert validation_metric_ids == payload_metric_ids
+        assert "precomputed_aggregates" not in payload
+        assert "metric_ledger" not in payload
+        assert payload["section_packets"]["account_packet"]["numeric_support"]["total_accounts"]["source_id"]
+        assert payload["section_packets"]["displacement_packet"]["numeric_support"]["switch_volume"]["source_id"]
         synthesis_writes = [
             item for item in fake_pool.executed
             if "INSERT INTO b2b_reasoning_synthesis" in item[0]
@@ -5482,9 +5469,7 @@ class TestReasoningSynthesisTask:
         assert component_tokens["payload_profile"] > 0
         assert component_tokens["witness_pack"] > 0
         assert component_tokens["section_packets"] > 0
-        assert component_tokens["precomputed_aggregates"] > 0
-        assert component_tokens["metric_ledger"] > 0
-        assert component_tokens["compact_context"] > 0
+        assert component_tokens["coverage_gaps"] > 0
 
     @pytest.mark.asyncio
     async def test_run_rejects_vendor_when_lean_payload_still_exceeds_budget(self, monkeypatch):

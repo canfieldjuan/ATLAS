@@ -31,7 +31,6 @@ for _mod in (
 
 from atlas_brain.autonomous.tasks._b2b_pool_compression import (
     CompressedPacket,
-    _REASONING_CONTEXT_LIMITS,
     ScoredItem,
     SourceRef,
     TrackedAggregate,
@@ -677,7 +676,6 @@ class TestPacketPayloadIntegration:
 
         assert payload["metric_ledger"] == [{
             "label": "total_reviews",
-            "scope": "review_volume",
             "_sid": "vault:metric:total_reviews",
         }]
 
@@ -912,20 +910,20 @@ class TestCompressVendorPoolsIntegration:
 
         payload = packet.to_reasoning_payload()
 
-        assert payload["payload_profile"] == "witness_first_v1"
+        assert payload["payload_profile"] == "witness_first_v2"
         assert "witness_pack" in payload
         assert "section_packets" in payload
-        assert "precomputed_aggregates" in payload
-        assert "metric_ledger" in payload
-        assert "compact_context" in payload
+        assert "precomputed_aggregates" not in payload
+        assert "metric_ledger" not in payload
+        assert "compact_context" not in payload
         assert "evidence_vault" not in payload
         assert "segment" not in payload
         assert "accounts" not in payload
         assert "displacement" not in payload
         assert "temporal" not in payload
         assert "category" not in payload
-        assert payload["compact_context"]["accounts"][0]["name"]
-        assert all("scope" not in entry for entry in payload["metric_ledger"])
+        assert payload["section_packets"]["account_packet"]["top_accounts"][0]["name"]
+        assert payload["section_packets"]["displacement_packet"]["numeric_support"]["switch_volume"]["source_id"]
 
     def test_reasoning_payload_component_tokens_are_emitted(self):
         packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
@@ -935,21 +933,22 @@ class TestCompressVendorPoolsIntegration:
         assert estimates["payload_profile"] > 0
         assert estimates["witness_pack"] > 0
         assert estimates["section_packets"] > 0
-        assert estimates["precomputed_aggregates"] > 0
-        assert estimates["metric_ledger"] > 0
-        assert estimates["compact_context"] > 0
+        assert "precomputed_aggregates" not in estimates
+        assert "metric_ledger" not in estimates
+        assert "compact_context" not in estimates
         assert "evidence_vault" not in estimates
         assert "accounts" not in estimates
 
-    def test_reasoning_payload_compact_context_uses_tighter_limits(self):
+    def test_reasoning_payload_section_packets_include_numeric_support(self):
         packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
 
         payload = packet.to_reasoning_payload()
-        compact_context = payload["compact_context"]
+        packets = payload["section_packets"]
 
-        for pool_name, limit in _REASONING_CONTEXT_LIMITS.items():
-            entries = compact_context.get(pool_name) or []
-            assert len(entries) <= limit
+        assert packets["timing_packet"]["numeric_support"]["active_eval_signals"]["source_id"]
+        assert packets["account_packet"]["numeric_support"]["total_accounts"]["source_id"]
+        assert packets["account_packet"]["top_accounts"]
+        assert packets["category_packet"]["regime_candidates"]
 
 
 class TestWitnessGovernance:
