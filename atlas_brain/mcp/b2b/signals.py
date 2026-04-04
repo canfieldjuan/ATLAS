@@ -12,6 +12,57 @@ from ._shared import (
 from .server import mcp
 
 
+def _normalize_vendor_name(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+async def _load_reasoning_views_for_vendors(pool, vendor_names: list[str]) -> dict[str, object]:
+    requested = [
+        str(vendor_name).strip()
+        for vendor_name in vendor_names
+        if str(vendor_name or "").strip()
+    ]
+    if not requested:
+        return {}
+    try:
+        from atlas_brain.autonomous.tasks._b2b_synthesis_reader import load_best_reasoning_views
+
+        views = await load_best_reasoning_views(
+            pool,
+            requested,
+            allow_legacy_fallback=False,
+        )
+    except Exception:
+        logger.debug("MCP reasoning view load failed", exc_info=True)
+        return {}
+    return {
+        _normalize_vendor_name(vendor_name): view
+        for vendor_name, view in views.items()
+        if _normalize_vendor_name(vendor_name)
+    }
+
+
+def _overlay_reasoning_summary_from_view(target: dict, view: object) -> None:
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import synthesis_view_to_reasoning_entry
+
+    entry = synthesis_view_to_reasoning_entry(view)
+    target["archetype"] = entry.get("archetype")
+    target["archetype_confidence"] = entry.get("confidence")
+    target["reasoning_mode"] = entry.get("mode")
+    target["reasoning_risk_level"] = entry.get("risk_level")
+
+
+def _overlay_reasoning_detail_from_view(target: dict, view: object) -> None:
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import synthesis_view_to_reasoning_entry
+
+    _overlay_reasoning_summary_from_view(target, view)
+    entry = synthesis_view_to_reasoning_entry(view)
+    target["reasoning_executive_summary"] = entry.get("executive_summary")
+    target["reasoning_key_signals"] = entry.get("key_signals", [])
+    target["reasoning_uncertainty_sources"] = entry.get("uncertainty_sources", [])
+    target["falsification_conditions"] = entry.get("falsification_conditions", [])
+
+
 @mcp.tool()
 async def list_churn_signals(
     vendor_name: Optional[str] = None,
@@ -62,7 +113,6 @@ async def list_churn_signals(
             SELECT vendor_name, product_category, total_reviews,
                    churn_intent_count, avg_urgency_score, avg_rating_normalized,
                    nps_proxy, price_complaint_rate, decision_maker_churn_rate,
-                   archetype, archetype_confidence, reasoning_risk_level,
                    keyword_spike_count, insider_signal_count,
                    last_computed_at
             FROM b2b_churn_signals
@@ -84,15 +134,23 @@ async def list_churn_signals(
                 "nps_proxy": float(r["nps_proxy"]) if r["nps_proxy"] is not None else None,
                 "price_complaint_rate": float(r["price_complaint_rate"]) if r["price_complaint_rate"] is not None else None,
                 "decision_maker_churn_rate": float(r["decision_maker_churn_rate"]) if r["decision_maker_churn_rate"] is not None else None,
-                "archetype": r["archetype"],
-                "archetype_confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] is not None else None,
-                "reasoning_risk_level": r["reasoning_risk_level"],
+                "archetype": None,
+                "archetype_confidence": None,
+                "reasoning_risk_level": None,
                 "keyword_spike_count": r["keyword_spike_count"],
                 "insider_signal_count": r["insider_signal_count"],
                 "last_computed_at": r["last_computed_at"],
             }
             for r in rows
         ]
+        reasoning_views = await _load_reasoning_views_for_vendors(
+            pool,
+            [signal.get("vendor_name", "") for signal in signals],
+        )
+        for signal in signals:
+            view = reasoning_views.get(_normalize_vendor_name(signal.get("vendor_name")))
+            if view is not None:
+                _overlay_reasoning_summary_from_view(signal, view)
 
         return json.dumps({"signals": signals, "count": len(signals)}, default=str)
     except Exception as exc:
@@ -177,14 +235,14 @@ async def get_churn_signal(
             "last_computed_at": row["last_computed_at"],
             "created_at": row["created_at"],
             # Reasoning
-            "archetype": row["archetype"],
-            "archetype_confidence": float(row["archetype_confidence"]) if row["archetype_confidence"] is not None else None,
-            "reasoning_mode": row["reasoning_mode"],
-            "reasoning_risk_level": row["reasoning_risk_level"],
-            "reasoning_executive_summary": row["reasoning_executive_summary"],
-            "reasoning_key_signals": _safe_json(row["reasoning_key_signals"]),
-            "reasoning_uncertainty_sources": _safe_json(row["reasoning_uncertainty_sources"]),
-            "falsification_conditions": _safe_json(row["falsification_conditions"]),
+            "archetype": None,
+            "archetype_confidence": None,
+            "reasoning_mode": None,
+            "reasoning_risk_level": None,
+            "reasoning_executive_summary": None,
+            "reasoning_key_signals": [],
+            "reasoning_uncertainty_sources": [],
+            "falsification_conditions": [],
             # Insider signals
             "insider_signal_count": row["insider_signal_count"],
             "insider_org_health_summary": row["insider_org_health_summary"],
@@ -195,6 +253,10 @@ async def get_churn_signal(
             "keyword_spike_keywords": _safe_json(row["keyword_spike_keywords"]),
             "keyword_trend_summary": row["keyword_trend_summary"],
         }
+        reasoning_views = await _load_reasoning_views_for_vendors(pool, [row["vendor_name"]])
+        view = reasoning_views.get(_normalize_vendor_name(row["vendor_name"]))
+        if view is not None:
+            _overlay_reasoning_detail_from_view(signal, view)
         signal = await _apply_field_overrides(pool, "churn_signal", str(row["id"]), signal)
 
         return json.dumps({"success": True, "signal": signal}, default=str)
@@ -369,14 +431,14 @@ async def get_vendor_profile(vendor_name: str) -> str:
                 "confidence_score": float(signal_row["confidence_score"]) if signal_row["confidence_score"] is not None else 0,
                 "last_computed_at": signal_row["last_computed_at"],
                 # Reasoning
-                "archetype": signal_row["archetype"],
-                "archetype_confidence": float(signal_row["archetype_confidence"]) if signal_row["archetype_confidence"] is not None else None,
-                "reasoning_mode": signal_row["reasoning_mode"],
-                "reasoning_risk_level": signal_row["reasoning_risk_level"],
-                "reasoning_executive_summary": signal_row["reasoning_executive_summary"],
-                "reasoning_key_signals": _safe_json(signal_row["reasoning_key_signals"]),
-                "reasoning_uncertainty_sources": _safe_json(signal_row["reasoning_uncertainty_sources"]),
-                "falsification_conditions": _safe_json(signal_row["falsification_conditions"]),
+                "archetype": None,
+                "archetype_confidence": None,
+                "reasoning_mode": None,
+                "reasoning_risk_level": None,
+                "reasoning_executive_summary": None,
+                "reasoning_key_signals": [],
+                "reasoning_uncertainty_sources": [],
+                "falsification_conditions": [],
                 # Insider signals
                 "insider_signal_count": signal_row["insider_signal_count"],
                 "insider_org_health_summary": signal_row["insider_org_health_summary"],
@@ -387,6 +449,13 @@ async def get_vendor_profile(vendor_name: str) -> str:
                 "keyword_spike_keywords": _safe_json(signal_row["keyword_spike_keywords"]),
                 "keyword_trend_summary": signal_row["keyword_trend_summary"],
             }
+            reasoning_views = await _load_reasoning_views_for_vendors(
+                pool,
+                [signal_row["vendor_name"]],
+            )
+            view = reasoning_views.get(_normalize_vendor_name(signal_row["vendor_name"]))
+            if view is not None:
+                _overlay_reasoning_detail_from_view(sig, view)
             sig = await _apply_field_overrides(pool, "churn_signal", str(signal_row["id"]), sig)
             profile["churn_signal"] = sig
         else:

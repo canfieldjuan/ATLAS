@@ -334,7 +334,9 @@ class TestB2BChurnMCPTools:
 
         pool = _mock_pool(fetch_return=[_make_churn_signal()])
 
-        with _patch_pool(pool):
+        with _patch_pool(pool), \
+             patch("atlas_brain.mcp.b2b.signals._load_reasoning_views_for_vendors",
+                   new=AsyncMock(return_value={})):
             raw = await list_churn_signals(vendor_name="Zendesk")
 
         data = json.loads(raw)
@@ -343,6 +345,8 @@ class TestB2BChurnMCPTools:
         call_args = pool.fetch.call_args
         assert "ILIKE" in call_args[0][0]
         assert "Zendesk" in call_args[0][1:]
+        assert data["signals"][0]["archetype"] is None
+        assert data["signals"][0]["reasoning_risk_level"] is None
 
     async def test_list_churn_signals_with_min_urgency(self):
         from atlas_brain.mcp.b2b.signals import list_churn_signals
@@ -523,6 +527,8 @@ class TestB2BChurnMCPTools:
         adapter_result = [_make_adapter_high_intent_result()]
 
         with _patch_pool(pool), \
+             patch("atlas_brain.mcp.b2b.signals._load_reasoning_views_for_vendors",
+                   new=AsyncMock(return_value={})), \
              patch("atlas_brain.autonomous.tasks._b2b_shared.read_high_intent_companies",
                    new=AsyncMock(return_value=adapter_result)):
             raw = await get_vendor_profile(vendor_name="Zendesk")
@@ -532,6 +538,8 @@ class TestB2BChurnMCPTools:
         profile = data["profile"]
         assert profile["vendor_name"] == "Zendesk"
         assert profile["churn_signal"] is not None
+        assert profile["churn_signal"]["archetype"] is None
+        assert profile["churn_signal"]["reasoning_risk_level"] is None
         assert profile["review_counts"]["total"] == 120
         assert profile["review_counts"]["enriched"] == 115
         assert len(profile["high_intent_companies"]) == 1
