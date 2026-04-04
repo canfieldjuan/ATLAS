@@ -1204,6 +1204,20 @@ def _build_confidence_posture(
         elif gap_type == "shallow_evidence_window":
             limits.append(f"shallow evidence window ({sample} days)")
 
+    contradictions = getattr(packet, "contradiction_rows", None) or []
+    contradiction_dims = sorted(
+        {
+            str(item.get("dimension") or "").strip().lower()
+            for item in contradictions
+            if isinstance(item, dict) and str(item.get("dimension") or "").strip()
+        },
+    )
+    if contradiction_dims:
+        limits.append(
+            f"contradictions on {', '.join(contradiction_dims)} "
+            "require cautious interpretation"
+        )
+
     if not limits and section_confidence in ("high", "medium"):
         return None
 
@@ -1211,6 +1225,39 @@ def _build_confidence_posture(
         "overall": section_confidence,
         "limits": limits,
     }
+
+
+def _apply_contradiction_hedging(
+    packet: Any,
+    causal_narrative: dict[str, Any],
+) -> dict[str, Any]:
+    """Backfill contradiction-aware caveats before validation/retry decisions."""
+    if not isinstance(causal_narrative, dict) or not causal_narrative:
+        return causal_narrative
+
+    contradictions = getattr(packet, "contradiction_rows", None) or []
+    contradiction_dims = sorted(
+        {
+            str(item.get("dimension") or "").strip().lower()
+            for item in contradictions
+            if isinstance(item, dict) and str(item.get("dimension") or "").strip()
+        },
+    )
+    if not contradiction_dims:
+        return causal_narrative
+
+    if str(causal_narrative.get("confidence") or "").strip().lower() == "high":
+        causal_narrative["confidence"] = "medium"
+
+    data_gaps = _copy_list(causal_narrative.get("data_gaps"))
+    gap_text = " ".join(str(item) for item in data_gaps).lower()
+    missing_dims = [dim for dim in contradiction_dims if dim not in gap_text]
+    if missing_dims:
+        data_gaps.append(
+            f"Contradictory evidence on {', '.join(missing_dims)} requires caution"
+        )
+        causal_narrative["data_gaps"] = data_gaps
+    return causal_narrative
 
 
 def _build_switch_triggers(
@@ -1446,6 +1493,8 @@ def build_reasoning_contracts(
         if sid and sid not in displacement_citations:
             displacement_citations.append(sid)
 
+    causal_narrative = _apply_contradiction_hedging(packet, causal_narrative)
+
     vendor_core: dict[str, Any] = {}
     if explicit_vendor_core or not has_explicit_contracts:
         vendor_core = {
@@ -1490,11 +1539,30 @@ def build_reasoning_contracts(
             displacement["citations"] = citations
 
     account_summary = _account_summary(packet)
+    flat_account = (
+        _copy_dict(synthesis.get("account_reasoning"))
+        if not has_explicit_contracts
+        else {}
+    )
     account = {
+        **flat_account,
         **explicit_account,
         **account_summary,
         "schema_version": str(explicit_account.get("schema_version") or "v1"),
-        "market_summary": explicit_account.get("market_summary") or "",
+        "market_summary": (
+            explicit_account.get("market_summary")
+            or flat_account.get("market_summary")
+            or ""
+        ),
+        "confidence": (
+            explicit_account.get("confidence")
+            or flat_account.get("confidence")
+        ),
+        "data_gaps": (
+            explicit_account.get("data_gaps")
+            if explicit_account.get("data_gaps") is not None
+            else flat_account.get("data_gaps", [])
+        ),
         "confidence_score": (
             explicit_account.get("confidence_score")
             if explicit_account.get("confidence_score") is not None
@@ -1510,12 +1578,27 @@ def build_reasoning_contracts(
     _filter_valid_citations(account, valid_source_ids)
 
     category_summary = _category_summary(packet)
+    flat_category = (
+        _copy_dict(synthesis.get("category_reasoning"))
+        if not has_explicit_contracts
+        else {}
+    )
     category = {
         **category_summary,
+        **flat_category,
         **explicit_category,
         "schema_version": str(explicit_category.get("schema_version") or "v1"),
-        "market_regime": explicit_category.get("market_regime") or category_summary.get("market_regime") or "",
-        "narrative": explicit_category.get("narrative") or category_summary.get("narrative") or "",
+        "market_regime": explicit_category.get("market_regime") or flat_category.get("market_regime") or category_summary.get("market_regime") or "",
+        "narrative": explicit_category.get("narrative") or flat_category.get("narrative") or category_summary.get("narrative") or "",
+        "confidence": (
+            explicit_category.get("confidence")
+            or flat_category.get("confidence")
+        ),
+        "data_gaps": (
+            explicit_category.get("data_gaps")
+            if explicit_category.get("data_gaps") is not None
+            else flat_category.get("data_gaps", [])
+        ),
         "confidence_score": (
             explicit_category.get("confidence_score")
             if explicit_category.get("confidence_score") is not None

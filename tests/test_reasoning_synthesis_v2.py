@@ -3158,6 +3158,44 @@ class TestReasoningContracts:
         result = validate_synthesis(persisted, packet)
         assert result.is_valid, result.summary()
 
+    def test_build_persistable_synthesis_backfills_contradiction_hedging(self):
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import (
+            compress_vendor_pools,
+        )
+        from atlas_brain.autonomous.tasks._b2b_reasoning_contracts import (
+            build_persistable_synthesis,
+        )
+        from atlas_brain.autonomous.tasks._b2b_synthesis_validation import (
+            validate_synthesis,
+        )
+
+        packet = compress_vendor_pools("ContractVendor", _make_layers())
+        packet.contradiction_rows = [
+            {"dimension": "support"},
+            {"dimension": "ux"},
+        ]
+        synthesis, _ = _make_valid_synthesis(packet)
+        synthesis["causal_narrative"]["confidence"] = "high"
+        synthesis["causal_narrative"]["data_gaps"] = []
+
+        persisted = build_persistable_synthesis(synthesis, packet)
+        vendor_core = persisted["reasoning_contracts"]["vendor_core_reasoning"]
+        causal = vendor_core["causal_narrative"]
+        limits = vendor_core["confidence_posture"]["limits"]
+
+        assert causal["confidence"] == "medium"
+        assert any(
+            "support" in gap.lower() and "ux" in gap.lower()
+            for gap in causal["data_gaps"]
+        )
+        assert any(
+            "contradict" in limit.lower() and "support" in limit.lower()
+            for limit in limits
+        )
+
+        result = validate_synthesis(persisted, packet, governance_blocking=True)
+        assert result.is_valid, result.summary()
+
     def test_build_reasoning_contracts_uses_broader_displacement_mentions(self):
         from atlas_brain.autonomous.tasks._b2b_pool_compression import (
             compress_vendor_pools,
