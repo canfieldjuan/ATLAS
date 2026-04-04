@@ -12,6 +12,7 @@ provides them (vault weakness/strength, company signals, provenance).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -101,6 +102,27 @@ _REASONING_CORE_AGGREGATE_LABELS = frozenset({
     "enrichment_window_start",
     "enrichment_window_end",
 })
+
+_REASONING_CONTEXT_LIMITS = {
+    "segment": 2,
+    "temporal": 2,
+    "displacement": 2,
+    "category": 1,
+    "accounts": 3,
+}
+
+
+def _approx_payload_tokens(value: Any) -> int:
+    """Approximate token count for a compact JSON payload fragment."""
+    serialized = json.dumps(
+        value,
+        separators=(",", ":"),
+        sort_keys=True,
+        default=str,
+    )
+    if not serialized:
+        return 0
+    return max(1, (len(serialized) + 3) // 4)
 
 
 # ---------------------------------------------------------------------------
@@ -394,14 +416,7 @@ class CompressedPacket:
             payload.pop(pool_name, None)
 
         compact_context: dict[str, list[dict[str, Any]]] = {}
-        limits = {
-            "segment": 4,
-            "temporal": 4,
-            "displacement": 4,
-            "category": 2,
-            "accounts": 5,
-        }
-        for pool_name, limit in limits.items():
+        for pool_name, limit in _REASONING_CONTEXT_LIMITS.items():
             projected: list[dict[str, Any]] = []
             for item in self.pools.get(pool_name) or []:
                 entry = _compact_reasoning_context_entry(pool_name, item)
@@ -416,6 +431,28 @@ class CompressedPacket:
             payload["compact_context"] = compact_context
         payload["payload_profile"] = "witness_first_v1"
         return payload
+
+    def reasoning_payload_component_tokens(
+        self,
+        *,
+        compact_metric_ledger: bool = True,
+        compact_aggregates: bool = True,
+        include_contradiction_rows: bool = True,
+        include_minority_signals: bool = True,
+        include_section_packets: bool = True,
+    ) -> dict[str, int]:
+        """Approximate per-component token contribution for the reasoning payload."""
+        payload = self.to_reasoning_payload(
+            compact_metric_ledger=compact_metric_ledger,
+            compact_aggregates=compact_aggregates,
+            include_contradiction_rows=include_contradiction_rows,
+            include_minority_signals=include_minority_signals,
+            include_section_packets=include_section_packets,
+        )
+        estimates: dict[str, int] = {}
+        for key, value in payload.items():
+            estimates[key] = _approx_payload_tokens({key: value})
+        return estimates
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +490,6 @@ def _compact_reasoning_context_entry(
                 "role_type": data.get("role_type"),
                 "review_count": data.get("review_count"),
                 "churn_rate": data.get("churn_rate"),
-                "top_pain": data.get("top_pain"),
             }
         if kind == "department":
             return {
@@ -505,7 +541,6 @@ def _compact_reasoning_context_entry(
                 "keyword": data.get("keyword") or data.get("term"),
                 "magnitude": data.get("magnitude") or data.get("spike_ratio"),
                 "change_pct": data.get("change_pct"),
-                "volume": data.get("volume"),
             }
         if kind == "sentiment":
             return {
@@ -531,7 +566,6 @@ def _compact_reasoning_context_entry(
             ),
             "urgency": data.get("urgency"),
             "date": data.get("date") or data.get("deadline"),
-            "company": data.get("company"),
         }
 
     if pool_name == "displacement":
@@ -568,7 +602,6 @@ def _compact_reasoning_context_entry(
         return {
             "_sid": sid,
             "kind": kind,
-            "summary": data.get("summary"),
             "confidence": data.get("confidence"),
             "winner": data.get("winner"),
             "loser": data.get("loser"),

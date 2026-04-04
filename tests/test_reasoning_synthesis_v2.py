@@ -5267,6 +5267,15 @@ class TestReasoningSynthesisTask:
         assert persisted["meta"]["payload_mode"] == "lean"
         assert persisted["meta"]["section_packets_included"] is False
         assert persisted["meta"]["estimated_input_tokens"] == 500
+        component_tokens = persisted["meta"]["payload_component_tokens"]
+        assert component_tokens["payload_profile"] > 0
+        assert component_tokens["witness_pack"] > 0
+        assert component_tokens["precomputed_aggregates"] > 0
+        assert component_tokens["metric_ledger"] > 0
+        assert component_tokens["compact_context"] > 0
+        assert "section_packets" not in component_tokens
+        assert "contradiction_rows" not in component_tokens
+        assert "minority_signals" not in component_tokens
 
     @pytest.mark.asyncio
     async def test_run_uses_configured_full_items_per_pool(self, monkeypatch):
@@ -5391,6 +5400,13 @@ class TestReasoningSynthesisTask:
         persisted = json.loads(synthesis_writes[0][1][5])
         assert persisted["meta"]["payload_mode"] == "full"
         assert persisted["meta"]["packet_items_per_pool"] == 4
+        component_tokens = persisted["meta"]["payload_component_tokens"]
+        assert component_tokens["payload_profile"] > 0
+        assert component_tokens["witness_pack"] > 0
+        assert component_tokens["section_packets"] > 0
+        assert component_tokens["precomputed_aggregates"] > 0
+        assert component_tokens["metric_ledger"] > 0
+        assert component_tokens["compact_context"] > 0
 
     @pytest.mark.asyncio
     async def test_run_rejects_vendor_when_lean_payload_still_exceeds_budget(self, monkeypatch):

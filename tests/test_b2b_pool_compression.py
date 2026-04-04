@@ -31,6 +31,7 @@ for _mod in (
 
 from atlas_brain.autonomous.tasks._b2b_pool_compression import (
     CompressedPacket,
+    _REASONING_CONTEXT_LIMITS,
     ScoredItem,
     SourceRef,
     TrackedAggregate,
@@ -924,6 +925,30 @@ class TestCompressVendorPoolsIntegration:
         assert "temporal" not in payload
         assert "category" not in payload
         assert payload["compact_context"]["accounts"][0]["name"]
+
+    def test_reasoning_payload_component_tokens_are_emitted(self):
+        packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
+
+        estimates = packet.reasoning_payload_component_tokens()
+
+        assert estimates["payload_profile"] > 0
+        assert estimates["witness_pack"] > 0
+        assert estimates["section_packets"] > 0
+        assert estimates["precomputed_aggregates"] > 0
+        assert estimates["metric_ledger"] > 0
+        assert estimates["compact_context"] > 0
+        assert "evidence_vault" not in estimates
+        assert "accounts" not in estimates
+
+    def test_reasoning_payload_compact_context_uses_tighter_limits(self):
+        packet = compress_vendor_pools("CoverageVendor", _make_full_coverage_layers())
+
+        payload = packet.to_reasoning_payload()
+        compact_context = payload["compact_context"]
+
+        for pool_name, limit in _REASONING_CONTEXT_LIMITS.items():
+            entries = compact_context.get(pool_name) or []
+            assert len(entries) <= limit
 
 
 class TestWitnessGovernance:

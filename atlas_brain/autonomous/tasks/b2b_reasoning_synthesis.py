@@ -1111,8 +1111,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             section_packets_included = True
             include_contradiction_rows = True
             include_minority_signals = True
+            payload_packet = packet
             payload = json.dumps(
-                packet.to_reasoning_payload(
+                payload_packet.to_reasoning_payload(
                     compact_metric_ledger=True,
                     compact_aggregates=True,
                 ),
@@ -1160,6 +1161,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 payload_items_per_pool = lean_max_items_per_pool
                 payload_witness_count = len(getattr(lean_packet, "witness_pack", []) or [])
                 section_packets_included = False
+                payload_packet = lean_packet
                 prompt_packet = lean_packet.prompt_validation_view(
                     compact_aggregates=True,
                     include_contradiction_rows=include_contradiction_rows,
@@ -1528,6 +1530,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             meta["packet_witness_count"] = payload_witness_count
             meta["packet_items_per_pool"] = payload_items_per_pool
             meta["section_packets_included"] = section_packets_included
+            meta["payload_component_tokens"] = payload_packet.reasoning_payload_component_tokens(
+                compact_metric_ledger=True,
+                compact_aggregates=True,
+                include_contradiction_rows=include_contradiction_rows,
+                include_minority_signals=include_minority_signals,
+                include_section_packets=section_packets_included,
+            )
             if decision.get("prior_as_of_date") is not None:
                 meta["prior_row_as_of_date"] = decision["prior_as_of_date"].isoformat()
             if decision.get("prior_row_age_days") is not None:
