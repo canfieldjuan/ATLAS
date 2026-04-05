@@ -1177,6 +1177,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                    vendor_name,
                    as_of_date,
                    evidence_hash,
+                   synthesis,
                    jsonb_path_exists(synthesis, '$.packet_artifacts.witness_pack[*]') AS has_witness_pack,
                    jsonb_path_exists(synthesis, '$.reference_ids.metric_ids[*]') AS has_metric_refs,
                    jsonb_path_exists(synthesis, '$.reference_ids.witness_ids[*]') AS has_witness_refs
@@ -1185,7 +1186,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
               AND schema_version = $2
             ORDER BY vendor_name, as_of_date DESC, created_at DESC
         )
-        SELECT vendor_name, as_of_date, evidence_hash, has_witness_pack, has_metric_refs, has_witness_refs
+        SELECT vendor_name, as_of_date, evidence_hash, synthesis,
+               has_witness_pack, has_metric_refs, has_witness_refs
         FROM latest
         """,
         window_days, _SCHEMA_VERSION,

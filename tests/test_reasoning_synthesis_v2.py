@@ -5322,6 +5322,7 @@ class TestReasoningSynthesisTask:
 
             async def fetch(self, query, *args):
                 if "FROM b2b_reasoning_synthesis" in query:
+                    assert "synthesis" in query
                     return [{
                         "vendor_name": "ModelVendor",
                         "as_of_date": date.today() - timedelta(days=1),
@@ -5351,6 +5352,9 @@ class TestReasoningSynthesisTask:
         )
         monkeypatch.setattr(
             settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False,
         )
         monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_max_stale_days", 3, raising=False,
@@ -5448,6 +5452,9 @@ class TestReasoningSynthesisTask:
         )
         monkeypatch.setattr(
             settings.b2b_churn, "cross_vendor_synthesis_enabled", False, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False,
         )
         monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_max_stale_days", 3, raising=False,
