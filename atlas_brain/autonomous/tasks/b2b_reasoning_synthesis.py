@@ -921,6 +921,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return await _finalize_scope_result({"_skip_synthesis": "DB not ready"})
 
+    if not bool(cfg.reasoning_synthesis_enabled):
+        return await _finalize_scope_result(
+            {"_skip_synthesis": "Vendor reasoning synthesis disabled"}
+        )
+
     if scope_id:
         try:
             from ...storage.repositories.competitive_set import get_competitive_set_repo

@@ -4945,6 +4945,9 @@ class TestReasoningSynthesisTask:
             settings.b2b_churn, "cross_vendor_synthesis_enabled", True, raising=False,
         )
         monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
             settings.b2b_churn, "reasoning_synthesis_model", "anthropic/claude-sonnet-4-5", raising=False,
         )
 
@@ -4958,6 +4961,26 @@ class TestReasoningSynthesisTask:
         assert result["cross_vendor_mirrored"] == 4
         assert seen["force"] is True
         assert seen["vendor_names"] == ["ModelVendor"]
+
+    @pytest.mark.asyncio
+    async def test_run_respects_reasoning_synthesis_enabled_flag(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        class FakePool:
+            is_initialized = True
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: FakePool(),
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_enabled", False, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={"force": True}))
+
+        assert result["_skip_synthesis"] == "Vendor reasoning synthesis disabled"
 
     @pytest.mark.asyncio
     async def test_run_skips_cross_vendor_for_test_vendor_pilots(self, monkeypatch):
