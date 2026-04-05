@@ -680,6 +680,7 @@ def _competitive_scope_metadata(task: ScheduledTask | Any) -> dict[str, Any]:
         "scope_asymmetry_pairs": _metadata_vendor_pairs(metadata.get("scope_asymmetry_pairs")),
         "scope_trigger": str(metadata.get("scope_trigger") or "manual").strip() or "manual",
         "scope_name": str(metadata.get("scope_name") or "").strip(),
+        "changed_vendors_only": bool(metadata.get("changed_vendors_only")),
     }
 
 
@@ -712,6 +713,54 @@ def _coerce_timestamptz(value: Any) -> Any:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _pool_category_name(layers: dict[str, Any]) -> str:
+    category = layers.get("category") or {}
+    evidence_vault = layers.get("evidence_vault") or {}
+    value = (
+        category.get("category")
+        or evidence_vault.get("product_category")
+        or ""
+    )
+    return str(value or "").strip()
+
+
+def _prune_cross_vendor_scope_for_changed_vendors(
+    *,
+    vendor_pools: dict[str, dict[str, Any]],
+    changed_vendor_names: set[str],
+    scope_pairwise_pairs: list[tuple[str, str]],
+    scope_category_names: list[str],
+    scope_asymmetry_pairs: list[tuple[str, str]],
+) -> tuple[list[tuple[str, str]], list[str], list[tuple[str, str]]]:
+    if not changed_vendor_names:
+        return [], [], []
+
+    changed_norm = {str(name or "").strip().lower() for name in changed_vendor_names}
+    pairwise_pairs = [
+        (vendor_a, vendor_b)
+        for vendor_a, vendor_b in scope_pairwise_pairs
+        if vendor_a.lower() in changed_norm or vendor_b.lower() in changed_norm
+    ]
+    asymmetry_pairs = [
+        (vendor_a, vendor_b)
+        for vendor_a, vendor_b in scope_asymmetry_pairs
+        if vendor_a.lower() in changed_norm or vendor_b.lower() in changed_norm
+    ]
+
+    changed_categories = {
+        _pool_category_name(vendor_pools.get(vendor_name) or {})
+        for vendor_name in vendor_pools
+        if vendor_name.lower() in changed_norm
+    }
+    changed_categories = {value for value in changed_categories if value}
+    categories = [
+        category_name
+        for category_name in scope_category_names
+        if str(category_name or "").strip() in changed_categories
+    ]
+    return pairwise_pairs, categories, asymmetry_pairs
 
 
 def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
@@ -888,6 +937,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     scope_category_names = scope_meta.get("scope_category_names") or []
     scope_asymmetry_pairs = scope_meta.get("scope_asymmetry_pairs") or []
     scope_trigger = scope_meta.get("scope_trigger") or "manual"
+    changed_vendors_only = bool(scope_meta.get("changed_vendors_only"))
 
     async def _finalize_scope_result(result: dict[str, Any]) -> dict[str, Any]:
         if not scope_id:
@@ -1004,6 +1054,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         **plan_to_synthesis_metadata(plan),
                         "scope_name": competitive_set.name,
                         "scope_trigger": "scheduled",
+                        "changed_vendors_only": True,
                         "run_id": f"{run_id}:{competitive_set.id}",
                     },
                     created_at=task.created_at,
@@ -1210,6 +1261,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         vendors_to_reason.append((vendor_name, layers, ev_hash, decision))
 
     skipped = len(vendor_pools) - len(vendors_to_reason)
+    changed_vendor_names = {
+        vendor_name for vendor_name, _layers, _ev_hash, _decision in vendors_to_reason
+    }
     logger.info(
         "Reasoning synthesis v2: %d vendors to process, %d skipped (unchanged)",
         len(vendors_to_reason), skipped,
@@ -2011,10 +2065,36 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     xv_tokens = 0
     xv_mirrored = 0
     xv_rejected_input_budget = 0
+    scoped_pairwise_pairs_for_run = scope_pairwise_pairs
+    scoped_category_names_for_run = scope_category_names
+    scoped_asymmetry_pairs_for_run = scope_asymmetry_pairs
+    if changed_vendors_only and not force_cross_vendor:
+        (
+            scoped_pairwise_pairs_for_run,
+            scoped_category_names_for_run,
+            scoped_asymmetry_pairs_for_run,
+        ) = _prune_cross_vendor_scope_for_changed_vendors(
+            vendor_pools=vendor_pools,
+            changed_vendor_names=changed_vendor_names,
+            scope_pairwise_pairs=scope_pairwise_pairs,
+            scope_category_names=scope_category_names,
+            scope_asymmetry_pairs=scope_asymmetry_pairs,
+        )
+        logger.info(
+            "Changed-only scoped cross-vendor pruning: pairwise=%d->%d categories=%d->%d asymmetry=%d->%d",
+            len(scope_pairwise_pairs),
+            len(scoped_pairwise_pairs_for_run),
+            len(scope_category_names),
+            len(scoped_category_names_for_run),
+            len(scope_asymmetry_pairs),
+            len(scoped_asymmetry_pairs_for_run),
+        )
 
     run_cross_vendor = bool(cfg.cross_vendor_synthesis_enabled)
     scope_has_cross_vendor = bool(
-        scope_pairwise_pairs or scope_category_names or scope_asymmetry_pairs
+        scoped_pairwise_pairs_for_run
+        or scoped_category_names_for_run
+        or scoped_asymmetry_pairs_for_run
     )
     if filter_vendors and not force_cross_vendor and not scope_has_cross_vendor:
         run_cross_vendor = False
@@ -2030,9 +2110,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 window_days=window_days,
                 run_id=run_id,
                 force=force_cross_vendor,
-                scope_pairwise_pairs=scope_pairwise_pairs,
-                scope_category_names=scope_category_names,
-                scope_asymmetry_pairs=scope_asymmetry_pairs,
+                scope_pairwise_pairs=scoped_pairwise_pairs_for_run,
+                scope_category_names=scoped_category_names_for_run,
+                scope_asymmetry_pairs=scoped_asymmetry_pairs_for_run,
             )
             total_tokens += xv_tokens
         except Exception:
@@ -2066,6 +2146,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "vendors_forced": rerun_reason_counts["forced"],
         "vendors_payload_mode_full": payload_mode_full,
         "vendors_payload_mode_lean": payload_mode_lean,
+        "changed_vendors_only": changed_vendors_only,
         "total_tokens": total_tokens,
         "elapsed_seconds": elapsed,
         "schema_version": _SCHEMA_VERSION,
@@ -2075,6 +2156,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "cross_vendor_failed": xv_failed,
         "cross_vendor_tokens": xv_tokens,
         "cross_vendor_mirrored": xv_mirrored,
+        "cross_vendor_scoped_pairwise_jobs": len(scoped_pairwise_pairs_for_run),
+        "cross_vendor_scoped_category_jobs": len(scoped_category_names_for_run),
+        "cross_vendor_scoped_asymmetry_jobs": len(scoped_asymmetry_pairs_for_run),
     })
 
 

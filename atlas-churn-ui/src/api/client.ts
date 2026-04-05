@@ -760,7 +760,7 @@ export async function fetchCompetitiveSetPlan(competitiveSetId: string) {
 
 export async function runCompetitiveSetNow(
   competitiveSetId: string,
-  body?: { force?: boolean; force_cross_vendor?: boolean },
+  body?: { force?: boolean; force_cross_vendor?: boolean; changed_vendors_only?: boolean },
 ) {
   return post<{
     execution_id: string | null

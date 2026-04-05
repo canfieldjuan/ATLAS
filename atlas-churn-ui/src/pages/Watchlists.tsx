@@ -108,6 +108,7 @@ export default function Watchlists() {
   const [editingCompetitiveSetId, setEditingCompetitiveSetId] = useState<string | null>(null)
   const [competitiveSetPreviews, setCompetitiveSetPreviews] = useState<Record<string, CompetitiveSetPlan>>({})
   const [competitiveSetRuns, setCompetitiveSetRuns] = useState<Record<string, CompetitiveSetRun[]>>({})
+  const [competitiveSetChangedOnly, setCompetitiveSetChangedOnly] = useState<Record<string, boolean>>({})
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [competitiveSetName, setCompetitiveSetName] = useState('')
@@ -324,6 +325,10 @@ export default function Watchlists() {
         ...current,
         [item.id]: result.recent_runs,
       }))
+      setCompetitiveSetChangedOnly((current) => ({
+        ...current,
+        [item.id]: current[item.id] ?? true,
+      }))
       setOpenCompetitiveSetPreviewId(item.id)
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to load competitive-set preview')
@@ -337,7 +342,9 @@ export default function Watchlists() {
     setActionError(null)
     setActionMessage(null)
     try {
-      const result = await runCompetitiveSetNow(item.id)
+      const result = await runCompetitiveSetNow(item.id, {
+        changed_vendors_only: competitiveSetChangedOnly[item.id] ?? true,
+      })
       setActionMessage(
         `${item.name} refresh started${result.execution_id ? ` (${result.execution_id})` : ''}`,
       )
@@ -920,6 +927,7 @@ export default function Watchlists() {
                 const likelyRerunVendors = (estimate?.likely_rerun_vendors ?? []).slice(0, 6)
                 const likelyReuseVendors = (estimate?.likely_reuse_vendors ?? []).slice(0, 6)
                 const previewOpen = openCompetitiveSetPreviewId === item.id
+                const changedOnly = competitiveSetChangedOnly[item.id] ?? true
                 return (
                   <div key={item.id} className="rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
                     <div className="flex items-start justify-between gap-3">
@@ -1120,18 +1128,32 @@ export default function Watchlists() {
                                         {run.status}
                                       </span>
                                     </div>
-                                    <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-400">
-                                      <span>{formatWholeNumber(reasoned)} reasoned</span>
-                                      <span>{formatWholeNumber(reused)} reused</span>
-                                      <span>{formatWholeNumber(failed)} failed</span>
-                                      <span>{formatWholeNumber(totalTokens)} tokens</span>
+                                      <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                                        <span>{formatWholeNumber(reasoned)} reasoned</span>
+                                        <span>{formatWholeNumber(reused)} reused</span>
+                                        <span>{formatWholeNumber(failed)} failed</span>
+                                        <span>{formatWholeNumber(totalTokens)} tokens</span>
+                                        {summary.changed_vendors_only === true ? <span>changed only</span> : null}
+                                      </div>
                                     </div>
-                                  </div>
-                                )
+                                  )
                               })}
                             </div>
                           )}
                         </div>
+                        <label className="mt-3 flex items-center gap-2 rounded-md border border-slate-700/50 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={changedOnly}
+                            onChange={(event) => {
+                              setCompetitiveSetChangedOnly((current) => ({
+                                ...current,
+                                [item.id]: event.target.checked,
+                              }))
+                            }}
+                          />
+                          Run changed vendors only
+                        </label>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button
                             onClick={() => handleRunCompetitiveSet(item)}

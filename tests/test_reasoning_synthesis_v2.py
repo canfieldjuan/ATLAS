@@ -4963,6 +4963,165 @@ class TestReasoningSynthesisTask:
         assert seen["vendor_names"] == ["ModelVendor"]
 
     @pytest.mark.asyncio
+    async def test_run_changed_vendors_only_prunes_scoped_cross_vendor_targets(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks._b2b_pool_compression import compress_vendor_pools
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import (
+            _compute_pool_hash,
+            run,
+        )
+
+        vendor_a_layers = _make_layers()
+        vendor_b_layers = _make_layers()
+        vendor_c_layers = _make_layers()
+        vendor_c_layers["category"] = {"category": "CRM"}
+        vendor_pools = {
+            "Salesforce": vendor_a_layers,
+            "HubSpot": vendor_b_layers,
+            "Dynamics": vendor_c_layers,
+        }
+        scoped_category_name = "CRM"
+        prior_synthesis = {
+            "reasoning_contracts": {
+                "vendor_core_reasoning": {
+                    "causal_narrative": {"confidence": "medium"},
+                    "segment_playbook": {"confidence": "medium"},
+                    "timing_intelligence": {"confidence": "medium"},
+                },
+                "displacement_reasoning": {
+                    "competitive_reframes": {"confidence": "medium"},
+                    "migration_proof": {"confidence": "medium"},
+                },
+                "account_reasoning": {"confidence": "medium"},
+                "category_reasoning": {"confidence": "medium"},
+            },
+            "packet_artifacts": {
+                "witness_pack": [{"witness_id": "w1"}],
+            },
+            "_quality_status": "pass",
+        }
+
+        class FakePool:
+            is_initialized = True
+
+            def __init__(self):
+                self.executed = []
+                self.executemany_calls = []
+
+            async def fetch(self, query, *args):
+                if "FROM b2b_reasoning_synthesis" in query:
+                    return [
+                        {
+                            "vendor_name": "Salesforce",
+                            "as_of_date": date.today(),
+                            "evidence_hash": _compute_pool_hash(vendor_a_layers),
+                            "has_witness_pack": True,
+                            "has_metric_refs": True,
+                            "has_witness_refs": True,
+                            "synthesis": json.dumps(prior_synthesis),
+                        },
+                        {
+                            "vendor_name": "HubSpot",
+                            "as_of_date": date.today(),
+                            "evidence_hash": _compute_pool_hash(vendor_b_layers),
+                            "has_witness_pack": True,
+                            "has_metric_refs": True,
+                            "has_witness_refs": True,
+                            "synthesis": json.dumps(prior_synthesis),
+                        },
+                        {
+                            "vendor_name": "Dynamics",
+                            "as_of_date": date.today(),
+                            "evidence_hash": "outdated-hash",
+                            "has_witness_pack": True,
+                            "has_metric_refs": True,
+                            "has_witness_refs": True,
+                            "synthesis": json.dumps(prior_synthesis),
+                        },
+                    ]
+                return []
+
+            async def execute(self, query, *args):
+                self.executed.append((query, args))
+
+            async def executemany(self, query, args_iterable):
+                self.executemany_calls.append((query, list(args_iterable)))
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+            def __init__(self, response):
+                self.response = response
+
+            def chat(self, *, messages, max_tokens, temperature, **kwargs):
+                return {
+                    "response": self.response,
+                    "usage": {"input_tokens": 11, "output_tokens": 7},
+                }
+
+        packet = compress_vendor_pools("Dynamics", vendor_c_layers)
+        valid_synthesis, _ = _make_valid_synthesis(packet)
+        fake_pool = FakePool()
+        fake_llm = FakeLLM(json.dumps(valid_synthesis))
+        seen = {}
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
+            return vendor_pools
+
+        async def _fake_run_cross_vendor_synthesis(**kwargs):
+            seen["scope_pairwise_pairs"] = kwargs["scope_pairwise_pairs"]
+            seen["scope_category_names"] = kwargs["scope_category_names"]
+            seen["scope_asymmetry_pairs"] = kwargs["scope_asymmetry_pairs"]
+            return (1, 0, 100, 1, 0)
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: fake_pool,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: fake_llm,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._run_cross_vendor_synthesis",
+            _fake_run_cross_vendor_synthesis,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_attempts", 1, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={
+            "scope_type": "competitive_set",
+            "scope_id": "scope-set-1",
+            "scope_vendor_names": ["Salesforce", "HubSpot", "Dynamics"],
+            "scope_pairwise_pairs": [["Salesforce", "HubSpot"], ["Salesforce", "Dynamics"]],
+            "scope_category_names": [scoped_category_name],
+            "scope_asymmetry_pairs": [["Salesforce", "HubSpot"], ["Salesforce", "Dynamics"]],
+            "changed_vendors_only": True,
+        }))
+
+        assert result["vendors_reasoned"] == 1
+        assert result["vendors_skipped"] == 2
+        assert result["cross_vendor_succeeded"] == 1
+        assert result["changed_vendors_only"] is True
+        assert result["cross_vendor_scoped_pairwise_jobs"] == 1
+        assert result["cross_vendor_scoped_category_jobs"] == 1
+        assert result["cross_vendor_scoped_asymmetry_jobs"] == 1
+        assert seen["scope_pairwise_pairs"] == [("Salesforce", "Dynamics")]
+        assert seen["scope_category_names"] == [scoped_category_name]
+        assert seen["scope_asymmetry_pairs"] == [("Salesforce", "Dynamics")]
+
+    @pytest.mark.asyncio
     async def test_run_respects_reasoning_synthesis_enabled_flag(self, monkeypatch):
         from atlas_brain.config import settings
         from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run

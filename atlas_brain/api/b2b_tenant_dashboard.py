@@ -271,6 +271,7 @@ class CompetitiveSetUpdateRequest(BaseModel):
 class CompetitiveSetRunRequest(BaseModel):
     force: bool = False
     force_cross_vendor: bool = False
+    changed_vendors_only: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +679,7 @@ async def run_competitive_set_now(
         "scope_trigger": "manual",
         "force": req.force,
         "force_cross_vendor": req.force_cross_vendor,
+        "changed_vendors_only": req.changed_vendors_only,
     }
     scheduler = get_task_scheduler()
     result = await scheduler.run_now(synthesis_task)
