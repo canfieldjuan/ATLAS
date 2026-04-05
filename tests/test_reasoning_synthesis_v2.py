@@ -5122,6 +5122,77 @@ class TestReasoningSynthesisTask:
         assert seen["scope_asymmetry_pairs"] == [("Salesforce", "Dynamics")]
 
     @pytest.mark.asyncio
+    async def test_run_scope_can_disable_vendor_phase_without_blocking_cross_vendor(self, monkeypatch):
+        from atlas_brain.config import settings
+        from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run
+
+        vendor_pools = {
+            "Salesforce": _make_layers(),
+            "HubSpot": _make_layers(),
+        }
+
+        class FakePool:
+            is_initialized = True
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                return None
+
+        class FakeLLM:
+            model = "fake-reasoner"
+
+        seen = {}
+
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
+            return vendor_pools
+
+        async def _fake_run_cross_vendor_synthesis(**kwargs):
+            seen["called"] = True
+            seen["pairs"] = kwargs["scope_pairwise_pairs"]
+            return (1, 0, 100, 1, 0)
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis.get_db_pool",
+            lambda: FakePool(),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+            _fake_fetch_all_pool_layers,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            lambda **kw: FakeLLM(),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._run_cross_vendor_synthesis",
+            _fake_run_cross_vendor_synthesis,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "cross_vendor_synthesis_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False,
+        )
+
+        result = await run(SimpleNamespace(metadata={
+            "scope_type": "competitive_set",
+            "scope_id": "scope-set-2",
+            "scope_vendor_names": ["Salesforce", "HubSpot"],
+            "scope_pairwise_pairs": [["Salesforce", "HubSpot"]],
+            "vendor_synthesis_enabled": False,
+            "changed_vendors_only": False,
+        }))
+
+        assert result["vendors_total"] == 0
+        assert result["vendors_reasoned"] == 0
+        assert result["vendors_skipped"] == 0
+        assert result["cross_vendor_succeeded"] == 1
+        assert seen["called"] is True
+        assert seen["pairs"] == [("Salesforce", "HubSpot")]
+
+    @pytest.mark.asyncio
     async def test_run_respects_reasoning_synthesis_enabled_flag(self, monkeypatch):
         from atlas_brain.config import settings
         from atlas_brain.autonomous.tasks.b2b_reasoning_synthesis import run

@@ -353,3 +353,75 @@ async def test_run_competitive_set_now_forwards_changed_only_flag(monkeypatch):
     assert scheduler.run_now.await_count == 1
     assert task.metadata["changed_vendors_only"] is True
     assert task.metadata["scope_trigger"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_competitive_scope_finalize_marks_cross_vendor_only_failures_as_failed(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    marked = {}
+    scope_id = uuid4()
+
+    class FakeRepo:
+        async def mark_run_started(self, *args, **kwargs):
+            return None
+
+        async def mark_run_completed(self, competitive_set_id, *, status, summary):
+            marked["competitive_set_id"] = str(competitive_set_id)
+            marked["status"] = status
+            marked["summary"] = summary
+
+    class FakePool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            return []
+
+        async def execute(self, query, *args):
+            return None
+
+    class FakeLLM:
+        model = "fake-reasoner"
+
+    async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
+        return {
+            "Salesforce": {"evidence_vault": {"product_category": "CRM"}},
+            "HubSpot": {"evidence_vault": {"product_category": "CRM"}},
+        }
+
+    async def _fake_run_cross_vendor_synthesis(**kwargs):
+        return (0, 1, 0, 0, 0)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(mod.settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_churn, "cross_vendor_synthesis_enabled", True, raising=False)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+        _fake_fetch_all_pool_layers,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **kw: FakeLLM(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._run_cross_vendor_synthesis",
+        _fake_run_cross_vendor_synthesis,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.competitive_set.get_competitive_set_repo",
+        lambda: FakeRepo(),
+    )
+
+    result = await mod.run(SimpleNamespace(metadata={
+        "scope_type": "competitive_set",
+        "scope_id": str(scope_id),
+        "scope_vendor_names": ["Salesforce", "HubSpot"],
+        "scope_pairwise_pairs": [["Salesforce", "HubSpot"]],
+        "vendor_synthesis_enabled": False,
+        "changed_vendors_only": False,
+        "scope_trigger": "manual",
+    }))
+
+    assert result["cross_vendor_failed"] == 1
+    assert marked["competitive_set_id"] == str(scope_id)
+    assert marked["status"] == "failed"

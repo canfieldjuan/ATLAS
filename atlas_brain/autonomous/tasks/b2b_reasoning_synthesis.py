@@ -678,6 +678,10 @@ def _competitive_scope_metadata(task: ScheduledTask | Any) -> dict[str, Any]:
         "scope_pairwise_pairs": _metadata_vendor_pairs(metadata.get("scope_pairwise_pairs")),
         "scope_category_names": _metadata_text_list(metadata.get("scope_category_names")),
         "scope_asymmetry_pairs": _metadata_vendor_pairs(metadata.get("scope_asymmetry_pairs")),
+        "vendor_synthesis_enabled": bool(metadata.get("vendor_synthesis_enabled", True)),
+        "pairwise_enabled": bool(metadata.get("pairwise_enabled", True)),
+        "category_council_enabled": bool(metadata.get("category_council_enabled", False)),
+        "asymmetry_enabled": bool(metadata.get("asymmetry_enabled", False)),
         "scope_trigger": str(metadata.get("scope_trigger") or "manual").strip() or "manual",
         "scope_name": str(metadata.get("scope_name") or "").strip(),
         "changed_vendors_only": bool(metadata.get("changed_vendors_only")),
@@ -936,6 +940,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     scope_pairwise_pairs = scope_meta.get("scope_pairwise_pairs") or []
     scope_category_names = scope_meta.get("scope_category_names") or []
     scope_asymmetry_pairs = scope_meta.get("scope_asymmetry_pairs") or []
+    scope_vendor_synthesis_enabled = bool(scope_meta.get("vendor_synthesis_enabled", True))
     scope_trigger = scope_meta.get("scope_trigger") or "manual"
     changed_vendors_only = bool(scope_meta.get("changed_vendors_only"))
 
@@ -945,10 +950,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         try:
             from ...storage.repositories.competitive_set import get_competitive_set_repo
 
+            vendor_successes = int(result.get("vendors_reasoned", 0) or 0)
+            cross_vendor_successes = int(result.get("cross_vendor_succeeded", 0) or 0)
+            vendor_failures = int(result.get("vendors_failed", 0) or 0)
+            cross_vendor_failures = int(result.get("cross_vendor_failed", 0) or 0)
+            total_successes = vendor_successes + cross_vendor_successes
+            total_failures = vendor_failures + cross_vendor_failures
             status = "succeeded"
-            if result.get("vendors_failed") and result.get("vendors_reasoned"):
+            if total_failures and total_successes:
                 status = "partial"
-            elif result.get("vendors_failed") and not result.get("vendors_reasoned"):
+            elif total_failures and not total_successes:
                 status = "failed"
             await get_competitive_set_repo().mark_run_completed(
                 UUID(scope_id),
@@ -1087,7 +1098,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     )
                 continue
             aggregate["competitive_sets_processed"] += 1
-            if child_result.get("vendors_failed") and not child_result.get("vendors_reasoned"):
+            child_successes = int(child_result.get("vendors_reasoned", 0) or 0) + int(
+                child_result.get("cross_vendor_succeeded", 0) or 0,
+            )
+            child_failures = int(child_result.get("vendors_failed", 0) or 0) + int(
+                child_result.get("cross_vendor_failed", 0) or 0,
+            )
+            if child_failures and not child_successes:
                 aggregate["competitive_sets_failed"] += 1
             for key in (
                 "vendors_total",
@@ -1235,7 +1252,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if prior_normalized_hash == normalized_hashes.get(vendor_name):
                 legacy_hash_compatible_vendors.add(vendor_name)
 
-    vendors_to_reason: list[tuple[str, dict, str, dict[str, Any]]] = []
+    vendor_candidates_to_reason: list[tuple[str, dict, str, dict[str, Any]]] = []
     for vendor_name, layers in vendor_pools.items():
         ev_hash = normalized_hashes[vendor_name]
         latest_row = latest_rows.get(vendor_name)
@@ -1258,22 +1275,64 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         rerun_reason_counts[decision["reason"]] += 1
         if not decision["should_reason"]:
             continue
-        vendors_to_reason.append((vendor_name, layers, ev_hash, decision))
+        vendor_candidates_to_reason.append((vendor_name, layers, ev_hash, decision))
 
-    skipped = len(vendor_pools) - len(vendors_to_reason)
     changed_vendor_names = {
-        vendor_name for vendor_name, _layers, _ev_hash, _decision in vendors_to_reason
+        vendor_name for vendor_name, _layers, _ev_hash, _decision in vendor_candidates_to_reason
     }
+    vendors_to_reason = (
+        vendor_candidates_to_reason if scope_vendor_synthesis_enabled else []
+    )
+    vendor_job_total = len(vendor_pools) if scope_vendor_synthesis_enabled else 0
+    skipped = (
+        len(vendor_pools) - len(vendor_candidates_to_reason)
+        if scope_vendor_synthesis_enabled
+        else 0
+    )
     logger.info(
         "Reasoning synthesis v2: %d vendors to process, %d skipped (unchanged)",
         len(vendors_to_reason), skipped,
     )
+    if not scope_vendor_synthesis_enabled:
+        logger.info("Reasoning synthesis v2: vendor phase disabled by scoped plan")
 
-    if not vendors_to_reason and not (
-        cfg.cross_vendor_synthesis_enabled and force_cross_vendor
-    ):
+    scoped_pairwise_pairs_for_run = scope_pairwise_pairs
+    scoped_category_names_for_run = scope_category_names
+    scoped_asymmetry_pairs_for_run = scope_asymmetry_pairs
+    if changed_vendors_only and not force_cross_vendor:
+        (
+            scoped_pairwise_pairs_for_run,
+            scoped_category_names_for_run,
+            scoped_asymmetry_pairs_for_run,
+        ) = _prune_cross_vendor_scope_for_changed_vendors(
+            vendor_pools=vendor_pools,
+            changed_vendor_names=changed_vendor_names,
+            scope_pairwise_pairs=scope_pairwise_pairs,
+            scope_category_names=scope_category_names,
+            scope_asymmetry_pairs=scope_asymmetry_pairs,
+        )
+        logger.info(
+            "Changed-only scoped cross-vendor pruning: pairwise=%d->%d categories=%d->%d asymmetry=%d->%d",
+            len(scope_pairwise_pairs),
+            len(scoped_pairwise_pairs_for_run),
+            len(scope_category_names),
+            len(scoped_category_names_for_run),
+            len(scope_asymmetry_pairs),
+            len(scoped_asymmetry_pairs_for_run),
+        )
+
+    run_cross_vendor = bool(cfg.cross_vendor_synthesis_enabled)
+    scope_has_cross_vendor = bool(
+        scoped_pairwise_pairs_for_run
+        or scoped_category_names_for_run
+        or scoped_asymmetry_pairs_for_run
+    )
+    if filter_vendors and not force_cross_vendor and not scope_has_cross_vendor:
+        run_cross_vendor = False
+
+    if not vendors_to_reason and not run_cross_vendor:
         return await _finalize_scope_result({
-            "vendors_total": len(vendor_pools),
+            "vendors_total": vendor_job_total,
             "vendors_reasoned": 0,
             "vendors_failed": 0,
             "vendors_skipped": skipped,
@@ -1285,12 +1344,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "vendors_rerun_missing_packet_artifacts": rerun_reason_counts["missing_packet_artifacts"],
             "vendors_rerun_missing_reference_ids": rerun_reason_counts["missing_reference_ids"],
             "vendors_forced": rerun_reason_counts["forced"],
-            "_skip_synthesis": "All vendors unchanged",
+            "changed_vendors_only": changed_vendors_only,
+            "cross_vendor_succeeded": 0,
+            "cross_vendor_failed": 0,
+            "cross_vendor_tokens": 0,
+            "cross_vendor_mirrored": 0,
+            "cross_vendor_scoped_pairwise_jobs": len(scoped_pairwise_pairs_for_run),
+            "cross_vendor_scoped_category_jobs": len(scoped_category_names_for_run),
+            "cross_vendor_scoped_asymmetry_jobs": len(scoped_asymmetry_pairs_for_run),
+            "_skip_synthesis": "No scoped synthesis work required",
         })
-    if not vendors_to_reason and cfg.cross_vendor_synthesis_enabled and force_cross_vendor:
-        logger.info(
-            "Reasoning synthesis v2: vendor phase skipped; force_cross_vendor enabled",
-        )
+    if not vendors_to_reason and run_cross_vendor:
+        logger.info("Reasoning synthesis v2: vendor phase skipped; cross-vendor scope still active")
 
     # Resolve LLM via standard pipeline routing
     from ...pipelines.llm import get_pipeline_llm
@@ -2065,39 +2130,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     xv_tokens = 0
     xv_mirrored = 0
     xv_rejected_input_budget = 0
-    scoped_pairwise_pairs_for_run = scope_pairwise_pairs
-    scoped_category_names_for_run = scope_category_names
-    scoped_asymmetry_pairs_for_run = scope_asymmetry_pairs
-    if changed_vendors_only and not force_cross_vendor:
-        (
-            scoped_pairwise_pairs_for_run,
-            scoped_category_names_for_run,
-            scoped_asymmetry_pairs_for_run,
-        ) = _prune_cross_vendor_scope_for_changed_vendors(
-            vendor_pools=vendor_pools,
-            changed_vendor_names=changed_vendor_names,
-            scope_pairwise_pairs=scope_pairwise_pairs,
-            scope_category_names=scope_category_names,
-            scope_asymmetry_pairs=scope_asymmetry_pairs,
-        )
-        logger.info(
-            "Changed-only scoped cross-vendor pruning: pairwise=%d->%d categories=%d->%d asymmetry=%d->%d",
-            len(scope_pairwise_pairs),
-            len(scoped_pairwise_pairs_for_run),
-            len(scope_category_names),
-            len(scoped_category_names_for_run),
-            len(scope_asymmetry_pairs),
-            len(scoped_asymmetry_pairs_for_run),
-        )
-
-    run_cross_vendor = bool(cfg.cross_vendor_synthesis_enabled)
-    scope_has_cross_vendor = bool(
-        scoped_pairwise_pairs_for_run
-        or scoped_category_names_for_run
-        or scoped_asymmetry_pairs_for_run
-    )
-    if filter_vendors and not force_cross_vendor and not scope_has_cross_vendor:
-        run_cross_vendor = False
 
     if run_cross_vendor:
         try:
@@ -2128,7 +2160,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     return await _finalize_scope_result({
-        "vendors_total": len(vendor_pools),
+        "vendors_total": vendor_job_total,
         "vendors_reasoned": succeeded,
         "vendors_failed": failed,
         "vendors_validation_failures": validation_failures,
