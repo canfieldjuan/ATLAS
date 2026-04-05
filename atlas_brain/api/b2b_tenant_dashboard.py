@@ -175,13 +175,16 @@ async def _canonical_competitive_set_payload(
     }
 
 
-def _competitive_set_defaults_payload() -> dict[str, int]:
+def _competitive_set_defaults_payload() -> dict[str, Any]:
     return {
         "default_refresh_interval_hours": max(
             1,
             int(settings.b2b_churn.competitive_set_refresh_interval_seconds // 3600),
         ),
         "max_competitors": int(settings.b2b_churn.competitive_set_max_competitors),
+        "default_changed_vendors_only": bool(
+            settings.b2b_churn.competitive_set_changed_vendors_only_default
+        ),
     }
 
 
@@ -271,7 +274,7 @@ class CompetitiveSetUpdateRequest(BaseModel):
 class CompetitiveSetRunRequest(BaseModel):
     force: bool = False
     force_cross_vendor: bool = False
-    changed_vendors_only: bool = True
+    changed_vendors_only: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -672,6 +675,11 @@ async def run_competitive_set_now(
     synthesis_task = await task_repo.get_by_name("b2b_reasoning_synthesis")
     if not synthesis_task:
         raise HTTPException(status_code=503, detail="b2b_reasoning_synthesis task is not registered")
+    changed_vendors_only = (
+        req.changed_vendors_only
+        if req.changed_vendors_only is not None
+        else bool(settings.b2b_churn.competitive_set_changed_vendors_only_default)
+    )
     synthesis_task.metadata = {
         **(synthesis_task.metadata or {}),
         **plan_to_synthesis_metadata(plan),
@@ -679,7 +687,7 @@ async def run_competitive_set_now(
         "scope_trigger": "manual",
         "force": req.force,
         "force_cross_vendor": req.force_cross_vendor,
-        "changed_vendors_only": req.changed_vendors_only,
+        "changed_vendors_only": changed_vendors_only,
     }
     scheduler = get_task_scheduler()
     result = await scheduler.run_now(synthesis_task)

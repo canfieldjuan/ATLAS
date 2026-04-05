@@ -634,6 +634,7 @@ export interface CompetitiveSetRun {
 export interface CompetitiveSetDefaults {
   default_refresh_interval_hours: number
   max_competitors: number
+  default_changed_vendors_only: boolean
 }
 
 export interface CompetitiveSetEstimate {

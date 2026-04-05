@@ -3069,6 +3069,13 @@ class B2BChurnConfig(BaseSettings):
         le=90,
         description="Lookback window for competitive-set run cost previews based on recent synthesis history",
     )
+    competitive_set_changed_vendors_only_default: bool = Field(
+        default=True,
+        description=(
+            "Default changed-vendors-only policy for scoped competitive-set runs "
+            "when the caller does not explicitly choose full refresh behavior"
+        ),
+    )
 
     scorecard_narrative_concurrency: int = Field(default=6, description="Max concurrent LLM calls during scorecard narrative generation")
 

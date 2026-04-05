@@ -327,7 +327,7 @@ export default function Watchlists() {
       }))
       setCompetitiveSetChangedOnly((current) => ({
         ...current,
-        [item.id]: current[item.id] ?? true,
+        [item.id]: current[item.id] ?? (competitiveSetDefaults?.default_changed_vendors_only ?? true),
       }))
       setOpenCompetitiveSetPreviewId(item.id)
     } catch (err) {

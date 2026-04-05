@@ -684,7 +684,12 @@ def _competitive_scope_metadata(task: ScheduledTask | Any) -> dict[str, Any]:
         "asymmetry_enabled": bool(metadata.get("asymmetry_enabled", False)),
         "scope_trigger": str(metadata.get("scope_trigger") or "manual").strip() or "manual",
         "scope_name": str(metadata.get("scope_name") or "").strip(),
-        "changed_vendors_only": bool(metadata.get("changed_vendors_only")),
+        "changed_vendors_only": bool(
+            metadata.get(
+                "changed_vendors_only",
+                settings.b2b_churn.competitive_set_changed_vendors_only_default,
+            )
+        ),
     }
 
 
@@ -1065,7 +1070,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         **plan_to_synthesis_metadata(plan),
                         "scope_name": competitive_set.name,
                         "scope_trigger": "scheduled",
-                        "changed_vendors_only": True,
+                        "changed_vendors_only": bool(
+                            cfg.competitive_set_changed_vendors_only_default
+                        ),
                         "run_id": f"{run_id}:{competitive_set.id}",
                     },
                     created_at=task.created_at,

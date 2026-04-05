@@ -163,6 +163,7 @@ async def test_list_competitive_sets_returns_backend_defaults(monkeypatch):
     assert result["defaults"] == {
         "default_refresh_interval_hours": 2,
         "max_competitors": 12,
+        "default_changed_vendors_only": True,
     }
 
 
@@ -356,6 +357,51 @@ async def test_run_competitive_set_now_forwards_changed_only_flag(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_competitive_set_now_uses_config_default_when_flag_omitted(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    competitive_set = _competitive_set()
+    repo = SimpleNamespace(
+        get_by_id_for_account=AsyncMock(return_value=competitive_set),
+    )
+    scheduler = SimpleNamespace(
+        run_now=AsyncMock(return_value={"status": "started", "message": "ok", "execution_id": "exec-1"}),
+    )
+    task = SimpleNamespace(metadata={"existing": True})
+    task_repo = SimpleNamespace(get_by_name=AsyncMock(return_value=task))
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(competitive_set.account_id),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(mod, "get_competitive_set_repo", lambda: repo)
+    monkeypatch.setattr(mod, "get_task_scheduler", lambda: scheduler)
+    monkeypatch.setattr(mod, "get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(
+        mod,
+        "load_vendor_category_map",
+        AsyncMock(return_value={"salesforce": "CRM", "hubspot": "CRM"}),
+    )
+    monkeypatch.setattr(
+        mod.settings.b2b_churn,
+        "competitive_set_changed_vendors_only_default",
+        False,
+        raising=False,
+    )
+
+    req = mod.CompetitiveSetRunRequest()
+    await mod.run_competitive_set_now(competitive_set.id, req, user=user)
+
+    assert task.metadata["changed_vendors_only"] is False
+
+
+@pytest.mark.asyncio
 async def test_competitive_scope_finalize_marks_cross_vendor_only_failures_as_failed(monkeypatch):
     from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
 
@@ -425,3 +471,77 @@ async def test_competitive_scope_finalize_marks_cross_vendor_only_failures_as_fa
     assert result["cross_vendor_failed"] == 1
     assert marked["competitive_set_id"] == str(scope_id)
     assert marked["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_competitive_sets_use_configured_changed_only_default(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    due_set = _competitive_set()
+    repo = SimpleNamespace(
+        list_due_scheduled=AsyncMock(return_value=[due_set]),
+    )
+    child_meta = {}
+    original_run = mod.run
+
+    class FakePool:
+        is_initialized = True
+
+    async def _fake_run(task):
+        metadata = getattr(task, "metadata", {}) or {}
+        if metadata.get("scope_type") == "competitive_set":
+            child_meta.update(metadata)
+            return {
+                "vendors_reasoned": 0,
+                "vendors_failed": 0,
+                "vendors_skipped": 0,
+                "cross_vendor_succeeded": 0,
+                "cross_vendor_failed": 0,
+                "total_tokens": 0,
+            }
+        return await original_run(task)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(mod.settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False)
+    monkeypatch.setattr(
+        mod.settings.b2b_churn,
+        "competitive_set_changed_vendors_only_default",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.competitive_set.get_competitive_set_repo",
+        lambda: repo,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b_competitive_sets.load_vendor_category_map",
+        AsyncMock(return_value={"salesforce": "CRM", "hubspot": "CRM", "microsoft dynamics": "CRM"}),
+        raising=False,
+    )
+    monkeypatch.setattr(mod, "run", _fake_run)
+
+    result = await _fake_run(SimpleNamespace(
+        metadata={"scheduled_scope_strategy": "competitive_sets"},
+        id=uuid4(),
+        name="b2b_reasoning_synthesis",
+        task_type="builtin",
+        schedule_type="interval",
+        description=None,
+        prompt=None,
+        agent_type=None,
+        cron_expression=None,
+        interval_seconds=3600,
+        run_at=None,
+        timezone="UTC",
+        enabled=True,
+        max_retries=0,
+        retry_delay_seconds=0,
+        timeout_seconds=0,
+        created_at=None,
+        updated_at=None,
+        last_run_at=None,
+        next_run_at=None,
+    ))
+
+    assert result["competitive_sets_processed"] == 1
+    assert child_meta["changed_vendors_only"] is False
