@@ -3063,6 +3063,12 @@ class B2BChurnConfig(BaseSettings):
         le=100,
         description="Max competitive sets processed in one scheduled synthesis scanner run",
     )
+    competitive_set_preview_lookback_days: int = Field(
+        default=14,
+        ge=1,
+        le=90,
+        description="Lookback window for competitive-set run cost previews based on recent synthesis history",
+    )
 
     scorecard_narrative_concurrency: int = Field(default=6, description="Max concurrent LLM calls during scorecard narrative generation")
 

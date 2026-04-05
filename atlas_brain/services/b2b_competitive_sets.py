@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..config import settings
 from ..storage.models import CompetitiveSet
 
 
@@ -116,6 +117,199 @@ def plan_to_synthesis_metadata(plan: CompetitiveSetPlan) -> dict[str, Any]:
         "scope_asymmetry_pairs": plan.asymmetry_pairs,
     })
     return payload
+
+
+def _rounded_usd(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 4)
+
+
+async def estimate_competitive_set_plan(
+    pool,
+    plan: CompetitiveSetPlan,
+) -> dict[str, Any]:
+    """Estimate token and cost upper bounds for a competitive-set run.
+
+    Estimates use recent persisted synthesis history for scoped vendors and
+    recent LLM usage aggregates for cost-per-token fallback. This is an upper
+    bound for `force=false`; actual spend may be lower when vendor hashes reuse.
+    """
+    lookback_days = int(settings.b2b_churn.competitive_set_preview_lookback_days)
+
+    vendor_rows = await pool.fetch(
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (vendor_name)
+                   vendor_name,
+                   tokens_used
+            FROM b2b_reasoning_synthesis
+            WHERE schema_version = 'v2'
+              AND vendor_name = ANY($1::text[])
+            ORDER BY vendor_name, created_at DESC
+        )
+        SELECT vendor_name, tokens_used
+        FROM latest
+        """,
+        plan.vendor_names,
+    )
+    vendor_tokens_by_name = {
+        str(row["vendor_name"]): int(row["tokens_used"] or 0)
+        for row in vendor_rows
+    }
+
+    usage_rows = await pool.fetch(
+        """
+        SELECT span_name,
+               AVG(input_tokens + output_tokens)::float AS avg_total_tokens,
+               AVG(cost_usd)::float AS avg_cost_usd,
+               COUNT(*)::int AS sample_count
+        FROM llm_usage
+        WHERE span_name IN (
+                'task.b2b_reasoning_synthesis',
+                'task.b2b_reasoning_synthesis.cross_vendor'
+            )
+          AND created_at >= NOW() - make_interval(days => $1)
+        GROUP BY span_name
+        """,
+        lookback_days,
+    )
+    usage_by_span = {
+        str(row["span_name"]): {
+            "avg_total_tokens": float(row["avg_total_tokens"] or 0.0),
+            "avg_cost_usd": float(row["avg_cost_usd"] or 0.0),
+            "sample_count": int(row["sample_count"] or 0),
+        }
+        for row in usage_rows
+    }
+
+    cross_rows = await pool.fetch(
+        """
+        SELECT analysis_type,
+               AVG(tokens_used)::float AS avg_tokens_used,
+               COUNT(*)::int AS sample_count
+        FROM b2b_cross_vendor_reasoning_synthesis
+        WHERE created_at >= NOW() - make_interval(days => $1)
+        GROUP BY analysis_type
+        """,
+        lookback_days,
+    )
+    cross_tokens_by_type = {
+        str(row["analysis_type"]): {
+            "avg_tokens_used": float(row["avg_tokens_used"] or 0.0),
+            "sample_count": int(row["sample_count"] or 0),
+        }
+        for row in cross_rows
+    }
+
+    vendor_usage = usage_by_span.get("task.b2b_reasoning_synthesis", {})
+    cross_usage = usage_by_span.get("task.b2b_reasoning_synthesis.cross_vendor", {})
+    vendor_fallback_tokens = float(vendor_usage.get("avg_total_tokens") or 0.0)
+    cross_fallback_tokens = float(cross_usage.get("avg_total_tokens") or 0.0)
+    vendor_cost_per_token = (
+        float(vendor_usage.get("avg_cost_usd") or 0.0) / vendor_fallback_tokens
+        if vendor_fallback_tokens > 0
+        else None
+    )
+    cross_cost_per_token = (
+        float(cross_usage.get("avg_cost_usd") or 0.0) / cross_fallback_tokens
+        if cross_fallback_tokens > 0
+        else None
+    )
+
+    vendor_jobs_with_history = 0
+    vendor_jobs_using_fallback = 0
+    estimated_vendor_tokens = 0.0
+    if plan.vendor_synthesis_enabled:
+        for vendor_name in plan.vendor_names:
+            known_tokens = vendor_tokens_by_name.get(vendor_name)
+            if known_tokens is not None and known_tokens > 0:
+                vendor_jobs_with_history += 1
+                estimated_vendor_tokens += float(known_tokens)
+            else:
+                vendor_jobs_using_fallback += 1
+                estimated_vendor_tokens += vendor_fallback_tokens
+
+    def _cross_type_tokens(analysis_type: str) -> tuple[float, bool]:
+        stats = cross_tokens_by_type.get(analysis_type) or {}
+        avg_tokens = float(stats.get("avg_tokens_used") or 0.0)
+        if avg_tokens > 0:
+            return avg_tokens, True
+        return cross_fallback_tokens, False
+
+    cross_jobs_with_history = 0
+    cross_jobs_using_fallback = 0
+    estimated_pairwise_tokens = 0.0
+    estimated_category_tokens = 0.0
+    estimated_asymmetry_tokens = 0.0
+
+    if plan.pairwise_enabled:
+        avg_tokens, has_history = _cross_type_tokens("pairwise_battle")
+        estimated_pairwise_tokens = float(len(plan.pairwise_pairs)) * avg_tokens
+        if has_history:
+            cross_jobs_with_history += len(plan.pairwise_pairs)
+        else:
+            cross_jobs_using_fallback += len(plan.pairwise_pairs)
+    if plan.category_council_enabled:
+        avg_tokens, has_history = _cross_type_tokens("category_council")
+        estimated_category_tokens = float(len(plan.category_names)) * avg_tokens
+        if has_history:
+            cross_jobs_with_history += len(plan.category_names)
+        else:
+            cross_jobs_using_fallback += len(plan.category_names)
+    if plan.asymmetry_enabled:
+        avg_tokens, has_history = _cross_type_tokens("resource_asymmetry")
+        estimated_asymmetry_tokens = float(len(plan.asymmetry_pairs)) * avg_tokens
+        if has_history:
+            cross_jobs_with_history += len(plan.asymmetry_pairs)
+        else:
+            cross_jobs_using_fallback += len(plan.asymmetry_pairs)
+
+    estimated_cross_tokens = (
+        estimated_pairwise_tokens
+        + estimated_category_tokens
+        + estimated_asymmetry_tokens
+    )
+    estimated_total_tokens = estimated_vendor_tokens + estimated_cross_tokens
+    estimated_vendor_cost = (
+        estimated_vendor_tokens * vendor_cost_per_token
+        if vendor_cost_per_token is not None
+        else None
+    )
+    estimated_cross_cost = (
+        estimated_cross_tokens * cross_cost_per_token
+        if cross_cost_per_token is not None
+        else None
+    )
+    estimated_total_cost = (
+        (estimated_vendor_cost or 0.0) + (estimated_cross_cost or 0.0)
+        if estimated_vendor_cost is not None or estimated_cross_cost is not None
+        else None
+    )
+
+    return {
+        "lookback_days": lookback_days,
+        "vendor_jobs_planned": len(plan.vendor_names) if plan.vendor_synthesis_enabled else 0,
+        "pairwise_jobs_planned": len(plan.pairwise_pairs) if plan.pairwise_enabled else 0,
+        "category_jobs_planned": len(plan.category_names) if plan.category_council_enabled else 0,
+        "asymmetry_jobs_planned": len(plan.asymmetry_pairs) if plan.asymmetry_enabled else 0,
+        "estimated_vendor_tokens": int(round(estimated_vendor_tokens)),
+        "estimated_cross_vendor_tokens": int(round(estimated_cross_tokens)),
+        "estimated_total_tokens": int(round(estimated_total_tokens)),
+        "estimated_vendor_cost_usd": _rounded_usd(estimated_vendor_cost),
+        "estimated_cross_vendor_cost_usd": _rounded_usd(estimated_cross_cost),
+        "estimated_total_cost_usd": _rounded_usd(estimated_total_cost),
+        "vendor_jobs_with_history": vendor_jobs_with_history,
+        "vendor_jobs_using_fallback": vendor_jobs_using_fallback,
+        "cross_vendor_jobs_with_history": cross_jobs_with_history,
+        "cross_vendor_jobs_using_fallback": cross_jobs_using_fallback,
+        "recent_vendor_sample_count": int(vendor_usage.get("sample_count") or 0),
+        "recent_cross_vendor_sample_count": int(cross_usage.get("sample_count") or 0),
+        "note": (
+            "Upper-bound estimate for a non-forced run. Actual spend may be lower "
+            "when unchanged vendors hash-reuse existing synthesis."
+        ),
+    }
 
 
 async def load_vendor_category_map(pool, vendor_names: list[str]) -> dict[str, str]:

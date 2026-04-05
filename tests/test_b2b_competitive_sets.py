@@ -7,6 +7,7 @@ import pytest
 from atlas_brain.auth.dependencies import AuthUser
 from atlas_brain.services.b2b_competitive_sets import (
     build_competitive_set_plan,
+    estimate_competitive_set_plan,
     plan_to_synthesis_metadata,
 )
 from atlas_brain.storage.models import CompetitiveSet
@@ -180,3 +181,61 @@ def test_competitive_scope_run_id_prefers_explicit_scope_run_id():
     scope_meta = mod._competitive_scope_metadata(task)
 
     assert mod._competitive_scope_run_id(task, scope_meta) == "scope-run-123"
+
+
+@pytest.mark.asyncio
+async def test_estimate_competitive_set_plan_uses_history_and_fallback(monkeypatch):
+    plan = build_competitive_set_plan(
+        _competitive_set(),
+        category_by_vendor={
+            "salesforce": "CRM",
+            "hubspot": "CRM",
+            "microsoft dynamics": "CRM",
+        },
+    )
+
+    class FakePool:
+        async def fetch(self, query, *args):
+            if "FROM b2b_reasoning_synthesis" in query:
+                return [
+                    {"vendor_name": "Salesforce", "tokens_used": 1000},
+                    {"vendor_name": "HubSpot", "tokens_used": 1200},
+                ]
+            if "FROM llm_usage" in query:
+                return [
+                    {
+                        "span_name": "task.b2b_reasoning_synthesis",
+                        "avg_total_tokens": 900.0,
+                        "avg_cost_usd": 0.09,
+                        "sample_count": 20,
+                    },
+                    {
+                        "span_name": "task.b2b_reasoning_synthesis.cross_vendor",
+                        "avg_total_tokens": 200.0,
+                        "avg_cost_usd": 0.02,
+                        "sample_count": 10,
+                    },
+                ]
+            if "FROM b2b_cross_vendor_reasoning_synthesis" in query:
+                return [
+                    {"analysis_type": "pairwise_battle", "avg_tokens_used": 250.0, "sample_count": 8},
+                    {"analysis_type": "category_council", "avg_tokens_used": 400.0, "sample_count": 3},
+                ]
+            raise AssertionError(f"Unexpected query: {query}")
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b_competitive_sets.settings.b2b_churn.competitive_set_preview_lookback_days",
+        14,
+        raising=False,
+    )
+
+    estimate = await estimate_competitive_set_plan(FakePool(), plan)
+
+    assert estimate["estimated_vendor_tokens"] == 3100
+    assert estimate["estimated_cross_vendor_tokens"] == 1300
+    assert estimate["estimated_total_tokens"] == 4400
+    assert estimate["estimated_total_cost_usd"] == 0.44
+    assert estimate["vendor_jobs_with_history"] == 2
+    assert estimate["vendor_jobs_using_fallback"] == 1
+    assert estimate["cross_vendor_jobs_with_history"] == 3
+    assert estimate["cross_vendor_jobs_using_fallback"] == 2

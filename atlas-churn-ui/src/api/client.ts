@@ -622,6 +622,27 @@ export interface CompetitiveSetDefaults {
   max_competitors: number
 }
 
+export interface CompetitiveSetEstimate {
+  lookback_days: number
+  vendor_jobs_planned: number
+  pairwise_jobs_planned: number
+  category_jobs_planned: number
+  asymmetry_jobs_planned: number
+  estimated_vendor_tokens: number
+  estimated_cross_vendor_tokens: number
+  estimated_total_tokens: number
+  estimated_vendor_cost_usd: number | null
+  estimated_cross_vendor_cost_usd: number | null
+  estimated_total_cost_usd: number | null
+  vendor_jobs_with_history: number
+  vendor_jobs_using_fallback: number
+  cross_vendor_jobs_with_history: number
+  cross_vendor_jobs_using_fallback: number
+  recent_vendor_sample_count: number
+  recent_cross_vendor_sample_count: number
+  note: string
+}
+
 export interface CompetitiveSetPlan {
   competitive_set_id: string
   focal_vendor_name: string
@@ -639,6 +660,7 @@ export interface CompetitiveSetPlan {
   asymmetry_job_count: number
   estimated_total_jobs: number
   category_by_vendor?: Record<string, string | null>
+  estimate?: CompetitiveSetEstimate
 }
 
 export interface VendorSearchResult {

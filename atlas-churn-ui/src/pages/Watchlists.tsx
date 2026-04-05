@@ -21,6 +21,7 @@ import {
   addTrackedVendor,
   createCompetitiveSet,
   deleteCompetitiveSet,
+  fetchCompetitiveSetPlan,
   fetchAccountsInMotionFeed,
   fetchSlowBurnWatchlist,
   listTrackedVendors,
@@ -31,6 +32,7 @@ import {
   type AccountsInMotionFeedItem,
   type CompetitiveSet,
   type CompetitiveSetDefaults,
+  type CompetitiveSetPlan,
   type TrackedVendor,
   updateCompetitiveSet,
   type VendorSearchResult,
@@ -72,6 +74,23 @@ function freshnessTone(value: string | null | undefined) {
   return ageHours > STALE_AFTER_HOURS ? 'text-amber-400' : 'text-emerald-400'
 }
 
+function formatCostUsd(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return '--'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function formatWholeNumber(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) return '--'
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0,
+  }).format(value)
+}
+
 export default function Watchlists() {
   const navigate = useNavigate()
   const [searchInput, setSearchInput] = useState('')
@@ -82,8 +101,11 @@ export default function Watchlists() {
   const [removingVendor, setRemovingVendor] = useState<string | null>(null)
   const [savingCompetitiveSet, setSavingCompetitiveSet] = useState(false)
   const [runningCompetitiveSetId, setRunningCompetitiveSetId] = useState<string | null>(null)
+  const [previewingCompetitiveSetId, setPreviewingCompetitiveSetId] = useState<string | null>(null)
+  const [openCompetitiveSetPreviewId, setOpenCompetitiveSetPreviewId] = useState<string | null>(null)
   const [deletingCompetitiveSetId, setDeletingCompetitiveSetId] = useState<string | null>(null)
   const [editingCompetitiveSetId, setEditingCompetitiveSetId] = useState<string | null>(null)
+  const [competitiveSetPreviews, setCompetitiveSetPreviews] = useState<Record<string, CompetitiveSetPlan>>({})
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [competitiveSetName, setCompetitiveSetName] = useState('')
@@ -283,6 +305,24 @@ export default function Watchlists() {
       setActionError(err instanceof Error ? err.message : 'Failed to delete competitive set')
     } finally {
       setDeletingCompetitiveSetId(null)
+    }
+  }
+
+  async function handlePreviewCompetitiveSet(item: CompetitiveSet) {
+    setPreviewingCompetitiveSetId(item.id)
+    setActionError(null)
+    setActionMessage(null)
+    try {
+      const result = await fetchCompetitiveSetPlan(item.id)
+      setCompetitiveSetPreviews((current) => ({
+        ...current,
+        [item.id]: result.plan,
+      }))
+      setOpenCompetitiveSetPreviewId(item.id)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to load competitive-set preview')
+    } finally {
+      setPreviewingCompetitiveSetId(null)
     }
   }
 
@@ -868,6 +908,9 @@ export default function Watchlists() {
                 const vendorJobCount = item.vendor_synthesis_enabled ? competitorCount + 1 : 0
                 const pairwiseJobCount = item.pairwise_enabled ? competitorCount : 0
                 const asymmetryJobCount = item.asymmetry_enabled ? competitorCount : 0
+                const preview = competitiveSetPreviews[item.id]
+                const estimate = preview?.estimate
+                const previewOpen = openCompetitiveSetPreviewId === item.id
                 return (
                   <div key={item.id} className="rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
                     <div className="flex items-start justify-between gap-3">
@@ -908,11 +951,11 @@ export default function Watchlists() {
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
-                        onClick={() => handleRunCompetitiveSet(item)}
-                        disabled={runningCompetitiveSetId === item.id}
+                        onClick={() => handlePreviewCompetitiveSet(item)}
+                        disabled={previewingCompetitiveSetId === item.id}
                         className="rounded-md bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
                       >
-                        Run now
+                        {previewingCompetitiveSetId === item.id ? 'Loading preview...' : 'Preview cost'}
                       </button>
                       <button
                         onClick={() => loadCompetitiveSetForEdit(item)}
@@ -928,6 +971,75 @@ export default function Watchlists() {
                         Delete
                       </button>
                     </div>
+                    {previewOpen && preview ? (
+                      <div className="mt-3 rounded-lg border border-cyan-500/20 bg-slate-900/70 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-white">Run Preview</div>
+                            <div className="mt-1 text-xs text-slate-400">
+                              Estimated upper bound for a non-forced run over the next {preview.estimate?.lookback_days ?? '--'} days of history.
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => setOpenCompetitiveSetPreviewId((current) => current === item.id ? null : current)}
+                            className="rounded-md bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-300 hover:bg-slate-700"
+                          >
+                            Close
+                          </button>
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                          <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Planned Jobs</div>
+                            <div className="mt-1 text-sm font-medium text-white">{formatWholeNumber(preview.estimated_total_jobs)}</div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {formatWholeNumber(preview.vendor_job_count)} vendor · {formatWholeNumber(preview.pairwise_job_count + preview.category_job_count + preview.asymmetry_job_count)} cross-vendor
+                            </div>
+                          </div>
+                          <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Token Estimate</div>
+                            <div className="mt-1 text-sm font-medium text-white">{formatWholeNumber(estimate?.estimated_total_tokens)}</div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {formatWholeNumber(estimate?.estimated_vendor_tokens)} vendor · {formatWholeNumber(estimate?.estimated_cross_vendor_tokens)} cross-vendor
+                            </div>
+                          </div>
+                          <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Cost Upper Bound</div>
+                            <div className="mt-1 text-sm font-medium text-white">{formatCostUsd(estimate?.estimated_total_cost_usd)}</div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {formatCostUsd(estimate?.estimated_vendor_cost_usd)} vendor · {formatCostUsd(estimate?.estimated_cross_vendor_cost_usd)} cross-vendor
+                            </div>
+                          </div>
+                          <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">History Coverage</div>
+                            <div className="mt-1 text-sm font-medium text-white">
+                              {formatWholeNumber(estimate?.vendor_jobs_with_history)} vendor · {formatWholeNumber(estimate?.cross_vendor_jobs_with_history)} cross-vendor
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {formatWholeNumber(estimate?.vendor_jobs_using_fallback)} vendor fallback · {formatWholeNumber(estimate?.cross_vendor_jobs_using_fallback)} cross fallback
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-3 text-xs text-slate-400">
+                          {estimate?.note ?? 'Estimate unavailable.'}
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleRunCompetitiveSet(item)}
+                            disabled={runningCompetitiveSetId === item.id}
+                            className="rounded-md bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+                          >
+                            {runningCompetitiveSetId === item.id ? 'Starting run...' : 'Run now'}
+                          </button>
+                          <button
+                            onClick={() => handlePreviewCompetitiveSet(item)}
+                            disabled={previewingCompetitiveSetId === item.id}
+                            className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+                          >
+                            Refresh preview
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 )
               })}

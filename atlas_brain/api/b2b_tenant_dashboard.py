@@ -26,6 +26,7 @@ from ..services.scraping.target_provisioning import (
 )
 from ..services.b2b_competitive_sets import (
     build_competitive_set_plan,
+    estimate_competitive_set_plan,
     load_vendor_category_map,
     plan_to_synthesis_metadata,
 )
@@ -196,6 +197,7 @@ async def _competitive_set_plan_payload(pool, competitive_set) -> dict[str, Any]
         vendor_name: category_by_vendor.get(vendor_name.lower()) or None
         for vendor_name in vendor_names
     }
+    payload["estimate"] = await estimate_competitive_set_plan(pool, plan)
     return payload
 
 
