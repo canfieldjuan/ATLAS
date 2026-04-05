@@ -1054,11 +1054,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     window_days = cfg.intelligence_window_days
     today = date.today()
+    test_vendors = (task.metadata or {}).get("test_vendors")
+    filter_vendors = scope_vendor_names[:] or _metadata_text_list(test_vendors)
 
     # Load all pool layers
     t0 = time.monotonic()
     vendor_pools = await fetch_all_pool_layers(
-        pool, as_of=today, analysis_window_days=window_days,
+        pool,
+        as_of=today,
+        analysis_window_days=window_days,
+        vendor_names=filter_vendors or None,
     )
     load_ms = (time.monotonic() - t0) * 1000
     logger.info(
@@ -1070,8 +1075,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return await _finalize_scope_result({"_skip_synthesis": "No pool data available"})
 
     # Optional vendor filter: scoped competitive set or legacy test_vendors.
-    test_vendors = (task.metadata or {}).get("test_vendors")
-    filter_vendors = scope_vendor_names[:] or _metadata_text_list(test_vendors)
     if filter_vendors:
         vendor_set = {v.lower() for v in filter_vendors}
         vendor_pools = {
@@ -1166,6 +1169,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             pool,
             as_of=prior_as_of_date,
             analysis_window_days=window_days,
+            vendor_names=candidate_vendors,
         )
         for vendor_name in candidate_vendors:
             prior_layers = prior_vendor_pools.get(vendor_name)

@@ -917,6 +917,8 @@ export default function Watchlists() {
                 const preview = competitiveSetPreviews[item.id]
                 const estimate = preview?.estimate
                 const recentRuns = competitiveSetRuns[item.id] ?? []
+                const likelyRerunVendors = (estimate?.likely_rerun_vendors ?? []).slice(0, 6)
+                const likelyReuseVendors = (estimate?.likely_reuse_vendors ?? []).slice(0, 6)
                 const previewOpen = openCompetitiveSetPreviewId === item.id
                 return (
                   <div key={item.id} className="rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
@@ -1026,9 +1028,60 @@ export default function Watchlists() {
                             </div>
                           </div>
                         </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Likely Vendor Outcome</div>
+                            <div className="mt-1 text-sm font-medium text-white">
+                              {formatWholeNumber(estimate?.vendor_jobs_likely_to_reason)} rerun · {formatWholeNumber(estimate?.vendor_jobs_likely_hash_reuse)} reuse
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {formatWholeNumber(estimate?.vendor_jobs_missing_pools)} no pool · {formatWholeNumber(estimate?.vendor_jobs_likely_stale_reuse)} stale reuse
+                            </div>
+                          </div>
+                          <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Likely Vendor Spend</div>
+                            <div className="mt-1 text-sm font-medium text-white">{formatCostUsd(estimate?.estimated_vendor_cost_usd_likely_to_reason)}</div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {formatWholeNumber(estimate?.estimated_vendor_tokens_likely_to_reason)} vendor tokens if changed-only
+                            </div>
+                          </div>
+                          <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Rerun Reasons</div>
+                            <div className="mt-1 text-sm font-medium text-white">
+                              {formatWholeNumber(estimate?.vendor_jobs_likely_hash_changed)} changed · {formatWholeNumber(estimate?.vendor_jobs_likely_prior_quality_weak)} weak
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              {formatWholeNumber(estimate?.vendor_jobs_likely_missing_prior)} missing prior · {formatWholeNumber(estimate?.vendor_jobs_likely_missing_reference_ids)} missing refs
+                            </div>
+                          </div>
+                        </div>
                         <div className="mt-3 text-xs text-slate-400">
                           {estimate?.note ?? 'Estimate unavailable.'}
                         </div>
+                        {likelyRerunVendors.length > 0 ? (
+                          <div className="mt-3">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Likely Rerun Vendors</div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {likelyRerunVendors.map((entry) => (
+                                <span key={entry} className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-300">
+                                  {entry.replace(':', ' · ')}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        {likelyReuseVendors.length > 0 ? (
+                          <div className="mt-3">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">Likely Reuse Vendors</div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {likelyReuseVendors.map((entry) => (
+                                <span key={entry} className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300">
+                                  {entry.replace(':', ' · ')}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                         <div className="mt-4">
                           <div className="text-[11px] uppercase tracking-wide text-slate-500">Recent Runs</div>
                           {recentRuns.length === 0 ? (

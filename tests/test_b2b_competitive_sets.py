@@ -228,6 +228,24 @@ async def test_estimate_competitive_set_plan_uses_history_and_fallback(monkeypat
         14,
         raising=False,
     )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b_competitive_sets._estimate_vendor_reuse_for_plan",
+        AsyncMock(return_value={
+            "vendor_jobs_with_matching_pools": 3,
+            "vendor_jobs_missing_pools": 0,
+            "vendor_jobs_likely_to_reason": 1,
+            "vendor_jobs_likely_hash_reuse": 1,
+            "vendor_jobs_likely_stale_reuse": 1,
+            "vendor_jobs_likely_missing_prior": 0,
+            "vendor_jobs_likely_hash_changed": 1,
+            "vendor_jobs_likely_prior_quality_weak": 0,
+            "vendor_jobs_likely_missing_packet_artifacts": 0,
+            "vendor_jobs_likely_missing_reference_ids": 0,
+            "likely_rerun_vendors": ["Microsoft Dynamics:hash_changed"],
+            "likely_reuse_vendors": ["Salesforce:hash_reuse", "HubSpot:stale_reused"],
+        }),
+        raising=False,
+    )
 
     estimate = await estimate_competitive_set_plan(FakePool(), plan)
 
@@ -239,6 +257,12 @@ async def test_estimate_competitive_set_plan_uses_history_and_fallback(monkeypat
     assert estimate["vendor_jobs_using_fallback"] == 1
     assert estimate["cross_vendor_jobs_with_history"] == 3
     assert estimate["cross_vendor_jobs_using_fallback"] == 2
+    assert estimate["estimated_vendor_tokens_likely_to_reason"] == 900
+    assert estimate["estimated_vendor_cost_usd_likely_to_reason"] == 0.09
+    assert estimate["vendor_jobs_likely_to_reason"] == 1
+    assert estimate["vendor_jobs_likely_hash_reuse"] == 1
+    assert estimate["vendor_jobs_likely_stale_reuse"] == 1
+    assert estimate["likely_rerun_vendors"] == ["Microsoft Dynamics:hash_changed"]
 
 
 @pytest.mark.asyncio

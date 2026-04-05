@@ -4234,7 +4234,7 @@ class TestReasoningSynthesisTask:
             json.dumps(valid_synthesis),
         ])
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"RetryVendor": layers}
 
         monkeypatch.setattr(
@@ -4369,7 +4369,7 @@ class TestReasoningSynthesisTask:
             json.dumps(valid_synthesis),
         ])
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"RetryVendor": layers}
 
         monkeypatch.setattr(
@@ -4524,7 +4524,7 @@ class TestReasoningSynthesisTask:
         fake_pool = FakePool()
         fake_llm = FakeLLM(json.dumps(valid_synthesis))
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"RetryVendor": layers}
 
         monkeypatch.setattr(
@@ -4620,7 +4620,7 @@ class TestReasoningSynthesisTask:
         fake_pool = FakePool()
         fake_llm = FakeLLM(json.dumps(repairable))
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"RetryVendor": layers}
 
         monkeypatch.setattr(
@@ -4701,7 +4701,7 @@ class TestReasoningSynthesisTask:
         invalid_synthesis, _ = _make_valid_synthesis(packet)
         invalid_synthesis["causal_narrative"]["primary_wedge"] = "totally_made_up"
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"RetryVendor": layers}
 
         monkeypatch.setattr(
@@ -4770,7 +4770,7 @@ class TestReasoningSynthesisTask:
 
         layers = _make_layers()
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"TimeoutVendor": layers}
 
         fake_pool = FakePool()
@@ -4830,7 +4830,7 @@ class TestReasoningSynthesisTask:
         seen_models = []
         layers = _make_layers()
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"ModelVendor": layers}
 
         def _fake_get_pipeline_llm(**kw):
@@ -4917,7 +4917,7 @@ class TestReasoningSynthesisTask:
         seen = {}
         layers = _make_layers()
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"ModelVendor": layers}
 
         async def _fake_run_cross_vendor_synthesis(**kwargs):
@@ -5022,7 +5022,7 @@ class TestReasoningSynthesisTask:
         fake_llm = FakeLLM(json.dumps(valid_synthesis))
         seen = {"cross_vendor_called": False}
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"PilotVendor": layers}
 
         async def _fake_run_cross_vendor_synthesis(**kwargs):
@@ -5108,7 +5108,7 @@ class TestReasoningSynthesisTask:
 
         layers = _make_layers()
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"ModelVendor": layers}
 
         monkeypatch.setattr(
@@ -5203,7 +5203,7 @@ class TestReasoningSynthesisTask:
         prior_layers["evidence_vault"]["metric_snapshot"]["snapshot_date"] = prior_date.isoformat()
         prior_layers["evidence_vault"]["provenance"]["enrichment_window_end"] = prior_date.isoformat()
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             if as_of == prior_date:
                 return {"ModelVendor": prior_layers}
             return {"ModelVendor": current_layers}
@@ -5283,7 +5283,7 @@ class TestReasoningSynthesisTask:
         valid_synthesis, _ = _make_valid_synthesis(packet)
         fake_pool = FakePool()
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"ModelVendor": layers}
 
         monkeypatch.setattr(
@@ -5362,7 +5362,7 @@ class TestReasoningSynthesisTask:
         real_normalize = validation_mod.normalize_synthesis_source_ids
         real_validate = validation_mod.validate_synthesis
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"LeanVendor": layers}
 
         estimate_calls = {"count": 0}
@@ -5492,7 +5492,7 @@ class TestReasoningSynthesisTask:
         validate_packets = []
         real_validate = validation_mod.validate_synthesis
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"ConfiguredVendor": layers}
 
         def _capture_compress_vendor_pools(vendor_name, layers, **kwargs):
@@ -5590,7 +5590,7 @@ class TestReasoningSynthesisTask:
         fake_pool = FakePool()
         fake_llm = FakeLLM()
 
-        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days):
+        async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
             return {"BudgetVendor": layers}
 
         estimate_calls = {"count": 0}

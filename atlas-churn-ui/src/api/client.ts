@@ -648,10 +648,24 @@ export interface CompetitiveSetEstimate {
   estimated_vendor_cost_usd: number | null
   estimated_cross_vendor_cost_usd: number | null
   estimated_total_cost_usd: number | null
+  estimated_vendor_tokens_likely_to_reason: number
+  estimated_vendor_cost_usd_likely_to_reason: number | null
   vendor_jobs_with_history: number
   vendor_jobs_using_fallback: number
   cross_vendor_jobs_with_history: number
   cross_vendor_jobs_using_fallback: number
+  vendor_jobs_with_matching_pools: number
+  vendor_jobs_missing_pools: number
+  vendor_jobs_likely_to_reason: number
+  vendor_jobs_likely_hash_reuse: number
+  vendor_jobs_likely_stale_reuse: number
+  vendor_jobs_likely_missing_prior: number
+  vendor_jobs_likely_hash_changed: number
+  vendor_jobs_likely_prior_quality_weak: number
+  vendor_jobs_likely_missing_packet_artifacts: number
+  vendor_jobs_likely_missing_reference_ids: number
+  likely_rerun_vendors: string[]
+  likely_reuse_vendors: string[]
   recent_vendor_sample_count: number
   recent_cross_vendor_sample_count: number
   note: string

@@ -5023,6 +5023,7 @@ async def fetch_all_pool_layers(
     *,
     as_of: date,
     analysis_window_days: int,
+    vendor_names: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Load all 6 pool layers and merge into one dict per vendor.
 
@@ -5037,6 +5038,15 @@ async def fetch_all_pool_layers(
     ]
     generic_categories = {"", "unknown", "b2b software"}
     result: dict[str, dict[str, Any]] = {}
+    requested_vendors = sorted(
+        {
+            _canonicalize_vendor(name).lower()
+            for name in (vendor_names or [])
+            if _canonicalize_vendor(name)
+        }
+    )
+    vendor_filter_clause = "AND LOWER(vendor_name) = ANY($3::text[])" if requested_vendors else ""
+    vendor_filter_args: list[Any] = [requested_vendors] if requested_vendors else []
 
     for table, col, key in _POOL_TABLES:
         try:
@@ -5047,10 +5057,12 @@ async def fetch_all_pool_layers(
                 FROM {table}
                 WHERE as_of_date <= $1
                   AND analysis_window_days = $2
+                  {vendor_filter_clause}
                 ORDER BY vendor_name, as_of_date DESC, created_at DESC
                 """,
                 as_of,
                 analysis_window_days,
+                *vendor_filter_args,
             )
             for row in rows:
                 vn = _canonicalize_vendor(row.get("vendor_name") or "")
@@ -5064,6 +5076,7 @@ async def fetch_all_pool_layers(
 
     # Displacement dynamics: keyed by (from_vendor, to_vendor)
     try:
+        displacement_filter_clause = "AND LOWER(from_vendor) = ANY($3::text[])" if requested_vendors else ""
         disp_rows = await pool.fetch(
             """
             SELECT DISTINCT ON (from_vendor, to_vendor)
@@ -5071,10 +5084,12 @@ async def fetch_all_pool_layers(
             FROM b2b_displacement_dynamics
             WHERE as_of_date <= $1
               AND analysis_window_days = $2
+              """ + displacement_filter_clause + """
             ORDER BY from_vendor, to_vendor, as_of_date DESC, created_at DESC
             """,
             as_of,
             analysis_window_days,
+            *vendor_filter_args,
         )
         for row in disp_rows:
             fv = _canonicalize_vendor(row.get("from_vendor") or "")
@@ -5088,19 +5103,36 @@ async def fetch_all_pool_layers(
 
     # Category dynamics: keyed by category
     try:
-        profile_rows = await pool.fetch(
-            """
-            SELECT DISTINCT ON (vendor_name)
-                   vendor_name, product_category
-            FROM b2b_product_profiles
-            ORDER BY vendor_name,
-                     CASE
-                         WHEN lower(COALESCE(product_category, '')) IN ('', 'unknown', 'b2b software')
-                         THEN 1 ELSE 0
-                     END,
-                     total_reviews_analyzed DESC NULLS LAST
-            """,
-        )
+        if requested_vendors:
+            profile_rows = await pool.fetch(
+                """
+                SELECT DISTINCT ON (vendor_name)
+                       vendor_name, product_category
+                FROM b2b_product_profiles
+                WHERE LOWER(vendor_name) = ANY($1::text[])
+                ORDER BY vendor_name,
+                         CASE
+                             WHEN lower(COALESCE(product_category, '')) IN ('', 'unknown', 'b2b software')
+                             THEN 1 ELSE 0
+                         END,
+                         total_reviews_analyzed DESC NULLS LAST
+                """,
+                requested_vendors,
+            )
+        else:
+            profile_rows = await pool.fetch(
+                """
+                SELECT DISTINCT ON (vendor_name)
+                       vendor_name, product_category
+                FROM b2b_product_profiles
+                ORDER BY vendor_name,
+                         CASE
+                             WHEN lower(COALESCE(product_category, '')) IN ('', 'unknown', 'b2b software')
+                             THEN 1 ELSE 0
+                         END,
+                         total_reviews_analyzed DESC NULLS LAST
+                """,
+            )
         preferred_vendor_categories: dict[str, str] = {}
         for row in profile_rows:
             vendor = _canonicalize_vendor(row.get("vendor_name") or "")

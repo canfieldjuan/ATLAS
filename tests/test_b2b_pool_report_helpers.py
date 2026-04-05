@@ -35,9 +35,11 @@ class FakePool:
     def __init__(self, *, fetch_map=None, fetchrow_map=None):
         self.fetch_map = fetch_map or {}
         self.fetchrow_map = fetchrow_map or {}
+        self.calls = []
 
     async def fetch(self, query, *params):
         normalized = " ".join(str(query).split())
+        self.calls.append((normalized, params))
         for needle, value in self.fetch_map.items():
             if needle in normalized:
                 return value(*params) if callable(value) else value
@@ -260,6 +262,38 @@ async def test_fetch_all_pool_layers_canonicalizes_displacement_from_vendor_key(
 
     assert "Amazon Web Services" in layers
     assert layers["Amazon Web Services"]["displacement"][0]["to_vendor"] == "Google Cloud Platform"
+
+
+@pytest.mark.asyncio
+async def test_fetch_all_pool_layers_applies_vendor_filter_to_queries():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_evidence_vault": [
+                {"vendor_name": "Zendesk", "vault": {"product_category": "Helpdesk"}},
+            ],
+            "FROM b2b_segment_intelligence": [],
+            "FROM b2b_temporal_intelligence": [],
+            "FROM b2b_account_intelligence": [],
+            "FROM b2b_displacement_dynamics": [],
+            "FROM b2b_product_profiles": [
+                {"vendor_name": "Zendesk", "product_category": "Helpdesk"},
+            ],
+            "FROM b2b_category_dynamics": [],
+        },
+    )
+
+    layers = await shared_mod.fetch_all_pool_layers(
+        pool,
+        as_of=mod.date.today(),
+        analysis_window_days=30,
+        vendor_names=["Zendesk"],
+    )
+
+    assert "Zendesk" in layers
+    evidence_call = next(call for call in pool.calls if "FROM b2b_evidence_vault" in call[0])
+    assert evidence_call[1][2] == ["zendesk"]
+    profile_call = next(call for call in pool.calls if "FROM b2b_product_profiles" in call[0])
+    assert profile_call[1][0] == ["zendesk"]
 
 
 @pytest.mark.asyncio

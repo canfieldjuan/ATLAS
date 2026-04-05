@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from ..config import settings
@@ -123,6 +124,178 @@ def _rounded_usd(value: float | None) -> float | None:
     if value is None:
         return None
     return round(float(value), 4)
+
+
+async def _estimate_vendor_reuse_for_plan(
+    pool,
+    plan: CompetitiveSetPlan,
+) -> dict[str, Any]:
+    if not plan.vendor_synthesis_enabled or not plan.vendor_names:
+        return {
+            "vendor_jobs_with_matching_pools": 0,
+            "vendor_jobs_missing_pools": 0,
+            "vendor_jobs_likely_to_reason": 0,
+            "vendor_jobs_likely_hash_reuse": 0,
+            "vendor_jobs_likely_stale_reuse": 0,
+            "vendor_jobs_likely_missing_prior": 0,
+            "vendor_jobs_likely_hash_changed": 0,
+            "vendor_jobs_likely_prior_quality_weak": 0,
+            "vendor_jobs_likely_missing_packet_artifacts": 0,
+            "vendor_jobs_likely_missing_reference_ids": 0,
+            "likely_rerun_vendors": [],
+            "likely_reuse_vendors": [],
+        }
+
+    from ..autonomous.tasks import b2b_reasoning_synthesis as synthesis_mod
+    from ..autonomous.tasks._b2b_shared import fetch_all_pool_layers
+
+    today = date.today()
+    window_days = int(settings.b2b_churn.intelligence_window_days)
+    requested_by_norm = {_norm_vendor(name): name for name in plan.vendor_names}
+    vendor_pools_all = await fetch_all_pool_layers(
+        pool,
+        as_of=today,
+        analysis_window_days=window_days,
+        vendor_names=plan.vendor_names,
+    )
+    vendor_pools: dict[str, dict[str, Any]] = {}
+    for vendor_name, layers in vendor_pools_all.items():
+        requested_name = requested_by_norm.get(_norm_vendor(vendor_name))
+        if not requested_name:
+            continue
+        vendor_pools[requested_name] = layers
+
+    existing = await pool.fetch(
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (vendor_name)
+                   vendor_name,
+                   as_of_date,
+                   evidence_hash,
+                   synthesis,
+                   jsonb_path_exists(synthesis, '$.packet_artifacts.witness_pack[*]') AS has_witness_pack,
+                   jsonb_path_exists(synthesis, '$.reference_ids.metric_ids[*]') AS has_metric_refs,
+                   jsonb_path_exists(synthesis, '$.reference_ids.witness_ids[*]') AS has_witness_refs
+            FROM b2b_reasoning_synthesis
+            WHERE analysis_window_days = $1
+              AND schema_version = $2
+              AND vendor_name = ANY($3::text[])
+            ORDER BY vendor_name, as_of_date DESC, created_at DESC
+        )
+        SELECT vendor_name, as_of_date, evidence_hash, synthesis, has_witness_pack, has_metric_refs, has_witness_refs
+        FROM latest
+        """,
+        window_days,
+        synthesis_mod._SCHEMA_VERSION,
+        plan.vendor_names,
+    )
+    latest_rows: dict[str, dict[str, Any]] = {
+        str(row["vendor_name"]): dict(row) for row in existing
+    }
+
+    max_stale_days = max(
+        0,
+        int(getattr(settings.b2b_churn, "reasoning_synthesis_max_stale_days", 3)),
+    )
+    rerun_if_missing_packet_artifacts = bool(
+        getattr(settings.b2b_churn, "reasoning_synthesis_rerun_if_missing_packet_artifacts", True),
+    )
+    rerun_if_missing_reference_ids = bool(
+        getattr(settings.b2b_churn, "reasoning_synthesis_rerun_if_missing_reference_ids", True),
+    )
+    decision_counts = {
+        "hash_reuse": 0,
+        "stale_reused": 0,
+        "missing_prior_row": 0,
+        "hash_changed": 0,
+        "prior_quality_weak": 0,
+        "missing_packet_artifacts": 0,
+        "missing_reference_ids": 0,
+    }
+    normalized_hashes: dict[str, str] = {}
+    legacy_current_hashes: dict[str, str] = {}
+    transition_candidates_by_date: dict[date, list[str]] = {}
+    for vendor_name, layers in vendor_pools.items():
+        ev_hash = synthesis_mod._compute_pool_hash(layers)
+        legacy_ev_hash = synthesis_mod._compute_pool_hash_legacy(layers)
+        normalized_hashes[vendor_name] = ev_hash
+        legacy_current_hashes[vendor_name] = legacy_ev_hash
+        latest_row = latest_rows.get(vendor_name)
+        if latest_row is None:
+            continue
+        prior_hash = str(latest_row.get("evidence_hash") or "")
+        if prior_hash in {ev_hash, legacy_ev_hash}:
+            continue
+        prior_as_of_date = synthesis_mod._coerce_as_of_date(latest_row.get("as_of_date"))
+        if prior_as_of_date is None or prior_as_of_date == today:
+            continue
+        transition_candidates_by_date.setdefault(prior_as_of_date, []).append(vendor_name)
+
+    legacy_hash_compatible_vendors: set[str] = set()
+    for prior_as_of_date, candidate_vendors in transition_candidates_by_date.items():
+        prior_vendor_pools = await fetch_all_pool_layers(
+            pool,
+            as_of=prior_as_of_date,
+            analysis_window_days=window_days,
+            vendor_names=candidate_vendors,
+        )
+        for vendor_name in candidate_vendors:
+            prior_layers = prior_vendor_pools.get(vendor_name)
+            latest_row = latest_rows.get(vendor_name)
+            if prior_layers is None or latest_row is None:
+                continue
+            prior_hash = str(latest_row.get("evidence_hash") or "")
+            prior_normalized_hash = synthesis_mod._compute_pool_hash(prior_layers)
+            prior_legacy_hash = synthesis_mod._compute_pool_hash_legacy(prior_layers)
+            if prior_hash not in {prior_normalized_hash, prior_legacy_hash}:
+                continue
+            if prior_normalized_hash == normalized_hashes.get(vendor_name):
+                legacy_hash_compatible_vendors.add(vendor_name)
+
+    likely_rerun_vendors: list[str] = []
+    likely_reuse_vendors: list[str] = []
+    for vendor_name in plan.vendor_names:
+        layers = vendor_pools.get(vendor_name)
+        if not layers:
+            continue
+        latest_row = latest_rows.get(vendor_name)
+        ev_hash = normalized_hashes[vendor_name]
+        prior_hash = str((latest_row or {}).get("evidence_hash") or "")
+        hash_matches_prior = bool(latest_row) and (
+            prior_hash in {ev_hash, legacy_current_hashes[vendor_name]}
+            or vendor_name in legacy_hash_compatible_vendors
+        )
+        decision = synthesis_mod._classify_vendor_reasoning_decision(
+            vendor_name=vendor_name,
+            today=today,
+            evidence_hash=ev_hash,
+            latest_row=latest_row,
+            force=False,
+            max_stale_days=max_stale_days,
+            rerun_if_missing_packet_artifacts=rerun_if_missing_packet_artifacts,
+            rerun_if_missing_reference_ids=rerun_if_missing_reference_ids,
+            hash_matches_prior=hash_matches_prior,
+        )
+        decision_counts[decision["reason"]] += 1
+        if decision["should_reason"]:
+            likely_rerun_vendors.append(f"{vendor_name}:{decision['reason']}")
+        else:
+            likely_reuse_vendors.append(f"{vendor_name}:{decision['reason']}")
+
+    return {
+        "vendor_jobs_with_matching_pools": len(vendor_pools),
+        "vendor_jobs_missing_pools": max(0, len(plan.vendor_names) - len(vendor_pools)),
+        "vendor_jobs_likely_to_reason": len(likely_rerun_vendors),
+        "vendor_jobs_likely_hash_reuse": decision_counts["hash_reuse"],
+        "vendor_jobs_likely_stale_reuse": decision_counts["stale_reused"],
+        "vendor_jobs_likely_missing_prior": decision_counts["missing_prior_row"],
+        "vendor_jobs_likely_hash_changed": decision_counts["hash_changed"],
+        "vendor_jobs_likely_prior_quality_weak": decision_counts["prior_quality_weak"],
+        "vendor_jobs_likely_missing_packet_artifacts": decision_counts["missing_packet_artifacts"],
+        "vendor_jobs_likely_missing_reference_ids": decision_counts["missing_reference_ids"],
+        "likely_rerun_vendors": likely_rerun_vendors,
+        "likely_reuse_vendors": likely_reuse_vendors,
+    }
 
 
 async def estimate_competitive_set_plan(
@@ -286,6 +459,26 @@ async def estimate_competitive_set_plan(
         if estimated_vendor_cost is not None or estimated_cross_cost is not None
         else None
     )
+    vendor_reuse = await _estimate_vendor_reuse_for_plan(pool, plan)
+    likely_reason_count = int(vendor_reuse.get("vendor_jobs_likely_to_reason") or 0)
+    likely_reason_vendor_names = {
+        str(item).split(":", 1)[0]
+        for item in list(vendor_reuse.get("likely_rerun_vendors") or [])
+    }
+    estimated_vendor_tokens_likely_to_reason = 0.0
+    for vendor_name in plan.vendor_names:
+        if vendor_name not in likely_reason_vendor_names:
+            continue
+        known_tokens = vendor_tokens_by_name.get(vendor_name)
+        if known_tokens is not None and known_tokens > 0:
+            estimated_vendor_tokens_likely_to_reason += float(known_tokens)
+        else:
+            estimated_vendor_tokens_likely_to_reason += vendor_fallback_tokens
+    estimated_vendor_cost_likely_to_reason = (
+        estimated_vendor_tokens_likely_to_reason * vendor_cost_per_token
+        if vendor_cost_per_token is not None
+        else None
+    )
 
     return {
         "lookback_days": lookback_days,
@@ -299,15 +492,19 @@ async def estimate_competitive_set_plan(
         "estimated_vendor_cost_usd": _rounded_usd(estimated_vendor_cost),
         "estimated_cross_vendor_cost_usd": _rounded_usd(estimated_cross_cost),
         "estimated_total_cost_usd": _rounded_usd(estimated_total_cost),
+        "estimated_vendor_tokens_likely_to_reason": int(round(estimated_vendor_tokens_likely_to_reason)),
+        "estimated_vendor_cost_usd_likely_to_reason": _rounded_usd(estimated_vendor_cost_likely_to_reason),
         "vendor_jobs_with_history": vendor_jobs_with_history,
         "vendor_jobs_using_fallback": vendor_jobs_using_fallback,
         "cross_vendor_jobs_with_history": cross_jobs_with_history,
         "cross_vendor_jobs_using_fallback": cross_jobs_using_fallback,
         "recent_vendor_sample_count": int(vendor_usage.get("sample_count") or 0),
         "recent_cross_vendor_sample_count": int(cross_usage.get("sample_count") or 0),
+        **vendor_reuse,
         "note": (
             "Upper-bound estimate for a non-forced run. Actual spend may be lower "
-            "when unchanged vendors hash-reuse existing synthesis."
+            "when unchanged vendors hash-reuse existing synthesis; the likely-rerun "
+            "counts below use current pool hashes."
         ),
     }
 
