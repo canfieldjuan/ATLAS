@@ -683,6 +683,19 @@ def _competitive_scope_metadata(task: ScheduledTask | Any) -> dict[str, Any]:
     }
 
 
+def _competitive_scope_run_id(
+    task: ScheduledTask | Any,
+    scope_meta: dict[str, Any],
+) -> str | None:
+    metadata = getattr(task, "metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if scope_meta.get("scope_id"):
+        explicit = str(metadata.get("run_id") or "").strip()
+        if explicit:
+            return explicit
+    return _task_run_id(task)
+
+
 def _coerce_timestamptz(value: Any) -> Any:
     if isinstance(value, datetime):
         return value
@@ -867,8 +880,8 @@ async def _persist_packet_artifacts(
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: generate reasoning synthesis per vendor."""
     cfg = settings.b2b_churn
-    run_id = _task_run_id(task)
     scope_meta = _competitive_scope_metadata(task)
+    run_id = _competitive_scope_run_id(task, scope_meta)
     scope_id = scope_meta.get("scope_id") or ""
     scope_vendor_names = scope_meta.get("scope_vendor_names") or []
     scope_pairwise_pairs = scope_meta.get("scope_pairwise_pairs") or []

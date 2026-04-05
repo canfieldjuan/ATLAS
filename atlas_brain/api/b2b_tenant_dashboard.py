@@ -9,7 +9,7 @@ import json
 import logging
 import uuid as _uuid
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.routing import APIRoute
@@ -171,6 +171,16 @@ async def _canonical_competitive_set_payload(
         "competitor_vendor_names": deduped_competitors,
         "refresh_mode": refresh_mode,
         "refresh_interval_hours": refresh_interval_hours,
+    }
+
+
+def _competitive_set_defaults_payload() -> dict[str, int]:
+    return {
+        "default_refresh_interval_hours": max(
+            1,
+            int(settings.b2b_churn.competitive_set_refresh_interval_seconds // 3600),
+        ),
+        "max_competitors": int(settings.b2b_churn.competitive_set_max_competitors),
     }
 
 
@@ -504,7 +514,11 @@ async def list_competitive_sets(
         _uuid.UUID(user.account_id),
         include_inactive=include_inactive,
     )
-    return {"competitive_sets": [item.to_dict() for item in sets], "count": len(sets)}
+    return {
+        "competitive_sets": [item.to_dict() for item in sets],
+        "count": len(sets),
+        "defaults": _competitive_set_defaults_payload(),
+    }
 
 
 @router.post("/competitive-sets", status_code=201)
@@ -515,7 +529,11 @@ async def create_competitive_set(
     _require_b2b_product(user)
     pool = _pool_or_503()
     repo = get_competitive_set_repo()
-    existing_name = await repo.get_by_name_for_account(_uuid.UUID(user.account_id), req.name)
+    requested_name = str(req.name or "").strip()
+    existing_name = await repo.get_by_name_for_account(
+        _uuid.UUID(user.account_id),
+        requested_name,
+    )
     if existing_name:
         raise HTTPException(status_code=409, detail="Competitive set name already exists")
     payload = await _canonical_competitive_set_payload(
@@ -551,7 +569,7 @@ async def update_competitive_set(
     existing = await repo.get_by_id_for_account(competitive_set_id, _uuid.UUID(user.account_id))
     if not existing:
         raise HTTPException(status_code=404, detail="Competitive set not found")
-    next_name = req.name if req.name is not None else existing.name
+    next_name = str(req.name).strip() if req.name is not None else existing.name
     existing_name = await repo.get_by_name_for_account(_uuid.UUID(user.account_id), next_name)
     if existing_name and existing_name.id != competitive_set_id:
         raise HTTPException(status_code=409, detail="Competitive set name already exists")

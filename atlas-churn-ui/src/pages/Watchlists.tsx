@@ -30,6 +30,7 @@ import {
   searchAvailableVendors,
   type AccountsInMotionFeedItem,
   type CompetitiveSet,
+  type CompetitiveSetDefaults,
   type TrackedVendor,
   updateCompetitiveSet,
   type VendorSearchResult,
@@ -39,6 +40,7 @@ import type { ChurnSignal } from '../types'
 interface WatchlistsData {
   vendors: TrackedVendor[]
   competitiveSets: CompetitiveSet[]
+  competitiveSetDefaults: CompetitiveSetDefaults | null
   feed: ChurnSignal[]
   accounts: AccountsInMotionFeedItem[]
   vendorsWithAccounts: number
@@ -88,7 +90,7 @@ export default function Watchlists() {
   const [competitiveSetFocal, setCompetitiveSetFocal] = useState('')
   const [competitiveSetCompetitors, setCompetitiveSetCompetitors] = useState<string[]>([])
   const [competitiveSetRefreshMode, setCompetitiveSetRefreshMode] = useState<'manual' | 'scheduled'>('manual')
-  const [competitiveSetRefreshHours, setCompetitiveSetRefreshHours] = useState('24')
+  const [competitiveSetRefreshHours, setCompetitiveSetRefreshHours] = useState('')
   const [competitiveSetActive, setCompetitiveSetActive] = useState(true)
   const [competitiveSetVendorEnabled, setCompetitiveSetVendorEnabled] = useState(true)
   const [competitiveSetPairwiseEnabled, setCompetitiveSetPairwiseEnabled] = useState(true)
@@ -113,6 +115,7 @@ export default function Watchlists() {
       return {
         vendors: tracked.vendors,
         competitiveSets: trackedSets.competitive_sets,
+        competitiveSetDefaults: trackedSets.defaults ?? null,
         feed: feed.signals,
         accounts: accounts.accounts,
         vendorsWithAccounts: accounts.vendors_with_accounts,
@@ -136,6 +139,7 @@ export default function Watchlists() {
 
   const trackedVendors = data?.vendors ?? []
   const competitiveSets = data?.competitiveSets ?? []
+  const competitiveSetDefaults = data?.competitiveSetDefaults ?? null
   const feed = data?.feed ?? []
   const accounts = data?.accounts ?? []
   const vendorsWithAccounts = data?.vendorsWithAccounts ?? 0
@@ -152,13 +156,25 @@ export default function Watchlists() {
     (vendor) => vendor.vendor_name !== competitiveSetFocal,
   )
 
+  useEffect(() => {
+    if (editingCompetitiveSetId) return
+    if (competitiveSetRefreshHours !== '') return
+    const defaultHours = competitiveSetDefaults?.default_refresh_interval_hours
+    if (!defaultHours) return
+    setCompetitiveSetRefreshHours(String(defaultHours))
+  }, [
+    competitiveSetDefaults?.default_refresh_interval_hours,
+    competitiveSetRefreshHours,
+    editingCompetitiveSetId,
+  ])
+
   function resetCompetitiveSetForm() {
     setEditingCompetitiveSetId(null)
     setCompetitiveSetName('')
     setCompetitiveSetFocal('')
     setCompetitiveSetCompetitors([])
     setCompetitiveSetRefreshMode('manual')
-    setCompetitiveSetRefreshHours('24')
+    setCompetitiveSetRefreshHours(String(competitiveSetDefaults?.default_refresh_interval_hours ?? ''))
     setCompetitiveSetActive(true)
     setCompetitiveSetVendorEnabled(true)
     setCompetitiveSetPairwiseEnabled(true)
@@ -206,7 +222,9 @@ export default function Watchlists() {
     setCompetitiveSetFocal(item.focal_vendor_name)
     setCompetitiveSetCompetitors(item.competitor_vendor_names)
     setCompetitiveSetRefreshMode(item.refresh_mode)
-    setCompetitiveSetRefreshHours(String(item.refresh_interval_hours ?? 24))
+    setCompetitiveSetRefreshHours(
+      String(item.refresh_interval_hours ?? competitiveSetDefaults?.default_refresh_interval_hours ?? ''),
+    )
     setCompetitiveSetActive(item.active)
     setCompetitiveSetVendorEnabled(item.vendor_synthesis_enabled)
     setCompetitiveSetPairwiseEnabled(item.pairwise_enabled)
@@ -225,7 +243,9 @@ export default function Watchlists() {
       active: competitiveSetActive,
       refresh_mode: competitiveSetRefreshMode,
       refresh_interval_hours: competitiveSetRefreshMode === 'scheduled'
-        ? Number.parseInt(competitiveSetRefreshHours, 10) || 24
+        ? Number.parseInt(competitiveSetRefreshHours, 10)
+          || competitiveSetDefaults?.default_refresh_interval_hours
+          || null
         : null,
       vendor_synthesis_enabled: competitiveSetVendorEnabled,
       pairwise_enabled: competitiveSetPairwiseEnabled,

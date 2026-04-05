@@ -617,6 +617,11 @@ export interface CompetitiveSet {
   updated_at: string
 }
 
+export interface CompetitiveSetDefaults {
+  default_refresh_interval_hours: number
+  max_competitors: number
+}
+
 export interface CompetitiveSetPlan {
   competitive_set_id: string
   focal_vendor_name: string
@@ -660,7 +665,7 @@ export async function listTrackedVendors() {
 }
 
 export async function listCompetitiveSets(include_inactive: boolean = false) {
-  return get<{ competitive_sets: CompetitiveSet[]; count: number }>(
+  return get<{ competitive_sets: CompetitiveSet[]; count: number; defaults?: CompetitiveSetDefaults }>(
     TENANT_BASE,
     '/competitive-sets',
     { include_inactive },
