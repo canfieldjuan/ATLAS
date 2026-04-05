@@ -636,7 +636,16 @@ async def preview_competitive_set_plan(
     if not existing:
         raise HTTPException(status_code=404, detail="Competitive set not found")
     plan = await _competitive_set_plan_payload(pool, existing)
-    return {"competitive_set": existing.to_dict(), "plan": plan}
+    recent_runs = await repo.list_runs_for_account_set(
+        competitive_set_id,
+        _uuid.UUID(user.account_id),
+        limit=5,
+    )
+    return {
+        "competitive_set": existing.to_dict(),
+        "plan": plan,
+        "recent_runs": [item.to_dict() for item in recent_runs],
+    }
 
 
 @router.post("/competitive-sets/{competitive_set_id}/run", status_code=202)

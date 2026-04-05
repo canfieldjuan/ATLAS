@@ -33,6 +33,7 @@ import {
   type CompetitiveSet,
   type CompetitiveSetDefaults,
   type CompetitiveSetPlan,
+  type CompetitiveSetRun,
   type TrackedVendor,
   updateCompetitiveSet,
   type VendorSearchResult,
@@ -106,6 +107,7 @@ export default function Watchlists() {
   const [deletingCompetitiveSetId, setDeletingCompetitiveSetId] = useState<string | null>(null)
   const [editingCompetitiveSetId, setEditingCompetitiveSetId] = useState<string | null>(null)
   const [competitiveSetPreviews, setCompetitiveSetPreviews] = useState<Record<string, CompetitiveSetPlan>>({})
+  const [competitiveSetRuns, setCompetitiveSetRuns] = useState<Record<string, CompetitiveSetRun[]>>({})
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [competitiveSetName, setCompetitiveSetName] = useState('')
@@ -317,6 +319,10 @@ export default function Watchlists() {
       setCompetitiveSetPreviews((current) => ({
         ...current,
         [item.id]: result.plan,
+      }))
+      setCompetitiveSetRuns((current) => ({
+        ...current,
+        [item.id]: result.recent_runs,
       }))
       setOpenCompetitiveSetPreviewId(item.id)
     } catch (err) {
@@ -910,6 +916,7 @@ export default function Watchlists() {
                 const asymmetryJobCount = item.asymmetry_enabled ? competitorCount : 0
                 const preview = competitiveSetPreviews[item.id]
                 const estimate = preview?.estimate
+                const recentRuns = competitiveSetRuns[item.id] ?? []
                 const previewOpen = openCompetitiveSetPreviewId === item.id
                 return (
                   <div key={item.id} className="rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
@@ -1021,6 +1028,56 @@ export default function Watchlists() {
                         </div>
                         <div className="mt-3 text-xs text-slate-400">
                           {estimate?.note ?? 'Estimate unavailable.'}
+                        </div>
+                        <div className="mt-4">
+                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Recent Runs</div>
+                          {recentRuns.length === 0 ? (
+                            <div className="mt-2 text-xs text-slate-400">No recorded runs yet.</div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              {recentRuns.map((run) => {
+                                const summary = run.summary ?? {}
+                                const totalTokens = typeof summary.total_tokens === 'number'
+                                  ? summary.total_tokens
+                                  : null
+                                const reused = typeof summary.vendors_skipped_hash_reuse === 'number'
+                                  ? summary.vendors_skipped_hash_reuse
+                                  : null
+                                const reasoned = typeof summary.vendors_reasoned === 'number'
+                                  ? summary.vendors_reasoned
+                                  : null
+                                const failed = typeof summary.vendors_failed === 'number'
+                                  ? summary.vendors_failed
+                                  : null
+                                return (
+                                  <div key={run.id} className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="text-xs text-slate-300">
+                                        {formatTs(run.started_at)}
+                                      </div>
+                                      <span
+                                        className={clsx(
+                                          'rounded-full px-2 py-0.5 text-[11px] font-medium',
+                                          run.status === 'succeeded' && 'bg-emerald-500/10 text-emerald-300',
+                                          run.status === 'partial' && 'bg-amber-500/10 text-amber-300',
+                                          run.status === 'failed' && 'bg-rose-500/10 text-rose-300',
+                                          run.status === 'running' && 'bg-cyan-500/10 text-cyan-300',
+                                        )}
+                                      >
+                                        {run.status}
+                                      </span>
+                                    </div>
+                                    <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                                      <span>{formatWholeNumber(reasoned)} reasoned</span>
+                                      <span>{formatWholeNumber(reused)} reused</span>
+                                      <span>{formatWholeNumber(failed)} failed</span>
+                                      <span>{formatWholeNumber(totalTokens)} tokens</span>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button

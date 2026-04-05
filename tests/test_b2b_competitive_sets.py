@@ -239,3 +239,51 @@ async def test_estimate_competitive_set_plan_uses_history_and_fallback(monkeypat
     assert estimate["vendor_jobs_using_fallback"] == 1
     assert estimate["cross_vendor_jobs_with_history"] == 3
     assert estimate["cross_vendor_jobs_using_fallback"] == 2
+
+
+@pytest.mark.asyncio
+async def test_preview_competitive_set_plan_returns_recent_runs(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    competitive_set = _competitive_set()
+    repo = SimpleNamespace(
+        get_by_id_for_account=AsyncMock(return_value=competitive_set),
+        list_runs_for_account_set=AsyncMock(return_value=[
+            SimpleNamespace(to_dict=lambda: {
+                "id": str(uuid4()),
+                "competitive_set_id": str(competitive_set.id),
+                "account_id": str(competitive_set.account_id),
+                "run_id": "scope-run-1",
+                "trigger": "manual",
+                "status": "succeeded",
+                "execution_id": None,
+                "summary": {"vendors_reasoned": 2, "vendors_skipped_hash_reuse": 1, "total_tokens": 12345},
+                "started_at": "2026-04-05T12:00:00+00:00",
+                "completed_at": "2026-04-05T12:01:00+00:00",
+                "created_at": "2026-04-05T12:00:00+00:00",
+            }),
+        ]),
+    )
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(competitive_set.account_id),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(mod, "get_competitive_set_repo", lambda: repo)
+    monkeypatch.setattr(
+        mod,
+        "_competitive_set_plan_payload",
+        AsyncMock(return_value={"estimated_total_jobs": 2, "estimate": {"estimated_total_cost_usd": 0.12}}),
+    )
+
+    result = await mod.preview_competitive_set_plan(competitive_set.id, user=user)
+
+    assert result["competitive_set"]["id"] == str(competitive_set.id)
+    assert result["plan"]["estimated_total_jobs"] == 2
+    assert len(result["recent_runs"]) == 1
+    assert result["recent_runs"][0]["summary"]["total_tokens"] == 12345

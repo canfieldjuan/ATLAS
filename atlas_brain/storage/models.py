@@ -646,6 +646,38 @@ class CompetitiveSet:
 
 
 @dataclass
+class CompetitiveSetRun:
+    """Persisted run history for a competitive set."""
+
+    id: UUID
+    competitive_set_id: UUID
+    account_id: UUID
+    run_id: str
+    trigger: str
+    status: str
+    execution_id: Optional[str] = None
+    summary: dict[str, Any] = field(default_factory=dict)
+    started_at: datetime = field(default_factory=_utcnow)
+    completed_at: Optional[datetime] = None
+    created_at: datetime = field(default_factory=_utcnow)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id),
+            "competitive_set_id": str(self.competitive_set_id),
+            "account_id": str(self.account_id),
+            "run_id": self.run_id,
+            "trigger": self.trigger,
+            "status": self.status,
+            "execution_id": self.execution_id,
+            "summary": self.summary,
+            "started_at": self.started_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass
 class PresenceEvent:
     """A presence state transition event."""
 

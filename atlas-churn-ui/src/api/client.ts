@@ -617,6 +617,20 @@ export interface CompetitiveSet {
   updated_at: string
 }
 
+export interface CompetitiveSetRun {
+  id: string
+  competitive_set_id: string
+  account_id: string
+  run_id: string
+  trigger: string
+  status: 'running' | 'succeeded' | 'partial' | 'failed'
+  execution_id: string | null
+  summary: Record<string, unknown>
+  started_at: string
+  completed_at: string | null
+  created_at: string
+}
+
 export interface CompetitiveSetDefaults {
   default_refresh_interval_hours: number
   max_competitors: number
@@ -724,7 +738,7 @@ export async function deleteCompetitiveSet(competitiveSetId: string) {
 }
 
 export async function fetchCompetitiveSetPlan(competitiveSetId: string) {
-  return get<{ competitive_set: CompetitiveSet; plan: CompetitiveSetPlan }>(
+  return get<{ competitive_set: CompetitiveSet; plan: CompetitiveSetPlan; recent_runs: CompetitiveSetRun[] }>(
     TENANT_BASE,
     `/competitive-sets/${encodeURIComponent(competitiveSetId)}/plan`,
   )

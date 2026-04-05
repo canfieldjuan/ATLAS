@@ -2,13 +2,13 @@
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from ..database import get_db_pool
 from ..exceptions import DatabaseUnavailableError, DatabaseOperationError
-from ..models import CompetitiveSet
+from ..models import CompetitiveSet, CompetitiveSetRun
 
 logger = logging.getLogger("atlas.storage.competitive_set")
 
@@ -313,11 +313,9 @@ class CompetitiveSetRepository:
                             cs.last_run_status IS NULL
                             OR cs.last_run_status != 'running'
                           )
-                      AND (
-                            cs.last_success_at IS NULL
-                            OR cs.last_success_at <= NOW() - make_interval(hours => cs.refresh_interval_hours)
-                          )
-                    ORDER BY COALESCE(cs.last_success_at, cs.created_at) ASC
+                      AND COALESCE(cs.last_run_at, cs.last_success_at, cs.created_at)
+                          <= NOW() - make_interval(hours => cs.refresh_interval_hours)
+                    ORDER BY COALESCE(cs.last_run_at, cs.last_success_at, cs.created_at) ASC
                     LIMIT $1
                 )
                 SELECT cs.*,
@@ -327,7 +325,7 @@ class CompetitiveSetRepository:
                 JOIN due_sets ds ON ds.id = cs.id
                 LEFT JOIN b2b_competitive_set_vendors csv
                   ON csv.competitive_set_id = cs.id
-                ORDER BY COALESCE(cs.last_success_at, cs.created_at) ASC,
+                ORDER BY COALESCE(cs.last_run_at, cs.last_success_at, cs.created_at) ASC,
                          csv.sort_order ASC,
                          csv.vendor_name ASC
                 """,
@@ -350,6 +348,9 @@ class CompetitiveSetRepository:
         pool = get_db_pool()
         if not pool.is_initialized:
             raise DatabaseUnavailableError("mark competitive set run started")
+        existing = await self.get_by_id(competitive_set_id)
+        if not existing:
+            raise DatabaseOperationError("mark competitive set run started", Exception("Competitive set not found"))
         summary = {
             "run_id": run_id,
             "trigger": trigger,
@@ -357,18 +358,41 @@ class CompetitiveSetRepository:
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            await pool.execute(
-                """
-                UPDATE b2b_competitive_sets
-                SET last_run_at = NOW(),
-                    last_run_status = 'running',
-                    last_run_summary = $2::jsonb,
-                    updated_at = NOW()
-                WHERE id = $1
-                """,
-                competitive_set_id,
-                json.dumps(summary),
-            )
+            async with pool.transaction() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO b2b_competitive_set_runs (
+                        competitive_set_id, account_id, run_id, trigger,
+                        status, execution_id, summary, started_at, created_at
+                    )
+                    VALUES ($1, $2, $3, $4, 'running', $5, $6::jsonb, NOW(), NOW())
+                    ON CONFLICT (competitive_set_id, run_id)
+                    DO UPDATE SET
+                        trigger = EXCLUDED.trigger,
+                        status = 'running',
+                        execution_id = EXCLUDED.execution_id,
+                        summary = EXCLUDED.summary,
+                        started_at = NOW()
+                    """,
+                    competitive_set_id,
+                    existing.account_id,
+                    str(run_id or ""),
+                    trigger,
+                    execution_id,
+                    json.dumps(summary),
+                )
+                await conn.execute(
+                    """
+                    UPDATE b2b_competitive_sets
+                    SET last_run_at = NOW(),
+                        last_run_status = 'running',
+                        last_run_summary = $2::jsonb,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    competitive_set_id,
+                    json.dumps(summary),
+                )
         except DatabaseUnavailableError:
             raise
         except Exception as exc:
@@ -386,27 +410,86 @@ class CompetitiveSetRepository:
             raise DatabaseUnavailableError("mark competitive set run completed")
         try:
             success_ts = datetime.now(timezone.utc) if status in {"succeeded", "partial"} else None
-            await pool.execute(
-                """
-                UPDATE b2b_competitive_sets
-                SET last_run_status = $2,
-                    last_run_summary = $3::jsonb,
-                    last_success_at = CASE
-                        WHEN $4::timestamptz IS NOT NULL THEN $4::timestamptz
-                        ELSE last_success_at
-                    END,
-                    updated_at = NOW()
-                WHERE id = $1
-                """,
-                competitive_set_id,
-                status,
-                json.dumps(summary, default=str),
-                success_ts,
-            )
+            run_id = str(summary.get("run_id") or "").strip()
+            existing = await self.get_by_id(competitive_set_id)
+            if not existing:
+                raise DatabaseOperationError("mark competitive set run completed", Exception("Competitive set not found"))
+            async with pool.transaction() as conn:
+                if run_id:
+                    await conn.execute(
+                        """
+                        INSERT INTO b2b_competitive_set_runs (
+                            competitive_set_id, account_id, run_id, trigger,
+                            status, execution_id, summary, started_at,
+                            completed_at, created_at
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW(), NOW(), NOW())
+                        ON CONFLICT (competitive_set_id, run_id)
+                        DO UPDATE SET
+                            status = EXCLUDED.status,
+                            execution_id = COALESCE(EXCLUDED.execution_id, b2b_competitive_set_runs.execution_id),
+                            summary = EXCLUDED.summary,
+                            completed_at = NOW()
+                        """,
+                        competitive_set_id,
+                        existing.account_id,
+                        run_id,
+                        str(summary.get("trigger") or "manual"),
+                        status,
+                        str(summary.get("execution_id") or "") or None,
+                        json.dumps(summary, default=str),
+                    )
+                await conn.execute(
+                    """
+                    UPDATE b2b_competitive_sets
+                    SET last_run_status = $2,
+                        last_run_summary = $3::jsonb,
+                        last_success_at = CASE
+                            WHEN $4::timestamptz IS NOT NULL THEN $4::timestamptz
+                            ELSE last_success_at
+                        END,
+                        updated_at = NOW()
+                    WHERE id = $1
+                    """,
+                    competitive_set_id,
+                    status,
+                    json.dumps(summary, default=str),
+                    success_ts,
+                )
         except DatabaseUnavailableError:
             raise
         except Exception as exc:
             raise DatabaseOperationError("mark competitive set run completed", exc)
+
+    async def list_runs_for_account_set(
+        self,
+        competitive_set_id: UUID,
+        account_id: UUID,
+        *,
+        limit: int = 5,
+    ) -> list[CompetitiveSetRun]:
+        pool = get_db_pool()
+        if not pool.is_initialized:
+            raise DatabaseUnavailableError("list competitive set runs")
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT *
+                FROM b2b_competitive_set_runs
+                WHERE competitive_set_id = $1
+                  AND account_id = $2
+                ORDER BY started_at DESC, created_at DESC
+                LIMIT $3
+                """,
+                competitive_set_id,
+                account_id,
+                limit,
+            )
+            return [self._row_to_competitive_set_run(row) for row in rows]
+        except DatabaseUnavailableError:
+            raise
+        except Exception as exc:
+            raise DatabaseOperationError("list competitive set runs", exc)
 
     @staticmethod
     def _normalize_vendor_names(vendor_names: list[str] | None) -> list[str]:
@@ -460,6 +543,26 @@ class CompetitiveSetRepository:
             last_run_summary=summary if isinstance(summary, dict) else {},
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    def _row_to_competitive_set_run(self, row) -> CompetitiveSetRun:
+        summary = row["summary"]
+        if isinstance(summary, str):
+            summary = json.loads(summary)
+        elif summary is None:
+            summary = {}
+        return CompetitiveSetRun(
+            id=row["id"],
+            competitive_set_id=row["competitive_set_id"],
+            account_id=row["account_id"],
+            run_id=str(row["run_id"] or ""),
+            trigger=str(row["trigger"] or ""),
+            status=str(row["status"] or ""),
+            execution_id=row["execution_id"],
+            summary=summary if isinstance(summary, dict) else {},
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            created_at=row["created_at"],
         )
 
 
