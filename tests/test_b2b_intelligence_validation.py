@@ -1639,6 +1639,33 @@ class TestBattleCardSalesCopySanitization:
         assert "$9" in lowered
         assert "$29" in lowered
 
+    def test_sanitizes_missing_anchor_usage_with_comma_numeric_outlier(self):
+        card = _sample_battle_card() | {
+            "anchor_examples": {
+                "common_pattern": [
+                    {
+                        "excerpt_text": "HubSpot Professional starts at ~ $1,400/month for 6 seats.",
+                        "reviewer_company": None,
+                        "competitor": None,
+                        "time_anchor": "immediately",
+                    }
+                ]
+            }
+        }
+        generated = {
+            "executive_summary": "Pricing pressure is creating renewed buyer scrutiny.",
+            "talk_track": {
+                "opening": "Teams are taking a harder look at fit and value.",
+                "mid_call_pivot": "Show how simpler pricing reduces surprise costs.",
+                "closing": "Offer a renewal benchmark.",
+            },
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        lowered = sanitized["executive_summary"].lower()
+        assert "$1,400" in lowered
+        assert "$1 " not in lowered
+        assert "immediately" not in lowered
+
     def test_sanitizes_overcertain_play_when_account_intelligence_is_missing(self):
         card = _sample_battle_card() | {
             "reasoning_contracts": {

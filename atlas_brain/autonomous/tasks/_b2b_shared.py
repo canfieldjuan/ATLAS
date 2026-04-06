@@ -1836,7 +1836,7 @@ def _battle_card_anchor_phrase_from_card(card: dict[str, Any]) -> str:
                 continue
             company = str(witness.get("reviewer_company") or "").strip()
             competitor = str(witness.get("competitor") or "").strip()
-            time_anchor = str(witness.get("time_anchor") or "").strip()
+            time_anchor = _battle_card_specific_time_anchor(witness.get("time_anchor"))
             parts: list[str] = []
             if company:
                 parts.append(f"accounts like {company}")
@@ -1845,7 +1845,7 @@ def _battle_card_anchor_phrase_from_card(card: dict[str, Any]) -> str:
             if time_anchor:
                 parts.append(f"during {time_anchor}")
             excerpt = str(witness.get("excerpt_text") or "")
-            numeric_tokens = re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt)
+            numeric_tokens = re.findall(r"\$\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?%", excerpt)
             if numeric_tokens:
                 preview = ", ".join(numeric_tokens[:3])
                 if parts:
@@ -1874,11 +1874,14 @@ def _battle_card_anchor_terms_from_card(card: dict[str, Any]) -> set[str]:
                 witness.get("competitor"),
                 witness.get("time_anchor"),
             ):
-                term = str(value or "").strip().lower()
+                if value == witness.get("time_anchor"):
+                    term = _battle_card_specific_time_anchor(value).lower()
+                else:
+                    term = str(value or "").strip().lower()
                 if term:
                     terms.add(term)
             excerpt = str(witness.get("excerpt_text") or "")
-            for token in re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt):
+            for token in re.findall(r"\$\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?%", excerpt):
                 normalized = token.strip().lower()
                 if normalized:
                     terms.add(normalized)
@@ -1958,7 +1961,7 @@ def _repair_battle_card_missing_anchor(card: dict[str, Any], generated: dict[str
                     continue
                 company = str(witness.get("reviewer_company") or "").strip().lower()
                 competitor = str(witness.get("competitor") or "").strip().lower()
-                time_anchor = str(witness.get("time_anchor") or "").strip().lower()
+                time_anchor = _battle_card_specific_time_anchor(witness.get("time_anchor")).lower()
                 if company:
                     companies.add(company)
                 if competitor:
@@ -1966,7 +1969,7 @@ def _repair_battle_card_missing_anchor(card: dict[str, Any], generated: dict[str
                 if time_anchor:
                     timing_terms.add(time_anchor)
                 excerpt = str(witness.get("excerpt_text") or "")
-                for token in re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt):
+                for token in re.findall(r"\$\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?%", excerpt):
                     normalized = token.strip().lower()
                     if normalized:
                         numeric_terms.add(normalized)

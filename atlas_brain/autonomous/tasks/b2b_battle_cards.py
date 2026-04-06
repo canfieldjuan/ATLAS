@@ -215,6 +215,18 @@ _QUALITY_EVAL_PATH_FAMILY_MAP = {
     "displacement_reasoning.migration_proof.active_evaluation_volume": _QUALITY_EVAL_FAMILY_SIGNAL_VOLUME,
     "displacement_reasoning.migration_proof.supporting_evidence.active_evaluation_volume": _QUALITY_EVAL_FAMILY_SIGNAL_VOLUME,
 }
+_ANCHOR_SPECIFIC_TIME_TERMS = (
+    "renewal",
+    "review",
+    "planning",
+    "quarter",
+    "month",
+    "week",
+    "deadline",
+    "window",
+    "cycle",
+    "decision",
+)
 
 def _parse_battle_card_sales_copy(text: str | None) -> dict[str, Any]:
     """Parse battle-card LLM output with truncation recovery enabled."""
@@ -1028,11 +1040,23 @@ def _witness_numeric_tokens(witness: dict[str, Any]) -> set[str]:
     if tokens:
         return tokens
     excerpt = str(witness.get("excerpt_text") or "")
-    for token in re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt):
+    for token in re.findall(r"\$\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?%", excerpt):
         normalized = token.strip().lower()
         if normalized:
             tokens.add(normalized)
     return tokens
+
+
+def _battle_card_specific_time_anchor(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if re.search(r"\d", lower):
+        return text
+    if any(term in lower for term in _ANCHOR_SPECIFIC_TIME_TERMS):
+        return text
+    return ""
 
 
 def _battle_card_anchor_signal_terms(card: dict[str, Any]) -> dict[str, set[str]]:
@@ -1048,7 +1072,7 @@ def _battle_card_anchor_signal_terms(card: dict[str, Any]) -> dict[str, set[str]
             competitor = str(witness.get("competitor") or "").strip().lower()
             if competitor:
                 competitor_terms.add(competitor)
-            time_anchor = str(witness.get("time_anchor") or "").strip().lower()
+            time_anchor = _battle_card_specific_time_anchor(witness.get("time_anchor")).lower()
             if time_anchor:
                 timing_terms.add(time_anchor)
             numeric_terms.update(_witness_numeric_tokens(witness))
@@ -1069,7 +1093,7 @@ def _battle_card_anchor_phrase(card: dict[str, Any]) -> str:
                 continue
             company = str(witness.get("reviewer_company") or "").strip()
             competitor = str(witness.get("competitor") or "").strip()
-            time_anchor = str(witness.get("time_anchor") or "").strip()
+            time_anchor = _battle_card_specific_time_anchor(witness.get("time_anchor"))
             parts: list[str] = []
             if company:
                 parts.append(f"accounts like {company}")
