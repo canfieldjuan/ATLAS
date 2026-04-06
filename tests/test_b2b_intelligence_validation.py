@@ -1588,6 +1588,31 @@ class TestBattleCardSalesCopySanitization:
         sanitized = _sanitize_battle_card_sales_copy(card, generated)
         assert "acme commerce" in sanitized["executive_summary"].lower()
 
+    def test_sanitizes_missing_anchor_usage_when_only_partial_anchor_is_present(self):
+        card = _sample_battle_card() | {
+            "anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "reviewer_company": "Acme Commerce",
+                        "competitor": "WooCommerce",
+                        "time_anchor": "renewal review",
+                    }
+                ]
+            }
+        }
+        generated = {
+            "executive_summary": "Acme Commerce is already re-evaluating pricing pressure.",
+            "talk_track": {
+                "opening": "Teams are taking a harder look at fit and value.",
+                "mid_call_pivot": "Show how simpler pricing reduces surprise costs.",
+                "closing": "Offer a renewal benchmark.",
+            },
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        lowered = sanitized["executive_summary"].lower()
+        assert "acme commerce" in lowered
+        assert "renewal review" in lowered
+
     def test_sanitizes_missing_anchor_usage_with_numeric_outlier(self):
         card = _sample_battle_card() | {
             "anchor_examples": {

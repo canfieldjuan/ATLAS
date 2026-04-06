@@ -1844,13 +1844,16 @@ def _battle_card_anchor_phrase_from_card(card: dict[str, Any]) -> str:
                 parts.append(f"while evaluating {competitor}")
             if time_anchor:
                 parts.append(f"during {time_anchor}")
-            if parts:
-                return " ".join(parts)
             excerpt = str(witness.get("excerpt_text") or "")
             numeric_tokens = re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt)
             if numeric_tokens:
                 preview = ", ".join(numeric_tokens[:3])
-                return f"pricing callouts like {preview} in current review evidence"
+                if parts:
+                    parts.append(f"with pricing callouts like {preview}")
+                else:
+                    parts.append(f"pricing callouts like {preview} in current review evidence")
+            if parts:
+                return " ".join(parts)
     return ""
 
 
@@ -1941,7 +1944,39 @@ def _repair_battle_card_missing_anchor(card: dict[str, Any], generated: dict[str
     if not anchor_phrase or not anchor_terms:
         return
     render_text = _battle_card_render_text_from_generated(generated)
-    if any(term in render_text for term in anchor_terms):
+    raw = card.get("anchor_examples")
+    companies: set[str] = set()
+    competitor_terms: set[str] = set()
+    timing_terms: set[str] = set()
+    numeric_terms: set[str] = set()
+    if isinstance(raw, dict):
+        for rows in raw.values():
+            if not isinstance(rows, list):
+                continue
+            for witness in rows:
+                if not isinstance(witness, dict):
+                    continue
+                company = str(witness.get("reviewer_company") or "").strip().lower()
+                competitor = str(witness.get("competitor") or "").strip().lower()
+                time_anchor = str(witness.get("time_anchor") or "").strip().lower()
+                if company:
+                    companies.add(company)
+                if competitor:
+                    competitor_terms.add(competitor)
+                if time_anchor:
+                    timing_terms.add(time_anchor)
+                excerpt = str(witness.get("excerpt_text") or "")
+                for token in re.findall(r"\$\d+(?:\.\d+)?|\d+(?:\.\d+)?%", excerpt):
+                    normalized = token.strip().lower()
+                    if normalized:
+                        numeric_terms.add(normalized)
+    anchor_categories_missing = any((
+        companies and not any(term in render_text for term in companies),
+        competitor_terms and not any(term in render_text for term in competitor_terms),
+        timing_terms and not any(term in render_text for term in timing_terms),
+        numeric_terms and not any(term in render_text for term in numeric_terms),
+    ))
+    if not anchor_categories_missing and any(term in render_text for term in anchor_terms):
         return
     anchor_sentence = f"The clearest live signal is coming from {anchor_phrase}."
     summary = str(generated.get("executive_summary") or "").strip()
