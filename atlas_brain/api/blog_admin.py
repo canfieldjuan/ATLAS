@@ -21,8 +21,10 @@ from ..auth.dependencies import AuthUser, require_auth
 from ..autonomous.visibility import emit_event, record_attempt
 from ..services.blog_quality import (
     blog_failure_explanation,
+    blog_first_pass_failure_explanation,
     blog_quality_projection,
     blog_quality_revalidation,
+    latest_blog_first_pass_quality_audit,
     blog_row_content,
     blog_row_to_blueprint,
 )
@@ -55,6 +57,7 @@ class BlogDraftSummary(BaseModel):
     latest_error_summary: Optional[str] = None
     unresolved_issue_count: int = 0
     failure_explanation: Optional[dict] = None
+    first_pass_failure_explanation: Optional[dict] = None
 
 
 class BlogDraftDetail(BaseModel):
@@ -84,6 +87,8 @@ class BlogDraftDetail(BaseModel):
     latest_error_summary: Optional[str] = None
     unresolved_issue_count: int = 0
     failure_explanation: Optional[dict] = None
+    first_pass_failure_explanation: Optional[dict] = None
+    first_pass_quality_audit: Optional[dict] = None
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
     target_keyword: Optional[str] = None
@@ -131,6 +136,7 @@ def _safe_json(val):
 
 
 def _row_to_summary(row) -> dict:
+    data_context = row.get("data_context")
     return {
         "id": str(row["id"]),
         "slug": row["slug"],
@@ -150,7 +156,8 @@ def _row_to_summary(row) -> dict:
         "latest_error_code": row.get("latest_error_code"),
         "latest_error_summary": row.get("latest_error_summary"),
         "unresolved_issue_count": row.get("unresolved_issue_count") or 0,
-        "failure_explanation": blog_failure_explanation(row.get("data_context")),
+        "failure_explanation": blog_failure_explanation(data_context),
+        "first_pass_failure_explanation": blog_first_pass_failure_explanation(data_context),
     }
 
 
@@ -193,6 +200,8 @@ def _row_to_detail(row) -> dict:
         "latest_error_summary": row.get("latest_error_summary"),
         "unresolved_issue_count": row.get("unresolved_issue_count") or 0,
         "failure_explanation": blog_failure_explanation(data_context),
+        "first_pass_failure_explanation": blog_first_pass_failure_explanation(data_context),
+        "first_pass_quality_audit": latest_blog_first_pass_quality_audit(data_context),
         "seo_title": row.get("seo_title"),
         "seo_description": row.get("seo_description"),
         "target_keyword": row.get("target_keyword"),

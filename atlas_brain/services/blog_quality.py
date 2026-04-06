@@ -68,8 +68,20 @@ def latest_blog_quality_audit(data_context: Any) -> dict[str, Any]:
     return dict(audit) if isinstance(audit, dict) else {}
 
 
+def latest_blog_first_pass_quality_audit(data_context: Any) -> dict[str, Any]:
+    context = coerce_json_dict(data_context)
+    audit = context.get("latest_first_pass_quality_audit")
+    return dict(audit) if isinstance(audit, dict) else {}
+
+
 def blog_failure_explanation(data_context: Any) -> dict[str, Any] | None:
     audit = latest_blog_quality_audit(data_context)
+    explanation = audit.get("failure_explanation")
+    return dict(explanation) if isinstance(explanation, dict) else None
+
+
+def blog_first_pass_failure_explanation(data_context: Any) -> dict[str, Any] | None:
+    audit = latest_blog_first_pass_quality_audit(data_context)
     explanation = audit.get("failure_explanation")
     return dict(explanation) if isinstance(explanation, dict) else None
 
@@ -286,6 +298,19 @@ def merge_blog_revalidation_data_context(
     }
     if boundary in {"generation", "manual_generate"}:
         merged["generation_quality"] = dict(audit)
+    return merged
+
+
+def merge_blog_first_pass_quality_data_context(
+    *,
+    data_context: Any,
+    audit: dict[str, Any],
+) -> dict[str, Any]:
+    merged = coerce_json_dict(data_context)
+    merged["latest_first_pass_quality_audit"] = {
+        **audit,
+        "boundary": "generation_first_pass",
+    }
     return merged
 
 

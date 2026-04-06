@@ -125,3 +125,22 @@ def test_blog_quality_revalidation_flags_missing_upstream_context():
     explanation = result["audit"]["failure_explanation"]
     assert explanation["cause_type"] == "upstream_data_missing"
     assert "reasoning_anchor_examples" in explanation["missing_inputs"]
+
+
+def test_merge_blog_first_pass_quality_data_context():
+    merged = mod.merge_blog_first_pass_quality_data_context(
+        data_context={"vendor": "Shopify"},
+        audit={
+            "status": "fail",
+            "score": 82,
+            "threshold": 70,
+            "blocking_issues": [],
+            "warnings": ["unsupported_data_claim:Magento"],
+            "failure_explanation": {"primary_blocker": "unsupported_data_claim:Magento"},
+        },
+    )
+
+    assert merged["latest_first_pass_quality_audit"]["boundary"] == "generation_first_pass"
+    assert merged["latest_first_pass_quality_audit"]["warnings"] == ["unsupported_data_claim:Magento"]
+    assert mod.latest_blog_first_pass_quality_audit(merged)["score"] == 82
+    assert mod.blog_first_pass_failure_explanation(merged)["primary_blocker"] == "unsupported_data_claim:Magento"

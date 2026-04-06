@@ -70,7 +70,16 @@ def test_blog_admin_routes_return_truth_fields(monkeypatch):
                     "missing_primary_inputs": [],
                     "context_sources": ["data_context"],
                 },
-            }
+            },
+            "latest_first_pass_quality_audit": {
+                "status": "fail",
+                "boundary": "generation_first_pass",
+                "failure_explanation": {
+                    "boundary": "generation_first_pass",
+                    "primary_blocker": "unsupported_data_claim:Magento",
+                    "cause_type": "unsupported_claim",
+                },
+            },
         },
     }
     detail_row = {
@@ -82,6 +91,7 @@ def test_blog_admin_routes_return_truth_fields(monkeypatch):
         "data_context": {
             "vendor": "Shopify",
             "latest_quality_audit": list_row["data_context"]["latest_quality_audit"],
+            "latest_first_pass_quality_audit": list_row["data_context"]["latest_first_pass_quality_audit"],
         },
         "cta": {
             "headline": "See the full migration brief",
@@ -121,6 +131,7 @@ def test_blog_admin_routes_return_truth_fields(monkeypatch):
     assert body[0]["latest_failure_step"] == "quality_gate"
     assert body[0]["unresolved_issue_count"] == 3
     assert body[0]["failure_explanation"]["cause_type"] == "unsupported_claim"
+    assert body[0]["first_pass_failure_explanation"]["primary_blocker"] == "unsupported_data_claim:Magento"
 
     assert detail_res.status_code == 200
     detail = detail_res.json()
@@ -128,6 +139,8 @@ def test_blog_admin_routes_return_truth_fields(monkeypatch):
     assert detail["latest_error_summary"] == "unsupported_data_claim:Magento"
     assert detail["unresolved_issue_count"] == 3
     assert detail["failure_explanation"]["primary_blocker"] == "unsupported_data_claim:Magento"
+    assert detail["first_pass_failure_explanation"]["primary_blocker"] == "unsupported_data_claim:Magento"
+    assert detail["first_pass_quality_audit"]["boundary"] == "generation_first_pass"
     assert detail["cta"]["headline"] == "See the full migration brief"
 
 

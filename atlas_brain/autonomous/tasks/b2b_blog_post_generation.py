@@ -1253,6 +1253,18 @@ def _apply_blog_deterministic_repairs(
     return updated, repaired_report
 
 
+def _with_first_pass_quality_metadata(
+    report: dict[str, Any],
+    *,
+    first_pass_report: dict[str, Any],
+    retry_requested: bool,
+) -> dict[str, Any]:
+    enriched = dict(report)
+    enriched["_first_pass_report"] = dict(first_pass_report)
+    enriched["_retry_requested"] = retry_requested
+    return enriched
+
+
 def _ensure_methodology_context(
     blueprint: PostBlueprint,
     content: dict[str, Any],
@@ -1352,9 +1364,14 @@ async def _enforce_blog_quality_async(
     current, report = _apply_blog_deterministic_repairs(blueprint, current, report)
     initial_critical = _critical_quality_warnings(report)
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
+    first_pass_report = dict(report)
     if not needs_retry:
         await _store_blog_generation_cache(blueprint, current)
-        return _finalize_blog_generation_content(current), report
+        return _finalize_blog_generation_content(current), _with_first_pass_quality_metadata(
+            report,
+            first_pass_report=first_pass_report,
+            retry_requested=False,
+        )
 
     retry = await _generate_content_async(
         llm,
@@ -1365,8 +1382,16 @@ async def _enforce_blog_quality_async(
     )
     if retry is None:
         if initial_critical:
-            return None, _with_unresolved_critical_warnings(report)
-        return None, report
+            return None, _with_first_pass_quality_metadata(
+                _with_unresolved_critical_warnings(report),
+                first_pass_report=first_pass_report,
+                retry_requested=True,
+            )
+        return None, _with_first_pass_quality_metadata(
+            report,
+            first_pass_report=first_pass_report,
+            retry_requested=True,
+        )
 
     retry = _ensure_methodology_context(blueprint, retry)
     _inject_affiliate_links(blueprint, retry)
@@ -1374,9 +1399,17 @@ async def _enforce_blog_quality_async(
     retry, retry_report = _apply_blog_deterministic_repairs(blueprint, retry, retry_report)
     retry_report = _with_unresolved_critical_warnings(retry_report)
     if retry_report.get("status") != "pass":
-        return None, retry_report
+        return None, _with_first_pass_quality_metadata(
+            retry_report,
+            first_pass_report=first_pass_report,
+            retry_requested=True,
+        )
     await _store_blog_generation_cache(blueprint, retry)
-    return _finalize_blog_generation_content(retry), retry_report
+    return _finalize_blog_generation_content(retry), _with_first_pass_quality_metadata(
+        retry_report,
+        first_pass_report=first_pass_report,
+        retry_requested=True,
+    )
 
 
 def _enforce_blog_quality(
@@ -1400,8 +1433,13 @@ def _enforce_blog_quality(
     current, report = _apply_blog_deterministic_repairs(blueprint, current, report)
     initial_critical = _critical_quality_warnings(report)
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
+    first_pass_report = dict(report)
     if not needs_retry:
-        return _finalize_blog_generation_content(current), report
+        return _finalize_blog_generation_content(current), _with_first_pass_quality_metadata(
+            report,
+            first_pass_report=first_pass_report,
+            retry_requested=False,
+        )
 
     retry = _generate_content(
         llm,
@@ -1412,8 +1450,16 @@ def _enforce_blog_quality(
     )
     if retry is None:
         if initial_critical:
-            return None, _with_unresolved_critical_warnings(report)
-        return None, report
+            return None, _with_first_pass_quality_metadata(
+                _with_unresolved_critical_warnings(report),
+                first_pass_report=first_pass_report,
+                retry_requested=True,
+            )
+        return None, _with_first_pass_quality_metadata(
+            report,
+            first_pass_report=first_pass_report,
+            retry_requested=True,
+        )
 
     retry = _ensure_methodology_context(blueprint, retry)
     _inject_affiliate_links(blueprint, retry)
@@ -1421,8 +1467,16 @@ def _enforce_blog_quality(
     retry, retry_report = _apply_blog_deterministic_repairs(blueprint, retry, retry_report)
     retry_report = _with_unresolved_critical_warnings(retry_report)
     if retry_report.get("status") != "pass":
-        return None, retry_report
-    return _finalize_blog_generation_content(retry), retry_report
+        return None, _with_first_pass_quality_metadata(
+            retry_report,
+            first_pass_report=first_pass_report,
+            retry_requested=True,
+        )
+    return _finalize_blog_generation_content(retry), _with_first_pass_quality_metadata(
+        retry_report,
+        first_pass_report=first_pass_report,
+        retry_requested=True,
+    )
 
 
 def _canonicalize_blog_quality(
@@ -1442,6 +1496,33 @@ def _canonicalize_blog_quality(
     )
     blueprint.data_context = result["data_context"]
     return result["audit"]
+
+
+def _persist_first_pass_blog_quality(
+    blueprint: PostBlueprint,
+    report: dict[str, Any] | None,
+) -> dict[str, Any]:
+    from ...services.blog_quality import (
+        blog_quality_revalidation,
+        merge_blog_first_pass_quality_data_context,
+    )
+
+    first_pass_report = report.get("_first_pass_report") if isinstance(report, dict) else None
+    if not isinstance(first_pass_report, dict):
+        return {}
+
+    result = blog_quality_revalidation(
+        blueprint=blueprint,
+        content=None,
+        boundary="generation",
+        report=first_pass_report,
+    )
+    first_pass_audit = dict(result["audit"])
+    blueprint.data_context = merge_blog_first_pass_quality_data_context(
+        data_context=result["data_context"],
+        audit=first_pass_audit,
+    )
+    return first_pass_audit
 
 
 # -- entry point --------------------------------------------------
@@ -1567,6 +1648,26 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             cfg.blog_post_max_tokens,
             related_posts=link_posts,
         )
+        first_pass_audit = _persist_first_pass_blog_quality(blueprint, quality_report)
+        if quality_report.get("_retry_requested"):
+            from ..visibility import record_attempt
+            await record_attempt(
+                pool,
+                artifact_type="blog_post",
+                artifact_id=blueprint.slug,
+                run_id=str(task.id),
+                attempt_no=1,
+                stage="quality_gate_first_pass",
+                status="retry_requested",
+                score=first_pass_audit.get("score"),
+                threshold=first_pass_audit.get("threshold"),
+                blocker_count=len(first_pass_audit.get("blocking_issues", [])),
+                warning_count=len(first_pass_audit.get("warnings", [])),
+                blocking_issues=first_pass_audit.get("blocking_issues"),
+                warnings=first_pass_audit.get("warnings"),
+                failure_step="quality_gate_first_pass",
+                error_message=", ".join(first_pass_audit.get("blocking_issues", [])[:3]) or None,
+            )
         if content is None:
             quality_audit = _canonicalize_blog_quality(
                 blueprint,
@@ -1791,6 +1892,7 @@ async def _regenerate_existing_posts(
                 cfg.blog_post_max_tokens,
                 related_posts=link_posts,
             )
+            _persist_first_pass_blog_quality(blueprint, quality_report)
             if content is None:
                 quality_audit = _canonicalize_blog_quality(
                     blueprint,

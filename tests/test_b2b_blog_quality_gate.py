@@ -254,6 +254,8 @@ def test_enforce_quality_auto_injects_methodology(monkeypatch):
     assert calls["count"] == 0
     assert final is not None
     assert report["status"] == "pass"
+    assert report["_retry_requested"] is False
+    assert report["_first_pass_report"]["status"] == "pass"
     assert "self-selected" in str(final.get("content") or "").lower()
     assert "2026-02 to 2026-03" in str(final.get("content") or "")
 
@@ -298,6 +300,8 @@ def test_enforce_quality_fails_when_blocking_issues_persist_after_retry(monkeypa
     )
 
     assert final is None
+    assert report["_retry_requested"] is True
+    assert isinstance(report["_first_pass_report"], dict)
     issues = report.get("blocking_issues") or []
     assert any("missing_vendor_mentions" in issue for issue in issues)
 
