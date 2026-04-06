@@ -2054,6 +2054,65 @@ class TestBattleCardQualityGate:
         assert card["quality_status"] == "deterministic_fallback"
         assert card["executive_summary"]
 
+    def test_final_quality_replaces_duplicate_recommended_play_segments_with_fallbacks(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+            ],
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [
+                            {
+                                "segment": "SMB support teams (sample n=12)",
+                                "best_opening_angle": "Cost-effective support without forced AI upgrades",
+                                "sample_size": 12,
+                            },
+                            {
+                                "segment": "Support departments with moderate urgency tolerance",
+                                "best_opening_angle": "Reliable support tooling without complexity overhead",
+                                "sample_size": 8,
+                            },
+                        ],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [
+                                {"role_type": "economic_buyer", "source_id": "segment:role:economic_buyer"},
+                                {"role_type": "evaluator", "source_id": "segment:role:evaluator"},
+                            ],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "recommended_plays": [
+                {
+                    "play": "Best tested on SMB support teams with cost audit messaging.",
+                    "target_segment": "SMB support teams",
+                    "key_message": "Lead with cost control.",
+                    "timing": "During renewal planning.",
+                },
+                {
+                    "play": "Best tested on SMB support teams with migration benchmarking.",
+                    "target_segment": "SMB support teams",
+                    "key_message": "Lead with migration risk reduction.",
+                    "timing": "During annual planning.",
+                },
+            ],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert quality["status"] in {"sales_ready", "needs_review"}
+        assert not any("repeat the same target segment" in item for item in quality["failed_checks"])
+        assert not any("contain duplicate target segments" in item for item in quality["failed_checks"])
+        assert card["recommended_plays"][0]["target_segment"] != card["recommended_plays"][1]["target_segment"]
+
     def test_final_quality_populates_grounded_fallback_sales_copy(self):
         card = _sample_battle_card() | {
             "evidence_window_is_thin": False,

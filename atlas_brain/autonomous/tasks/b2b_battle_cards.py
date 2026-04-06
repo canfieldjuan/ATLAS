@@ -1396,7 +1396,21 @@ def _evaluate_battle_card_quality(
     )
 
     if phase == _QUALITY_PHASE_FINAL:
-        if len(plays) < min_total_plays or actionable_play_count < min_actionable_plays:
+        duplicate_target_segments = (
+            len(set(target_segments)) < 2 and len([seg for seg in target_segments if seg]) >= 2
+        )
+        duplicate_segment_labels = (
+            isinstance(card.get("recommended_plays"), list)
+            and _battle_card_has_duplicate_recommended_play_segments(
+                {"recommended_plays": card.get("recommended_plays")}
+            )
+        )
+        if (
+            len(plays) < min_total_plays
+            or actionable_play_count < min_actionable_plays
+            or duplicate_target_segments
+            or duplicate_segment_labels
+        ):
             fallback_plays = _battle_card_fallback_recommended_plays(
                 card,
                 limit=max(min_total_plays, 1),
@@ -1408,6 +1422,12 @@ def _evaluate_battle_card_quality(
                     plays,
                     account_names=account_names,
                 )
+                duplicate_target_segments = (
+                    len(set(target_segments)) < 2 and len([seg for seg in target_segments if seg]) >= 2
+                )
+                duplicate_segment_labels = _battle_card_has_duplicate_recommended_play_segments(
+                    {"recommended_plays": plays}
+                )
         if len(plays) < min_total_plays:
             hard_blockers.append(
                 f"recommended_plays must contain at least {min_total_plays} distinct motions"
@@ -1416,9 +1436,9 @@ def _evaluate_battle_card_quality(
             hard_blockers.append(
                 "recommended plays are missing role/account targeting + timing + CTA"
             )
-        if len(set(target_segments)) < 2 and len([seg for seg in target_segments if seg]) >= 2:
+        if duplicate_target_segments:
             hard_blockers.append("recommended plays repeat the same target segment")
-        if isinstance(card.get("recommended_plays"), list) and _battle_card_has_duplicate_recommended_play_segments({"recommended_plays": card.get("recommended_plays")}):
+        if duplicate_segment_labels:
             hard_blockers.append("recommended plays contain duplicate target segments")
 
         generated = {
