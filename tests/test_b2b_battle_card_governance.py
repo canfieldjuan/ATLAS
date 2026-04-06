@@ -2,6 +2,7 @@
 
 import sys
 from datetime import date
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -29,6 +30,7 @@ for _mod in (
 
 from atlas_brain.autonomous.tasks.b2b_battle_cards import (
     _build_battle_card_render_payload,
+    _battle_card_trace_metadata,
     _evaluate_battle_card_quality,
 )
 
@@ -170,6 +172,114 @@ class TestRenderPayloadGovernance:
         payload = _build_battle_card_render_payload(card)
         assert "reasoning_contracts" not in payload
         assert "vendor_core_reasoning" in payload
+
+    def test_compacts_reasoning_contract_sections_for_prompt_payload(self):
+        card = _card_with_governance()
+        card["reasoning_contracts"] = {
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "trigger": "Budget shock",
+                    "why_now": "Renewals are active",
+                    "who_most_affected": "Ops leaders",
+                    "confidence": "medium",
+                    "data_gaps": [f"gap-{i}" for i in range(6)],
+                    "citations": [f"cite-{i}" for i in range(10)],
+                },
+                "segment_playbook": {
+                    "confidence": "low",
+                    "data_gaps": [f"segment-gap-{i}" for i in range(6)],
+                    "priority_segments": [
+                        {"segment": f"seg-{i}", "why_now": "now", "sample_size": i + 1}
+                        for i in range(6)
+                    ],
+                    "supporting_evidence": {
+                        "top_roles": [
+                            {"role_type": f"role-{i}", "review_count": i + 1}
+                            for i in range(5)
+                        ],
+                    },
+                },
+                "timing_intelligence": {
+                    "confidence": "medium",
+                    "best_timing_window": "Q2",
+                    "immediate_triggers": [f"trigger-{i}" for i in range(6)],
+                    "data_gaps": [f"time-gap-{i}" for i in range(6)],
+                    "supporting_evidence": {"large_blob": "drop-me"},
+                },
+                "why_they_stay": {
+                    "summary": "They stay for integrations.",
+                    "strengths": [
+                        {"area": f"strength-{i}", "evidence": "proof", "neutralization": "counter"}
+                        for i in range(5)
+                    ],
+                },
+                "confidence_posture": {
+                    "overall": "medium",
+                    "limits": [f"limit-{i}" for i in range(6)],
+                },
+            },
+        }
+        payload = _build_battle_card_render_payload(card)
+        vendor_core = payload["vendor_core_reasoning"]
+        assert "citations" not in vendor_core
+        assert len(vendor_core["causal_narrative"]["data_gaps"]) == 4
+        assert len(vendor_core["segment_playbook"]["priority_segments"]) == 3
+        assert len(vendor_core["segment_playbook"]["supporting_evidence"]["top_roles"]) == 3
+        assert "supporting_evidence" not in vendor_core["timing_intelligence"]
+        assert len(vendor_core["timing_intelligence"]["immediate_triggers"]) == 4
+        assert len(vendor_core["why_they_stay"]["strengths"]) == 3
+        assert len(vendor_core["confidence_posture"]["limits"]) == 4
+
+    def test_limits_anchor_witness_reference_and_account_payload_inputs(self):
+        card = _card_with_governance(
+            cross_vendor_battles=[
+                {"opponent": f"Opp-{i}", "conclusion": "x", "confidence": 0.9}
+                for i in range(5)
+            ],
+            high_intent_companies=[
+                {"company": f"Acct-{i}", "urgency": 8.0, "role": "VP"}
+                for i in range(5)
+            ],
+            reference_ids={
+                "witness_ids": [f"w-{i}" for i in range(20)],
+                "metric_ids": [f"m-{i}" for i in range(20)],
+            },
+            anchor_examples={
+                "outlier_or_named_account": [
+                    {"witness_id": f"w-{i}", "reviewer_company": f"Co-{i}", "excerpt_text": "quote"}
+                    for i in range(3)
+                ],
+            },
+            witness_highlights=[
+                {"witness_id": f"w-{i}", "excerpt_text": "quote"}
+                for i in range(8)
+            ],
+        )
+        payload = _build_battle_card_render_payload(card)
+        assert len(payload["cross_vendor_battles"]) == 2
+        assert len(payload["high_intent_companies"]) == 3
+        assert len(payload["reference_ids"]["witness_ids"]) == 12
+        assert len(payload["reference_ids"]["metric_ids"]) == 12
+        assert len(payload["anchor_examples"]["outlier_or_named_account"]) == 1
+        assert len(payload["witness_highlights"]) == 4
+
+
+class TestTraceMetadata:
+    def test_battle_card_trace_metadata_includes_vendor_and_run_identity(self):
+        task = SimpleNamespace(id="run-123")
+        metadata = _battle_card_trace_metadata(
+            task,
+            {"vendor": "HubSpot"},
+            attempt=2,
+        )
+        assert metadata["vendor_name"] == "HubSpot"
+        assert metadata["run_id"] == "run-123"
+        assert metadata["entity_type"] == "battle_card"
+        assert metadata["entity_id"] == "HubSpot"
+        assert metadata["source_name"] == "b2b_battle_cards"
+        assert metadata["event_type"] == "llm_overlay"
+        assert metadata["attempt_no"] == 2
 
 
 # ---------------------------------------------------------------------------

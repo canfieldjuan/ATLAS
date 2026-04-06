@@ -585,6 +585,419 @@ def _battle_card_witness_highlights(card: dict[str, Any]) -> list[dict[str, Any]
     return [dict(row) for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
 
 
+def _battle_card_limited_rows(
+    rows: Any,
+    *,
+    limit: int,
+    allowed_keys: tuple[str, ...] | None = None,
+) -> list[dict[str, Any]]:
+    """Return a bounded list of shallow-copied rows for prompt payloads."""
+    if limit <= 0 or not isinstance(rows, list):
+        return []
+    resolved: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        if allowed_keys is not None:
+            item = {key: item[key] for key in allowed_keys if key in item}
+        if item:
+            resolved.append(item)
+        if len(resolved) >= limit:
+            break
+    return resolved
+
+
+def _battle_card_limited_strings(values: Any, *, limit: int) -> list[str]:
+    """Return a bounded list of non-empty strings."""
+    if limit <= 0 or not isinstance(values, list):
+        return []
+    resolved: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        resolved.append(text)
+        if len(resolved) >= limit:
+            break
+    return resolved
+
+
+def _battle_card_limited_reference_ids(reference_ids: Any) -> dict[str, list[str]]:
+    """Return bounded metric/witness reference ids for prompt payloads."""
+    if not isinstance(reference_ids, dict):
+        return {}
+    cfg = settings.b2b_churn
+    limit = int(getattr(cfg, "battle_card_render_reference_ids_limit", 12) or 12)
+    if limit <= 0:
+        return {}
+    limited: dict[str, list[str]] = {}
+    for key in ("metric_ids", "witness_ids"):
+        values = _battle_card_limited_strings(reference_ids.get(key), limit=limit)
+        if values:
+            limited[key] = values
+    return limited
+
+
+def _battle_card_limited_anchor_examples(card: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Return bounded anchor examples for prompt payloads."""
+    cfg = settings.b2b_churn
+    limit = int(getattr(cfg, "battle_card_render_anchor_examples_per_bucket", 1) or 1)
+    if limit <= 0:
+        return {}
+    allowed_keys = (
+        "witness_id",
+        "excerpt_text",
+        "reviewer_company",
+        "time_anchor",
+        "numeric_literals",
+        "competitor",
+        "title",
+        "company_size",
+        "industry",
+    )
+    anchors = _battle_card_anchor_examples(card)
+    resolved: dict[str, list[dict[str, Any]]] = {}
+    for label, rows in anchors.items():
+        limited = _battle_card_limited_rows(rows, limit=limit, allowed_keys=allowed_keys)
+        if limited:
+            resolved[label] = limited
+    return resolved
+
+
+def _battle_card_limited_witness_highlights(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return bounded witness highlights for prompt payloads."""
+    cfg = settings.b2b_churn
+    limit = int(getattr(cfg, "battle_card_render_witness_highlights_limit", 4) or 4)
+    allowed_keys = (
+        "witness_id",
+        "excerpt_text",
+        "reviewer_company",
+        "time_anchor",
+        "numeric_literals",
+        "competitor",
+        "title",
+        "company_size",
+        "industry",
+    )
+    return _battle_card_limited_rows(
+        _battle_card_witness_highlights(card),
+        limit=limit,
+        allowed_keys=allowed_keys,
+    )
+
+
+def _battle_card_trim_data_gaps(values: Any) -> list[str]:
+    """Return bounded data-gap text for compact reasoning packets."""
+    cfg = settings.b2b_churn
+    limit = int(getattr(cfg, "battle_card_render_data_gaps_limit", 4) or 4)
+    return _battle_card_limited_strings(values, limit=limit)
+
+
+def _battle_card_compact_vendor_core_reasoning(contract: dict[str, Any]) -> dict[str, Any]:
+    """Compact vendor core reasoning to the fields battle-card copy actually uses."""
+    if not isinstance(contract, dict):
+        return {}
+    cfg = settings.b2b_churn
+    strengths_limit = int(getattr(cfg, "battle_card_render_strengths_limit", 3) or 3)
+    segments_limit = int(getattr(cfg, "battle_card_render_priority_segments_limit", 3) or 3)
+    compact: dict[str, Any] = {}
+    causal = contract.get("causal_narrative") if isinstance(contract.get("causal_narrative"), dict) else {}
+    if causal:
+        causal_payload = {
+            key: causal.get(key)
+            for key in (
+                "primary_wedge",
+                "trigger",
+                "why_now",
+                "who_most_affected",
+                "causal_chain",
+                "confidence",
+            )
+            if causal.get(key) not in (None, "", [], {})
+        }
+        data_gaps = _battle_card_trim_data_gaps(causal.get("data_gaps"))
+        if data_gaps:
+            causal_payload["data_gaps"] = data_gaps
+        weakeners = _battle_card_limited_rows(
+            causal.get("what_would_weaken_thesis"),
+            limit=3,
+            allowed_keys=("condition", "monitorable", "signal_source"),
+        )
+        if weakeners:
+            causal_payload["what_would_weaken_thesis"] = weakeners
+        if causal_payload:
+            compact["causal_narrative"] = causal_payload
+    segment = contract.get("segment_playbook") if isinstance(contract.get("segment_playbook"), dict) else {}
+    if segment:
+        segment_payload = {
+            key: segment.get(key)
+            for key in ("confidence",)
+            if segment.get(key) not in (None, "", [], {})
+        }
+        data_gaps = _battle_card_trim_data_gaps(segment.get("data_gaps"))
+        if data_gaps:
+            segment_payload["data_gaps"] = data_gaps
+        priority_segments = _battle_card_limited_rows(
+            segment.get("priority_segments"),
+            limit=segments_limit,
+            allowed_keys=(
+                "segment",
+                "why_now",
+                "play",
+                "pain",
+                "sample_size",
+                "buyer_role",
+                "company_size",
+                "industry",
+                "active_eval_signals",
+            ),
+        )
+        if priority_segments:
+            segment_payload["priority_segments"] = priority_segments
+        supporting = segment.get("supporting_evidence") if isinstance(segment.get("supporting_evidence"), dict) else {}
+        support_payload: dict[str, Any] = {}
+        top_roles = _battle_card_limited_rows(
+            supporting.get("top_roles"),
+            limit=segments_limit,
+            allowed_keys=("role_type", "top_pain", "top_buying_stage", "review_count", "priority_score"),
+        )
+        if top_roles:
+            support_payload["top_roles"] = top_roles
+        top_use_cases = _battle_card_limited_rows(
+            supporting.get("top_use_cases"),
+            limit=segments_limit,
+            allowed_keys=("use_case", "mention_count", "lock_in_level"),
+        )
+        if top_use_cases:
+            support_payload["top_use_cases"] = top_use_cases
+        active_eval = supporting.get("active_eval_signals")
+        if active_eval not in (None, "", [], {}):
+            support_payload["active_eval_signals"] = active_eval
+        if support_payload:
+            segment_payload["supporting_evidence"] = support_payload
+        if segment_payload:
+            compact["segment_playbook"] = segment_payload
+    timing = contract.get("timing_intelligence") if isinstance(contract.get("timing_intelligence"), dict) else {}
+    if timing:
+        timing_payload = {
+            key: timing.get(key)
+            for key in (
+                "confidence",
+                "best_timing_window",
+                "seasonal_pattern",
+                "sentiment_direction",
+                "active_eval_signals",
+            )
+            if timing.get(key) not in (None, "", [], {})
+        }
+        immediate = _battle_card_limited_strings(timing.get("immediate_triggers"), limit=4)
+        if immediate:
+            timing_payload["immediate_triggers"] = immediate
+        data_gaps = _battle_card_trim_data_gaps(timing.get("data_gaps"))
+        if data_gaps:
+            timing_payload["data_gaps"] = data_gaps
+        if timing_payload:
+            compact["timing_intelligence"] = timing_payload
+    stay = contract.get("why_they_stay") if isinstance(contract.get("why_they_stay"), dict) else {}
+    if stay:
+        stay_payload = {}
+        summary = str(stay.get("summary") or "").strip()
+        if summary:
+            stay_payload["summary"] = summary
+        strengths = _battle_card_limited_rows(
+            stay.get("strengths"),
+            limit=strengths_limit,
+            allowed_keys=("area", "evidence", "neutralization", "how_to_neutralize"),
+        )
+        if strengths:
+            stay_payload["strengths"] = strengths
+        if stay_payload:
+            compact["why_they_stay"] = stay_payload
+    posture = contract.get("confidence_posture") if isinstance(contract.get("confidence_posture"), dict) else {}
+    if posture:
+        posture_payload = {}
+        overall = posture.get("overall")
+        if overall not in (None, "", [], {}):
+            posture_payload["overall"] = overall
+        limits = _battle_card_trim_data_gaps(posture.get("limits"))
+        if limits:
+            posture_payload["limits"] = limits
+        if posture_payload:
+            compact["confidence_posture"] = posture_payload
+    return compact
+
+
+def _battle_card_compact_displacement_reasoning(contract: dict[str, Any]) -> dict[str, Any]:
+    """Compact displacement reasoning for battle-card prompts."""
+    if not isinstance(contract, dict):
+        return {}
+    cfg = settings.b2b_churn
+    reframes_limit = int(getattr(cfg, "battle_card_render_reframes_limit", 3) or 3)
+    compact: dict[str, Any] = {}
+    for key in (
+        "confirmed_switch_count",
+        "active_evaluation_count",
+        "displacement_mention_volume",
+    ):
+        value = contract.get(key)
+        if value not in (None, "", [], {}):
+            compact[key] = value
+    migration = contract.get("migration_proof") if isinstance(contract.get("migration_proof"), dict) else {}
+    if migration:
+        migration_payload = {
+            key: migration.get(key)
+            for key in (
+                "confidence",
+                "evidence_type",
+                "switching_is_real",
+                "primary_switch_driver",
+                "top_destination",
+                "switch_volume",
+                "active_evaluation_volume",
+                "displacement_mention_volume",
+                "evaluation_vs_switching",
+            )
+            if migration.get(key) not in (None, "", [], {})
+        }
+        data_gaps = _battle_card_trim_data_gaps(migration.get("data_gaps"))
+        if data_gaps:
+            migration_payload["data_gaps"] = data_gaps
+        named_examples = _battle_card_limited_rows(
+            migration.get("named_examples"),
+            limit=2,
+            allowed_keys=("company", "destination", "driver", "proof"),
+        )
+        if named_examples:
+            migration_payload["named_examples"] = named_examples
+        if migration_payload:
+            compact["migration_proof"] = migration_payload
+    reframes = contract.get("competitive_reframes") if isinstance(contract.get("competitive_reframes"), dict) else {}
+    if reframes:
+        reframe_payload = {
+            key: reframes.get(key)
+            for key in ("confidence",)
+            if reframes.get(key) not in (None, "", [], {})
+        }
+        data_gaps = _battle_card_trim_data_gaps(reframes.get("data_gaps"))
+        if data_gaps:
+            reframe_payload["data_gaps"] = data_gaps
+        rows = _battle_card_limited_rows(
+            reframes.get("reframes"),
+            limit=reframes_limit,
+            allowed_keys=("opponent", "segment", "message", "proof_point", "when_to_use"),
+        )
+        if rows:
+            reframe_payload["reframes"] = rows
+        if reframe_payload:
+            compact["competitive_reframes"] = reframe_payload
+    switch_triggers = _battle_card_limited_strings(contract.get("switch_triggers"), limit=4)
+    if switch_triggers:
+        compact["switch_triggers"] = switch_triggers
+    top_flows = _battle_card_limited_rows(
+        contract.get("top_flows"),
+        limit=3,
+        allowed_keys=("from_vendor", "to_vendor", "direction", "mention_count"),
+    )
+    if top_flows:
+        compact["top_flows"] = top_flows
+    return compact
+
+
+def _battle_card_compact_category_reasoning(contract: dict[str, Any]) -> dict[str, Any]:
+    """Compact category reasoning for battle-card prompts."""
+    if not isinstance(contract, dict):
+        return {}
+    compact = {
+        key: contract.get(key)
+        for key in (
+            "market_regime",
+            "narrative",
+            "confidence",
+            "confidence_score",
+            "durability",
+            "winner",
+            "loser",
+            "vendor_count",
+            "displacement_flow_count",
+            "top_differentiator",
+            "top_vulnerability",
+        )
+        if contract.get(key) not in (None, "", [], {})
+    }
+    data_gaps = _battle_card_trim_data_gaps(contract.get("data_gaps"))
+    if data_gaps:
+        compact["data_gaps"] = data_gaps
+    key_insights = _battle_card_limited_rows(
+        contract.get("key_insights"),
+        limit=3,
+    )
+    if key_insights:
+        compact["key_insights"] = key_insights
+    outliers = _battle_card_limited_strings(contract.get("outlier_vendors"), limit=3)
+    if outliers:
+        compact["outlier_vendors"] = outliers
+    return compact
+
+
+def _battle_card_compact_account_reasoning(contract: dict[str, Any]) -> dict[str, Any]:
+    """Compact account reasoning for battle-card prompts."""
+    if not isinstance(contract, dict):
+        return {}
+    compact = {
+        key: contract.get(key)
+        for key in (
+            "confidence",
+            "market_summary",
+            "total_accounts",
+            "high_intent_count",
+            "active_eval_count",
+            "active_evaluation_count",
+        )
+        if contract.get(key) not in (None, "", [], {})
+    }
+    data_gaps = _battle_card_trim_data_gaps(contract.get("data_gaps"))
+    if data_gaps:
+        compact["data_gaps"] = data_gaps
+    cfg = settings.b2b_churn
+    account_limit = int(getattr(cfg, "battle_card_render_high_intent_companies_limit", 3) or 3)
+    top_accounts = _battle_card_limited_rows(
+        contract.get("top_accounts"),
+        limit=account_limit,
+        allowed_keys=("name", "role", "pain", "stage", "urgency", "decision_maker", "contract_end"),
+    )
+    if top_accounts:
+        compact["top_accounts"] = top_accounts
+    supporting = contract.get("supporting_evidence") if isinstance(contract.get("supporting_evidence"), dict) else {}
+    support_payload = {
+        key: supporting.get(key)
+        for key in ("active_eval_count", "active_evaluation_count")
+        if supporting.get(key) not in (None, "", [], {})
+    }
+    if support_payload:
+        compact["supporting_evidence"] = support_payload
+    return compact
+
+
+def _battle_card_trace_metadata(
+    task: ScheduledTask,
+    card: dict[str, Any],
+    *,
+    attempt: int,
+) -> dict[str, Any]:
+    """Build trace metadata for battle-card sales-copy calls."""
+    vendor = str(card.get("vendor") or "").strip()
+    return {
+        "vendor_name": vendor,
+        "run_id": str(task.id),
+        "source_name": "b2b_battle_cards",
+        "event_type": "llm_overlay",
+        "entity_type": "battle_card",
+        "entity_id": vendor,
+        "attempt_no": attempt,
+    }
+
+
 def _battle_card_render_text(card: dict[str, Any]) -> str:
     parts: list[str] = []
     for field in _BATTLE_CARD_LLM_FIELDS:
@@ -1230,30 +1643,104 @@ def _build_battle_card_render_payload(
         and reasoning_contracts
         and not section_contracts_present
     ):
-        payload["reasoning_contracts"] = reasoning_contracts
+        compact_contracts = {}
+        vendor_bundle = _battle_card_compact_vendor_core_reasoning(
+            reasoning_contracts.get("vendor_core_reasoning"),
+        )
+        if vendor_bundle:
+            compact_contracts["vendor_core_reasoning"] = vendor_bundle
+        displacement_bundle = _battle_card_compact_displacement_reasoning(
+            reasoning_contracts.get("displacement_reasoning"),
+        )
+        if displacement_bundle:
+            compact_contracts["displacement_reasoning"] = displacement_bundle
+        category_bundle = _battle_card_compact_category_reasoning(
+            reasoning_contracts.get("category_reasoning"),
+        )
+        if category_bundle:
+            compact_contracts["category_reasoning"] = category_bundle
+        account_bundle = _battle_card_compact_account_reasoning(
+            reasoning_contracts.get("account_reasoning"),
+        )
+        if account_bundle:
+            compact_contracts["account_reasoning"] = account_bundle
+        if compact_contracts:
+            payload["reasoning_contracts"] = compact_contracts
     if vendor_core_reasoning:
-        payload["vendor_core_reasoning"] = vendor_core_reasoning
+        payload["vendor_core_reasoning"] = _battle_card_compact_vendor_core_reasoning(
+            vendor_core_reasoning,
+        )
     if displacement_reasoning:
-        payload["displacement_reasoning"] = displacement_reasoning
+        payload["displacement_reasoning"] = _battle_card_compact_displacement_reasoning(
+            displacement_reasoning,
+        )
     if category_reasoning:
-        payload["category_reasoning"] = category_reasoning
+        payload["category_reasoning"] = _battle_card_compact_category_reasoning(
+            category_reasoning,
+        )
     if account_reasoning:
-        payload["account_reasoning"] = account_reasoning
+        payload["account_reasoning"] = _battle_card_compact_account_reasoning(
+            account_reasoning,
+        )
 
     payload["locked_facts"] = _build_battle_card_locked_facts(card)
     payload["render_packet_version"] = "contract_first_v1"
     metric_ledger = _build_metric_ledger(card)
     if metric_ledger:
         payload["metric_ledger"] = metric_ledger
-    anchor_examples = _battle_card_anchor_examples(card)
+    anchor_examples = _battle_card_limited_anchor_examples(card)
     if anchor_examples:
         payload["anchor_examples"] = anchor_examples
-    witness_highlights = _battle_card_witness_highlights(card)
+    witness_highlights = _battle_card_limited_witness_highlights(card)
     if witness_highlights:
         payload["witness_highlights"] = witness_highlights
-    reference_ids = card.get("reference_ids")
-    if isinstance(reference_ids, dict) and reference_ids:
+    reference_ids = _battle_card_limited_reference_ids(card.get("reference_ids"))
+    if reference_ids:
         payload["reference_ids"] = reference_ids
+
+    cfg = settings.b2b_churn
+    battle_limit = int(getattr(cfg, "battle_card_render_cross_vendor_battles_limit", 2) or 2)
+    if battle_limit <= 0:
+        payload.pop("cross_vendor_battles", None)
+    else:
+        battles = _battle_card_limited_rows(
+            payload.get("cross_vendor_battles"),
+            limit=battle_limit,
+            allowed_keys=(
+                "opponent",
+                "conclusion",
+                "durability",
+                "confidence",
+                "winner",
+                "loser",
+                "key_insights",
+            ),
+        )
+        if battles:
+            payload["cross_vendor_battles"] = battles
+        else:
+            payload.pop("cross_vendor_battles", None)
+
+    account_limit = int(getattr(cfg, "battle_card_render_high_intent_companies_limit", 3) or 3)
+    companies = _battle_card_limited_rows(
+        payload.get("high_intent_companies"),
+        limit=account_limit,
+        allowed_keys=(
+            "company",
+            "urgency",
+            "role",
+            "pain",
+            "company_size",
+            "buying_stage",
+            "decision_maker",
+            "confidence_score",
+            "contract_end",
+        ),
+    )
+    if companies:
+        payload["high_intent_companies"] = companies
+    else:
+        payload.pop("high_intent_companies", None)
 
     # Phase 8: inject governance context so LLM can calibrate
     contracts = card.get("reasoning_contracts")
@@ -1271,10 +1758,16 @@ def _build_battle_card_render_payload(
         if isinstance(eg, dict):
             contradictions = eg.get("contradictions")
             if isinstance(contradictions, list) and contradictions:
-                payload["contradictions"] = contradictions
+                payload["contradictions"] = _battle_card_limited_rows(
+                    contradictions,
+                    limit=3,
+                )
             cg = eg.get("coverage_gaps")
             if isinstance(cg, list) and cg:
-                payload["coverage_gaps"] = cg
+                payload["coverage_gaps"] = _battle_card_limited_rows(
+                    cg,
+                    limit=int(getattr(cfg, "battle_card_render_data_gaps_limit", 4) or 4),
+                )
 
     if prior_attempt is not None:
         payload["prior_attempt"] = prior_attempt
@@ -2213,7 +2706,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     cache_confidence = cfg.battle_card_cache_confidence
     llm_options = _battle_card_llm_options(cfg)
 
-    async def _request_sales_copy(payload: dict[str, Any]) -> dict[str, Any]:
+    async def _request_sales_copy(
+        card: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        attempt: int,
+    ) -> dict[str, Any]:
         sales_copy = await asyncio.wait_for(
             asyncio.to_thread(
                 call_llm_with_skill,
@@ -2226,6 +2724,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 workload=llm_options["workload"],
                 try_openrouter=llm_options["try_openrouter"],
                 openrouter_model=llm_options["openrouter_model"],
+                trace_metadata=_battle_card_trace_metadata(
+                    task,
+                    card,
+                    attempt=attempt,
+                ),
             ),
             timeout=llm_timeout,
         )
@@ -2359,7 +2862,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             for attempt in range(max_attempts):
                 candidate_for_retry: dict[str, Any] = {}
                 try:
-                    parsed_copy = await _request_sales_copy(payload)
+                    parsed_copy = await _request_sales_copy(
+                        card,
+                        payload,
+                        attempt=attempt + 1,
+                    )
                 except Exception as exc:
                     parsed_copy = {}
                     candidate_for_retry = {}

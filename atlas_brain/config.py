@@ -3106,6 +3106,60 @@ class B2BChurnConfig(BaseSettings):
         le=50000,
         description="Approximate max input tokens allowed for a single battle-card sales-copy prompt before the LLM step falls back deterministically",
     )
+    battle_card_render_anchor_examples_per_bucket: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Max witness-backed anchor examples to surface per anchor bucket in battle-card sales-copy prompts",
+    )
+    battle_card_render_witness_highlights_limit: int = Field(
+        default=4,
+        ge=0,
+        le=12,
+        description="Max witness highlights to include in battle-card sales-copy prompts",
+    )
+    battle_card_render_reference_ids_limit: int = Field(
+        default=12,
+        ge=0,
+        le=40,
+        description="Max metric or witness reference ids to include per list in battle-card sales-copy prompts",
+    )
+    battle_card_render_cross_vendor_battles_limit: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Max cross-vendor battle summaries to include in battle-card sales-copy prompts",
+    )
+    battle_card_render_high_intent_companies_limit: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Max high-intent accounts to include in battle-card sales-copy prompts",
+    )
+    battle_card_render_reframes_limit: int = Field(
+        default=3,
+        ge=0,
+        le=8,
+        description="Max competitive reframes to include in compact displacement reasoning for battle-card sales-copy prompts",
+    )
+    battle_card_render_priority_segments_limit: int = Field(
+        default=3,
+        ge=0,
+        le=8,
+        description="Max priority segments to include in compact vendor reasoning for battle-card sales-copy prompts",
+    )
+    battle_card_render_strengths_limit: int = Field(
+        default=3,
+        ge=0,
+        le=8,
+        description="Max incumbent strengths to include in compact battle-card retention context",
+    )
+    battle_card_render_data_gaps_limit: int = Field(
+        default=4,
+        ge=0,
+        le=12,
+        description="Max data gaps or confidence-limit notes to include per compact battle-card reasoning section",
+    )
     battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
     battle_card_llm_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0, description="Timeout for a single battle card LLM generation attempt")
     battle_card_cache_confidence: float = Field(default=0.95, ge=0.0, le=1.0, description="Confidence assigned to validated battle card sales copy cache entries")
