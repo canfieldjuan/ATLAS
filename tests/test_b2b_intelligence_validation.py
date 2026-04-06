@@ -1815,6 +1815,95 @@ class TestBattleCardSalesCopySanitization:
         assert "pricing predictability" in plays[0]["key_message"].lower()
         assert plays[0]["timing"] == "During renewal review cycles."
 
+    def test_fallback_recommended_plays_use_high_intent_accounts_when_segments_are_thin(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+                {"company": "Northwind Health", "urgency": 8, "buying_stage": "renewal_decision"},
+            ],
+        }
+
+        plays = _battle_card_fallback_recommended_plays(card)
+
+        assert len(plays) >= 2
+        assert plays[0]["target_segment"] == "Acme Transit renewal stakeholders"
+        assert plays[1]["target_segment"] == "Northwind Health renewal stakeholders"
+        assert "workshop" in plays[0]["play"].lower() or "benchmark" in plays[0]["play"].lower()
+        assert "evaluation" in plays[0]["timing"].lower()
+        assert "renewal decision" in plays[1]["timing"].lower()
+
+    def test_fallback_recommended_plays_use_generic_roles_when_accounts_are_missing(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "high_intent_companies": [],
+        }
+
+        plays = _battle_card_fallback_recommended_plays(card)
+
+        assert len(plays) >= 2
+        assert plays[0]["target_segment"] != plays[1]["target_segment"]
+        assert "buyers" in plays[0]["target_segment"].lower() or "evaluators" in plays[0]["target_segment"].lower()
+        assert "buyers" in plays[1]["target_segment"].lower() or "evaluators" in plays[1]["target_segment"].lower()
+
+    def test_fallback_recommended_plays_normalize_date_heavy_timing(self):
+        card = _sample_battle_card() | {
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": (
+                            "The most actionable timing anchor is the recent (March 2026) emergence "
+                            "of integration gap complaints during annual planning."
+                        ),
+                    },
+                },
+            },
+            "high_intent_companies": [],
+        }
+
+        plays = _battle_card_fallback_recommended_plays(card)
+
+        assert plays[0]["timing"] == "Best tested during active evaluation windows, renewal review, or planning cycles."
+
 
 class TestBattleCardQualityGate:
     def test_quality_gate_rejects_conflicting_active_eval_signals(self):
@@ -2164,6 +2253,76 @@ class TestBattleCardQualityGate:
         assert not any("repeat the same target segment" in item for item in quality["failed_checks"])
         assert not any("contain duplicate target segments" in item for item in quality["failed_checks"])
         assert card["recommended_plays"][0]["target_segment"] != card["recommended_plays"][1]["target_segment"]
+
+    def test_final_quality_repairs_thin_recommended_plays_with_account_fallbacks(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "high_intent_companies": [
+                {"company": "Acme Transit", "urgency": 9, "buying_stage": "evaluation"},
+                {"company": "Northwind Health", "urgency": 8, "buying_stage": "renewal_decision"},
+            ],
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "recommended_plays": [
+                {
+                    "play": "Consider this platform at some point.",
+                    "target_segment": "all",
+                    "key_message": "It could help.",
+                    "timing": "sometime",
+                },
+            ],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert quality["status"] in {"sales_ready", "needs_review"}
+        assert not any("recommended_plays must contain at least" in item for item in quality["failed_checks"])
+        assert not any("recommended plays are missing role/account targeting + timing + CTA" in item for item in quality["failed_checks"])
+        assert card["recommended_plays"][0]["target_segment"] != card["recommended_plays"][1]["target_segment"]
+
+    def test_final_quality_repairs_thin_recommended_plays_with_generic_role_fallbacks(self):
+        card = _sample_battle_card() | {
+            "evidence_window_is_thin": False,
+            "data_stale": False,
+            "data_as_of_date": date.today().isoformat(),
+            "high_intent_companies": [],
+            "reasoning_contracts": {
+                "schema_version": "v1",
+                "vendor_core_reasoning": {
+                    "schema_version": "v1",
+                    "segment_playbook": {
+                        "confidence": "medium",
+                        "priority_segments": [],
+                        "supporting_evidence": {
+                            "top_strategic_roles": [],
+                        },
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "During renewal review cycles",
+                    },
+                },
+            },
+            "recommended_plays": [],
+        }
+        quality = _evaluate_battle_card_quality(card, phase="final")
+        assert quality["status"] in {"needs_review", "thin_evidence", "sales_ready"}
+        assert not any("recommended_plays must contain at least" in item for item in quality["failed_checks"])
+        assert not any("recommended plays are missing role/account targeting + timing + CTA" in item for item in quality["failed_checks"])
+        assert len(card["recommended_plays"]) >= 2
 
     def test_final_quality_populates_grounded_fallback_sales_copy(self):
         card = _sample_battle_card() | {

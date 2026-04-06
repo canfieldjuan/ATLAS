@@ -1683,6 +1683,60 @@ def _battle_card_role_key_message(card: dict[str, Any], role_type: str) -> str:
     return _battle_card_safe_play_text(card, "recommended_plays[0].key_message").rstrip(".")
 
 
+def _battle_card_account_stage_timing(stage: Any, default_timing: str) -> str:
+    normalized = _normalize_buying_stage(stage)
+    if normalized == "renewal_decision":
+        return "Before the next renewal decision checkpoint."
+    if normalized == "evaluation":
+        return "During active evaluation and renewal review."
+    if normalized == "consideration":
+        return "As the evaluation moves into shortlist review."
+    if normalized == "procurement":
+        return "Before procurement locks the renewal plan."
+    return default_timing.rstrip(".") + "."
+
+
+def _battle_card_safe_fallback_timing(value: Any) -> str:
+    text = str(value or "").strip()
+    default = "Best tested during active evaluation windows, renewal review, or planning cycles."
+    if not text:
+        return default
+    if len(text) > 140:
+        return default
+    if re.search(r"\b20\d{2}\b", text):
+        return default
+    if any(token in text.lower() for token in ("march ", "april ", "may ", "june ", "july ", "august ", "september ", "october ", "november ", "december ", "january ", "february ")):
+        return default
+    return text.rstrip(".") + "."
+
+
+def _battle_card_account_play_text(card: dict[str, Any], company: str) -> str:
+    weakness = _battle_card_primary_weakness(card)
+    if weakness == "pricing":
+        return f"Run a pricing benchmark workshop with {company} before renewal pressure hardens."
+    if weakness == "support":
+        return f"Run a support-risk review with {company} before the next renewal checkpoint."
+    return f"Run a fit-and-risk benchmark with {company} before the next evaluation checkpoint."
+
+
+def _battle_card_generic_fallback_roles(card: dict[str, Any]) -> list[dict[str, str]]:
+    weakness = _battle_card_primary_weakness(card)
+    if weakness == "pricing":
+        return [
+            {"role_type": "economic_buyer"},
+            {"role_type": "evaluator"},
+        ]
+    if weakness == "support":
+        return [
+            {"role_type": "champion"},
+            {"role_type": "economic_buyer"},
+        ]
+    return [
+        {"role_type": "evaluator"},
+        {"role_type": "economic_buyer"},
+    ]
+
+
 def _battle_card_fallback_recommended_plays(
     card: dict[str, Any],
     *,
@@ -1692,7 +1746,7 @@ def _battle_card_fallback_recommended_plays(
     segment_playbook = _battle_card_segment_playbook(card)
     timing = _battle_card_timing_intelligence(card)
     best_timing_window = str(timing.get("best_timing_window") or "").strip()
-    default_timing = best_timing_window or "Best tested during active evaluation windows, renewal review, or planning cycles."
+    default_timing = _battle_card_safe_fallback_timing(best_timing_window)
     thin = _battle_card_segment_evidence_is_thin(card)
     prefix = "Best tested on" if thin else "Target"
     plays: list[dict[str, str]] = []
@@ -1734,6 +1788,44 @@ def _battle_card_fallback_recommended_plays(
         if len(plays) >= limit:
             break
         role_type = str(role.get("role_type") or "").strip()
+        target_text = _battle_card_role_target_segment(segment_playbook, role)
+        norm = re.sub(r"\s+", " ", target_text.lower()).strip()
+        if not norm or norm in seen_segments:
+            continue
+        seen_segments.add(norm)
+        plays.append({
+            "play": f"{prefix} {target_text} with {_battle_card_role_opening_angle(card, role_type)}.",
+            "target_segment": target_text,
+            "key_message": _battle_card_role_key_message(card, role_type).rstrip(".") + ".",
+            "timing": default_timing.rstrip(".") + ".",
+        })
+    if len(plays) < limit:
+        for account in _rank_high_intent_companies(card.get("high_intent_companies") or []):
+            if len(plays) >= limit:
+                break
+            if not isinstance(account, dict):
+                continue
+            company = str(account.get("company") or account.get("company_name") or "").strip()
+            if not company:
+                continue
+            stage = account.get("buying_stage") or account.get("stage")
+            target_text = f"{company} renewal stakeholders"
+            norm = re.sub(r"\s+", " ", target_text.lower()).strip()
+            if not norm or norm in seen_segments:
+                continue
+            seen_segments.add(norm)
+            plays.append({
+                "play": _battle_card_account_play_text(card, company),
+                "target_segment": target_text,
+                "key_message": _battle_card_safe_play_text(card, "recommended_plays[0].key_message").rstrip(".") + ".",
+                "timing": _battle_card_account_stage_timing(stage, default_timing),
+            })
+    for role in _battle_card_generic_fallback_roles(card):
+        if len(plays) >= limit:
+            break
+        role_type = str(role.get("role_type") or "").strip()
+        if not role_type:
+            continue
         target_text = _battle_card_role_target_segment(segment_playbook, role)
         norm = re.sub(r"\s+", " ", target_text.lower()).strip()
         if not norm or norm in seen_segments:
@@ -2209,6 +2301,32 @@ def _battle_card_quote_terms(area: str, *, source: str = "") -> list[str]:
     if any(token in lower for token in ("integration", "plugin", "api", "stack")):
         return ["integration", "plugin", "api", "stack"]
     return []
+
+
+def _battle_card_specific_time_anchor(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if re.search(r"\d", lower):
+        return text
+    if any(
+        term in lower
+        for term in (
+            "renewal",
+            "review",
+            "planning",
+            "quarter",
+            "month",
+            "week",
+            "deadline",
+            "window",
+            "cycle",
+            "decision",
+        )
+    ):
+        return text
+    return ""
 
 
 def _battle_card_competitor_bucket_key(raw_label: str, buckets: dict[str, dict[str, Any]]) -> tuple[str, str]:
