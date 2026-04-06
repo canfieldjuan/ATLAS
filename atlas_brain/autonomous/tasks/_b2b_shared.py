@@ -1512,10 +1512,25 @@ def _battle_card_safe_play_text(card: dict[str, Any], path: str) -> str:
         return "Teams already showing evaluation pressure around fit and value."
     if path.endswith(".key_message"):
         if weakness == "pricing":
-            return "Lead with pricing clarity, spend control, and fewer forced add-ons."
+            variants = [
+                "Lead with pricing clarity, spend control, and fewer forced add-ons.",
+                "Lead with packaging clarity, budget predictability, and less renewal surprise.",
+                "Lead with tighter spend control, clearer packaging, and a cleaner renewal story.",
+            ]
+            return variants[index % len(variants)]
         if weakness == "support":
-            return "Lead with more responsive support operations and clearer accountability."
-        return "Lead with a simpler path to better fit, lower friction, and clearer value."
+            variants = [
+                "Lead with more responsive support operations and clearer accountability.",
+                "Lead with faster escalations, cleaner ownership, and less day-to-day support friction.",
+                "Lead with stronger service responsiveness and clearer accountability at renewal.",
+            ]
+            return variants[index % len(variants)]
+        variants = [
+            "Lead with a simpler path to better fit, lower friction, and clearer value.",
+            "Lead with cleaner fit, less operational drag, and a clearer path to value.",
+            "Lead with lower friction, stronger day-to-day fit, and easier value validation.",
+        ]
+        return variants[index % len(variants)]
     if path.endswith(".timing"):
         timing_variants = [
             "Best tested during active evaluation windows, renewal review, or planning cycles.",
@@ -1545,6 +1560,87 @@ def _battle_card_safe_play_text(card: dict[str, Any], path: str) -> str:
         if path.endswith(".closing"):
             return "Close with a working session to benchmark current fit, costs, and switching timing before renewal."
     return ""
+
+
+def _battle_card_normalize_recommended_play_segment(value: Any) -> str:
+    """Normalize a recommended-play target segment for duplicate detection."""
+    segment = str(value or "").strip().lower()
+    segment = re.sub(r"\s*\(sample n=\d+\)\s*$", "", segment)
+    return re.sub(r"\s+", " ", segment).strip()
+
+
+def _battle_card_normalize_recommended_play_text(value: Any) -> str:
+    """Normalize recommended-play text for duplicate detection."""
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[.]+$", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _repair_battle_card_recommended_play_duplicates(card: dict[str, Any], generated: dict[str, Any]) -> None:
+    """Deterministically diversify duplicate recommended-play rows before retry."""
+    plays = generated.get("recommended_plays")
+    if not isinstance(plays, list) or not plays:
+        return
+    fallback_candidates = _battle_card_fallback_recommended_plays(
+        card,
+        limit=max(len(plays) + 2, 2),
+    )
+    repaired: list[dict[str, Any]] = []
+    seen_segments: set[str] = set()
+    seen_plays: set[str] = set()
+    seen_messages: set[str] = set()
+
+    def _row_signals(row: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            _battle_card_normalize_recommended_play_segment(row.get("target_segment")),
+            _battle_card_normalize_recommended_play_text(row.get("play")),
+            _battle_card_normalize_recommended_play_text(row.get("key_message")),
+        )
+
+    def _next_fallback() -> dict[str, Any] | None:
+        for candidate in fallback_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            segment_key, play_key, message_key = _row_signals(candidate)
+            if segment_key and segment_key in seen_segments:
+                continue
+            if play_key and play_key in seen_plays:
+                continue
+            if message_key and message_key in seen_messages:
+                continue
+            return dict(candidate)
+        return None
+
+    for idx, item in enumerate(plays):
+        row = dict(item) if isinstance(item, dict) else {}
+        if not row:
+            continue
+        segment_key, play_key, message_key = _row_signals(row)
+        if segment_key and segment_key in seen_segments:
+            replacement = _next_fallback()
+            if replacement is not None:
+                row = replacement
+                segment_key, play_key, message_key = _row_signals(row)
+        if play_key and play_key in seen_plays:
+            row["play"] = _battle_card_safe_play_text(card, f"recommended_plays[{idx}].play").rstrip(".") + "."
+            play_key = _battle_card_normalize_recommended_play_text(row.get("play"))
+        if message_key and message_key in seen_messages:
+            row["key_message"] = _battle_card_safe_play_text(card, f"recommended_plays[{idx}].key_message").rstrip(".") + "."
+            message_key = _battle_card_normalize_recommended_play_text(row.get("key_message"))
+        if (segment_key and segment_key in seen_segments) or (play_key and play_key in seen_plays) or (message_key and message_key in seen_messages):
+            replacement = _next_fallback()
+            if replacement is not None:
+                row = replacement
+                segment_key, play_key, message_key = _row_signals(row)
+        repaired.append(row)
+        if segment_key:
+            seen_segments.add(segment_key)
+        if play_key:
+            seen_plays.add(play_key)
+        if message_key:
+            seen_messages.add(message_key)
+    if repaired:
+        generated["recommended_plays"] = repaired
 
 
 def _battle_card_role_target_segment(
@@ -2184,6 +2280,7 @@ def _sanitize_battle_card_sales_copy(card: dict[str, Any], generated: dict[str, 
         if fallback_plays:
             sanitized["recommended_plays"] = fallback_plays
     if isinstance(sanitized, dict):
+        _repair_battle_card_recommended_play_duplicates(card, sanitized)
         _repair_battle_card_duplicate_copy(card, sanitized)
         _repair_battle_card_missing_anchor(card, sanitized)
     allowed_quotes = _battle_card_allowed_quotes(card)

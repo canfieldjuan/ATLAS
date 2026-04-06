@@ -1399,6 +1399,30 @@ class TestBattleCardSalesCopySanitization:
         assert not any("duplicates content already present" in w for w in warnings)
         assert sanitized["recommended_plays"][0]["timing"] != sanitized["recommended_plays"][1]["timing"]
 
+    def test_repairs_duplicate_recommended_play_key_messages(self):
+        card = _sample_battle_card()
+        duplicate_key_message = "Lead with pricing clarity, spend control, and fewer forced add-ons."
+        generated = {
+            "recommended_plays": [
+                {
+                    "play": "Best tested on finance teams with a pricing benchmark.",
+                    "target_segment": "Finance teams",
+                    "key_message": duplicate_key_message,
+                    "timing": "During renewal planning.",
+                },
+                {
+                    "play": "Best tested on operations teams with a pricing benchmark.",
+                    "target_segment": "Operations teams",
+                    "key_message": duplicate_key_message,
+                    "timing": "During annual planning.",
+                },
+            ]
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated)
+        warnings = _validate_battle_card_sales_copy(card, sanitized)
+        assert not any("duplicates content already present" in w for w in warnings)
+        assert sanitized["recommended_plays"][0]["key_message"] != sanitized["recommended_plays"][1]["key_message"]
+
     def test_sanitizes_customer_quote_to_exact_source_text(self):
         card = _sample_battle_card()
         generated = {
