@@ -609,17 +609,34 @@ def _inject_blog_reasoning_specificity(
     suffix: str,
     view: Any,
 ) -> None:
+    data_context = data.setdefault("data_context", {})
+    if not isinstance(data_context, dict):
+        data_context = {}
+        data["data_context"] = data_context
+
     consumer_context = view.filtered_consumer_context("blog_reranker")
     specificity = surface_specificity_context(consumer_context, surface="blog")
     if specificity.get("anchor_examples"):
         data[f"reasoning_anchor_examples{suffix}"] = specificity["anchor_examples"]
+        data_context[f"reasoning_anchor_examples{suffix}"] = copy.deepcopy(
+            specificity["anchor_examples"]
+        )
     if specificity.get("witness_highlights"):
         data[f"reasoning_witness_highlights{suffix}"] = specificity["witness_highlights"]
+        data_context[f"reasoning_witness_highlights{suffix}"] = copy.deepcopy(
+            specificity["witness_highlights"]
+        )
     if specificity.get("reference_ids"):
         data[f"reasoning_reference_ids{suffix}"] = specificity["reference_ids"]
+        data_context[f"reasoning_reference_ids{suffix}"] = copy.deepcopy(
+            specificity["reference_ids"]
+        )
     disclaimers = consumer_context.get("reasoning_section_disclaimers")
     if isinstance(disclaimers, dict) and disclaimers:
         data[f"reasoning_section_disclaimers{suffix}"] = disclaimers
+        data_context[f"reasoning_section_disclaimers{suffix}"] = copy.deepcopy(
+            disclaimers
+        )
 
     claim_plan = _build_blog_claim_plan(
         consumer_context.get("reasoning_contracts") or view.materialized_contracts(),
@@ -627,6 +644,7 @@ def _inject_blog_reasoning_specificity(
     )
     if claim_plan:
         data[f"blog_claim_plan{suffix}"] = claim_plan
+        data_context[f"blog_claim_plan{suffix}"] = copy.deepcopy(claim_plan)
 
 
 # -- Cross-vendor synthesis resolution helpers ----------------------

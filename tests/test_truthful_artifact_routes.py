@@ -568,16 +568,27 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
     async def _fake_gather_data(_pool, _topic_type, _topic_ctx):
         return {"data_context": {}}
 
+    async def _fake_load_pool_layers_for_blog(_pool, _topic_type, _topic_ctx, data):
+        data["data_context"]["reasoning_anchor_examples"] = {
+            "outlier_or_named_account": [{"excerpt_text": "Named account switching at renewal"}]
+        }
+        data["data_context"]["reasoning_witness_highlights"] = [
+            {"excerpt_text": "Switching trigger surfaced in review evidence"}
+        ]
+        data["data_context"]["reasoning_reference_ids"] = {
+            "vendor_core_reasoning": ["review:1"]
+        }
+
     def _fake_check_data_sufficiency(_topic_type, _data):
         return {"sufficient": True}
 
-    def _fake_build_blueprint(_topic_type, topic_ctx, _data):
+    def _fake_build_blueprint(_topic_type, topic_ctx, data):
         return PostBlueprint(
             topic_type="vendor_deep_dive",
             slug=topic_ctx["slug"],
             suggested_title="Jira Deep Dive",
             tags=["jira"],
-            data_context={"topic_ctx": dict(topic_ctx)},
+            data_context={"topic_ctx": dict(topic_ctx), **dict(data.get("data_context") or {})},
             sections=[],
             charts=[],
         )
@@ -638,6 +649,10 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
         _fake_check_data_sufficiency,
     )
     monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._load_pool_layers_for_blog",
+        _fake_load_pool_layers_for_blog,
+    )
+    monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_blog_post_generation._build_blueprint",
         _fake_build_blueprint,
     )
@@ -667,5 +682,7 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
     assert captured["attempt_no"] == 1
     assert captured["run_id"]
     assert captured["data_context"]["latest_first_pass_quality_audit"]["boundary"] == "generation_first_pass"
+    assert captured["data_context"]["reasoning_anchor_examples"]["outlier_or_named_account"][0]["excerpt_text"] == "Named account switching at renewal"
+    assert captured["data_context"]["reasoning_reference_ids"]["vendor_core_reasoning"] == ["review:1"]
     record_attempt.assert_awaited_once()
     assert record_attempt.await_args.kwargs["stage"] == "quality_gate_first_pass"

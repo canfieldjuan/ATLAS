@@ -377,7 +377,7 @@ async def test_load_pool_layers_for_blog_injects_anchor_context_and_claim_plan(m
         AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
     )
 
-    data = {}
+    data = {"data_context": {}}
     await _load_pool_layers_for_blog(
         object(),
         "vendor_alternative",
@@ -392,6 +392,15 @@ async def test_load_pool_layers_for_blog_injects_anchor_context_and_claim_plan(m
     assert data["reasoning_section_disclaimers"]["timing_intelligence"]
     assert data["blog_claim_plan"]["primary_thesis"] == "Pricing pressure is driving the story."
     assert data["blog_claim_plan"]["timing_hook"] == "Q2 renewal"
+    assert data["data_context"]["reasoning_anchor_examples"]["outlier_or_named_account"][0]["excerpt_text"].startswith(
+        "a customer said Zendesk"
+    )
+    assert data["data_context"]["reasoning_witness_highlights"][0]["excerpt_text"].startswith(
+        "a customer said Zendesk"
+    )
+    assert data["data_context"]["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
+    assert data["data_context"]["reasoning_section_disclaimers"]["timing_intelligence"]
+    assert data["data_context"]["blog_claim_plan"]["primary_thesis"] == "Pricing pressure is driving the story."
 
 
 def test_apply_blog_quality_gate_blocks_generic_copy_when_anchors_available():

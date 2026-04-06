@@ -1005,6 +1005,7 @@ async def generate_post(
         _KNOWN_TOPIC_TYPES,
         _check_data_sufficiency,
         _gather_data,
+        _load_pool_layers_for_blog,
         _build_blueprint,
         _generate_content_async,
         _enforce_blog_quality_async,
@@ -1050,6 +1051,7 @@ async def generate_post(
         raise HTTPException(422, str(e))
 
     data = await _gather_data(pool, req.topic_type, topic_ctx)
+    await _load_pool_layers_for_blog(pool, req.topic_type, topic_ctx, data)
 
     sufficiency = _check_data_sufficiency(req.topic_type, data)
     if not sufficiency["sufficient"] and not req.skip_sufficiency_check:
