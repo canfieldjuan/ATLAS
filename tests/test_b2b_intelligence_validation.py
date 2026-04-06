@@ -7,7 +7,7 @@ and executive source list config parsing.
 
 import json
 import sys
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -75,6 +75,7 @@ def _load_synth_view(vendor: str, raw: dict) -> Any:
 from atlas_brain.autonomous.tasks.b2b_battle_cards import (
     _BATTLE_CARD_LLM_FIELDS,
     _apply_battle_card_quality,
+    _battle_card_preflight_quality_gate,
     _battle_card_row_status,
     _build_battle_card_render_payload,
     _evaluate_battle_card_quality,
@@ -2012,6 +2013,22 @@ class TestBattleCardQualityGate:
         assert card["battle_card_quality"]["schema_version"] == "v1"
         assert card["quality_status"] == quality["status"] == "deterministic_fallback"
         assert _battle_card_row_status(card) == "deterministic_fallback"
+
+    def test_preflight_quality_gate_skips_stale_cards_before_llm(self):
+        card = _sample_battle_card() | {
+            "data_stale": False,
+            "data_as_of_date": (date.today() - timedelta(days=3)).isoformat(),
+            "evidence_window_is_thin": False,
+        }
+        quality = _battle_card_preflight_quality_gate(card)
+        assert quality is not None
+        assert quality["status"] == "deterministic_fallback"
+        assert any(
+            "source data is stale for requested report date" in item
+            for item in quality["failed_checks"]
+        )
+        assert card["quality_status"] == "deterministic_fallback"
+        assert card["executive_summary"]
 
     def test_final_quality_populates_grounded_fallback_sales_copy(self):
         card = _sample_battle_card() | {

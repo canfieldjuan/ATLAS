@@ -1579,6 +1579,15 @@ def _apply_battle_card_quality(card: dict[str, Any], *, phase: str) -> dict[str,
     return quality
 
 
+def _battle_card_preflight_quality_gate(card: dict[str, Any]) -> dict[str, Any] | None:
+    """Return final quality when deterministic blockers make an LLM call wasteful."""
+    quality = _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
+    failed_checks = quality.get("failed_checks") if isinstance(quality.get("failed_checks"), list) else []
+    if quality.get("status") != _QUALITY_STATUS_FALLBACK or not failed_checks:
+        return None
+    return quality
+
+
 def _battle_card_seller_usable_battles(
     vendor: str,
     battles: list[dict[str, Any]] | None,
@@ -2736,6 +2745,53 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     async def _enrich_one(card: dict[str, Any]) -> None:
         nonlocal bc_llm_failures, bc_cache_hits, bc_llm_updates, bc_overlay_completed
+
+        preflight_quality = _battle_card_preflight_quality_gate(card)
+        if preflight_quality is not None:
+            card["llm_render_status"] = "skipped_preflight_quality_gate"
+            failed_checks = (
+                preflight_quality.get("failed_checks")
+                if isinstance(preflight_quality.get("failed_checks"), list)
+                else []
+            )
+            if failed_checks:
+                card["llm_render_error"] = "; ".join(str(item) for item in failed_checks[:3])
+            persisted_ok = False
+            try:
+                persisted = await _persist_battle_card(
+                    pool,
+                    today=today,
+                    card=card,
+                    data_density=data_density,
+                    report_source_review_count=report_source_review_count,
+                    report_source_dist=report_source_dist,
+                    llm_model=_battle_card_llm_model_label(card, llm_options),
+                    status=_battle_card_row_status(card),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist preflight-gated battle card for %s",
+                    card.get("vendor"),
+                )
+            else:
+                persisted_ok = bool(persisted)
+            async with progress_lock:
+                bc_llm_failures += 1
+                bc_llm_updates += int(persisted_ok)
+                bc_overlay_completed += 1
+                await _update_execution_progress(
+                    task,
+                    stage=_STAGE_LLM_OVERLAY,
+                    progress_current=bc_overlay_completed,
+                    progress_total=total_cards,
+                    progress_message="Applying LLM overlay to battle cards.",
+                    cards_built=total_cards,
+                    cards_persisted=cards_persisted,
+                    cards_llm_updated=bc_llm_updates,
+                    llm_failures=bc_llm_failures,
+                    cache_hits=bc_cache_hits,
+                )
+            return
 
         payload = _build_battle_card_render_payload(card)
         card_hash = compute_evidence_hash(payload)
