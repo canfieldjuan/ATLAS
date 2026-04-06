@@ -1060,7 +1060,12 @@ async def generate_post(
         })
 
     blueprint = _build_blueprint(req.topic_type, topic_ctx, data)
-    content = await _generate_content_async(llm, blueprint, cfg.blog_post_max_tokens)
+    content = await _generate_content_async(
+        llm,
+        blueprint,
+        cfg.blog_post_max_tokens,
+        run_id=run_id,
+    )
     if content is None:
         raise HTTPException(500, "LLM content generation failed")
 
@@ -1069,6 +1074,7 @@ async def generate_post(
         blueprint,
         content,
         cfg.blog_post_max_tokens,
+        run_id=run_id,
     )
     first_pass_audit = _persist_first_pass_blog_quality(blueprint, quality_report)
     if quality_report.get("_retry_requested"):

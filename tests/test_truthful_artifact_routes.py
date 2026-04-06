@@ -582,10 +582,10 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
             charts=[],
         )
 
-    async def _fake_generate_content_async(_llm, _blueprint, _max_tokens):
+    async def _fake_generate_content_async(_llm, _blueprint, _max_tokens, **_kwargs):
         return {"title": "Jira", "body": "Body"}
 
-    async def _fake_enforce_blog_quality_async(_llm, _blueprint, content, _max_tokens):
+    async def _fake_enforce_blog_quality_async(_llm, _blueprint, content, _max_tokens, **_kwargs):
         return content, {
             "status": "pass",
             "score": 86,

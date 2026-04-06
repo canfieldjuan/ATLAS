@@ -1356,6 +1356,7 @@ async def _enforce_blog_quality_async(
     content: dict[str, Any],
     max_tokens: int,
     related_posts: list[dict[str, str]] | None = None,
+    run_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Apply quality gate and perform one retry with feedback when needed."""
     current = _ensure_methodology_context(blueprint, dict(content or {}))
@@ -1379,6 +1380,7 @@ async def _enforce_blog_quality_async(
         max_tokens,
         related_posts=related_posts,
         quality_feedback=_quality_feedback(report),
+        run_id=run_id,
     )
     if retry is None:
         if initial_critical:
@@ -1418,6 +1420,7 @@ def _enforce_blog_quality(
     content: dict[str, Any],
     max_tokens: int,
     related_posts: list[dict[str, str]] | None = None,
+    run_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Sync wrapper retained for local/unit-test callers."""
     try:
@@ -1447,6 +1450,7 @@ def _enforce_blog_quality(
         max_tokens,
         related_posts=related_posts,
         quality_feedback=_quality_feedback(report),
+        run_id=run_id,
     )
     if retry is None:
         if initial_critical:
@@ -1610,6 +1614,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         content = await _generate_content_async(
             llm, blueprint, cfg.blog_post_max_tokens,
             related_posts=link_posts,
+            run_id=str(task.id),
         )
         if content is None:
             logger.warning("LLM failed for B2B topic %s, skipping", blueprint.slug)
@@ -1647,6 +1652,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             content,
             cfg.blog_post_max_tokens,
             related_posts=link_posts,
+            run_id=str(task.id),
         )
         first_pass_audit = _persist_first_pass_blog_quality(blueprint, quality_report)
         if quality_report.get("_retry_requested"):
@@ -1869,6 +1875,7 @@ async def _regenerate_existing_posts(
             content = await _generate_content_async(
                 llm, blueprint, cfg.blog_post_max_tokens,
                 related_posts=link_posts,
+                run_id=str(task.id),
             )
             if content is None:
                 logger.warning("Regen: LLM failed for %s, skipping", slug)
@@ -1891,6 +1898,7 @@ async def _regenerate_existing_posts(
                 content,
                 cfg.blog_post_max_tokens,
                 related_posts=link_posts,
+                run_id=str(task.id),
             )
             _persist_first_pass_blog_quality(blueprint, quality_report)
             if content is None:
@@ -6462,6 +6470,7 @@ async def _generate_content_async(
     llm, blueprint: PostBlueprint, max_tokens: int,
     related_posts: list[dict[str, str]] | None = None,
     quality_feedback: list[str] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Single LLM call: blueprint in, {title, description, content} out."""
     from ...pipelines.llm import clean_llm_output, parse_json_response
@@ -6566,14 +6575,22 @@ async def _generate_content_async(
             _trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
             _resp_text = (result.get("response", "") if isinstance(result, dict) else str(result)) or ""
             _biz_ctx = {
+                "workflow": "b2b_blog_post_generation",
+                "report_type": blueprint.topic_type,
                 "topic_type": blueprint.topic_type,
                 "slug": blueprint.slug,
+                "source_name": "b2b_blog_post_generation",
+                "event_type": "llm_overlay",
+                "entity_type": "blog_post",
+                "entity_id": blueprint.slug,
                 "suggested_title": blueprint.suggested_title[:200],
                 "tags": blueprint.tags[:10],
             }
+            if run_id:
+                _biz_ctx["run_id"] = run_id
             _dc = blueprint.data_context or {}
             if _dc.get("vendor"):
-                _biz_ctx["vendor"] = str(_dc["vendor"])[:200]
+                _biz_ctx["vendor_name"] = str(_dc["vendor"])[:200]
             if _dc.get("vendor_a"):
                 _biz_ctx["vendor_a"] = str(_dc["vendor_a"])[:200]
             if _dc.get("vendor_b"):
@@ -6652,6 +6669,7 @@ def _generate_content(
     llm, blueprint: PostBlueprint, max_tokens: int,
     related_posts: list[dict[str, str]] | None = None,
     quality_feedback: list[str] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Sync wrapper retained for local/unit-test callers."""
     try:
@@ -6664,6 +6682,7 @@ def _generate_content(
                 max_tokens,
                 related_posts=related_posts,
                 quality_feedback=quality_feedback,
+                run_id=run_id,
             )
         )
     raise RuntimeError("Use _generate_content_async() from async contexts")

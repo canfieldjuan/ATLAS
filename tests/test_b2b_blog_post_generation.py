@@ -1,5 +1,6 @@
 """Focused tests for evidence-vault overlays in B2B blog generation."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -158,11 +159,93 @@ def test_ensure_methodology_context_injects_review_period_and_disclaimer():
         charts=[],
     )
     content = {"content": "# CrowdStrike vs SentinelOne\n\nOpening paragraph."}
-
     updated = blog_mod._ensure_methodology_context(blueprint, content)
 
     assert "2025-06 to 2026-03" in updated["content"]
     assert "self-selected" in updated["content"]
+
+
+@pytest.mark.asyncio
+async def test_generate_content_async_traces_blog_business_metadata(monkeypatch):
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="jira-deep-dive-2026-04",
+        suggested_title="Jira Deep Dive",
+        tags=["jira", "project-management"],
+        data_context={"vendor": "Jira", "category": "Project Management"},
+        sections=[],
+        charts=[],
+    )
+
+    class DummyLLM:
+        model = "anthropic/claude-sonnet-4-5"
+        name = "openrouter"
+
+        def chat(self, **_kwargs):
+            return {
+                "response": json.dumps({
+                    "title": "Jira Deep Dive",
+                    "description": "Desc",
+                    "content": "# Jira\n\nBody",
+                }),
+                "usage": {"input_tokens": 1234, "output_tokens": 456},
+                "_trace_meta": {
+                    "provider_request_id": "req_blog_123",
+                    "api_endpoint": "https://openrouter.ai/api/v1/chat/completions",
+                },
+            }
+
+    trace_calls = []
+
+    class DummyRegistry:
+        def get(self, name):
+            assert name == "digest/b2b_blog_post_generation"
+            return SimpleNamespace(content="system")
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation.get_skill_registry",
+        lambda: DummyRegistry(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.skills.registry.get_skill_registry",
+        lambda: DummyRegistry(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_stage_request",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider="openrouter",
+            model="anthropic/claude-sonnet-4-5",
+            request_envelope={"messages": []},
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.trace_llm_call",
+        lambda *args, **kwargs: trace_calls.append((args, kwargs)),
+    )
+
+    result = await blog_mod._generate_content_async(
+        DummyLLM(),
+        blueprint,
+        4096,
+        run_id="run-blog-123",
+    )
+
+    assert result is not None
+    assert len(trace_calls) == 1
+    _, kwargs = trace_calls[0]
+    assert kwargs["metadata"]["workflow"] == "b2b_blog_post_generation"
+    assert kwargs["metadata"]["report_type"] == "vendor_deep_dive"
+    assert kwargs["metadata"]["vendor_name"] == "Jira"
+    assert kwargs["metadata"]["run_id"] == "run-blog-123"
+    assert kwargs["metadata"]["source_name"] == "b2b_blog_post_generation"
+    assert kwargs["metadata"]["entity_type"] == "blog_post"
+    assert kwargs["metadata"]["entity_id"] == "jira-deep-dive-2026-04"
+    assert kwargs["provider_request_id"] == "req_blog_123"
 
 
 def _blog_anchor_context() -> dict:
