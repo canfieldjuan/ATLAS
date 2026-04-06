@@ -10,7 +10,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import markdown as _md
 
@@ -1009,6 +1009,7 @@ async def generate_post(
         _generate_content_async,
         _enforce_blog_quality_async,
         _assemble_and_store,
+        _persist_first_pass_blog_quality,
         build_manual_topic_ctx,
     )
     from ..config import settings
@@ -1024,6 +1025,7 @@ async def generate_post(
         raise HTTPException(503, "Database not ready")
 
     cfg = settings.b2b_churn
+    run_id = str(uuid4())
 
     # Get LLM
     from ..pipelines.llm import get_pipeline_llm
@@ -1068,6 +1070,25 @@ async def generate_post(
         content,
         cfg.blog_post_max_tokens,
     )
+    first_pass_audit = _persist_first_pass_blog_quality(blueprint, quality_report)
+    if quality_report.get("_retry_requested"):
+        await record_attempt(
+            pool,
+            artifact_type="blog_post",
+            artifact_id=blueprint.slug,
+            run_id=run_id,
+            attempt_no=1,
+            stage="quality_gate_first_pass",
+            status="retry_requested",
+            score=first_pass_audit.get("score"),
+            threshold=first_pass_audit.get("threshold"),
+            blocker_count=len(first_pass_audit.get("blocking_issues", [])),
+            warning_count=len(first_pass_audit.get("warnings", [])),
+            blocking_issues=first_pass_audit.get("blocking_issues"),
+            warnings=first_pass_audit.get("warnings"),
+            failure_step="quality_gate_first_pass",
+            error_message=", ".join(first_pass_audit.get("blocking_issues", [])[:3]) or None,
+        )
     if content is None:
         audit = blog_quality_revalidation(
             blueprint=blueprint,
@@ -1092,7 +1113,14 @@ async def generate_post(
     )
     blueprint.data_context = result["data_context"]
 
-    post_id = await _assemble_and_store(pool, blueprint, content, llm)
+    post_id = await _assemble_and_store(
+        pool,
+        blueprint,
+        content,
+        llm,
+        run_id=run_id,
+        attempt_no=1,
+    )
     if not post_id:
         raise HTTPException(409, f"Slug '{blueprint.slug}' already published")
 
@@ -1103,6 +1131,7 @@ async def generate_post(
         "topic_type": req.topic_type,
         "charts": len(blueprint.charts),
         "sufficiency": sufficiency,
+        "first_pass_failure_explanation": first_pass_audit.get("failure_explanation"),
     }
 
 

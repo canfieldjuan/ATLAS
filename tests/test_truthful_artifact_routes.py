@@ -1,6 +1,7 @@
 """Route-level tests for truthful blog/report artifact fields."""
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 import atlas_brain.api.b2b_tenant_dashboard as tenant_dashboard_api
 import atlas_brain.api.blog_admin as blog_admin_api
 from atlas_brain.auth.dependencies import AuthUser, require_auth
+from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
 
 
 def _auth_user() -> AuthUser:
@@ -542,3 +544,128 @@ def test_tenant_report_routes_return_truth_fields(monkeypatch):
     assert detail["status"] == "failed"
     assert detail["latest_error_summary"] == "Challenger brief has no displacement mentions"
     assert detail["unresolved_issue_count"] == 2
+
+
+def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+    record_attempt = AsyncMock()
+    llm = object()
+    captured = {}
+
+    async def _fake_build_manual_topic_ctx(_pool, vendor_name, topic_type, vendor_b=None, category=None):
+        assert vendor_name == "Jira"
+        assert topic_type == "vendor_deep_dive"
+        assert vendor_b is None
+        assert category is None
+        return {"vendor": vendor_name, "category": "Project Management", "slug": "jira-deep-dive-2026-04"}
+
+    async def _fake_gather_data(_pool, _topic_type, _topic_ctx):
+        return {"data_context": {}}
+
+    def _fake_check_data_sufficiency(_topic_type, _data):
+        return {"sufficient": True}
+
+    def _fake_build_blueprint(_topic_type, topic_ctx, _data):
+        return PostBlueprint(
+            topic_type="vendor_deep_dive",
+            slug=topic_ctx["slug"],
+            suggested_title="Jira Deep Dive",
+            tags=["jira"],
+            data_context={"topic_ctx": dict(topic_ctx)},
+            sections=[],
+            charts=[],
+        )
+
+    async def _fake_generate_content_async(_llm, _blueprint, _max_tokens):
+        return {"title": "Jira", "body": "Body"}
+
+    async def _fake_enforce_blog_quality_async(_llm, _blueprint, content, _max_tokens):
+        return content, {
+            "status": "pass",
+            "score": 86,
+            "threshold": 70,
+            "blocking_issues": [],
+            "warnings": ["too_few_sourced_quotes"],
+            "_retry_requested": True,
+            "_first_pass_report": {
+                "status": "fail",
+                "score": 61,
+                "threshold": 70,
+                "blocking_issues": ["unsupported_data_claim:Magento"],
+                "warnings": ["too_few_sourced_quotes"],
+                "failure_explanation": {
+                    "boundary": "generation_first_pass",
+                    "primary_blocker": "unsupported_data_claim:Magento",
+                },
+            },
+        }
+
+    async def _fake_assemble_and_store(_pool, blueprint, _content, _llm, *, run_id=None, attempt_no=None):
+        captured["data_context"] = dict(blueprint.data_context)
+        captured["run_id"] = run_id
+        captured["attempt_no"] = attempt_no
+        return "post-123"
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(blog_admin_api, "record_attempt", record_attempt)
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **_kwargs: llm,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.api.blog_admin.settings",
+        SimpleNamespace(
+            b2b_churn=SimpleNamespace(blog_post_max_tokens=4096, blog_post_openrouter_model="test-model")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation.build_manual_topic_ctx",
+        _fake_build_manual_topic_ctx,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._gather_data",
+        _fake_gather_data,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_data_sufficiency",
+        _fake_check_data_sufficiency,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._build_blueprint",
+        _fake_build_blueprint,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._generate_content_async",
+        _fake_generate_content_async,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._enforce_blog_quality_async",
+        _fake_enforce_blog_quality_async,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._assemble_and_store",
+        _fake_assemble_and_store,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/blog/generate",
+            json={"vendor_name": "Jira", "topic_type": "vendor_deep_dive"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["post_id"] == "post-123"
+    assert body["first_pass_failure_explanation"]["primary_blocker"] == "unsupported_data_claim:Magento"
+    assert captured["attempt_no"] == 1
+    assert captured["run_id"]
+    assert captured["data_context"]["latest_first_pass_quality_audit"]["boundary"] == "generation_first_pass"
+    record_attempt.assert_awaited_once()
+    assert record_attempt.await_args.kwargs["stage"] == "quality_gate_first_pass"
