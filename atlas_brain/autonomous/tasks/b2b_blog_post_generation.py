@@ -28,7 +28,14 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...services.scraping.sources import VERIFIED_SOURCES, filter_deprecated_sources, parse_source_allowlist
+from ...services.scraping.sources import (
+    VERIFIED_SOURCES,
+    ReviewSource,
+    display_name as source_display_name,
+    filter_deprecated_sources,
+    parse_source_allowlist,
+)
+from ...reasoning.wedge_registry import Wedge, get_wedge_meta
 from ._b2b_shared import (
     _fetch_latest_evidence_vault,
     _segment_targeting_summary,
@@ -100,6 +107,46 @@ _VENDORISH_SKIP_WORDS = frozenset(
         "HTML", "REST", "SDK", "ROI", "KPI", "B2B", "SMB",
     )
 )
+_BLOG_SKIP_SENTENCE_PREFIXES = (
+    "#",
+    "_methodology note:",
+    "methodology note:",
+    "analysis methodology:",
+    "*analysis methodology:",
+)
+_BLOG_SKIP_SENTENCE_CONTAINS = (
+    "this analysis draws on",
+    "this post draws on",
+    "analysis based on self-selected reviewer feedback",
+    "analysis reflects self-selected feedback from",
+)
+_SOURCE_NAME_ALIASES = {
+    "gartner peer insights",
+    "public b2b software review platforms",
+    "public software reviews",
+}
+_SOURCEISH_SKIP_WORDS = frozenset(
+    {
+        *(
+            " ".join(re.findall(r"[a-z0-9]+", source_display_name(source).lower()))
+            for source in ReviewSource
+        ),
+        *(
+            " ".join(re.findall(r"[a-z0-9]+", alias.lower()))
+            for alias in _SOURCE_NAME_ALIASES
+        ),
+    }
+)
+_WEDGEISH_SKIP_WORDS = frozenset(
+    " ".join(re.findall(r"[a-z0-9]+", phrase.lower()))
+    for phrase in {
+        *(wedge.value.replace("_", " ") for wedge in Wedge),
+        *(get_wedge_meta(wedge).label for wedge in Wedge),
+    }
+)
+_BLOG_NON_VENDOR_SKIP_WORDS = frozenset(
+    set(_VENDORISH_SKIP_WORDS) | set(_SOURCEISH_SKIP_WORDS) | set(_WEDGEISH_SKIP_WORDS)
+)
 
 
 def _build_grounded_vendor_set(blueprint: "PostBlueprint") -> set[str]:
@@ -169,6 +216,12 @@ def _find_unsupported_data_claims(
     for sentence in sentences:
         if not _DATA_CLAIM_PATTERN.search(sentence):
             continue
+        trimmed_sentence = sentence.strip()
+        trimmed_lower = trimmed_sentence.lower()
+        if any(trimmed_lower.startswith(prefix) for prefix in _BLOG_SKIP_SENTENCE_PREFIXES):
+            continue
+        if any(fragment in trimmed_lower for fragment in _BLOG_SKIP_SENTENCE_CONTAINS):
+            continue
         # Strategy 1: known vendor lookup
         found_known = False
         for vendor_name, pattern in ungrounded_known:
@@ -187,11 +240,64 @@ def _find_unsupported_data_claims(
                 continue  # single words handled by known-vendor lookup only
             normalized_name = _normalized_vendor_text(name)
             if normalized_name not in grounded and len(normalized_name) > 2:
-                if normalized_name in _VENDORISH_SKIP_WORDS:
+                if normalized_name in _BLOG_NON_VENDOR_SKIP_WORDS:
                     continue
                 flagged.append(f"{name}: {sentence.strip()[:120]}")
                 break
     return flagged
+
+
+def _unsupported_claim_entries(report: dict[str, Any]) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for warning in report.get("warnings", []) or []:
+        warning_text = str(warning)
+        if not warning_text.startswith("unsupported_data_claim:"):
+            continue
+        claim_text = warning_text[len("unsupported_data_claim:"):].strip()
+        vendor, _, snippet = claim_text.partition(":")
+        entries.append((vendor.strip(), snippet.strip()))
+    return entries
+
+
+def _line_contains_unsupported_claim(line: str, vendor: str, snippet: str) -> bool:
+    if not line.strip():
+        return False
+    if snippet and snippet in line:
+        return True
+    if vendor and re.search(r"\b" + re.escape(vendor) + r"\b", line, re.IGNORECASE):
+        return bool(_DATA_CLAIM_PATTERN.search(line))
+    return False
+
+
+def _remove_unsupported_claim_lines(body: str, report: dict[str, Any]) -> tuple[str, int]:
+    lines = body.splitlines()
+    if not lines:
+        return body, 0
+    removed = 0
+    for vendor, snippet in _unsupported_claim_entries(report):
+        if not vendor and not snippet:
+            continue
+        next_lines: list[str] = []
+        claim_removed = False
+        for line in lines:
+            if _line_contains_unsupported_claim(line, vendor, snippet):
+                removed += 1
+                claim_removed = True
+                continue
+            next_lines.append(line)
+        lines = next_lines
+        if claim_removed:
+            continue
+        text = "\n".join(lines)
+        sentences = re.split(r"(?<=[.!?])(\s+)", text)
+        kept: list[str] = []
+        for segment in sentences:
+            if _line_contains_unsupported_claim(segment, vendor, snippet):
+                removed += 1
+                continue
+            kept.append(segment)
+        lines = "".join(kept).splitlines()
+    return "\n".join(lines), removed
 
 
 def _blog_source_allowlist() -> list[str]:
@@ -1127,6 +1233,26 @@ def _with_unresolved_critical_warnings(report: dict[str, Any]) -> dict[str, Any]
     return enriched
 
 
+def _apply_blog_deterministic_repairs(
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+    report: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    updated = dict(content or {})
+    body = str(updated.get("content") or "")
+    repaired_body, removed_claim_lines = _remove_unsupported_claim_lines(body, report)
+    if removed_claim_lines <= 0 or repaired_body == body:
+        return updated, report
+
+    updated["content"] = repaired_body
+    updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
+    repaired_report = dict(repaired_report)
+    fixes = list(repaired_report.get("fixes_applied", []) or [])
+    fixes.append(f"removed_unsupported_claim_lines:{removed_claim_lines}")
+    repaired_report["fixes_applied"] = fixes
+    return updated, repaired_report
+
+
 def _ensure_methodology_context(
     blueprint: PostBlueprint,
     content: dict[str, Any],
@@ -1223,6 +1349,7 @@ async def _enforce_blog_quality_async(
     current = _ensure_methodology_context(blueprint, dict(content or {}))
     _inject_affiliate_links(blueprint, current)
     current, report = _apply_blog_quality_gate(blueprint, current)
+    current, report = _apply_blog_deterministic_repairs(blueprint, current, report)
     initial_critical = _critical_quality_warnings(report)
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
     if not needs_retry:
@@ -1244,6 +1371,7 @@ async def _enforce_blog_quality_async(
     retry = _ensure_methodology_context(blueprint, retry)
     _inject_affiliate_links(blueprint, retry)
     retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
+    retry, retry_report = _apply_blog_deterministic_repairs(blueprint, retry, retry_report)
     retry_report = _with_unresolved_critical_warnings(retry_report)
     if retry_report.get("status") != "pass":
         return None, retry_report
@@ -1269,6 +1397,7 @@ def _enforce_blog_quality(
     current = _ensure_methodology_context(blueprint, dict(content or {}))
     _inject_affiliate_links(blueprint, current)
     current, report = _apply_blog_quality_gate(blueprint, current)
+    current, report = _apply_blog_deterministic_repairs(blueprint, current, report)
     initial_critical = _critical_quality_warnings(report)
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
     if not needs_retry:
@@ -1289,6 +1418,7 @@ def _enforce_blog_quality(
     retry = _ensure_methodology_context(blueprint, retry)
     _inject_affiliate_links(blueprint, retry)
     retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
+    retry, retry_report = _apply_blog_deterministic_repairs(blueprint, retry, retry_report)
     retry_report = _with_unresolved_critical_warnings(retry_report)
     if retry_report.get("status") != "pass":
         return None, retry_report

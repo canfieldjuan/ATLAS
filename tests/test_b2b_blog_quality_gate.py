@@ -486,6 +486,33 @@ def test_data_claim_allows_to_vendor_grounding():
     assert not any("unsupported_data_claim" in w for w in report.get("warnings", []))
 
 
+def test_data_claim_skips_methodology_source_sentence():
+    bp = _migration_blueprint()
+    grounded = _build_grounded_vendor_set(bp)
+    body = (
+        "This analysis draws on 957 enriched reviews from Reddit (926 reviews), "
+        "G2 (10 reviews), and Gartner Peer Insights (10 reviews)."
+    )
+    flagged = _find_unsupported_data_claims(body, grounded, known_vendors=[])
+    assert not flagged
+
+
+def test_data_claim_skips_markdown_heading_fragments():
+    bp = _migration_blueprint()
+    grounded = _build_grounded_vendor_set(bp)
+    body = "# Gusto vs Rippling: 60 Churn Signals Across 364 Reviews Analyzed"
+    flagged = _find_unsupported_data_claims(body, grounded, known_vendors=[])
+    assert not flagged
+
+
+def test_data_claim_skips_wedge_labels():
+    bp = _migration_blueprint()
+    grounded = _build_grounded_vendor_set(bp)
+    body = 'The synthesis wedge label is "UX Regression," though the data shows declining UX complaint mentions.'
+    flagged = _find_unsupported_data_claims(body, grounded, known_vendors=[])
+    assert not flagged
+
+
 # ---------------------------------------------------------------------------
 # Known-vendor DB lookup path tests
 # ---------------------------------------------------------------------------
@@ -586,3 +613,47 @@ def test_chart_scope_ambiguity_allows_chart_vendor_in_strongest_claim():
     }
     _, report = _apply_blog_quality_gate(bp, content)
     assert not any("chart_scope_ambiguity" in w for w in report.get("warnings", []))
+
+
+def test_enforce_quality_removes_unsupported_claim_lines_before_retry(monkeypatch):
+    bp = _migration_blueprint()
+    bp.data_context["_known_vendors"] = ["Trello", "Shopify", "WooCommerce", "BigCommerce"]
+    content = {
+        "title": "Switch to Shopify",
+        "description": "desc",
+        "content": (
+            "## Introduction\n"
+            "This analysis is based on self-selected reviewers from 2026-02 to 2026-03.\n"
+            f"{_CLAIM_PAD}\n"
+            "The top migration source is WooCommerce with 5 stories analyzed.\n"
+            "- **Trello** -- The most common comparison.\n"
+            "{{chart:sources-bar}}\n"
+            '> "We switched from WooCommerce after hitting scaling limits" -- reviewer\n'
+            '> "BigCommerce pricing pushed us to Shopify" -- reviewer\n'
+        ),
+    }
+
+    calls = {"count": 0}
+
+    def _fake_retry_generate(*args, **kwargs):
+        calls["count"] += 1
+        return dict(content)
+
+    monkeypatch.setattr(blog_mod, "_generate_content", _fake_retry_generate)
+
+    final, report = _enforce_blog_quality(
+        llm=object(),
+        blueprint=bp,
+        content=content,
+        max_tokens=1200,
+        related_posts=None,
+    )
+
+    assert calls["count"] == 0
+    assert final is not None
+    assert report["status"] == "pass"
+    assert "Trello" not in str(final.get("content") or "")
+    assert any(
+        item.startswith("removed_unsupported_claim_lines:")
+        for item in report.get("fixes_applied", [])
+    )
