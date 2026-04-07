@@ -224,6 +224,16 @@ def test_competitive_scope_run_id_generates_unique_id_for_direct_scoped_runs():
     assert run_id_a != run_id_b
 
 
+def test_competitive_set_preview_uses_canonical_v2_schema_predicate():
+    from atlas_brain.services import b2b_competitive_sets as mod
+
+    predicate = mod._reasoning_v2_schema_predicate("schema_version")
+
+    assert "IN ('v2', '2')" in predicate
+    assert "LIKE 'v2.%'" in predicate
+    assert "LIKE '2.%'" in predicate
+
+
 def test_scheduled_scope_strategy_prefers_runtime_config(monkeypatch):
     from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
 

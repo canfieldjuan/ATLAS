@@ -14,6 +14,15 @@ def _norm_vendor(name: str) -> str:
     return str(name or "").strip().lower()
 
 
+def _reasoning_v2_schema_predicate(column_name: str = "schema_version") -> str:
+    """SQL predicate matching canonical reasoning v2 schema version formats."""
+    return (
+        f"(LOWER(COALESCE({column_name}, '')) IN ('v2', '2') "
+        f"OR LOWER(COALESCE({column_name}, '')) LIKE 'v2.%' "
+        f"OR COALESCE({column_name}, '') LIKE '2.%')"
+    )
+
+
 @dataclass
 class CompetitiveSetPlan:
     """Concrete vendor and cross-vendor work derived from a competitive set."""
@@ -311,13 +320,13 @@ async def estimate_competitive_set_plan(
     lookback_days = int(settings.b2b_churn.competitive_set_preview_lookback_days)
 
     vendor_rows = await pool.fetch(
-        """
+        f"""
         WITH latest AS (
             SELECT DISTINCT ON (vendor_name)
                    vendor_name,
                    tokens_used
             FROM b2b_reasoning_synthesis
-            WHERE schema_version LIKE '2.%'
+            WHERE {_reasoning_v2_schema_predicate()}
               AND vendor_name = ANY($1::text[])
             ORDER BY vendor_name, created_at DESC
         )
