@@ -231,13 +231,18 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
     class Pool:
         is_initialized = True
 
-        async def fetchrow(self, query, *_args):
+        async def fetchrow(self, query, *args):
+            if "SELECT MAX(as_of_date) AS as_of_date" in query:
+                assert args == ("Salesforce", 90, date.today())
+                return {"as_of_date": date(2026, 4, 1)}
             if "COUNT(*) AS total FROM b2b_vendor_witnesses" in query:
+                assert args == ("Salesforce", 90, date(2026, 4, 1))
                 return {"total": 1}
             return None
 
-        async def fetch(self, query, *_args):
+        async def fetch(self, query, *args):
             if "FROM b2b_vendor_witnesses" in query and "GROUP BY pain_category" not in query:
+                assert args == ("Salesforce", 90, date(2026, 4, 1), 50, 0)
                 return [
                     {
                         "witness_id": "w1",
@@ -257,6 +262,8 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
                         "as_of_date": datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
                     }
                 ]
+            if "GROUP BY pain_category, source, witness_type" in query:
+                assert args == ("Salesforce", 90, date(2026, 4, 1))
             return []
 
     monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
@@ -271,8 +278,71 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["vendor_name"] == "Salesforce"
+    assert body["as_of_date"] == "2026-04-01"
+    assert body["analysis_window_days"] == 90
     assert body["total"] == 1
     assert body["witnesses"][0]["witness_id"] == "w1"
+
+
+def test_b2b_evidence_witness_detail_uses_requested_snapshot(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            if "SELECT MAX(as_of_date) AS as_of_date" in query:
+                assert args == ("Salesforce", 30, date(2026, 3, 31))
+                return {"as_of_date": date(2026, 3, 30)}
+            if "FROM b2b_vendor_witnesses w" in query:
+                assert args == ("Salesforce", "w1", 30, date(2026, 3, 30))
+                return {
+                    "witness_id": "w1",
+                    "review_id": uuid4(),
+                    "witness_type": "pain_signal",
+                    "excerpt_text": "Switching due to slow support.",
+                    "source": "g2",
+                    "reviewed_at": datetime(2026, 3, 28, tzinfo=timezone.utc),
+                    "reviewer_company": "Acme",
+                    "reviewer_title": "VP IT",
+                    "pain_category": "support",
+                    "competitor": None,
+                    "salience_score": 0.9,
+                    "specificity_score": 0.8,
+                    "selection_reason": "high_signal",
+                    "signal_tags": ["support"],
+                    "as_of_date": date(2026, 3, 30),
+                    "review_text": "Full review text",
+                    "summary": "Summary",
+                    "pros": None,
+                    "cons": None,
+                    "rating": 2,
+                    "review_source": "g2",
+                    "source_url": None,
+                    "enrichment": None,
+                    "reviewer_name": "Pat",
+                    "enrichment_status": "completed",
+                }
+            return None
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/b2b/evidence/witnesses/w1?vendor_name=Salesforce&as_of_date=2026-03-31&window_days=30"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["witness"]["witness_id"] == "w1"
+    assert body["witness"]["as_of_date"] == "2026-03-30"
 
 
 def test_b2b_evidence_router_rejects_invalid_as_of_date(monkeypatch):

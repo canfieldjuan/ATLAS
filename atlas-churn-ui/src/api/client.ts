@@ -1318,6 +1318,8 @@ export interface EvidenceTrace {
 
 export async function fetchWitnesses(params: {
   vendor_name: string
+  as_of_date?: string
+  window_days?: number
   pain_category?: string
   source?: string
   competitor?: string
@@ -1328,6 +1330,8 @@ export async function fetchWitnesses(params: {
 }) {
   return get<{
     vendor_name: string
+    as_of_date: string | null
+    analysis_window_days: number
     witnesses: EvidenceWitness[]
     total: number
     limit: number
@@ -1336,11 +1340,15 @@ export async function fetchWitnesses(params: {
   }>(EVIDENCE_BASE, '/witnesses', params as Record<string, string | number | boolean>)
 }
 
-export async function fetchWitness(witnessId: string, vendorName: string) {
+export async function fetchWitness(
+  witnessId: string,
+  vendorName: string,
+  params?: { as_of_date?: string; window_days?: number },
+) {
   return get<{ witness: EvidenceWitnessDetail }>(
     EVIDENCE_BASE,
     `/witnesses/${encodeURIComponent(witnessId)}`,
-    { vendor_name: vendorName },
+    { vendor_name: vendorName, ...(params || {}) },
   )
 }
 

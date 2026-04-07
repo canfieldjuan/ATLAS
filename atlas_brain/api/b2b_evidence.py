@@ -80,11 +80,29 @@ def _row_to_dict(row) -> dict:
     return d
 
 
+async def _latest_witness_snapshot_date(pool, vendor_name: str, window_days: int, target_date: date) -> date | None:
+    row = await pool.fetchrow(
+        """
+        SELECT MAX(as_of_date) AS as_of_date
+        FROM b2b_vendor_witnesses
+        WHERE vendor_name = $1
+          AND analysis_window_days = $2
+          AND as_of_date <= $3
+        """,
+        vendor_name,
+        window_days,
+        target_date,
+    )
+    return row["as_of_date"] if row and row["as_of_date"] else None
+
+
 # -- 1. List witnesses --------------------------------------------------------
 
 @router.get("/witnesses")
 async def list_witnesses(
     vendor_name: str,
+    as_of_date: Optional[str] = None,
+    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     pain_category: Optional[str] = None,
     source: Optional[str] = None,
     competitor: Optional[str] = None,
@@ -96,15 +114,32 @@ async def list_witnesses(
 ):
     """List witness records for a vendor with optional filters."""
     pool = _pool_or_503()
-
+    target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
 
-    conditions = ["vendor_name = $1"]
-    params: list = [vendor_name]
-    idx = 2
+    snapshot_date = await _latest_witness_snapshot_date(pool, vendor_name, window_days, target_date)
+    if snapshot_date is None:
+        return {
+            "vendor_name": vendor_name,
+            "as_of_date": None,
+            "analysis_window_days": window_days,
+            "witnesses": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "facets": {
+                "pain_categories": [],
+                "sources": [],
+                "witness_types": [],
+            },
+        }
+
+    conditions = ["vendor_name = $1", "analysis_window_days = $2", "as_of_date = $3"]
+    params: list = [vendor_name, window_days, snapshot_date]
+    idx = 4
 
     if pain_category:
         conditions.append(f"pain_category = ${idx}")
@@ -167,10 +202,14 @@ async def list_witnesses(
             COUNT(*) AS cnt
         FROM b2b_vendor_witnesses
         WHERE vendor_name = $1
+          AND analysis_window_days = $2
+          AND as_of_date = $3
         GROUP BY pain_category, source, witness_type
         ORDER BY cnt DESC
         """,
         vendor_name,
+        window_days,
+        snapshot_date,
     )
 
     pain_cats = sorted({r["pain_category"] for r in facets_rows if r["pain_category"]})
@@ -179,6 +218,8 @@ async def list_witnesses(
 
     return {
         "vendor_name": vendor_name,
+        "as_of_date": snapshot_date.isoformat(),
+        "analysis_window_days": window_days,
         "witnesses": [_row_to_dict(r) for r in rows],
         "total": total,
         "limit": limit,
@@ -197,15 +238,21 @@ async def list_witnesses(
 async def get_witness(
     witness_id: str,
     vendor_name: str,
+    as_of_date: Optional[str] = None,
+    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get a single witness record with full review text and evidence spans."""
     pool = _pool_or_503()
-
+    target_date = _parse_target_date(as_of_date)
 
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
+
+    snapshot_date = await _latest_witness_snapshot_date(pool, vendor_name, window_days, target_date)
+    if snapshot_date is None:
+        raise HTTPException(status_code=404, detail="Witness not found")
 
     witness = await pool.fetchrow(
         """
@@ -215,10 +262,11 @@ async def get_witness(
         FROM b2b_vendor_witnesses w
         LEFT JOIN b2b_reviews r ON r.id = w.review_id
         WHERE w.vendor_name = $1 AND w.witness_id = $2
-        ORDER BY w.as_of_date DESC
+          AND w.analysis_window_days = $3
+          AND w.as_of_date = $4
         LIMIT 1
         """,
-        vendor_name, witness_id,
+        vendor_name, witness_id, window_days, snapshot_date,
     )
 
     if not witness:

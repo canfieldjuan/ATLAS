@@ -36,6 +36,8 @@ type Tab = 'witnesses' | 'vault' | 'trace'
 // -- Main component -----------------------------------------------------------
 
 export default function EvidenceExplorer() {
+  const windowDays = 90
+
   // Search state
   const [vendorInput, setVendorInput] = useState('')
   const [activeVendor, setActiveVendor] = useState('')
@@ -50,6 +52,7 @@ export default function EvidenceExplorer() {
   const [witnesses, setWitnesses] = useState<EvidenceWitness[]>([])
   const [facets, setFacets] = useState<EvidenceFacets>({ pain_categories: [], sources: [], witness_types: [] })
   const [total, setTotal] = useState(0)
+  const [witnessSnapshotDate, setWitnessSnapshotDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [offset, setOffset] = useState(0)
   const limit = 30
@@ -118,6 +121,7 @@ export default function EvidenceExplorer() {
     try {
       const res = await fetchWitnesses({
         vendor_name: activeVendor,
+        window_days: windowDays,
         pain_category: filterPain || undefined,
         source: filterSource || undefined,
         witness_type: filterType || undefined,
@@ -128,13 +132,15 @@ export default function EvidenceExplorer() {
       setWitnesses(res.witnesses)
       setFacets(res.facets)
       setTotal(res.total)
+      setWitnessSnapshotDate(res.as_of_date)
     } catch {
       if (version !== requestVersionRef.current) return
       setWitnesses([])
+      setWitnessSnapshotDate(null)
     } finally {
       if (version === requestVersionRef.current) setLoading(false)
     }
-  }, [activeVendor, filterPain, filterSource, filterType, offset])
+  }, [activeVendor, filterPain, filterSource, filterType, offset, windowDays])
 
   useEffect(() => {
     if (activeTab === 'witnesses') loadWitnesses()
@@ -144,7 +150,7 @@ export default function EvidenceExplorer() {
     if (activeTab === 'vault' && activeVendor && !vault && !vaultLoading) {
       const version = ++requestVersionRef.current
       setVaultLoading(true)
-      fetchEvidenceVault({ vendor_name: activeVendor })
+      fetchEvidenceVault({ vendor_name: activeVendor, window_days: windowDays })
         .then(res => {
           if (version !== requestVersionRef.current) return
           if ('weakness_evidence' in res) {
@@ -161,13 +167,13 @@ export default function EvidenceExplorer() {
           if (version === requestVersionRef.current) setVaultLoading(false)
         })
     }
-  }, [activeTab, activeVendor, vault, vaultLoading])
+  }, [activeTab, activeVendor, vault, vaultLoading, windowDays])
 
   useEffect(() => {
     if (activeTab === 'trace' && activeVendor && !trace && !traceLoading) {
       const version = ++requestVersionRef.current
       setTraceLoading(true)
-      fetchEvidenceTrace({ vendor_name: activeVendor })
+      fetchEvidenceTrace({ vendor_name: activeVendor, window_days: windowDays })
         .then(res => {
           if (version !== requestVersionRef.current) return
           setTrace(res)
@@ -180,12 +186,13 @@ export default function EvidenceExplorer() {
           if (version === requestVersionRef.current) setTraceLoading(false)
         })
     }
-  }, [activeTab, activeVendor, trace, traceLoading])
+  }, [activeTab, activeVendor, trace, traceLoading, windowDays])
 
   // Reset vault/trace when vendor changes
   useEffect(() => {
     setVault(null)
     setTrace(null)
+    setWitnessSnapshotDate(null)
   }, [activeVendor])
 
   const clearFilters = () => {
@@ -734,6 +741,8 @@ export default function EvidenceExplorer() {
       <EvidenceDrawer
         vendorName={activeVendor}
         witnessId={drawerWitnessId}
+        asOfDate={witnessSnapshotDate}
+        windowDays={windowDays}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
       />

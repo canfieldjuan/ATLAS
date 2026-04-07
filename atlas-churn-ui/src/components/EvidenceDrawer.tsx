@@ -83,11 +83,20 @@ function highlightExcerpt(fullText: string, excerptText: string): ReactNode {
 interface EvidenceDrawerProps {
   vendorName: string
   witnessId: string | null
+  asOfDate?: string | null
+  windowDays?: number
   open: boolean
   onClose: () => void
 }
 
-export default function EvidenceDrawer({ vendorName, witnessId, open, onClose }: EvidenceDrawerProps) {
+export default function EvidenceDrawer({
+  vendorName,
+  witnessId,
+  asOfDate,
+  windowDays,
+  open,
+  onClose,
+}: EvidenceDrawerProps) {
   const [witness, setWitness] = useState<EvidenceWitnessDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -97,11 +106,14 @@ export default function EvidenceDrawer({ vendorName, witnessId, open, onClose }:
     if (!open || !witnessId || !vendorName) return
     setLoading(true)
     setError('')
-    fetchWitness(witnessId, vendorName)
+    fetchWitness(witnessId, vendorName, {
+      as_of_date: asOfDate || undefined,
+      window_days: windowDays,
+    })
       .then(res => setWitness(res.witness))
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load witness'))
       .finally(() => setLoading(false))
-  }, [open, witnessId, vendorName])
+  }, [open, witnessId, vendorName, asOfDate, windowDays])
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
