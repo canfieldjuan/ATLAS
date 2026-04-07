@@ -2724,6 +2724,7 @@ class B2BChurnConfig(BaseSettings):
     )
     # Regeneration mode -- re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
+    blog_post_max_rejection_retries: int = Field(default=2, ge=0, le=10, description="Max times a rejected blog slug can be retried before permanent block")
 
     # Historical snapshots
     snapshot_enabled: bool = Field(default=True, description="Enable daily vendor health snapshots")
@@ -3144,6 +3145,13 @@ class B2BChurnConfig(BaseSettings):
         description=(
             "Default changed-vendors-only policy for scoped competitive-set runs "
             "when the caller does not explicitly choose full refresh behavior"
+        ),
+    )
+    reasoning_synthesis_scheduled_scope_strategy: str = Field(
+        default="competitive_sets",
+        description=(
+            "Runtime strategy for scheduled b2b_reasoning_synthesis runs: "
+            "'competitive_sets' scans due scoped sets, 'full_universe' keeps the legacy global run path"
         ),
     )
 

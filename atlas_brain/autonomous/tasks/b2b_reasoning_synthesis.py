@@ -707,6 +707,17 @@ def _competitive_scope_run_id(
     return _task_run_id(task)
 
 
+def _scheduled_scope_strategy(task: ScheduledTask | Any) -> str:
+    configured = str(
+        getattr(settings.b2b_churn, "reasoning_synthesis_scheduled_scope_strategy", "") or "",
+    ).strip().lower()
+    if configured in {"competitive_sets", "full_universe"}:
+        return configured
+    metadata = getattr(task, "metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    return str(metadata.get("scheduled_scope_strategy") or "").strip().lower()
+
+
 def _coerce_timestamptz(value: Any) -> Any:
     if isinstance(value, datetime):
         return value
@@ -1010,9 +1021,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 exc_info=True,
             )
 
-    scheduled_scope_strategy = str(
-        ((task.metadata or {}).get("scheduled_scope_strategy") or "")
-    ).strip()
+    scheduled_scope_strategy = _scheduled_scope_strategy(task)
     if not scope_id and scheduled_scope_strategy == "competitive_sets":
         from ...services.b2b_competitive_sets import (
             build_competitive_set_plan,

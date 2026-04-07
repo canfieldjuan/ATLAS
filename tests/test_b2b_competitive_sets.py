@@ -184,6 +184,36 @@ def test_competitive_scope_run_id_prefers_explicit_scope_run_id():
     assert mod._competitive_scope_run_id(task, scope_meta) == "scope-run-123"
 
 
+def test_scheduled_scope_strategy_prefers_runtime_config(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    task = SimpleNamespace(metadata={"scheduled_scope_strategy": "competitive_sets"})
+
+    monkeypatch.setattr(
+        mod.settings.b2b_churn,
+        "reasoning_synthesis_scheduled_scope_strategy",
+        "full_universe",
+        raising=False,
+    )
+
+    assert mod._scheduled_scope_strategy(task) == "full_universe"
+
+
+def test_scheduled_scope_strategy_falls_back_to_task_metadata(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    task = SimpleNamespace(metadata={"scheduled_scope_strategy": "competitive_sets"})
+
+    monkeypatch.setattr(
+        mod.settings.b2b_churn,
+        "reasoning_synthesis_scheduled_scope_strategy",
+        "",
+        raising=False,
+    )
+
+    assert mod._scheduled_scope_strategy(task) == "competitive_sets"
+
+
 @pytest.mark.asyncio
 async def test_estimate_competitive_set_plan_uses_history_and_fallback(monkeypatch):
     plan = build_competitive_set_plan(
