@@ -463,9 +463,9 @@ def _attach_synthesis_contracts_to_report_entry(
     scope_manifest = context.get("scope_manifest")
     if isinstance(scope_manifest, dict) and scope_manifest:
         entry["scope_manifest"] = scope_manifest
-    atoms = context.get("reasoning_atoms")
-    if isinstance(atoms, dict) and atoms:
-        entry["reasoning_atoms"] = atoms
+    atom_summary = context.get("reasoning_atom_summary")
+    if isinstance(atom_summary, dict) and atom_summary:
+        entry["reasoning_atom_summary"] = atom_summary
     delta = context.get("reasoning_delta")
     if isinstance(delta, dict) and delta:
         entry["reasoning_delta"] = delta

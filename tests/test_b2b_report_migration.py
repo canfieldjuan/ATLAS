@@ -272,7 +272,7 @@ class TestGovernanceFieldsInReportEntries:
         )
 
         assert entry["scope_manifest"]["selection_strategy"] == "vendor_facet_packet_v1"
-        assert entry["reasoning_atoms"]["theses"][0]["thesis_id"] == "t1"
+        assert entry["reasoning_atom_summary"]["theses"][0]["thesis_id"] == "t1"
         assert entry["reasoning_delta"]["changed"] is True
 
 

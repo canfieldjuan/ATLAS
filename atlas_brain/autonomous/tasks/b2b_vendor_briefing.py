@@ -164,9 +164,9 @@ def _apply_synthesis_view_to_briefing(
     if isinstance(scope_manifest, dict) and scope_manifest:
         briefing["scope_manifest"] = scope_manifest
         used = True
-    atoms = context.get("reasoning_atoms")
-    if isinstance(atoms, dict) and atoms:
-        briefing["reasoning_atoms"] = atoms
+    atom_summary = context.get("reasoning_atom_summary")
+    if isinstance(atom_summary, dict) and atom_summary:
+        briefing["reasoning_atom_summary"] = atom_summary
         used = True
     delta = context.get("reasoning_delta")
     if isinstance(delta, dict) and delta:

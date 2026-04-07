@@ -1057,9 +1057,9 @@ def _build_vendor_aggregate(
             scope_manifest = context.get("scope_manifest")
             if isinstance(scope_manifest, dict) and scope_manifest:
                 result["scope_manifest"] = scope_manifest
-            atoms = context.get("reasoning_atoms")
-            if isinstance(atoms, dict) and atoms:
-                result["reasoning_atoms"] = atoms
+            atom_summary = context.get("reasoning_atom_summary")
+            if isinstance(atom_summary, dict) and atom_summary:
+                result["reasoning_atom_summary"] = atom_summary
             delta = context.get("reasoning_delta")
             if isinstance(delta, dict) and delta:
                 result["reasoning_delta"] = delta

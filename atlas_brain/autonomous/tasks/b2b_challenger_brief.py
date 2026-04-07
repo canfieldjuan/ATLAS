@@ -1393,7 +1393,7 @@ def _build_challenger_brief(
     reasoning_witness_highlights: list[dict[str, Any]] = []
     reasoning_reference_ids: dict[str, Any] = {}
     reasoning_scope_manifest: dict[str, Any] = {}
-    reasoning_atoms: dict[str, Any] = {}
+    reasoning_atom_summary: dict[str, Any] = {}
     reasoning_delta: dict[str, Any] = {}
     if incumbent_synthesis_view is not None:
         from ._b2b_synthesis_reader import (
@@ -1446,9 +1446,9 @@ def _build_challenger_brief(
             if isinstance(consumer_context.get("scope_manifest"), dict)
             else {}
         )
-        reasoning_atoms = (
-            consumer_context.get("reasoning_atoms")
-            if isinstance(consumer_context.get("reasoning_atoms"), dict)
+        reasoning_atom_summary = (
+            consumer_context.get("reasoning_atom_summary")
+            if isinstance(consumer_context.get("reasoning_atom_summary"), dict)
             else {}
         )
         reasoning_delta = (
@@ -1530,8 +1530,8 @@ def _build_challenger_brief(
             incumbent_section["reasoning_reference_ids"] = reasoning_reference_ids
         if reasoning_scope_manifest:
             incumbent_section["reasoning_scope_manifest"] = reasoning_scope_manifest
-        if reasoning_atoms:
-            incumbent_section["reasoning_atoms"] = reasoning_atoms
+        if reasoning_atom_summary:
+            incumbent_section["reasoning_atom_summary"] = reasoning_atom_summary
         if reasoning_delta:
             incumbent_section["reasoning_delta"] = reasoning_delta
 
@@ -1786,8 +1786,8 @@ def _build_challenger_brief(
         result["reasoning_reference_ids"] = reasoning_reference_ids
     if reasoning_scope_manifest:
         result["reasoning_scope_manifest"] = reasoning_scope_manifest
-    if reasoning_atoms:
-        result["reasoning_atoms"] = reasoning_atoms
+    if reasoning_atom_summary:
+        result["reasoning_atom_summary"] = reasoning_atom_summary
     if reasoning_delta:
         result["reasoning_delta"] = reasoning_delta
     if account_reasoning:

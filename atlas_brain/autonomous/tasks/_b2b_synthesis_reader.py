@@ -719,6 +719,88 @@ class SynthesisView:
         rows = self.reasoning_atoms.get("coverage_limits")
         return [dict(item) for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
 
+    def reasoning_atom_summary(self) -> dict[str, Any]:
+        atoms = self.reasoning_atoms
+        if not atoms:
+            return {}
+
+        summary: dict[str, Any] = {
+            "schema_version": str(atoms.get("schema_version") or "v1"),
+        }
+
+        theses = [
+            {
+                "thesis_id": str(item.get("thesis_id") or ""),
+                "wedge": str(item.get("wedge") or ""),
+                "summary": str(item.get("summary") or ""),
+                "why_now": str(item.get("why_now") or ""),
+                "confidence": str(item.get("confidence") or ""),
+                "ui_priority": item.get("ui_priority"),
+            }
+            for item in self.theses[:2]
+        ]
+        theses = [item for item in theses if item["summary"] or item["why_now"]]
+        if theses:
+            summary["theses"] = theses
+
+        timing_windows = [
+            {
+                "window_type": str(item.get("window_type") or ""),
+                "start_or_anchor": str(item.get("start_or_anchor") or ""),
+                "urgency": str(item.get("urgency") or ""),
+                "recommended_action": str(item.get("recommended_action") or ""),
+            }
+            for item in self.timing_windows[:2]
+        ]
+        timing_windows = [item for item in timing_windows if item["start_or_anchor"]]
+        if timing_windows:
+            summary["timing_windows"] = timing_windows
+
+        proof_points = [
+            {
+                "label": str(item.get("label") or ""),
+                "claim_type": str(item.get("claim_type") or ""),
+                "value": item.get("value"),
+                "best_segment": str(item.get("best_segment") or ""),
+                "confidence": str(item.get("confidence") or ""),
+            }
+            for item in self.proof_points[:3]
+        ]
+        proof_points = [item for item in proof_points if item["label"]]
+        if proof_points:
+            summary["proof_points"] = proof_points
+
+        account_signals = [
+            {
+                "company": str(item.get("company") or ""),
+                "role_type": str(item.get("role_type") or ""),
+                "buying_stage": str(item.get("buying_stage") or ""),
+                "urgency": str(item.get("urgency") or ""),
+                "competitor_context": str(item.get("competitor_context") or ""),
+                "trust_tier": str(item.get("trust_tier") or ""),
+            }
+            for item in self.account_signals[:2]
+        ]
+        account_signals = [item for item in account_signals if item["company"]]
+        if account_signals:
+            summary["account_signals"] = account_signals
+
+        coverage_limits = [
+            {
+                "label": str(item.get("label") or item.get("gap") or ""),
+                "confidence_cap": str(item.get("confidence_cap") or ""),
+            }
+            for item in self.coverage_limits[:3]
+        ]
+        coverage_limits = [item for item in coverage_limits if item["label"]]
+        if coverage_limits:
+            summary["coverage_limits"] = coverage_limits
+
+        if self.counterevidence:
+            summary["counterevidence_count"] = len(self.counterevidence)
+
+        return summary
+
     def consumer_context(self, consumer: str) -> dict[str, Any]:
         contracts = self.materialized_contracts()
         context: dict[str, Any] = {
@@ -756,6 +838,9 @@ class SynthesisView:
                 context["counterevidence"] = self.counterevidence
             if self.coverage_limits:
                 context["coverage_limits"] = self.coverage_limits
+            atom_summary = self.reasoning_atom_summary()
+            if atom_summary:
+                context["reasoning_atom_summary"] = atom_summary
         reasoning_delta = self.reasoning_delta
         if reasoning_delta:
             context["reasoning_delta"] = reasoning_delta
@@ -1055,9 +1140,9 @@ def inject_synthesis_into_card(
     scope_manifest = context.get("scope_manifest")
     if isinstance(scope_manifest, dict) and scope_manifest:
         card_entry["scope_manifest"] = scope_manifest
-    reasoning_atoms = context.get("reasoning_atoms")
-    if isinstance(reasoning_atoms, dict) and reasoning_atoms:
-        card_entry["reasoning_atoms"] = reasoning_atoms
+    reasoning_atom_summary = context.get("reasoning_atom_summary")
+    if isinstance(reasoning_atom_summary, dict) and reasoning_atom_summary:
+        card_entry["reasoning_atom_summary"] = reasoning_atom_summary
     reasoning_delta = context.get("reasoning_delta")
     if isinstance(reasoning_delta, dict) and reasoning_delta:
         card_entry["reasoning_delta"] = reasoning_delta
