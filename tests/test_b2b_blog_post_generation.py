@@ -503,6 +503,92 @@ async def test_run_uses_anthropic_batch_for_blog_first_pass(monkeypatch):
     notify.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_run_allows_maintenance_regeneration_override(monkeypatch):
+    task = ScheduledTask(
+        id=uuid4(),
+        name="b2b_blog_post_generation",
+        task_type="builtin",
+        schedule_type="interval",
+        interval_seconds=300,
+        enabled=True,
+        metadata={
+            "builtin_handler": "b2b_blog_post_generation",
+            "maintenance_run": True,
+            "regenerate_existing_posts": True,
+            "test_vendors": ["Asana"],
+            "test_topic_types": ["migration_guide"],
+        },
+    )
+
+    class FakePool:
+        is_initialized = True
+
+    class FakeLLM:
+        model = "anthropic/claude-sonnet-4-5"
+        name = "openrouter"
+
+    regen = AsyncMock(return_value={"count": 1, "regenerated": True})
+
+    monkeypatch.setattr(blog_mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_enabled", False, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_regenerate_mode", False, raising=False)
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **_kwargs: FakeLLM(),
+    )
+    monkeypatch.setattr(blog_mod, "_regenerate_existing_posts", regen)
+
+    result = await blog_mod.run(task)
+
+    assert result == {"count": 1, "regenerated": True}
+    regen.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_regenerate_existing_posts_applies_scoped_filters_before_limit():
+    captured: dict[str, object] = {}
+
+    class Pool:
+        async def fetch(self, query, *args):
+            captured["query"] = query
+            captured["args"] = args
+            return []
+
+    task = ScheduledTask(
+        id=uuid4(),
+        name="b2b_blog_post_generation",
+        task_type="builtin",
+        schedule_type="interval",
+        interval_seconds=300,
+        enabled=True,
+        metadata={
+            "maintenance_run": True,
+            "regenerate_existing_posts": True,
+            "test_vendors": ["Asana"],
+            "test_topic_types": ["migration_guide"],
+            "test_slugs": ["switch-to-asana-2026-04"],
+        },
+    )
+
+    result = await blog_mod._regenerate_existing_posts(
+        Pool(),
+        llm=object(),
+        cfg=SimpleNamespace(),
+        task=task,
+        max_posts=10,
+    )
+
+    assert result == {"_skip_synthesis": "No draft posts to regenerate"}
+    assert "LOWER(COALESCE(data_context->>'vendor_name', data_context->>'vendor_a', data_context->>'vendor', '')) = ANY($2::text[])" in str(captured["query"])
+    assert "topic_type = ANY($3::text[])" in str(captured["query"])
+    assert "slug = ANY($4::text[])" in str(captured["query"])
+    assert captured["args"][1] == ["asana"]
+    assert captured["args"][2] == ["migration_guide"]
+    assert captured["args"][3] == ["switch-to-asana-2026-04"]
+    assert captured["args"][4] == 10
+
+
 def _blog_anchor_context() -> dict:
     return {
         "reasoning_anchor_examples": {

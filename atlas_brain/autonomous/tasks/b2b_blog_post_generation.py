@@ -1685,6 +1685,29 @@ def _persist_first_pass_blog_quality(
     return first_pass_audit
 
 
+def _normalize_string_scope(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        values = list(raw)
+    else:
+        values = [raw]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(text)
+    return normalized
+
+
 # -- entry point --------------------------------------------------
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -1694,7 +1717,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     All posts are stored as drafts.
     """
     cfg = settings.b2b_churn
-    if not cfg.blog_post_enabled:
+    maintenance_run = bool((task.metadata or {}).get("maintenance_run"))
+    if not cfg.blog_post_enabled and not maintenance_run:
         return {"_skip_synthesis": "B2B blog post generation disabled"}
 
     pool = get_db_pool()
@@ -1986,7 +2010,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return first_pass_by_slug
 
     # Regeneration mode: re-process existing drafts through fixed pipeline
-    if cfg.blog_post_regenerate_mode:
+    if cfg.blog_post_regenerate_mode or (
+        maintenance_run and bool((task.metadata or {}).get("regenerate_existing_posts"))
+    ):
         return await _regenerate_existing_posts(pool, generation_llm, cfg, task, max_posts)
 
     while len(results) < max_posts:
@@ -2251,19 +2277,37 @@ async def _regenerate_existing_posts(
     """
     from ...pipelines.notify import send_pipeline_notification
 
-    # Only regenerate the 10 known B2B topic types (skip consumer types like
-    # safety_spotlight / migration_report that have different schemas)
+    scoped_vendors = [
+        value.lower()
+        for value in _normalize_string_scope((task.metadata or {}).get("test_vendors"))
+    ]
+    scoped_topic_types = _normalize_string_scope((task.metadata or {}).get("test_topic_types"))
+    scoped_slugs = _normalize_string_scope((task.metadata or {}).get("test_slugs"))
+
+    params: list[Any] = [list(_B2B_TOPIC_TYPES)]
+    where_clauses = [
+        "status = 'draft'",
+        f"topic_type = ANY(${len(params)}::text[])",
+    ]
+    if scoped_vendors:
+        params.append(scoped_vendors)
+        where_clauses.append(
+            "LOWER(COALESCE(data_context->>'vendor_name', data_context->>'vendor_a', "
+            f"data_context->>'vendor', '')) = ANY(${len(params)}::text[])"
+        )
+    if scoped_topic_types:
+        params.append(scoped_topic_types)
+        where_clauses.append(f"topic_type = ANY(${len(params)}::text[])")
+    if scoped_slugs:
+        params.append(scoped_slugs)
+        where_clauses.append(f"slug = ANY(${len(params)}::text[])")
+    params.append(max_posts)
+
     rows = await pool.fetch(
-        """
+        f"""
         SELECT id, slug, topic_type, data_context, created_at
         FROM blog_posts
-        WHERE status = 'draft'
-          AND topic_type IN (
-              'vendor_showdown', 'vendor_deep_dive', 'churn_report',
-              'pricing_reality_check', 'vendor_alternative', 'switching_story',
-              'migration_guide', 'market_landscape', 'pain_point_roundup',
-              'best_fit_guide'
-          )
+        WHERE {' AND '.join(where_clauses)}
         ORDER BY
             CASE topic_type
                 WHEN 'vendor_showdown' THEN 1
@@ -2279,9 +2323,9 @@ async def _regenerate_existing_posts(
                 ELSE 11
             END,
             created_at ASC
-        LIMIT $1
+        LIMIT ${len(params)}
         """,
-        max_posts,
+        *params,
     )
 
     if not rows:

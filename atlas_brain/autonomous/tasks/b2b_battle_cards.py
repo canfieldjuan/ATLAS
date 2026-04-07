@@ -1116,6 +1116,7 @@ def _populate_battle_card_fallback_sales_copy(card: dict[str, Any]) -> None:
         _battle_card_safe_summary,
         _battle_card_structured_proof_text,
         _battle_card_winning_position,
+        _sanitize_battle_card_sales_copy,
     )
 
     weak_rows = card.get("weakness_analysis") if isinstance(card.get("weakness_analysis"), list) else []
@@ -1273,6 +1274,19 @@ def _populate_battle_card_fallback_sales_copy(card: dict[str, Any]) -> None:
             item["timing"] = distinct_defaults[next_default]
             normalized_timings.add(item["timing"].lower())
             next_default += 1
+
+    render_status = str(card.get("llm_render_status") or "").strip().lower()
+    if render_status not in {"succeeded", "cached"}:
+        generated_fields = {
+            field: card[field]
+            for field in _BATTLE_CARD_LLM_FIELDS
+            if field in card
+        }
+        sanitized = _sanitize_battle_card_sales_copy(card, generated_fields)
+        if isinstance(sanitized, dict):
+            for field in _BATTLE_CARD_LLM_FIELDS:
+                if field in sanitized:
+                    card[field] = sanitized[field]
 
 
 def _evaluate_battle_card_quality(
@@ -2199,6 +2213,32 @@ async def _check_freshness(pool) -> date | None:
     return today
 
 
+async def _latest_core_report_date(pool) -> date | None:
+    """Return the latest persisted core-run date, if any."""
+    return await pool.fetchval(
+        """
+        SELECT report_date
+        FROM b2b_intelligence
+        WHERE report_type = 'core_run_complete'
+        ORDER BY report_date DESC, created_at DESC
+        LIMIT 1
+        """
+    )
+
+
+async def _resolve_core_report_date(pool, *, maintenance_run: bool) -> date | None:
+    """Return the report date battle cards should read from."""
+    today = await _check_freshness(pool)
+    if today is not None:
+        return today
+    if not maintenance_run:
+        return None
+    latest = await _latest_core_report_date(pool)
+    if latest is not None:
+        logger.info("Using latest core run date %s for maintenance battle-card run", latest)
+    return latest
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Build battle cards + LLM sales copy from persisted artifacts."""
     cfg = settings.b2b_churn
@@ -2210,7 +2250,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    today = await _check_freshness(pool)
+    today = await _resolve_core_report_date(pool, maintenance_run=maintenance_run)
     if today is None:
         return {"_skip_synthesis": "Core signals not fresh for today"}
 

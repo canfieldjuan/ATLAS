@@ -1509,6 +1509,46 @@ class TestBattleCardSalesCopySanitization:
             != sanitized["objection_handlers"][0]["pivot"]
         )
 
+    def test_fallback_sales_copy_is_sanitized_before_preflight_gate(self):
+        card = _sample_battle_card() | {
+            "llm_render_status": "pending",
+            "executive_summary": "Shopify is showing 30 high-risk signals in 2026.",
+            "why_they_stay": {
+                "summary": "The incumbent still holds on where teams feel the current setup is familiar and good enough.",
+                "strengths": [
+                    {
+                        "area": "Operational familiarity",
+                        "evidence": "Customers still cite familiar workflows as a reason to stay.",
+                        "how_to_neutralize": (
+                            "Emphasize predictable operations, easier adoption, and lower day-to-day friction "
+                            "while keeping the renewal conversation focused on fit and value."
+                        ),
+                    },
+                    {
+                        "area": "Operational familiarity",
+                        "evidence": "Customers still cite familiar workflows as a reason to stay.",
+                        "how_to_neutralize": (
+                            "Emphasize predictable operations, easier adoption, and lower day-to-day friction "
+                            "while keeping the renewal conversation focused on fit and value."
+                        ),
+                    },
+                ],
+            },
+        }
+
+        _populate_battle_card_fallback_sales_copy(card)
+        warnings = _validate_battle_card_sales_copy(
+            card,
+            {
+                field: card[field]
+                for field in _BATTLE_CARD_LLM_FIELDS
+                if field in card
+            },
+        )
+
+        assert not any("unsupported numeric claims" in warning for warning in warnings)
+        assert not any("duplicates content already present" in warning for warning in warnings)
+
     def test_repairs_duplicate_recommended_play_timing(self):
         card = _sample_battle_card()
         duplicate_timing = "Best tested during active evaluation windows, renewal review, or planning cycles."
@@ -3008,6 +3048,29 @@ class TestBattleCardExecutionProgress:
 
 
 class TestBattleCardAnthropicBatching:
+    @pytest.mark.asyncio
+    async def test_resolve_core_report_date_uses_latest_for_maintenance(self, monkeypatch):
+        import atlas_brain.autonomous.tasks.b2b_battle_cards as battle_cards_mod
+
+        async def _fake_check_freshness(pool):
+            return None
+
+        async def _fake_latest_core_report_date(pool):
+            return date(2026, 4, 6)
+
+        monkeypatch.setattr(battle_cards_mod, "_check_freshness", _fake_check_freshness)
+        monkeypatch.setattr(
+            battle_cards_mod,
+            "_latest_core_report_date",
+            _fake_latest_core_report_date,
+        )
+
+        assert await battle_cards_mod._resolve_core_report_date(object(), maintenance_run=False) is None
+        assert await battle_cards_mod._resolve_core_report_date(
+            object(),
+            maintenance_run=True,
+        ) == date(2026, 4, 6)
+
     @pytest.mark.asyncio
     async def test_run_allows_scoped_maintenance_override_when_intelligence_disabled(self, monkeypatch):
         import atlas_brain.autonomous.tasks.b2b_battle_cards as battle_cards_mod
