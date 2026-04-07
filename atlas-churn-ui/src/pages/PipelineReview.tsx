@@ -2966,6 +2966,32 @@ function CostsTab() {
       sortValue: (row) => row.task_name,
     },
     {
+      key: 'inspect',
+      header: 'Inspect',
+      render: (row) =>
+        row.run_id ? (
+          <button
+            onClick={() =>
+              openRunDetail(
+                row.run_id || '',
+                row.task_name === 'b2b_battle_cards' ? 'battle_card_overlay' : 'all',
+              )
+            }
+            className={clsx(
+              'rounded border px-2 py-1 text-xs transition',
+              row.task_name === 'b2b_battle_cards'
+                ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200 hover:border-cyan-400/50 hover:text-white'
+                : 'border-slate-700/60 text-slate-300 hover:border-cyan-500/60 hover:text-white',
+            )}
+          >
+            {row.task_name === 'b2b_battle_cards' ? 'Overlay' : 'Run'}
+          </button>
+        ) : (
+          <span className="text-xs text-slate-500">--</span>
+        ),
+      sortable: false,
+    },
+    {
       key: 'recent_runs',
       header: 'Runs',
       render: (row) => <span className="text-xs text-slate-300">{formatMaybeNumber(row.recent_runs)}</span>,

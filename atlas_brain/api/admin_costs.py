@@ -828,6 +828,7 @@ async def burn_dashboard(
         task_name = str(row.get("name") or "").strip()
         rows_by_task[task_name] = {
             "task_name": task_name,
+            "run_id": None,
             "recent_runs": _safe_int(row.get("recent_runs")),
             "last_run_at": row["last_run_at"].isoformat() if row.get("last_run_at") else None,
             "last_status": str(row.get("last_status") or "") or None,
@@ -854,6 +855,7 @@ async def burn_dashboard(
             task_name,
             {
                 "task_name": task_name,
+                "run_id": None,
                 "recent_runs": 0,
                 "last_run_at": row["started_at"].isoformat() if row.get("started_at") else None,
                 "last_status": str(row.get("status") or "") or None,
@@ -878,6 +880,11 @@ async def burn_dashboard(
         payload = _parse_task_result_payload(row.get("result_text"))
         metadata = _normalize_metadata(row.get("metadata"))
         normalized = _normalize_burn_payload(task_name, payload, metadata)
+        run_id = str(row.get("run_id") or "").strip() or None
+        started_at = row.get("started_at")
+        current_last_run_at = str(bucket.get("last_run_at") or "").strip()
+        if run_id and started_at and (not current_last_run_at or started_at.isoformat() >= current_last_run_at):
+            bucket["run_id"] = run_id
         _add_nullable_metric(bucket, "rows_processed", normalized.get("rows_processed"))
         _add_nullable_metric(bucket, "rows_skipped", normalized.get("rows_skipped"))
         _add_nullable_metric(bucket, "rows_reprocessed", normalized.get("rows_reprocessed"))
@@ -907,6 +914,7 @@ async def burn_dashboard(
             task_name,
             {
                 "task_name": task_name,
+                "run_id": None,
                 "recent_runs": 0,
                 "last_run_at": last_call_at.isoformat() if last_call_at else None,
                 "last_status": "manual",
@@ -935,6 +943,7 @@ async def burn_dashboard(
         if last_call_at and (not current_last_run_at or last_call_at.isoformat() > current_last_run_at):
             bucket["last_run_at"] = last_call_at.isoformat()
             bucket["last_status"] = "manual"
+            bucket["run_id"] = run_id
         bucket["model_call_count"] += _safe_int(row.get("model_call_count"))
         bucket["total_input_tokens"] += _safe_int(row.get("total_input_tokens"))
         bucket["total_billable_input_tokens"] += _safe_int(row.get("total_billable_input_tokens"))
@@ -1014,6 +1023,7 @@ async def burn_dashboard(
         event_type = str(generic_top_pair["event_type"]) if generic_top_pair else "unknown"
         rows_by_task["generic_reasoning"] = {
             "task_name": "generic_reasoning",
+            "run_id": None,
             "recent_runs": None,
             "last_run_at": generic_last_call_at.isoformat() if generic_last_call_at else None,
             "last_status": "event_driven",
@@ -1071,6 +1081,7 @@ async def burn_dashboard(
                 latest_cross_vendor_status = latest_attempt_status
         rows_by_task["b2b_reasoning_synthesis.cross_vendor"] = {
             "task_name": "b2b_reasoning_synthesis.cross_vendor",
+            "run_id": None,
             "recent_runs": None,
             "last_run_at": latest_cross_vendor_at.isoformat() if latest_cross_vendor_at else None,
             "last_status": latest_cross_vendor_status,

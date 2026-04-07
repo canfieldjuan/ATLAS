@@ -995,6 +995,7 @@ export interface AdminCostReconciliation {
 
 export interface AdminCostBurnRow {
   task_name: string
+  run_id: string | null
   recent_runs: number | null
   last_run_at: string | null
   last_status: string | null

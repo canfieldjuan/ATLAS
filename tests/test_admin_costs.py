@@ -191,6 +191,14 @@ class _FakePool:
                     "recent_runs": 1,
                     "recent_failures": 0,
                 },
+                {
+                    "id": uuid4(),
+                    "name": "b2b_battle_cards",
+                    "last_run_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
+                    "last_status": "completed",
+                    "recent_runs": 1,
+                    "recent_failures": 0,
+                },
             ]
         if "SELECT\n            t.name AS task_name,\n            e.id::text AS run_id," in query:
             return [
@@ -220,6 +228,15 @@ class _FakePool:
                     "retry_count": 0,
                     "result_text": '{"vendors_reasoned": 2, "vendors_skipped": 4, "cross_vendor_succeeded": 1, "generated": 3}',
                     "metadata": {"source_name": "b2b_scheduler", "event_type": "nightly_reasoning"},
+                },
+                {
+                    "task_name": "b2b_battle_cards",
+                    "run_id": "run-battle-1",
+                    "status": "completed",
+                    "started_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
+                    "retry_count": 0,
+                    "result_text": '{"cards_built": 2, "cards_llm_updated": 1, "cache_hits": 1, "llm_failures": 1}',
+                    "metadata": {},
                 },
             ]
         if "COUNT(*) AS model_call_count" in query and "run_id IS NOT NULL" in query:
@@ -1098,14 +1115,14 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
 def test_burn_dashboard_rolls_up_task_runs_and_generic_reasoning(monkeypatch):
     client, _ = _client(monkeypatch)
     with client:
-        res = client.get("/admin/costs/burn-dashboard?days=30&top_n=10")
+        res = client.get("/admin/costs/burn-dashboard?days=30&top_n=25")
     assert res.status_code == 200
     body = res.json()
     assert body["period_days"] == 30
-    assert body["top_n"] == 10
-    assert body["summary"]["tracked_cost_usd"] == pytest.approx(2.36)
-    assert body["summary"]["model_call_count"] == 18
-    assert body["summary"]["recent_runs"] == 4
+    assert body["top_n"] == 25
+    assert body["summary"]["tracked_cost_usd"] == pytest.approx(2.43)
+    assert body["summary"]["model_call_count"] == 19
+    assert body["summary"]["recent_runs"] == 5
     assert body["summary"]["rows_processed"] == 24
     assert body["summary"]["rows_reprocessed"] == 5
     assert body["summary"]["reprocess_pct"] == pytest.approx(5 / 24, rel=1e-3)
@@ -1122,9 +1139,11 @@ def test_burn_dashboard_rolls_up_task_runs_and_generic_reasoning(monkeypatch):
 
     rows = {row["task_name"]: row for row in body["rows"]}
     assert rows["generic_reasoning"]["model_call_count"] == 12
+    assert rows["generic_reasoning"]["run_id"] is None
     assert rows["generic_reasoning"]["recent_runs"] is None
     assert rows["generic_reasoning"]["top_trigger_reason"] == "crm_provider | crm.interaction_logged"
     assert rows["b2b_enrichment"]["rows_processed"] == 10
+    assert rows["b2b_enrichment"]["run_id"] == "run-enrich-1"
     assert rows["b2b_enrichment"]["avg_cost_per_successful_item"] == pytest.approx(0.0125)
     assert rows["b2b_enrichment"]["top_trigger_reason"] == "No new reviews pending enrichment"
     assert rows["b2b_enrichment_repair"]["rows_processed"] == 5
@@ -1133,6 +1152,7 @@ def test_burn_dashboard_rolls_up_task_runs_and_generic_reasoning(monkeypatch):
     assert rows["b2b_enrichment_repair"]["retry_count"] == 1
     assert rows["b2b_enrichment_repair"]["reprocess_pct"] == pytest.approx(1.0)
     assert rows["b2b_enrichment_repair"]["top_trigger_reason"] == "strict_discussion_gate"
+    assert rows["b2b_battle_cards"]["run_id"] == "run-battle-1"
     assert rows["b2b_reasoning_synthesis"]["recent_runs"] == 2
     assert rows["b2b_reasoning_synthesis"]["last_status"] == "manual"
     assert rows["b2b_reasoning_synthesis"]["model_call_count"] == 2
