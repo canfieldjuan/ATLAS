@@ -1,14 +1,42 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { useMemo } from 'react'
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import BlogArticleView from '../components/BlogArticleView'
-import { POSTS } from '../content/blog'
+import { loadPostBySlug, loadPostsBySlugs } from '../content/blog'
 import type { BlogPost as BlogPostType } from '../content/blog'
 
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
-  const post = POSTS.find((p) => p.slug === slug)
+  const [post, setPost] = useState<BlogPostType | null | undefined>(undefined)
+  const [relatedPosts, setRelatedPosts] = useState<BlogPostType[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    setPost(undefined)
+    setRelatedPosts([])
+
+    if (!slug) {
+      setPost(null)
+      return () => {
+        cancelled = true
+      }
+    }
+
+    loadPostBySlug(slug).then((loadedPost) => {
+      if (cancelled) return
+      setPost(loadedPost)
+      if (!loadedPost?.related_slugs?.length) return
+      loadPostsBySlugs(loadedPost.related_slugs).then((loadedRelatedPosts) => {
+        if (cancelled) return
+        setRelatedPosts(loadedRelatedPosts)
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [slug])
 
   const seoKeywords = useMemo(() => {
     if (!post) return undefined
@@ -78,12 +106,16 @@ export default function BlogPost() {
     return blogPosting
   }, [post, seoKeywords])
 
-  const relatedPosts = useMemo(() => {
-    if (!post?.related_slugs) return []
-    return post.related_slugs
-      .map((s) => POSTS.find((p) => p.slug === s))
-      .filter((p): p is BlogPostType => !!p)
-  }, [post])
+  if (post === undefined) {
+    return (
+      <PublicLayout>
+        <section className="max-w-3xl mx-auto px-6 py-24 text-center">
+          <div className="h-10 w-48 mx-auto rounded bg-slate-800/50 animate-pulse" />
+          <div className="mt-6 h-4 w-72 mx-auto rounded bg-slate-800/40 animate-pulse" />
+        </section>
+      </PublicLayout>
+    )
+  }
 
   if (!post) {
     return (

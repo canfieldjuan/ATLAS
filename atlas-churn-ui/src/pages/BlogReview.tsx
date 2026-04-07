@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   FileSearch,
@@ -20,7 +20,7 @@ import { resolveBlogArticleCta } from '../lib/blogCta'
 import BlogFailureExplanation from '../components/BlogFailureExplanation'
 import type { Column } from '../components/DataTable'
 import type { BlogDraftSummary, BlogDraft, BlogEvidence } from '../types'
-import { POSTS } from '../content/blog'
+import { loadPostsBySlugs } from '../content/blog'
 import type { BlogPost as BlogPostType } from '../content/blog'
 import {
   fetchBlogDrafts,
@@ -124,6 +124,7 @@ export default function BlogReview() {
   const [highlightAffiliateLinks, setHighlightAffiliateLinks] = useState(true)
   const [highlightCharts, setHighlightCharts] = useState(true)
   const [highlightCtas, setHighlightCtas] = useState(true)
+  const [relatedPreviewPosts, setRelatedPreviewPosts] = useState<BlogPostType[]>([])
 
   const { data: drafts, loading, error, refresh, refreshing } = useApiData(
     () => fetchBlogDrafts(statusFilter || undefined),
@@ -201,11 +202,22 @@ export default function BlogReview() {
     () => (selectedDraft ? derivePreviewPost(selectedDraft) : null),
     [selectedDraft],
   )
-  const relatedPreviewPosts = useMemo(() => {
-    if (!previewPost?.related_slugs) return []
-    return previewPost.related_slugs
-      .map((slug) => POSTS.find((post) => post.slug === slug))
-      .filter((post): post is BlogPostType => !!post)
+  useEffect(() => {
+    let cancelled = false
+    const relatedSlugs = previewPost?.related_slugs || []
+    if (relatedSlugs.length === 0) {
+      setRelatedPreviewPosts([])
+      return () => {
+        cancelled = true
+      }
+    }
+    loadPostsBySlugs(relatedSlugs).then((loadedPosts) => {
+      if (cancelled) return
+      setRelatedPreviewPosts(loadedPosts)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [previewPost])
   const renderedLinks = useMemo(
     () => extractLinks(previewPost?.content || ''),

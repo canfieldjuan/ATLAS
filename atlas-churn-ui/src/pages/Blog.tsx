@@ -1,8 +1,8 @@
-import React from 'react'
+import React, { startTransition, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
-import { POSTS } from '../content/blog'
+import { loadAllPosts } from '../content/blog'
 import type { BlogPost } from '../content/blog'
 
 const AtlasRobotScene = React.lazy(() => import('../components/AtlasRobotScene'))
@@ -113,6 +113,28 @@ function CardHeader({ post }: { post: BlogPost }) {
 }
 
 export default function Blog() {
+  const [posts, setPosts] = useState<BlogPost[] | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    loadAllPosts()
+      .then((loadedPosts) => {
+        if (cancelled) return
+        startTransition(() => {
+          setPosts(loadedPosts)
+          setLoadFailed(false)
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoadFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <PublicLayout>
       <SeoHead
@@ -134,13 +156,26 @@ export default function Blog() {
 
       {/* Post grid */}
       <section className="max-w-5xl mx-auto px-6 pb-24">
-        {POSTS.length === 0 ? (
+        {posts === null && !loadFailed ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div
+                key={index}
+                className="h-80 rounded-xl border border-slate-700/50 bg-slate-800/40 animate-pulse"
+              />
+            ))}
+          </div>
+        ) : loadFailed ? (
+          <div className="text-center py-16 text-slate-500">
+            <p className="text-lg">Blog posts failed to load. Try refreshing.</p>
+          </div>
+        ) : posts && posts.length === 0 ? (
           <div className="text-center py-16 text-slate-500">
             <p className="text-lg">No posts yet. Check back soon.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {POSTS.map(post => (
+            {posts?.map(post => (
               <Link
                 key={post.slug}
                 to={`/blog/${post.slug}`}
