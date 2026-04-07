@@ -78,6 +78,40 @@ function extractQuoteText(value: unknown): string {
   return ''
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function toRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
+    : []
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => asString(item))
+        .filter(Boolean)
+    : []
+}
+
+function humanizeToken(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
 export default function VendorDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
@@ -107,6 +141,52 @@ export default function VendorDetail() {
   if (!profile) return <PageError error={new Error('Vendor not found')} />
 
   const signal = profile.churn_signal
+  const reasoningScope = asRecord(signal?.reasoning_scope_manifest)
+  const reasoningAtoms = asRecord(signal?.reasoning_atoms)
+  const reasoningDelta = asRecord(signal?.reasoning_delta)
+  const witnessMix = Object.entries(asRecord(reasoningScope.witness_mix))
+    .map(([label, value]) => ({
+      label: humanizeToken(label),
+      count: asNumber(value) ?? 0,
+    }))
+    .filter((item) => item.count > 0)
+  const timeCoverage = Object.entries(asRecord(reasoningScope.coverage_by_time_bucket))
+    .map(([bucket, value]) => ({
+      bucket: humanizeToken(bucket),
+      count: asNumber(value) ?? 0,
+    }))
+    .filter((item) => item.count > 0)
+  const theses = toRecordArray(reasoningAtoms.theses).slice(0, 3)
+  const timingWindows = toRecordArray(reasoningAtoms.timing_windows).slice(0, 4)
+  const coverageLimits = toRecordArray(reasoningAtoms.coverage_limits).slice(0, 4)
+  const counterevidence = toRecordArray(reasoningAtoms.counterevidence).slice(0, 3)
+  const reasoningKeySignals = signal?.reasoning_key_signals ?? []
+  const reasoningUncertaintySources = signal?.reasoning_uncertainty_sources ?? []
+  const reasoningContractGaps = signal?.reasoning_contract_gaps ?? []
+  const reasoningSectionDisclaimers = signal?.reasoning_section_disclaimers ?? {}
+  const reasoningDeltaItems = [
+    reasoningDelta.wedge_changed ? 'Wedge changed since prior run' : '',
+    reasoningDelta.confidence_changed ? 'Confidence posture changed' : '',
+    reasoningDelta.top_destination_changed
+      ? `Top destination changed to ${asString(reasoningDelta.current_top_destination) || 'a new competitor'}`
+      : '',
+    ...toStringArray(reasoningDelta.new_timing_windows).slice(0, 2).map(
+      (item) => `New timing window: ${humanizeToken(item)}`,
+    ),
+    ...toStringArray(reasoningDelta.new_account_signals).slice(0, 2).map(
+      (item) => `New account signal: ${item}`,
+    ),
+  ].filter(Boolean)
+  const reasoningVisible = Boolean(
+    signal?.reasoning_executive_summary
+      || Object.keys(reasoningScope).length
+      || theses.length
+      || timingWindows.length
+      || coverageLimits.length
+      || counterevidence.length
+      || reasoningDeltaItems.length
+      || reasoningContractGaps.length,
+  )
   const painData = profile.pain_distribution.map((p) => ({
     name: p.pain_category,
     count: p.count,
@@ -393,25 +473,118 @@ export default function VendorDetail() {
                   </div>
                 </dl>
               </div>
-              {signal.archetype && (
+              {reasoningVisible && (
                 <div className="bg-slate-900/50 border border-cyan-500/20 rounded-xl p-5">
                   <h3 className="text-sm font-medium text-cyan-300 mb-3">Reasoning Intelligence</h3>
                   <dl className="space-y-2 text-sm">
-                    <div className="flex justify-between items-center">
-                      <dt className="text-slate-400">Churn Pattern</dt>
-                      <dd><ArchetypeBadge archetype={signal.archetype} confidence={signal.archetype_confidence} showConfidence /></dd>
-                    </div>
+                    {signal.archetype && (
+                      <div className="flex justify-between items-center">
+                        <dt className="text-slate-400">Churn Pattern</dt>
+                        <dd><ArchetypeBadge archetype={signal.archetype} confidence={signal.archetype_confidence} showConfidence /></dd>
+                      </div>
+                    )}
+                    {signal.synthesis_wedge_label && (
+                      <div className="flex justify-between">
+                        <dt className="text-slate-400">Primary Wedge</dt>
+                        <dd className="text-slate-200 text-xs">{signal.synthesis_wedge_label}</dd>
+                      </div>
+                    )}
                     <div className="flex justify-between">
                       <dt className="text-slate-400">Reasoning Mode</dt>
                       <dd className="text-slate-300 text-xs">{signal.reasoning_mode ?? '--'}</dd>
                     </div>
+                    {signal.reasoning_source && (
+                      <div className="flex justify-between">
+                        <dt className="text-slate-400">Reasoning Source</dt>
+                        <dd className="text-slate-300 text-xs">{humanizeToken(signal.reasoning_source.replace(/^b2b_/, ''))}</dd>
+                      </div>
+                    )}
                   </dl>
+                  {signal.reasoning_executive_summary && (
+                    <p className="mt-3 pt-3 border-t border-slate-700/50 text-sm text-slate-300">
+                      {signal.reasoning_executive_summary}
+                    </p>
+                  )}
+                  {reasoningKeySignals.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-1.5">Key signals</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {reasoningKeySignals.slice(0, 5).map((item, i) => (
+                          <span key={i} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {signal.falsification_conditions && signal.falsification_conditions.length > 0 && (
                     <div className="mt-3 pt-3 border-t border-slate-700/50">
                       <p className="text-xs text-slate-500 mb-1.5">What would change this conclusion:</p>
                       <ul className="space-y-1">
                         {signal.falsification_conditions.map((c: string, i: number) => (
                           <li key={i} className="text-xs text-slate-400 pl-3 relative before:content-['\2022'] before:absolute before:left-0 before:text-cyan-500">{c}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+              {Object.keys(reasoningScope).length > 0 && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                  <div className="flex items-start justify-between gap-4 mb-3">
+                    <div>
+                      <h3 className="text-sm font-medium text-slate-300">Evidence Scope</h3>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {asString(reasoningScope.selection_strategy) || 'Scoped witness packet'}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs text-slate-400">
+                      <p>{asNumber(reasoningScope.witnesses_in_scope) ?? 0} witnesses</p>
+                      <p>{asNumber(reasoningScope.reviews_in_scope) ?? 0} reviews in scope</p>
+                    </div>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-lg bg-slate-800/60 p-3">
+                      <dt className="text-xs text-slate-500">Reviews Considered</dt>
+                      <dd className="mt-1 text-white">{asNumber(reasoningScope.reviews_considered_total) ?? '--'}</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-800/60 p-3">
+                      <dt className="text-xs text-slate-500">Dropped Evidence</dt>
+                      <dd className="mt-1 text-white">{asNumber(reasoningScope.dropped_evidence_count) ?? 0}</dd>
+                    </div>
+                  </dl>
+                  {witnessMix.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-1.5">Witness mix</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {witnessMix.map((item) => (
+                          <span key={item.label} className="px-2 py-0.5 bg-cyan-900/20 border border-cyan-800/30 rounded text-xs text-cyan-200">
+                            {item.label} ({item.count})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {timeCoverage.length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-xs text-slate-500 mb-1.5">Time coverage</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {timeCoverage.map((item) => (
+                          <span key={item.bucket} className="px-2 py-0.5 bg-slate-800 rounded text-xs text-slate-300">
+                            {item.bucket} ({item.count})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {toStringArray(reasoningScope.reasons_dropped).length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-1.5">Coverage limits</p>
+                      <ul className="space-y-1">
+                        {toStringArray(reasoningScope.reasons_dropped).slice(0, 4).map((item, i) => (
+                          <li key={i} className="text-xs text-slate-400">
+                            {humanizeToken(item)}
+                          </li>
                         ))}
                       </ul>
                     </div>
@@ -585,6 +758,104 @@ export default function VendorDetail() {
                       </blockquote>
                     ))}
                   </div>
+                </div>
+              )}
+              {(theses.length > 0 || timingWindows.length > 0 || reasoningDeltaItems.length > 0 || coverageLimits.length > 0 || counterevidence.length > 0 || reasoningContractGaps.length > 0) && (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+                  <h3 className="text-sm font-medium text-slate-300 mb-3">Reasoning Highlights</h3>
+                  {theses.length > 0 && (
+                    <div className="space-y-3">
+                      {theses.map((item, index) => (
+                        <div key={`${asString(item.thesis_id) || 'thesis'}-${index}`} className="rounded-lg bg-slate-800/50 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm text-white">{asString(item.summary) || 'Unnamed thesis'}</p>
+                              {asString(item.why_now) && (
+                                <p className="mt-1 text-xs text-slate-400">{asString(item.why_now)}</p>
+                              )}
+                            </div>
+                            {asString(item.confidence) && (
+                              <span className="px-2 py-0.5 bg-slate-700 rounded text-[10px] uppercase tracking-wide text-slate-200">
+                                {asString(item.confidence)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-slate-400">
+                            {asString(item.wedge) && (
+                              <span className="px-2 py-0.5 bg-slate-900 rounded">{humanizeToken(asString(item.wedge))}</span>
+                            )}
+                            {asNumber(item.evidence_count) !== null && (
+                              <span className="px-2 py-0.5 bg-slate-900 rounded">{asNumber(item.evidence_count)} evidence refs</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {timingWindows.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-2">Timing windows</p>
+                      <div className="space-y-2">
+                        {timingWindows.map((item, index) => (
+                          <div key={`${asString(item.window_id) || 'window'}-${index}`} className="flex items-start justify-between gap-3 text-sm">
+                            <div>
+                              <p className="text-slate-200">{asString(item.start_or_anchor) || asString(item.window_type)}</p>
+                              {asString(item.recommended_action) && (
+                                <p className="text-xs text-slate-500 mt-0.5">{asString(item.recommended_action)}</p>
+                              )}
+                            </div>
+                            {asString(item.urgency) && (
+                              <span className="px-2 py-0.5 bg-amber-900/30 border border-amber-800/30 rounded text-[10px] uppercase tracking-wide text-amber-200">
+                                {asString(item.urgency)}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {reasoningDeltaItems.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-2">Since last reasoning run</p>
+                      <ul className="space-y-1">
+                        {reasoningDeltaItems.slice(0, 5).map((item, i) => (
+                          <li key={i} className="text-xs text-slate-300">{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {(coverageLimits.length > 0 || counterevidence.length > 0 || reasoningContractGaps.length > 0 || Object.keys(reasoningSectionDisclaimers).length > 0 || reasoningUncertaintySources.length > 0) && (
+                    <div className="mt-4 pt-4 border-t border-slate-700/50">
+                      <p className="text-xs text-slate-500 mb-2">Trust and coverage</p>
+                      <div className="space-y-2">
+                        {coverageLimits.slice(0, 3).map((item, index) => (
+                          <div key={`${asString(item.coverage_limit_id) || 'limit'}-${index}`} className="text-xs text-slate-400">
+                            {asString(item.label)}
+                          </div>
+                        ))}
+                        {counterevidence.slice(0, 2).map((item, index) => (
+                          <div key={`${asString(item.counterevidence_id) || 'counter'}-${index}`} className="text-xs text-slate-400">
+                            Counterevidence: {asString(item.statement)}
+                          </div>
+                        ))}
+                        {reasoningContractGaps.slice(0, 3).map((item, index) => (
+                          <div key={`${item}-${index}`} className="text-xs text-slate-400">
+                            Contract gap: {humanizeToken(item)}
+                          </div>
+                        ))}
+                        {Object.entries(reasoningSectionDisclaimers).slice(0, 2).map(([section, message]) => (
+                          <div key={section} className="text-xs text-slate-400">
+                            {humanizeToken(section)}: {message}
+                          </div>
+                        ))}
+                        {reasoningUncertaintySources.slice(0, 2).map((item, index) => (
+                          <div key={`${item}-${index}`} className="text-xs text-slate-400">
+                            Uncertainty: {item}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

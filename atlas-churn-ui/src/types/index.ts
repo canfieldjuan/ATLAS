@@ -18,7 +18,27 @@ export interface ChurnSignal {
   last_computed_at: string | null
 }
 
-export interface ChurnSignalDetail extends ChurnSignal {
+export interface ReasoningReferenceIds {
+  metric_ids?: string[] | null
+  witness_ids?: string[] | null
+}
+
+export interface ReasoningOverlayFields {
+  reasoning_executive_summary?: string | null
+  reasoning_key_signals?: string[] | null
+  reasoning_uncertainty_sources?: string[] | null
+  reasoning_scope_manifest?: Record<string, unknown> | null
+  reasoning_atoms?: Record<string, unknown> | null
+  reasoning_delta?: Record<string, unknown> | null
+  reasoning_contract_gaps?: string[] | null
+  reasoning_section_disclaimers?: Record<string, string> | null
+  reasoning_source?: string | null
+  reasoning_reference_ids?: ReasoningReferenceIds | null
+  synthesis_wedge?: string | null
+  synthesis_wedge_label?: string | null
+}
+
+export interface ChurnSignalDetail extends ChurnSignal, ReasoningOverlayFields {
   negative_reviews: number
   top_pain_categories: string[] | null
   top_competitors: string[] | null
@@ -33,6 +53,30 @@ export interface ChurnSignalDetail extends ChurnSignal {
   timeline_summary: { company: string | null; contract_end: string | null; evaluation_deadline: string | null; decision_timeline: string | null; urgency: number }[] | null
   falsification_conditions: string[] | null
   created_at: string | null
+}
+
+export interface VendorProfileChurnSignal extends ReasoningOverlayFields {
+  avg_urgency_score: number
+  churn_intent_count: number
+  total_reviews: number
+  nps_proxy: number | null
+  price_complaint_rate: number | null
+  decision_maker_churn_rate: number | null
+  top_pain_categories: string[] | null
+  top_competitors: string[] | null
+  top_feature_gaps: string[] | null
+  quotable_evidence: string[] | null
+  top_use_cases: { module: string; mentions: number }[] | null
+  top_integration_stacks: { tool: string; mentions: number }[] | null
+  budget_signal_summary: Record<string, unknown> | null
+  sentiment_distribution: Record<string, number> | null
+  buyer_authority_summary: Record<string, unknown> | null
+  timeline_summary: { company: string | null; contract_end: string | null; evaluation_deadline: string | null; decision_timeline: string | null; urgency: number }[] | null
+  archetype: string | null
+  archetype_confidence: number | null
+  reasoning_mode: string | null
+  falsification_conditions: string[] | null
+  last_computed_at: string | null
 }
 
 export interface HighIntentCompany {
@@ -53,29 +97,7 @@ export interface HighIntentCompany {
 
 export interface VendorProfile {
   vendor_name: string
-  churn_signal: {
-    avg_urgency_score: number
-    churn_intent_count: number
-    total_reviews: number
-    nps_proxy: number | null
-    price_complaint_rate: number | null
-    decision_maker_churn_rate: number | null
-    top_pain_categories: string[] | null
-    top_competitors: string[] | null
-    top_feature_gaps: string[] | null
-    quotable_evidence: string[] | null
-    top_use_cases: { module: string; mentions: number }[] | null
-    top_integration_stacks: { tool: string; mentions: number }[] | null
-    budget_signal_summary: Record<string, unknown> | null
-    sentiment_distribution: Record<string, number> | null
-    buyer_authority_summary: Record<string, unknown> | null
-    timeline_summary: { company: string | null; contract_end: string | null; evaluation_deadline: string | null; decision_timeline: string | null; urgency: number }[] | null
-    archetype: string | null
-    archetype_confidence: number | null
-    reasoning_mode: string | null
-    falsification_conditions: string[] | null
-    last_computed_at: string | null
-  } | null
+  churn_signal: VendorProfileChurnSignal | null
   review_counts: {
     total: number
     pending_enrichment: number
