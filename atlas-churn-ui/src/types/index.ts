@@ -29,6 +29,7 @@ export interface ReasoningOverlayFields {
   reasoning_uncertainty_sources?: string[] | null
   reasoning_scope_manifest?: Record<string, unknown> | null
   reasoning_atoms?: Record<string, unknown> | null
+  reasoning_atom_summary?: Record<string, unknown> | null
   reasoning_delta?: Record<string, unknown> | null
   reasoning_contract_gaps?: string[] | null
   reasoning_section_disclaimers?: Record<string, string> | null
