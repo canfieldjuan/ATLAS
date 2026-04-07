@@ -169,6 +169,7 @@ def _classify_b2b_pass(span_name: str, metadata: dict) -> str | None:
     stage = str(metadata.get("stage") or "").strip().lower()
     workflow = str(_recent_metadata_value(metadata, "workflow") or "").strip().lower()
     source_name = str(_recent_metadata_value(metadata, "source_name") or "").strip().lower()
+    event_type = str(_recent_metadata_value(metadata, "event_type") or "").strip().lower()
 
     if span_name in {
         "task.b2b_enrichment_repair.extraction",
@@ -194,6 +195,14 @@ def _classify_b2b_pass(span_name: str, metadata: dict) -> str | None:
         return "reasoning"
     if workflow in {"cross_vendor_reasoning"}:
         return "reasoning"
+
+    if span_name in {
+        "b2b.churn_intelligence.battle_card_sales_copy",
+        "pipeline.digest/battle_card_sales_copy",
+    }:
+        return "battle_card_overlay"
+    if source_name == "b2b_battle_cards" and event_type == "llm_overlay":
+        return "battle_card_overlay"
 
     return None
 
@@ -1777,7 +1786,7 @@ async def b2b_efficiency(
     top_n: int = Query(default=25, ge=1, le=100),
     run_limit: int = Query(default=25, ge=1, le=100),
 ):
-    """B2B-specific efficiency rollups for extraction, repair, and reasoning."""
+    """B2B-specific efficiency rollups for extraction, repair, reasoning, and battle-card overlay."""
     pool = _pool_or_503()
     since = datetime.now(timezone.utc) - timedelta(days=days)
     strict_discussion_sources, strict_discussion_content_types = strict_discussion_lists(
@@ -1834,9 +1843,11 @@ async def b2b_efficiency(
                     "extraction_cost_usd": 0.0,
                     "repair_cost_usd": 0.0,
                     "reasoning_cost_usd": 0.0,
+                    "battle_card_overlay_cost_usd": 0.0,
                     "extraction_calls": 0,
                     "repair_calls": 0,
                     "reasoning_calls": 0,
+                    "battle_card_overlay_calls": 0,
                     "total_cost_usd": 0.0,
                 },
             )
@@ -1879,13 +1890,19 @@ async def b2b_efficiency(
                     "total_cost_usd": 0.0,
                     "calls": 0,
                     "extraction_cost_usd": 0.0,
+                    "extraction_calls": 0,
                     "repair_cost_usd": 0.0,
+                    "repair_calls": 0,
                     "reasoning_cost_usd": 0.0,
+                    "reasoning_calls": 0,
+                    "battle_card_overlay_cost_usd": 0.0,
+                    "battle_card_overlay_calls": 0,
                 },
             )
             run_bucket["total_cost_usd"] += cost_usd
             run_bucket["calls"] += 1
             run_bucket[f"{pass_name}_cost_usd"] += cost_usd
+            run_bucket[f"{pass_name}_calls"] += 1
 
     # APPROVED-ENRICHMENT-READ: evidence_spans
     # Reason: admin analytics aggregation (evidence_spans count)
@@ -2005,7 +2022,7 @@ async def b2b_efficiency(
         LIMIT $3
         """,
         since,
-        ["b2b_enrichment", "b2b_enrichment_repair", "b2b_reasoning_synthesis"],
+        ["b2b_enrichment", "b2b_enrichment_repair", "b2b_reasoning_synthesis", "b2b_battle_cards"],
         run_limit,
     )
 
@@ -2031,6 +2048,8 @@ async def b2b_efficiency(
                 )
             elif task_name == "b2b_reasoning_synthesis":
                 reviews_processed = _safe_int(payload.get("vendors_reasoned"))
+            elif task_name == "b2b_battle_cards":
+                reviews_processed = _safe_int(payload.get("cards_built"))
         witness_count = _safe_int(payload.get("witness_count"))
         total_cost_usd = _safe_float(run_usage.get(run_id, {}).get("total_cost_usd"))
         calls = _safe_int(run_usage.get(run_id, {}).get("calls"))
@@ -2067,6 +2086,15 @@ async def b2b_efficiency(
                 "extraction_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("extraction_cost_usd")), 6),
                 "repair_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("repair_cost_usd")), 6),
                 "reasoning_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("reasoning_cost_usd")), 6),
+                "battle_card_overlay_cost_usd": round(
+                    _safe_float(run_usage.get(run_id, {}).get("battle_card_overlay_cost_usd")), 6
+                ),
+                "battle_card_overlay_calls": _safe_int(
+                    run_usage.get(run_id, {}).get("battle_card_overlay_calls")
+                ),
+                "battle_card_cache_hits": _safe_int(payload.get("cache_hits")),
+                "battle_card_llm_updated": _safe_int(payload.get("cards_llm_updated")),
+                "battle_card_llm_failures": _safe_int(payload.get("llm_failures")),
             }
         )
 

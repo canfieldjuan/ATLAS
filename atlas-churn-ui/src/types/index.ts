@@ -848,9 +848,11 @@ export interface AdminCostVendorPassRow {
   extraction_cost_usd: number
   repair_cost_usd: number
   reasoning_cost_usd: number
+  battle_card_overlay_cost_usd: number
   extraction_calls: number
   repair_calls: number
   reasoning_calls: number
+  battle_card_overlay_calls: number
   total_cost_usd: number
 }
 
@@ -894,6 +896,11 @@ export interface AdminCostB2bRunRow {
   extraction_cost_usd: number
   repair_cost_usd: number
   reasoning_cost_usd: number
+  battle_card_overlay_cost_usd: number
+  battle_card_overlay_calls: number
+  battle_card_cache_hits: number
+  battle_card_llm_updated: number
+  battle_card_llm_failures: number
 }
 
 export interface AdminCostB2bEfficiency {

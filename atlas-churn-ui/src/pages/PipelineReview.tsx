@@ -2701,6 +2701,18 @@ function CostsTab() {
       sortable: true,
       sortValue: (row) => row.reasoning_cost_usd,
     },
+    {
+      key: 'battle_card_overlay_cost_usd',
+      header: 'Battle Cards',
+      render: (row) => (
+        <div className="text-xs">
+          <div className="text-slate-300">{formatCurrency(row.battle_card_overlay_cost_usd)}</div>
+          <div className="text-slate-500">{formatNumber(row.battle_card_overlay_calls)} calls</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.battle_card_overlay_cost_usd,
+    },
   ]
 
   const sourceEfficiencyColumns: Column<AdminCostSourceEfficiencyRow>[] = [
@@ -2786,14 +2798,19 @@ function CostsTab() {
       key: 'pass_costs',
       header: 'Pass Split',
       render: (row) => (
-        <div className="space-y-0.5 text-[11px] text-slate-400">
+          <div className="space-y-0.5 text-[11px] text-slate-400">
           <div>Ext {formatMaybeCurrency(row.extraction_cost_usd)}</div>
           <div>Rep {formatMaybeCurrency(row.repair_cost_usd)}</div>
           <div>Reas {formatMaybeCurrency(row.reasoning_cost_usd)}</div>
+          <div>Card {formatMaybeCurrency(row.battle_card_overlay_cost_usd)}</div>
         </div>
       ),
       sortable: true,
-      sortValue: (row) => row.extraction_cost_usd + row.repair_cost_usd + row.reasoning_cost_usd,
+      sortValue: (row) =>
+        row.extraction_cost_usd
+        + row.repair_cost_usd
+        + row.reasoning_cost_usd
+        + row.battle_card_overlay_cost_usd,
     },
     {
       key: 'reviews_processed',
@@ -2836,6 +2853,31 @@ function CostsTab() {
       render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.strict_discussion_candidates_dropped)}</span>,
       sortable: true,
       sortValue: (row) => row.strict_discussion_candidates_dropped,
+    },
+    {
+      key: 'battle_card_overlay_calls',
+      header: 'Overlay',
+      render: (row) => (
+        <div className="space-y-0.5 text-[11px] text-slate-400">
+          <div>{formatNumber(row.battle_card_overlay_calls)} calls</div>
+          <div>{formatCurrency(row.battle_card_overlay_cost_usd)}</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.battle_card_overlay_cost_usd,
+    },
+    {
+      key: 'battle_card_outcomes',
+      header: 'Card Outcome',
+      render: (row) => (
+        <div className="space-y-0.5 text-[11px] text-slate-400">
+          <div>Updated {formatNumber(row.battle_card_llm_updated)}</div>
+          <div>Cached {formatNumber(row.battle_card_cache_hits)}</div>
+          <div>Failed {formatNumber(row.battle_card_llm_failures)}</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.battle_card_llm_failures,
     },
   ]
 

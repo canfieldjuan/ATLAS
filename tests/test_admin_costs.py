@@ -264,6 +264,16 @@ class _FakePool:
                     "total_output_tokens": 220,
                     "total_cost_usd": Decimal("0.15"),
                 },
+                {
+                    "run_id": "run-battle-1",
+                    "span_name": "b2b.churn_intelligence.battle_card_sales_copy",
+                    "last_call_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
+                    "model_call_count": 1,
+                    "total_input_tokens": 1800,
+                    "total_billable_input_tokens": 950,
+                    "total_output_tokens": 260,
+                    "total_cost_usd": Decimal("0.07"),
+                },
             ]
         if "FROM pipeline_visibility_events v" in query and "trigger_reason" in query:
             return [
@@ -433,6 +443,12 @@ class _FakePool:
                     "started_at": datetime(2026, 3, 31, 22, 10, tzinfo=timezone.utc),
                     "result_text": '{"vendors_reasoned": 2, "witness_vendor_rows": 1, "witness_count": 12, "generated": 2}',
                 },
+                {
+                    "execution_id": "run-battle-1",
+                    "task_name": "b2b_battle_cards",
+                    "started_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
+                    "result_text": '{"cards_built": 2, "cards_llm_updated": 1, "cache_hits": 1, "llm_failures": 1}',
+                },
             ]
         if "GROUP BY vendor_name" in query and "FROM llm_usage" in query:
             return [
@@ -490,6 +506,18 @@ class _FakePool:
                     "run_id": "run-reason-1",
                     "metadata": {"vendor_name": "Slack"},
                     "created_at": datetime(2026, 3, 31, 22, 10, tzinfo=timezone.utc),
+                },
+                {
+                    "span_name": "b2b.churn_intelligence.battle_card_sales_copy",
+                    "cost_usd": Decimal("0.07"),
+                    "vendor_name": "Slack",
+                    "run_id": "run-battle-1",
+                    "metadata": {
+                        "vendor_name": "Slack",
+                        "source_name": "b2b_battle_cards",
+                        "event_type": "llm_overlay",
+                    },
+                    "created_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
                 },
                 {
                     "span_name": "task.b2b_enrichment.tier1",
@@ -959,7 +987,9 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     assert vendor_row["extraction_cost_usd"] == 0.1
     assert vendor_row["repair_cost_usd"] == 0.05
     assert vendor_row["reasoning_cost_usd"] == 0.2
-    assert vendor_row["total_cost_usd"] == pytest.approx(0.35)
+    assert vendor_row["battle_card_overlay_cost_usd"] == 0.07
+    assert vendor_row["battle_card_overlay_calls"] == 1
+    assert vendor_row["total_cost_usd"] == pytest.approx(0.42)
 
     source_rows = {row["source"]: row for row in body["source_efficiency"]}
     assert source_rows["reddit"]["total_cost_usd"] == pytest.approx(0.15)
@@ -978,6 +1008,12 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     assert run_rows["run-repair-1"]["secondary_write_hits"] == 1
     assert run_rows["run-repair-1"]["strict_discussion_candidates_dropped"] == 3
     assert run_rows["run-reason-1"]["reasoning_cost_usd"] == 0.2
+    assert run_rows["run-battle-1"]["task_name"] == "b2b_battle_cards"
+    assert run_rows["run-battle-1"]["battle_card_overlay_cost_usd"] == 0.07
+    assert run_rows["run-battle-1"]["battle_card_overlay_calls"] == 1
+    assert run_rows["run-battle-1"]["battle_card_cache_hits"] == 1
+    assert run_rows["run-battle-1"]["battle_card_llm_updated"] == 1
+    assert run_rows["run-battle-1"]["battle_card_llm_failures"] == 1
 
 
 def test_burn_dashboard_rolls_up_task_runs_and_generic_reasoning(monkeypatch):
