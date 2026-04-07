@@ -624,6 +624,10 @@ export interface SynthesisValidationResult {
   summary: string
   field_path?: string
   detail: Record<string, unknown>
+  scope_manifest?: Record<string, unknown> | null
+  reasoning_delta?: Record<string, unknown> | null
+  payload_component_tokens?: Record<string, unknown> | null
+  evidence_hash?: string | null
   created_at: string
 }
 

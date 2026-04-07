@@ -96,6 +96,20 @@ def test_synthesis_validation_endpoint_returns_normalized_rows(monkeypatch):
                 "summary": "Differentiate charted source data from broader displacement data.",
                 "field_path": "content.sections[1]",
                 "detail": {"vendors": ["WooCommerce"]},
+                "scope_manifest": {
+                    "selection_strategy": "vendor_facet_packet_v1",
+                    "reviews_in_scope": 9,
+                    "witnesses_in_scope": 12,
+                },
+                "reasoning_delta": {
+                    "wedge_changed": True,
+                    "new_timing_windows": ["renewal_window"],
+                },
+                "payload_component_tokens": {
+                    "witness_pack": 3100,
+                    "section_packets": 900,
+                },
+                "evidence_hash": "abc123hash",
                 "created_at": "2026-03-30T22:00:00+00:00",
             }
         ]
@@ -110,6 +124,10 @@ def test_synthesis_validation_endpoint_returns_normalized_rows(monkeypatch):
     assert body["results"][0]["vendor_name"] == "Shopify"
     assert body["results"][0]["rule_code"] == "scope_ambiguity"
     assert body["results"][0]["detail"]["vendors"] == ["WooCommerce"]
+    assert body["results"][0]["scope_manifest"]["witnesses_in_scope"] == 12
+    assert body["results"][0]["reasoning_delta"]["wedge_changed"] is True
+    assert body["results"][0]["payload_component_tokens"]["witness_pack"] == 3100
+    assert body["results"][0]["evidence_hash"] == "abc123hash"
 
 
 def test_synthesis_validation_retry_only_joins_attempts(monkeypatch):

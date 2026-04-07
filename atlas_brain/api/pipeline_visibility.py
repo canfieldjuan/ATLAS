@@ -774,21 +774,21 @@ async def get_synthesis_validation_results(
             EXISTS (
                 SELECT 1
                 FROM artifact_attempts a_rejected
-                WHERE a_rejected.run_id = synthesis_validation_results.run_id
+                WHERE a_rejected.run_id = svr.run_id
                   AND a_rejected.artifact_type = 'reasoning_synthesis'
-                  AND a_rejected.artifact_id = synthesis_validation_results.vendor_name
+                  AND a_rejected.artifact_id = svr.vendor_name
                   AND a_rejected.stage = 'validation'
                   AND a_rejected.status = 'rejected'
-                  AND a_rejected.attempt_no = synthesis_validation_results.attempt_no
+                  AND a_rejected.attempt_no = svr.attempt_no
             )
             AND EXISTS (
                 SELECT 1
                 FROM artifact_attempts a_succeeded
-                WHERE a_succeeded.run_id = synthesis_validation_results.run_id
+                WHERE a_succeeded.run_id = svr.run_id
                   AND a_succeeded.artifact_type = 'reasoning_synthesis'
-                  AND a_succeeded.artifact_id = synthesis_validation_results.vendor_name
+                  AND a_succeeded.artifact_id = svr.vendor_name
                   AND a_succeeded.status = 'succeeded'
-                  AND a_succeeded.attempt_no > synthesis_validation_results.attempt_no
+                  AND a_succeeded.attempt_no > svr.attempt_no
             )
             """
         )
@@ -796,13 +796,32 @@ async def get_synthesis_validation_results(
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
     rows = await pool.fetch(
         f"""
-        SELECT id, vendor_name, as_of_date, analysis_window_days, schema_version,
-               run_id, attempt_no, rule_code, severity, passed, summary,
-               field_path, detail, created_at
-        FROM synthesis_validation_results
-        {where}
-        ORDER BY created_at DESC
-        LIMIT ${idx + 1} OFFSET ${idx + 2}
+        WITH filtered AS (
+            SELECT svr.id, svr.vendor_name, svr.as_of_date, svr.analysis_window_days,
+                   svr.schema_version, svr.run_id, svr.attempt_no, svr.rule_code,
+                   svr.severity, svr.passed, svr.summary, svr.field_path,
+                   svr.detail, svr.created_at
+            FROM synthesis_validation_results svr
+            {where}
+            ORDER BY svr.created_at DESC
+            LIMIT ${idx + 1} OFFSET ${idx + 2}
+        )
+        SELECT filtered.*,
+               syn.synthesis -> 'scope_manifest' AS scope_manifest,
+               syn.synthesis -> 'reasoning_delta' AS reasoning_delta,
+               syn.synthesis -> 'meta' -> 'payload_component_tokens' AS payload_component_tokens,
+               syn.evidence_hash
+        FROM filtered
+        LEFT JOIN LATERAL (
+            SELECT synthesis, evidence_hash, created_at
+            FROM b2b_reasoning_synthesis syn
+            WHERE LOWER(syn.vendor_name) = LOWER(filtered.vendor_name)
+              AND syn.as_of_date = filtered.as_of_date
+              AND syn.analysis_window_days = filtered.analysis_window_days
+            ORDER BY syn.created_at DESC
+            LIMIT 1
+        ) syn ON TRUE
+        ORDER BY filtered.created_at DESC
         """,
         *params,
         limit,

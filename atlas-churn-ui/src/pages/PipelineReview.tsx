@@ -239,6 +239,43 @@ function formatVisibilityCode(code: string | null | undefined): string {
   return visibilityCodeLabels[key] || key.replace(/_/g, ' ')
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => asString(item)).filter(Boolean)
+    : []
+}
+
+function summarizeValidationDelta(value: SynthesisValidationResult): string[] {
+  const delta = asRecord(value.reasoning_delta)
+  if (Object.keys(delta).length === 0) return []
+  const items: string[] = []
+  if (delta.wedge_changed) items.push('Wedge changed')
+  if (delta.confidence_changed) items.push('Confidence shifted')
+  if (delta.top_destination_changed) {
+    const destination = asString(delta.current_top_destination)
+    items.push(destination ? `Destination: ${destination}` : 'Destination shifted')
+  }
+  const timingWindows = toStringArray(delta.new_timing_windows)
+  if (timingWindows.length > 0) items.push(`Timing +${timingWindows.length}`)
+  const accounts = toStringArray(delta.new_account_signals)
+  if (accounts.length > 0) items.push(`Accounts +${accounts.length}`)
+  return items
+}
+
 // ---------------------------------------------------------------------------
 // Resolve dropdown for queue items
 // ---------------------------------------------------------------------------
@@ -798,14 +835,51 @@ function QualityTab() {
     {
       key: 'summary',
       header: 'Summary',
-      render: (r) => (
-        <div className="max-w-sm">
-          <span className="text-xs text-slate-400 line-clamp-2">{r.summary}</span>
-          <span className="text-[11px] text-slate-600 block">
-            {r.field_path || '--'}
-          </span>
-        </div>
-      ),
+      render: (r) => {
+        const scope = asRecord(r.scope_manifest)
+        const packet = asRecord(r.payload_component_tokens)
+        const deltaItems = summarizeValidationDelta(r)
+        const witnessCount = asNumber(scope.witnesses_in_scope)
+        const reviewCount = asNumber(scope.reviews_in_scope)
+        const witnessTokens = asNumber(packet.witness_pack)
+        const sectionTokens = asNumber(packet.section_packets)
+        return (
+          <div className="max-w-sm">
+            <span className="text-xs text-slate-400 line-clamp-2">{r.summary}</span>
+            <span className="text-[11px] text-slate-600 block">
+              {r.field_path || '--'}
+            </span>
+            {(witnessCount !== null || reviewCount !== null || witnessTokens !== null || sectionTokens !== null) && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(witnessCount !== null || reviewCount !== null) && (
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">
+                    {witnessCount ?? 0} witnesses / {reviewCount ?? 0} reviews
+                  </span>
+                )}
+                {(witnessTokens !== null || sectionTokens !== null) && (
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300">
+                    packet {formatCompactTokens((witnessTokens ?? 0) + (sectionTokens ?? 0))} tokens
+                  </span>
+                )}
+                {asString(r.evidence_hash) && (
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                    {truncateLabel(asString(r.evidence_hash), 14)}
+                  </span>
+                )}
+              </div>
+            )}
+            {deltaItems.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {deltaItems.slice(0, 2).map((item, index) => (
+                  <span key={`${r.id}-${index}`} className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-[10px] text-cyan-300">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      },
     },
     {
       key: 'created_at',
