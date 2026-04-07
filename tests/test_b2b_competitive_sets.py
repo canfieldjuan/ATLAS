@@ -184,6 +184,46 @@ def test_competitive_scope_run_id_prefers_explicit_scope_run_id():
     assert mod._competitive_scope_run_id(task, scope_meta) == "scope-run-123"
 
 
+def test_competitive_scope_run_id_prefers_scheduler_execution_id_when_present():
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    execution_id = str(uuid4())
+    task = SimpleNamespace(
+        id=uuid4(),
+        metadata={
+            "_execution_id": execution_id,
+            "scope_type": "competitive_set",
+            "scope_id": str(uuid4()),
+        },
+    )
+
+    scope_meta = mod._competitive_scope_metadata(task)
+
+    assert mod._competitive_scope_run_id(task, scope_meta) == execution_id
+
+
+def test_competitive_scope_run_id_generates_unique_id_for_direct_scoped_runs():
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    task = SimpleNamespace(
+        id=uuid4(),
+        metadata={
+            "scope_type": "competitive_set",
+            "scope_id": str(uuid4()),
+        },
+    )
+
+    scope_meta = mod._competitive_scope_metadata(task)
+    run_id_a = mod._competitive_scope_run_id(task, scope_meta)
+    run_id_b = mod._competitive_scope_run_id(task, scope_meta)
+
+    assert run_id_a is not None
+    assert run_id_b is not None
+    assert run_id_a != str(task.id)
+    assert run_id_b != str(task.id)
+    assert run_id_a != run_id_b
+
+
 def test_scheduled_scope_strategy_prefers_runtime_config(monkeypatch):
     from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
 

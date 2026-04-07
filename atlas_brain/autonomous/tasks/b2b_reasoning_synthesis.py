@@ -27,7 +27,7 @@ import re
 import time
 from datetime import date, datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from ...config import settings
 from ...storage.database import get_db_pool
@@ -704,6 +704,10 @@ def _competitive_scope_run_id(
         explicit = str(metadata.get("run_id") or "").strip()
         if explicit:
             return explicit
+        execution_id = str(metadata.get("_execution_id") or "").strip()
+        if execution_id:
+            return execution_id
+        return str(uuid4())
     return _task_run_id(task)
 
 
