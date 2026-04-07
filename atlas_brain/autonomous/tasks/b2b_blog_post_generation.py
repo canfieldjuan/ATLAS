@@ -981,6 +981,50 @@ def _blog_topic_threshold(raw_map: Any, topic_type: str, *, default: int = 0) ->
     return max(0, int(default))
 
 
+def _blog_min_vendor_profiles(topic_type: str) -> int:
+    return _blog_topic_threshold(
+        getattr(settings.b2b_churn, "blog_min_vendor_profiles_by_topic", {}) or {},
+        topic_type,
+        default=2,
+    )
+
+
+def _blog_section_word_budget(blueprint: "PostBlueprint") -> dict[str, int]:
+    length_policy = _blog_length_policy(blueprint.topic_type)
+    section_count = max(1, len(blueprint.sections or []))
+    min_words = max(1, int(length_policy["min_words"]))
+    target_words = max(min_words, int(length_policy["target_words"]))
+    return {
+        "section_count": section_count,
+        "min_words_per_section": (min_words + section_count - 1) // section_count,
+        "target_words_per_section": (target_words + section_count - 1) // section_count,
+    }
+
+
+def _blog_sections_manifest(blueprint: "PostBlueprint") -> list[dict[str, Any]]:
+    return [
+        {
+            "id": section.id,
+            "heading": section.heading,
+            "goal": section.goal,
+            "chart_ids": list(section.chart_ids or []),
+        }
+        for section in (blueprint.sections or [])
+    ]
+
+
+def _attach_blog_blueprint_runtime_metadata(blueprint: "PostBlueprint") -> None:
+    if not isinstance(blueprint.data_context, dict):
+        blueprint.data_context = {}
+    blueprint.data_context["generation_length_policy"] = _blog_length_policy(
+        blueprint.topic_type
+    )
+    blueprint.data_context["section_word_budget"] = _blog_section_word_budget(
+        blueprint
+    )
+    blueprint.data_context["sections_manifest"] = _blog_sections_manifest(blueprint)
+
+
 def _build_cta(topic_type: str, data_context: dict[str, Any]) -> dict[str, Any] | None:
     """Build structured CTA from topic type and data context."""
     cfg = _CTA_CONFIG.get(topic_type)
@@ -4408,6 +4452,7 @@ async def _find_pain_point_roundup_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_best_fit_guide_candidates(pool) -> list[dict[str, Any]]:
     """Categories with vendors serving different company sizes -- recommend by fit."""
+    min_vendor_profiles = _blog_min_vendor_profiles("best_fit_guide")
     rows = await pool.fetch(
         """
         SELECT
@@ -4418,17 +4463,23 @@ async def _find_best_fit_guide_candidates(pool) -> list[dict[str, Any]]:
                AND br.enrichment_status = 'enriched') AS total_reviews,
             MODE() WITHIN GROUP (
                 ORDER BY COALESCE(
-                    (SELECT key FROM jsonb_each_text(pp.typical_company_size) ORDER BY value::numeric DESC LIMIT 1),
+                    (
+                        SELECT key
+                        FROM jsonb_each_text(COALESCE(pp.typical_company_size, '{}'::jsonb))
+                        ORDER BY value::numeric DESC
+                        LIMIT 1
+                    ),
                     'unknown'
                 )
             ) AS dominant_size
         FROM b2b_product_profiles pp
         WHERE pp.product_category IS NOT NULL AND pp.product_category != ''
         GROUP BY pp.product_category
-        HAVING COUNT(DISTINCT pp.vendor_name) >= 2
+        HAVING COUNT(DISTINCT pp.vendor_name) >= $1
         ORDER BY COUNT(DISTINCT pp.vendor_name) DESC
         LIMIT 10
-        """
+        """,
+        min_vendor_profiles,
     )
     return [
         {
@@ -4482,20 +4533,25 @@ async def _find_vendor_deep_dive_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_market_landscape_candidates(pool) -> list[dict[str, Any]]:
     """Categories with multiple vendors -- write a landscape overview."""
+    min_vendor_profiles = _blog_min_vendor_profiles("market_landscape")
     rows = await pool.fetch(
         """
         SELECT
-            cs.product_category AS category,
-            COUNT(DISTINCT cs.vendor_name) AS vendor_count,
-            SUM(cs.total_reviews) AS total_reviews,
+            pp.product_category AS category,
+            COUNT(DISTINCT pp.vendor_name) AS vendor_count,
+            COALESCE(SUM(cs.total_reviews), 0) AS total_reviews,
             ROUND(AVG(cs.avg_urgency_score)::numeric, 1) AS avg_urgency
-        FROM b2b_churn_signals cs
-        WHERE cs.product_category IS NOT NULL AND cs.product_category != ''
-        GROUP BY cs.product_category
-        HAVING COUNT(DISTINCT cs.vendor_name) >= 2
-        ORDER BY COUNT(DISTINCT cs.vendor_name) DESC, SUM(cs.total_reviews) DESC
+        FROM b2b_product_profiles pp
+        JOIN b2b_churn_signals cs
+          ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
+         AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
+        WHERE pp.product_category IS NOT NULL AND pp.product_category != ''
+        GROUP BY pp.product_category
+        HAVING COUNT(DISTINCT pp.vendor_name) >= $1
+        ORDER BY COUNT(DISTINCT pp.vendor_name) DESC, COALESCE(SUM(cs.total_reviews), 0) DESC
         LIMIT 10
-        """
+        """,
+        min_vendor_profiles,
     )
     return [
         {
@@ -5382,7 +5438,15 @@ async def _gather_data(
         sources = _blog_source_allowlist()
         # Fetch all vendors in this category
         vendor_rows = await pool.fetch(
-            "SELECT DISTINCT vendor_name FROM b2b_churn_signals WHERE product_category = $1",
+            """
+            SELECT DISTINCT pp.vendor_name
+            FROM b2b_product_profiles pp
+            JOIN b2b_churn_signals cs
+              ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
+             AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
+            WHERE pp.product_category = $1
+            ORDER BY pp.vendor_name
+            """,
             category,
         )
         vendor_names = [r["vendor_name"] for r in vendor_rows]
@@ -6060,11 +6124,7 @@ def _check_data_sufficiency(topic_type: str, data: dict[str, Any]) -> dict[str, 
     # Multi-vendor types: at least 2 vendor profiles
     if topic_type in _MULTI_VENDOR_TYPES:
         vendor_profiles = data.get("vendor_profiles", [])
-        min_vendor_profiles = _blog_topic_threshold(
-            getattr(settings.b2b_churn, "blog_min_vendor_profiles_by_topic", {}) or {},
-            topic_type,
-            default=2,
-        )
+        min_vendor_profiles = _blog_min_vendor_profiles(topic_type)
         if len(vendor_profiles) < min_vendor_profiles:
             return {
                 "sufficient": False,
@@ -8128,11 +8188,15 @@ def _build_blog_generation_payload(
     related_posts: list[dict[str, str]] | None = None,
     quality_feedback: list[str] | None = None,
 ) -> dict[str, Any]:
+    _attach_blog_blueprint_runtime_metadata(blueprint)
+    length_policy = _blog_length_policy(blueprint.topic_type)
+    section_word_budget = _blog_section_word_budget(blueprint)
     payload: dict[str, Any] = {
         "topic_type": blueprint.topic_type,
         "suggested_title": blueprint.suggested_title,
         "data_context": blueprint.data_context,
-        "length_policy": _blog_length_policy(blueprint.topic_type),
+        "length_policy": length_policy,
+        "section_word_budget": section_word_budget,
         "sections": [
             {
                 "id": section.id,
@@ -8580,6 +8644,7 @@ async def _upsert_blog_post_state(
     content: dict[str, Any] | None = None,
 ) -> str:
     """Upsert the canonical blog row so failures/rejections do not vanish."""
+    _attach_blog_blueprint_runtime_metadata(blueprint)
     charts_json = [asdict(c) for c in blueprint.charts]
     model_name = getattr(llm, "model_name", None) or getattr(llm, "model", "unknown")
     title = (content or {}).get("title") or blueprint.suggested_title
@@ -8835,6 +8900,50 @@ async def _fetch_vendor_stats(pool, vendor_name: str) -> dict[str, Any]:
     }
 
 
+async def _fetch_category_topic_stats(pool, category: str) -> dict[str, Any]:
+    sources = _blog_source_allowlist()
+    row = await pool.fetchrow(
+        """
+        SELECT
+            COUNT(DISTINCT vendor_name) AS vendor_count,
+            COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched_reviews,
+            ROUND(AVG(
+                CASE WHEN enrichment->>'urgency_score' ~ '^[0-9]'
+                     THEN (enrichment->>'urgency_score')::numeric ELSE NULL END
+            )::numeric, 1) AS avg_urgency
+        FROM b2b_reviews
+        WHERE product_category = $1
+          AND source = ANY($2)
+        """,
+        category,
+        sources,
+    )
+    dominant_size = await pool.fetchval(
+        """
+        SELECT MODE() WITHIN GROUP (
+            ORDER BY COALESCE(
+                (
+                    SELECT key
+                    FROM jsonb_each_text(COALESCE(pp.typical_company_size, '{}'::jsonb))
+                    ORDER BY value::numeric DESC
+                    LIMIT 1
+                ),
+                'unknown'
+            )
+        ) AS dominant_size
+        FROM b2b_product_profiles pp
+        WHERE pp.product_category = $1
+        """,
+        category,
+    )
+    return {
+        "vendor_count": int(row["vendor_count"] or 0) if row else 0,
+        "enriched_reviews": int(row["enriched_reviews"] or 0) if row else 0,
+        "avg_urgency": float(row["avg_urgency"]) if row and row["avg_urgency"] else 0.0,
+        "dominant_size": str(dominant_size or "unknown"),
+    }
+
+
 async def build_manual_topic_ctx(
     pool,
     vendor_name: str,
@@ -8852,6 +8961,7 @@ async def build_manual_topic_ctx(
     stats = await _fetch_vendor_stats(pool, vendor_name)
     if not category:
         category = stats.get("category", "software") or "software"
+    category_stats = await _fetch_category_topic_stats(pool, category)
 
     ctx: dict[str, Any] = {
         "category": category,
@@ -8886,25 +8996,30 @@ async def build_manual_topic_ctx(
     elif topic_type == "market_landscape":
         slug = f"{_slugify(category)}-landscape-{month_suffix}"
         ctx.update({
-            "vendor_count": 0,
-            "total_reviews": stats.get("total", 0),
-            "avg_urgency": stats.get("avg_urgency", 0),
+            "vendor_count": category_stats.get("vendor_count", 0),
+            "total_reviews": category_stats.get("enriched_reviews", 0),
+            "avg_urgency": category_stats.get("avg_urgency", 0),
             "slug": slug,
         })
     elif topic_type == "pain_point_roundup":
         slug = f"top-complaint-every-{_slugify(category)}-{month_suffix}"
         ctx.update({
-            "vendor_count": 0,
-            "total_complaints": stats.get("negative", 0),
-            "avg_urgency": stats.get("avg_urgency", 0),
+            "vendor_count": category_stats.get("vendor_count", 0),
+            "total_complaints": category_stats.get("enriched_reviews", 0),
+            "avg_urgency": category_stats.get("avg_urgency", 0),
             "slug": slug,
         })
     elif topic_type == "best_fit_guide":
-        size = company_size or ctx.get("company_size") or "teams"
+        size = (
+            company_size
+            or category_stats.get("dominant_size")
+            or ctx.get("company_size")
+            or "teams"
+        )
         slug = f"best-{_slugify(category)}-for-{_slugify(size)}-{month_suffix}"
         ctx.update({
-            "vendor_count": 0,
-            "total_reviews": stats.get("total", 0),
+            "vendor_count": category_stats.get("vendor_count", 0),
+            "total_reviews": category_stats.get("enriched_reviews", 0),
             "company_size": size,
             "slug": slug,
         })

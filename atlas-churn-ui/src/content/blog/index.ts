@@ -1,3 +1,9 @@
+import marketingAutomationLandscape202604 from './marketing-automation-landscape-2026-04'
+import bestHrHcmFor51200202604 from './best-hr-hcm-for-51-200-2026-04'
+import insightlyDeepDive202604 from './insightly-deep-dive-2026-04'
+import crmLandscape202604 from './crm-landscape-2026-04'
+import bestCrmFor51200202604 from './best-crm-for-51-200-2026-04'
+import metabaseVsTableau202604 from './metabase-vs-tableau-2026-04'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -71,7 +77,13 @@ const postCache = new Map<string, Promise<BlogPost | null>>()
 let allPostsPromise: Promise<BlogPost[]> | null = null
 
 function sortPosts(posts: BlogPost[]): BlogPost[] {
-  return [...posts].sort((left, right) => {
+  return [...posts  marketingAutomationLandscape202604,
+  bestHrHcmFor51200202604,
+  insightlyDeepDive202604,
+  crmLandscape202604,
+  bestCrmFor51200202604,
+  metabaseVsTableau202604,
+].sort((left, right) => {
     if (left.date === right.date) return left.slug.localeCompare(right.slug)
     return right.date.localeCompare(left.date)
   })

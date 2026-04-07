@@ -955,6 +955,55 @@ def test_build_blog_generation_payload_includes_length_policy():
     assert payload["length_policy"] == {"min_words": 2000, "target_words": 2600}
 
 
+def test_build_blog_generation_payload_includes_section_budget_and_manifest():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_showdown",
+        slug="zendesk-vs-freshdesk-2026-04",
+        suggested_title="Zendesk vs Freshdesk",
+        tags=["helpdesk"],
+        data_context={},
+        sections=[
+            blog_mod.SectionSpec(
+                id="hook",
+                heading="Introduction",
+                goal="Set up the comparison",
+            ),
+            blog_mod.SectionSpec(
+                id="verdict",
+                heading="Verdict",
+                goal="Close the comparison",
+            ),
+        ],
+        charts=[],
+    )
+
+    payload = blog_mod._build_blog_generation_payload(blueprint)
+
+    assert payload["section_word_budget"] == {
+        "section_count": 2,
+        "min_words_per_section": 1000,
+        "target_words_per_section": 1300,
+    }
+    assert blueprint.data_context["generation_length_policy"] == {
+        "min_words": 2000,
+        "target_words": 2600,
+    }
+    assert blueprint.data_context["sections_manifest"] == [
+        {
+            "id": "hook",
+            "heading": "Introduction",
+            "goal": "Set up the comparison",
+            "chart_ids": [],
+        },
+        {
+            "id": "verdict",
+            "heading": "Verdict",
+            "goal": "Close the comparison",
+            "chart_ids": [],
+        },
+    ]
+
+
 def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
     blueprint = blog_mod._blueprint_vendor_deep_dive(
         {
@@ -1066,6 +1115,147 @@ def test_blueprint_best_fit_guide_adds_tradeoff_and_voice_sections():
     section_ids = {section.id for section in blueprint.sections}
 
     assert {"category_tradeoffs", "reviewer_voice", "decision_framework"} <= section_ids
+
+
+@pytest.mark.asyncio
+async def test_find_market_landscape_candidates_uses_configured_vendor_floor(monkeypatch):
+    seen: dict[str, object] = {}
+
+    class Pool:
+        async def fetch(self, query, *args):
+            seen["query"] = " ".join(str(query).split())
+            seen["args"] = args
+            return [
+                {
+                    "category": "CRM",
+                    "vendor_count": 4,
+                    "total_reviews": 220,
+                    "avg_urgency": 6.4,
+                }
+            ]
+
+    monkeypatch.setattr(
+        blog_mod.settings.b2b_churn,
+        "blog_min_vendor_profiles_by_topic",
+        {"market_landscape": 4},
+        raising=False,
+    )
+
+    result = await blog_mod._find_market_landscape_candidates(Pool())
+
+    assert seen["args"] == (4,)
+    assert "FROM b2b_product_profiles pp" in str(seen["query"])
+    assert "JOIN b2b_churn_signals cs" in str(seen["query"])
+    assert result == [
+        {
+            "category": "CRM",
+            "vendor_count": 4,
+            "total_reviews": 220,
+            "avg_urgency": 6.4,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_find_best_fit_guide_candidates_uses_configured_vendor_floor(monkeypatch):
+    seen: dict[str, object] = {}
+
+    class Pool:
+        async def fetch(self, query, *args):
+            seen["query"] = " ".join(str(query).split())
+            seen["args"] = args
+            return [
+                {
+                    "category": "CRM",
+                    "vendor_count": 4,
+                    "total_reviews": 320,
+                    "dominant_size": "mid_market",
+                }
+            ]
+
+    monkeypatch.setattr(
+        blog_mod.settings.b2b_churn,
+        "blog_min_vendor_profiles_by_topic",
+        {"best_fit_guide": 4},
+        raising=False,
+    )
+
+    result = await blog_mod._find_best_fit_guide_candidates(Pool())
+
+    assert seen["args"] == (4,)
+    assert "FROM b2b_product_profiles pp" in str(seen["query"])
+    assert result == [
+        {
+            "category": "CRM",
+            "vendor_count": 4,
+            "total_reviews": 320,
+            "company_size": "mid_market",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_manual_topic_ctx_uses_category_stats_for_market_landscape(monkeypatch):
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_vendor_stats",
+        AsyncMock(return_value={"total": 18, "avg_urgency": 5.8, "category": "CRM"}),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_category_topic_stats",
+        AsyncMock(
+            return_value={
+                "vendor_count": 7,
+                "enriched_reviews": 2155,
+                "avg_urgency": 6.4,
+                "dominant_size": "51-200",
+            }
+        ),
+    )
+
+    ctx = await blog_mod.build_manual_topic_ctx(
+        object(),
+        "HubSpot",
+        "market_landscape",
+        category="CRM",
+    )
+
+    assert ctx["vendor_count"] == 7
+    assert ctx["total_reviews"] == 2155
+    assert ctx["avg_urgency"] == 6.4
+
+
+@pytest.mark.asyncio
+async def test_build_manual_topic_ctx_uses_category_stats_for_best_fit_guide(monkeypatch):
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_vendor_stats",
+        AsyncMock(return_value={"total": 18, "avg_urgency": 5.8, "category": "CRM"}),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_category_topic_stats",
+        AsyncMock(
+            return_value={
+                "vendor_count": 7,
+                "enriched_reviews": 2155,
+                "avg_urgency": 6.4,
+                "dominant_size": "51-200",
+            }
+        ),
+    )
+
+    ctx = await blog_mod.build_manual_topic_ctx(
+        object(),
+        "HubSpot",
+        "best_fit_guide",
+        category="CRM",
+    )
+
+    assert ctx["vendor_count"] == 7
+    assert ctx["total_reviews"] == 2155
+    assert ctx["company_size"] == "51-200"
 
 
 def test_apply_blog_deterministic_repairs_adds_witness_anchor_note():

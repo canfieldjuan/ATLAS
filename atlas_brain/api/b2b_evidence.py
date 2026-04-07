@@ -13,6 +13,7 @@ Endpoints:
 """
 
 import json
+import uuid as _uuid
 from datetime import date, datetime
 from typing import Optional
 
@@ -74,7 +75,7 @@ def _row_to_dict(row) -> dict:
             d[k] = v.isoformat()
         elif isinstance(v, date):
             d[k] = v.isoformat()
-        elif hasattr(v, "hex"):
+        elif isinstance(v, _uuid.UUID):
             d[k] = str(v)
     return d
 

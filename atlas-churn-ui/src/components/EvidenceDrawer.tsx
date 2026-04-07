@@ -7,6 +7,19 @@ import { clsx } from 'clsx'
 import { fetchWitness } from '../api/client'
 import type { EvidenceWitnessDetail } from '../api/client'
 
+// Inject keyframes once at module load (not per-render)
+if (typeof document !== 'undefined' && !document.getElementById('evidence-drawer-keyframes')) {
+  const style = document.createElement('style')
+  style.id = 'evidence-drawer-keyframes'
+  style.textContent = `
+    @keyframes slideInRight {
+      from { transform: translateX(100%); opacity: 0.8; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  `
+  document.head.appendChild(style)
+}
+
 const SOURCE_COLORS: Record<string, string> = {
   g2: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
   capterra: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
@@ -296,12 +309,6 @@ export default function EvidenceDrawer({ vendorName, witnessId, open, onClose }:
         )}
       </div>
 
-      <style>{`
-        @keyframes slideInRight {
-          from { transform: translateX(100%); opacity: 0.8; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-      `}</style>
     </div>
   )
 }

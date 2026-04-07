@@ -98,6 +98,9 @@ export default function EvidenceExplorer() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [])
 
+  // Request version counter to prevent stale responses from overwriting state
+  const requestVersionRef = useRef(0)
+
   // -- Load data on vendor/filter/tab change ----------------------------------
 
   const selectVendor = useCallback((name: string) => {
@@ -110,6 +113,7 @@ export default function EvidenceExplorer() {
 
   const loadWitnesses = useCallback(async () => {
     if (!activeVendor) return
+    const version = ++requestVersionRef.current
     setLoading(true)
     try {
       const res = await fetchWitnesses({
@@ -120,13 +124,15 @@ export default function EvidenceExplorer() {
         limit,
         offset,
       })
+      if (version !== requestVersionRef.current) return
       setWitnesses(res.witnesses)
       setFacets(res.facets)
       setTotal(res.total)
     } catch {
+      if (version !== requestVersionRef.current) return
       setWitnesses([])
     } finally {
-      setLoading(false)
+      if (version === requestVersionRef.current) setLoading(false)
     }
   }, [activeVendor, filterPain, filterSource, filterType, offset])
 
@@ -135,24 +141,46 @@ export default function EvidenceExplorer() {
   }, [loadWitnesses, activeTab])
 
   useEffect(() => {
-    if (activeTab === 'vault' && activeVendor && !vault) {
+    if (activeTab === 'vault' && activeVendor && !vault && !vaultLoading) {
+      const version = ++requestVersionRef.current
       setVaultLoading(true)
       fetchEvidenceVault({ vendor_name: activeVendor })
-        .then(res => setVault('vault' in res && res.vault === null ? null : res as EvidenceVault))
-        .catch(() => setVault(null))
-        .finally(() => setVaultLoading(false))
+        .then(res => {
+          if (version !== requestVersionRef.current) return
+          if ('weakness_evidence' in res) {
+            setVault(res as EvidenceVault)
+          } else {
+            setVault(null)
+          }
+        })
+        .catch(() => {
+          if (version !== requestVersionRef.current) return
+          setVault(null)
+        })
+        .finally(() => {
+          if (version === requestVersionRef.current) setVaultLoading(false)
+        })
     }
-  }, [activeTab, activeVendor, vault])
+  }, [activeTab, activeVendor, vault, vaultLoading])
 
   useEffect(() => {
-    if (activeTab === 'trace' && activeVendor && !trace) {
+    if (activeTab === 'trace' && activeVendor && !trace && !traceLoading) {
+      const version = ++requestVersionRef.current
       setTraceLoading(true)
       fetchEvidenceTrace({ vendor_name: activeVendor })
-        .then(res => setTrace(res))
-        .catch(() => setTrace(null))
-        .finally(() => setTraceLoading(false))
+        .then(res => {
+          if (version !== requestVersionRef.current) return
+          setTrace(res)
+        })
+        .catch(() => {
+          if (version !== requestVersionRef.current) return
+          setTrace(null)
+        })
+        .finally(() => {
+          if (version === requestVersionRef.current) setTraceLoading(false)
+        })
     }
-  }, [activeTab, activeVendor, trace])
+  }, [activeTab, activeVendor, trace, traceLoading])
 
   // Reset vault/trace when vendor changes
   useEffect(() => {
