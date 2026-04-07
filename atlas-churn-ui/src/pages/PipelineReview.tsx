@@ -1888,6 +1888,19 @@ function CostsTab() {
     runDetailPreset === 'battle_card_overlay'
       ? (runDetail?.visibility_events ?? []).filter((row) => row.entity_type === 'battle_card')
       : (runDetail?.visibility_events ?? [])
+  const overlayCallCount = runDetailCalls.length
+  const overlayCostUsd = runDetailCalls.reduce((sum, row) => sum + row.cost_usd, 0)
+  const overlayBillableInputTokens = runDetailCalls.reduce(
+    (sum, row) => sum + row.billable_input_tokens,
+    0,
+  )
+  const overlayCachedTokens = runDetailCalls.reduce((sum, row) => sum + row.cached_tokens, 0)
+  const overlayAttemptFailures = runDetailAttempts.filter(
+    (row) => !['succeeded', 'cached'].includes(String(row.status || '').toLowerCase()),
+  ).length
+  const overlayEventWarnings = runDetailEvents.filter((row) =>
+    ['warning', 'error', 'critical'].includes(String(row.severity || '').toLowerCase()),
+  ).length
   const unifiedError =
     error ||
     vendorsError ||
@@ -4089,6 +4102,47 @@ function CostsTab() {
                 icon={<DollarSign className="h-4 w-4" />}
               />
             </div>
+
+            {runDetailPreset === 'battle_card_overlay' && (
+              <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 px-4 py-4 md:grid-cols-3 xl:grid-cols-6">
+                <StatCard
+                  label="Overlay Calls"
+                  value={formatNumber(overlayCallCount)}
+                  sub="Filtered battle-card overlay calls"
+                  icon={<Cpu className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Overlay Cost"
+                  value={formatCurrency(overlayCostUsd)}
+                  sub={`${formatCompactTokens(overlayBillableInputTokens)} billable input`}
+                  icon={<DollarSign className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Prompt Cache"
+                  value={formatCompactTokens(overlayCachedTokens)}
+                  sub="Provider cached read tokens"
+                  icon={<RefreshCw className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Attempt Failures"
+                  value={formatNumber(overlayAttemptFailures)}
+                  sub={`${formatNumber(runDetailAttempts.length)} overlay attempts`}
+                  icon={<AlertTriangle className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Warnings"
+                  value={formatNumber(overlayEventWarnings)}
+                  sub={`${formatNumber(runDetailEvents.length)} overlay events`}
+                  icon={<Shield className="h-4 w-4" />}
+                />
+                <StatCard
+                  label="Entity"
+                  value={runDetailCalls[0]?.entity_type || 'battle_card'}
+                  sub={runDetailCalls[0]?.vendor_name || runDetailCalls[0]?.entity_id || 'Overlay scope'}
+                  icon={<Building2 className="h-4 w-4" />}
+                />
+              </div>
+            )}
 
               <div className="grid gap-4 p-4 xl:grid-cols-[1.05fr,0.95fr]">
                 <div className="space-y-4">
