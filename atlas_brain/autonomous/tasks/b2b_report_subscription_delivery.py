@@ -57,7 +57,7 @@ _REPORT_FREQUENCY_DAYS = {
     "quarterly": 90,
 }
 _QUALITY_GATED_REPORT_TYPES = {"battle_card", "challenger_brief"}
-_DELIVERY_CONTENT_HASH_STATUSES = ("sent", "partial", "skipped")
+_DELIVERY_CONTENT_HASH_STATUSES = ("sent",)
 
 
 def _safe_json(value: Any) -> Any:
