@@ -1,0 +1,57 @@
+import importlib.util
+from pathlib import Path
+
+
+_SCRIPT_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "scripts"
+    / "check_reasoning_rollout_readiness.py"
+)
+_SPEC = importlib.util.spec_from_file_location("check_reasoning_rollout_readiness", _SCRIPT_PATH)
+_MODULE = importlib.util.module_from_spec(_SPEC)
+assert _SPEC and _SPEC.loader
+_SPEC.loader.exec_module(_MODULE)
+
+_as_dict = _MODULE._as_dict
+_exit_code = _MODULE._exit_code
+_status = _MODULE._status
+
+
+def test_as_dict_parses_json_strings():
+    result = _as_dict('{"scheduled_scope_strategy":"competitive_sets"}')
+
+    assert result == {"scheduled_scope_strategy": "competitive_sets"}
+
+
+def test_status_marks_required_failures_as_fail():
+    result = _status("required_migrations", False, detail={"missing": ["261_b2b_competitive_sets"]})
+
+    assert result["name"] == "required_migrations"
+    assert result["status"] == "fail"
+    assert result["required"] is True
+
+
+def test_status_marks_optional_failures_as_warn():
+    result = _status("competitive_sets_seeded", False, required=False, detail={"count": 0})
+
+    assert result["status"] == "warn"
+    assert result["required"] is False
+
+
+def test_exit_code_is_nonzero_when_required_check_fails():
+    checks = [
+        _status("required_tables", True),
+        _status("required_migrations", False),
+        _status("competitive_sets_seeded", False, required=False),
+    ]
+
+    assert _exit_code(checks) == 1
+
+
+def test_exit_code_is_zero_when_only_warnings_exist():
+    checks = [
+        _status("required_tables", True),
+        _status("competitive_sets_seeded", False, required=False),
+    ]
+
+    assert _exit_code(checks) == 0
