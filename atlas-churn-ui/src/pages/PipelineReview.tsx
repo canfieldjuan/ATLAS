@@ -2265,6 +2265,13 @@ function CostsTab() {
       sortable: true,
       sortValue: (row) => row.generated,
     },
+    {
+      key: 'overlay_failures',
+      header: 'Failures',
+      render: (row) => <span className="text-xs text-amber-300">{formatNumber(row.overlay_failures)}</span>,
+      sortable: true,
+      sortValue: (row) => row.overlay_failures,
+    },
   ]
 
   const promptCacheColumns: Column<AdminCostPromptCacheSpan>[] = [

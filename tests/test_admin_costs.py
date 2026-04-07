@@ -754,7 +754,7 @@ class _FakePool:
             return [
                 {
                     "name": "b2b_battle_cards",
-                    "result_text": None,
+                    "result_text": '{"cache_hits": 2, "cards_llm_updated": 1, "llm_failures": 1}',
                     "metadata": {"cache_hits": 2, "cards_llm_updated": 1},
                 },
                 {
@@ -909,6 +909,8 @@ def test_cache_health_rolls_up_exact_prompt_semantic_and_task_reuse(monkeypatch)
     tasks = {row["task_name"]: row for row in body["task_reuse"]["tasks"]}
     assert tasks["b2b_battle_cards"]["reused"] == 2
     assert tasks["b2b_battle_cards"]["semantic_cache_hits"] == 2
+    assert tasks["b2b_battle_cards"]["generated"] == 1
+    assert tasks["b2b_battle_cards"]["overlay_failures"] == 1
     assert tasks["b2b_churn_reports"]["reused"] == 5
     assert tasks["b2b_churn_reports"]["exact_cache_hits"] == 3
     assert tasks["b2b_churn_reports"]["evidence_hash_reuse"] == 2

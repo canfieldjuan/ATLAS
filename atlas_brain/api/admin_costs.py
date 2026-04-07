@@ -2533,6 +2533,7 @@ async def cache_health(
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
             "generated": 0,
+            "overlay_failures": 0,
         },
         "b2b_churn_reports": {
             "task_name": "b2b_churn_reports",
@@ -2542,6 +2543,7 @@ async def cache_health(
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
             "generated": 0,
+            "overlay_failures": 0,
         },
         "b2b_reasoning_synthesis": {
             "task_name": "b2b_reasoning_synthesis",
@@ -2551,6 +2553,7 @@ async def cache_health(
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
             "generated": 0,
+            "overlay_failures": 0,
         },
         "b2b_enrichment": {
             "task_name": "b2b_enrichment",
@@ -2560,6 +2563,7 @@ async def cache_health(
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
             "generated": 0,
+            "overlay_failures": 0,
         },
         "b2b_enrichment_repair": {
             "task_name": "b2b_enrichment_repair",
@@ -2569,6 +2573,7 @@ async def cache_health(
             "semantic_cache_hits": 0,
             "evidence_hash_reuse": 0,
             "generated": 0,
+            "overlay_failures": 0,
         },
     }
     for row in task_rows:
@@ -2580,8 +2585,17 @@ async def cache_health(
         metadata = _normalize_metadata(row["metadata"])
         payload = _parse_task_result_payload(row["result_text"])
         if task_name == "b2b_battle_cards":
-            bucket["semantic_cache_hits"] = _safe_int(bucket["semantic_cache_hits"]) + _safe_int(metadata.get("cache_hits"))
-            bucket["generated"] = _safe_int(bucket["generated"]) + _safe_int(metadata.get("cards_llm_updated"))
+            cache_hits = _safe_int(payload.get("cache_hits"))
+            if cache_hits == 0:
+                cache_hits = _safe_int(metadata.get("cache_hits"))
+            generated = _safe_int(payload.get("cards_llm_updated"))
+            if generated == 0:
+                generated = _safe_int(metadata.get("cards_llm_updated"))
+            bucket["semantic_cache_hits"] = _safe_int(bucket["semantic_cache_hits"]) + cache_hits
+            bucket["generated"] = _safe_int(bucket["generated"]) + generated
+            bucket["overlay_failures"] = _safe_int(bucket["overlay_failures"]) + _safe_int(
+                payload.get("llm_failures")
+            )
         elif task_name == "b2b_churn_reports":
             bucket["exact_cache_hits"] = _safe_int(bucket["exact_cache_hits"]) + _safe_int(payload.get("scorecard_cache_hits"))
             bucket["evidence_hash_reuse"] = _safe_int(bucket["evidence_hash_reuse"]) + _safe_int(payload.get("scorecard_reasoning_reused"))

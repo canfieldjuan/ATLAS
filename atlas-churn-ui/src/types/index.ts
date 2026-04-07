@@ -1188,6 +1188,7 @@ export interface AdminCostTaskReuseRow {
   semantic_cache_hits: number
   evidence_hash_reuse: number
   generated: number
+  overlay_failures: number
 }
 
 export interface AdminTaskHealthRow {
