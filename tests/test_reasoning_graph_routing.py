@@ -193,5 +193,3 @@ def test_synthesis_strict_openrouter_does_not_fallback(monkeypatch):
 
     assert llm is None
     assert calls == []
-
-

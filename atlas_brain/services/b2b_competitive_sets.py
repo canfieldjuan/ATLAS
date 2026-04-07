@@ -317,7 +317,7 @@ async def estimate_competitive_set_plan(
                    vendor_name,
                    tokens_used
             FROM b2b_reasoning_synthesis
-            WHERE schema_version = 'v2'
+            WHERE schema_version LIKE '2.%'
               AND vendor_name = ANY($1::text[])
             ORDER BY vendor_name, created_at DESC
         )

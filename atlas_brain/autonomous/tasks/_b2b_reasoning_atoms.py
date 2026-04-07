@@ -235,6 +235,7 @@ def build_scope_manifest(
             reasons_dropped.append(code)
     reviews_in_scope = len(review_ids)
     return {
+        "schema_version": "v1",
         "selection_strategy": selection_strategy,
         "reviews_considered_total": total_reviews,
         "reviews_in_scope": reviews_in_scope,

@@ -1768,6 +1768,7 @@ class TestValidation:
         persisted = build_persistable_synthesis(synthesis, packet)
 
         scope_manifest = persisted.get("scope_manifest") or {}
+        assert scope_manifest["schema_version"] == "v1"
         assert scope_manifest["selection_strategy"] == "vendor_facet_packet_v1"
         assert scope_manifest["witnesses_in_scope"] >= 1
         atoms = persisted.get("reasoning_atoms") or {}

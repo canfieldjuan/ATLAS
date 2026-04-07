@@ -162,6 +162,7 @@ def _contracts():
 def test_build_scope_manifest_tracks_witness_mix_and_drop_reasons():
     manifest = build_scope_manifest(_packet())
 
+    assert manifest["schema_version"] == "v1"
     assert manifest["selection_strategy"] == "vendor_facet_packet_v1"
     assert manifest["reviews_considered_total"] == 24
     assert manifest["reviews_in_scope"] == 2
