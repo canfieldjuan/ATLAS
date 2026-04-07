@@ -1687,6 +1687,7 @@ function CostsTab() {
   const [cacheFilter, setCacheFilter] = useState('')
   const [runIdInput, setRunIdInput] = useState('')
   const [activeRunId, setActiveRunId] = useState('')
+  const [runDetailPreset, setRunDetailPreset] = useState<'all' | 'battle_card_overlay'>('all')
   const [reconcileTriggering, setReconcileTriggering] = useState(false)
   const [reconcileMessage, setReconcileMessage] = useState<string | null>(null)
   const [reconcileError, setReconcileError] = useState<string | null>(null)
@@ -1868,6 +1869,25 @@ function CostsTab() {
   const genericReasoningPairs = genericReasoning?.top_source_events ?? []
   const genericReasoningEntities = genericReasoning?.top_entities ?? []
   const recentCalls = data?.recent ?? []
+  const openRunDetail = (runId: string, preset: 'all' | 'battle_card_overlay' = 'all') => {
+    setRunIdInput(runId)
+    setActiveRunId(runId)
+    setRunDetailPreset(preset)
+  }
+  const runDetailCalls =
+    runDetailPreset === 'battle_card_overlay'
+      ? (runDetail?.calls ?? []).filter(
+          (row) => row.source_name === 'b2b_battle_cards' && row.event_type === 'llm_overlay',
+        )
+      : (runDetail?.calls ?? [])
+  const runDetailAttempts =
+    runDetailPreset === 'battle_card_overlay'
+      ? (runDetail?.artifact_attempts ?? []).filter((row) => row.artifact_type === 'battle_card')
+      : (runDetail?.artifact_attempts ?? [])
+  const runDetailEvents =
+    runDetailPreset === 'battle_card_overlay'
+      ? (runDetail?.visibility_events ?? []).filter((row) => row.entity_type === 'battle_card')
+      : (runDetail?.visibility_events ?? [])
   const unifiedError =
     error ||
     vendorsError ||
@@ -2904,6 +2924,32 @@ function CostsTab() {
       sortable: true,
       sortValue: (row) => row.battle_card_llm_failures,
     },
+    {
+      key: 'actions',
+      header: 'Inspect',
+      render: (row) =>
+        row.run_id ? (
+          <div className="flex flex-col gap-1">
+            <button
+              onClick={() => openRunDetail(row.run_id)}
+              className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+            >
+              Run
+            </button>
+            {(row.battle_card_overlay_calls > 0 || row.battle_card_llm_failures > 0) && (
+              <button
+                onClick={() => openRunDetail(row.run_id, 'battle_card_overlay')}
+                className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-200 transition hover:border-cyan-400/50 hover:text-white"
+              >
+                Overlay
+              </button>
+            )}
+          </div>
+        ) : (
+          <span className="text-xs text-slate-500">--</span>
+        ),
+      sortable: false,
+    },
   ]
 
   const burnColumns: Column<AdminCostBurnRow>[] = [
@@ -3167,10 +3213,7 @@ function CostsTab() {
       render: (row) =>
         row.run_id ? (
           <button
-            onClick={() => {
-              setRunIdInput(row.run_id || '')
-              setActiveRunId(row.run_id || '')
-            }}
+            onClick={() => openRunDetail(row.run_id || '')}
             className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
           >
             Open
@@ -3581,14 +3624,20 @@ function CostsTab() {
             value={runIdInput}
             onChange={(e) => setRunIdInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') setActiveRunId(runIdInput.trim())
+              if (e.key === 'Enter') {
+                setRunDetailPreset('all')
+                setActiveRunId(runIdInput.trim())
+              }
             }}
             placeholder="Paste execution id"
             className="rounded border border-slate-700/60 bg-slate-950/60 px-2.5 py-1.5 text-xs text-white outline-none transition focus:border-cyan-500/60"
           />
         </label>
         <button
-          onClick={() => setActiveRunId(runIdInput.trim())}
+          onClick={() => {
+            setRunDetailPreset('all')
+            setActiveRunId(runIdInput.trim())
+          }}
           disabled={!runIdInput.trim()}
           className="mt-5 flex items-center gap-1.5 rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -3598,6 +3647,7 @@ function CostsTab() {
           onClick={() => {
             setRunIdInput('')
             setActiveRunId('')
+            setRunDetailPreset('all')
           }}
           disabled={!activeRunId}
           className="mt-5 flex items-center gap-1.5 rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-400 transition hover:border-slate-500/60 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
@@ -4049,10 +4099,38 @@ function CostsTab() {
 
                   <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
                     <div className="border-b border-slate-700/50 px-4 py-3">
-                      <h3 className="text-sm font-medium text-white">Run Calls</h3>
-                      <p className="text-xs text-slate-500">Recent traced model calls attached to this run id.</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-medium text-white">Run Calls</h3>
+                          <p className="text-xs text-slate-500">Recent traced model calls attached to this run id.</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setRunDetailPreset('all')}
+                            className={clsx(
+                              'rounded border px-2.5 py-1 text-xs transition',
+                              runDetailPreset === 'all'
+                                ? 'border-slate-500/60 text-white'
+                                : 'border-slate-700/60 text-slate-400 hover:border-slate-500/60 hover:text-white',
+                            )}
+                          >
+                            All
+                          </button>
+                          <button
+                            onClick={() => setRunDetailPreset('battle_card_overlay')}
+                            className={clsx(
+                              'rounded border px-2.5 py-1 text-xs transition',
+                              runDetailPreset === 'battle_card_overlay'
+                                ? 'border-cyan-400/50 bg-cyan-500/10 text-cyan-200'
+                                : 'border-slate-700/60 text-slate-400 hover:border-cyan-500/60 hover:text-white',
+                            )}
+                          >
+                            Overlay
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <DataTable columns={recentColumns} data={runDetail.calls} emptyMessage="No traced calls for this run" />
+                    <DataTable columns={recentColumns} data={runDetailCalls} emptyMessage="No traced calls for this run" />
                   </div>
                 </div>
 
@@ -4078,7 +4156,7 @@ function CostsTab() {
                       <h3 className="text-sm font-medium text-white">Artifact Attempts</h3>
                       <p className="text-xs text-slate-500">Quality and persistence attempts recorded for this run.</p>
                     </div>
-                    <DataTable columns={runAttemptColumns} data={runDetail.artifact_attempts} emptyMessage="No artifact attempts for this run" />
+                    <DataTable columns={runAttemptColumns} data={runDetailAttempts} emptyMessage="No artifact attempts for this run" />
                   </div>
 
                   <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
@@ -4086,7 +4164,7 @@ function CostsTab() {
                       <h3 className="text-sm font-medium text-white">Visibility Events</h3>
                       <p className="text-xs text-slate-500">Warnings, failures, and summaries emitted under the same run id.</p>
                     </div>
-                    <DataTable columns={runEventColumns} data={runDetail.visibility_events} emptyMessage="No visibility events for this run" />
+                    <DataTable columns={runEventColumns} data={runDetailEvents} emptyMessage="No visibility events for this run" />
                   </div>
                 </div>
               </div>
