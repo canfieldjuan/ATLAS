@@ -25,6 +25,9 @@ from ...storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.tasks.b2b_tenant_report")
 
+_TENANT_REPORT_CACHE_STAGE = "b2b_tenant_report.synthesis_chunk"
+_TENANT_REPORT_TRACE_SPAN = "task.b2b_tenant_report"
+
 
 def _tenant_report_llm_model(llm_usage: dict[str, Any] | None) -> str:
     """Persist the actual model when tenant report synthesis used an LLM."""
@@ -68,6 +71,18 @@ def _tenant_report_data_density(
         density["llm_chunk_count"] = usage.get("chunk_count", 0)
     if usage.get("chunk_failures") is not None:
         density["llm_chunk_failures"] = usage.get("chunk_failures", 0)
+    if usage.get("batch_jobs") is not None:
+        density["llm_batch_jobs"] = usage.get("batch_jobs", 0)
+    if usage.get("batch_items_submitted") is not None:
+        density["llm_batch_items_submitted"] = usage.get("batch_items_submitted", 0)
+    if usage.get("batch_cache_prefiltered_items") is not None:
+        density["llm_batch_cache_prefiltered_items"] = usage.get("batch_cache_prefiltered_items", 0)
+    if usage.get("batch_fallback_single_call_items") is not None:
+        density["llm_batch_fallback_single_call_items"] = usage.get("batch_fallback_single_call_items", 0)
+    if usage.get("batch_completed_items") is not None:
+        density["llm_batch_completed_items"] = usage.get("batch_completed_items", 0)
+    if usage.get("batch_failed_items") is not None:
+        density["llm_batch_failed_items"] = usage.get("batch_failed_items", 0)
     return json.dumps(density)
 
 
@@ -832,6 +847,77 @@ def _merge_tenant_chunk_outputs(
     return merged
 
 
+def _tenant_synthesis_trace_metadata(
+    *,
+    vendors: list[str],
+    account_id: str | None = None,
+    run_id: str | None = None,
+    chunk_index: int | None = None,
+) -> dict[str, Any]:
+    entity_suffix = ",".join(vendors[:5]) if vendors else "all"
+    return {
+        **build_business_trace_context(
+            account_id=account_id,
+            workflow="tenant_report",
+            report_type="weekly_b2b_intelligence",
+            vendor_name=", ".join(vendors[:5]),
+            entity_type="tenant_report_chunk",
+            entity_id=f"chunk:{chunk_index}:{entity_suffix}" if chunk_index is not None else entity_suffix,
+            source_name="b2b_tenant_report",
+        ),
+        "run_id": run_id,
+    }
+
+
+def _tenant_synthesis_messages(payload: dict[str, Any]) -> list[Any]:
+    from ...services.protocols import Message
+    from ...skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/b2b_churn_intelligence")
+    if skill is None:
+        raise ValueError("tenant report synthesis skill not found")
+    return [
+        Message(role="system", content=skill.content),
+        Message(
+            role="user",
+            content=json.dumps(payload, separators=(",", ":"), default=str),
+        ),
+    ]
+
+
+def _prepare_tenant_synthesis_request(
+    payload: dict[str, Any],
+    *,
+    max_tokens: int,
+    llm: Any | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+) -> tuple[Any | None, list[Any]]:
+    from ...services.b2b.cache_runner import prepare_b2b_exact_skill_stage_request
+    from ...services.b2b.llm_exact_cache import CacheUnavailable
+
+    try:
+        return prepare_b2b_exact_skill_stage_request(
+            _TENANT_REPORT_CACHE_STAGE,
+            skill_name="digest/b2b_churn_intelligence",
+            payload=payload,
+            llm=llm,
+            provider=provider,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=0.4,
+            response_format={"type": "json_object"},
+        )
+    except CacheUnavailable:
+        return None, _tenant_synthesis_messages(payload)
+
+
+def _parse_tenant_synthesis_response_text(text: str) -> dict[str, Any]:
+    from ...pipelines.llm import parse_json_response
+
+    return parse_json_response(text, recover_truncated=True)
+
+
 async def _run_tenant_synthesis_llm(
     payload: dict[str, Any],
     *,
@@ -841,42 +927,29 @@ async def _run_tenant_synthesis_llm(
     from ...pipelines.llm import (
         call_llm_with_skill,
         get_pipeline_llm,
-        parse_json_response,
     )
     from ...services.b2b.cache_runner import (
         lookup_b2b_exact_stage_text,
-        prepare_b2b_exact_skill_stage_request,
         store_b2b_exact_stage_text,
     )
-    from ...services.b2b.llm_exact_cache import CacheUnavailable, llm_identity
+    from ...services.b2b.llm_exact_cache import llm_identity
 
     llm_usage: dict[str, Any] = {}
-    cache_stage_id = "b2b_tenant_report.synthesis_chunk"
     request: Any | None = None
     resolved_llm = get_pipeline_llm(workload="synthesis")
     provider, model = llm_identity(resolved_llm)
     if provider and model:
-        try:
-            request, _ = prepare_b2b_exact_skill_stage_request(
-                cache_stage_id,
-                skill_name="digest/b2b_churn_intelligence",
-                payload=payload,
-                provider=provider,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=0.4,
-                response_format={"type": "json_object"},
-            )
-        except CacheUnavailable:
-            request = None
+        request, _ = _prepare_tenant_synthesis_request(
+            payload,
+            max_tokens=max_tokens,
+            provider=provider,
+            model=model,
+        )
 
     if request is not None:
         cached = await lookup_b2b_exact_stage_text(request)
         if cached is not None:
-            parsed_cached = parse_json_response(
-                cached["response_text"],
-                recover_truncated=True,
-            )
+            parsed_cached = _parse_tenant_synthesis_response_text(cached["response_text"])
             if not parsed_cached.get("_parse_fallback"):
                 llm_usage.update(
                     {
@@ -904,32 +977,25 @@ async def _run_tenant_synthesis_llm(
     )
     if not analysis:
         raise ValueError("tenant report llm returned no analysis")
-    parsed = parse_json_response(analysis, recover_truncated=True)
+    parsed = _parse_tenant_synthesis_response_text(analysis)
 
     if request is None:
         provider = str(llm_usage.get("provider") or "")
         model = str(llm_usage.get("model") or "")
         if provider and model:
-            try:
-                request, _ = prepare_b2b_exact_skill_stage_request(
-                    cache_stage_id,
-                    skill_name="digest/b2b_churn_intelligence",
-                    payload=payload,
-                    provider=provider,
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=0.4,
-                    response_format={"type": "json_object"},
-                )
-            except CacheUnavailable:
-                request = None
+            request, _ = _prepare_tenant_synthesis_request(
+                payload,
+                max_tokens=max_tokens,
+                provider=provider,
+                model=model,
+            )
 
     if request is not None and not parsed.get("_parse_fallback"):
         await store_b2b_exact_stage_text(
             request,
             response_text=analysis,
             usage=llm_usage,
-            metadata={"task": "tenant_report", "cache_stage": "synthesis_chunk"},
+            metadata={"task": "tenant_report", "cache_stage": _TENANT_REPORT_CACHE_STAGE},
         )
 
     return parsed, llm_usage
@@ -940,34 +1006,220 @@ async def _run_chunked_tenant_synthesis(
     *,
     max_tokens: int,
     data_context: dict[str, Any],
+    run_id: str | None = None,
+    account_id: str | None = None,
+    pool: Any | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run tenant synthesis in vendor chunks and merge the outputs."""
     chunks = _tenant_payload_vendor_chunks(payload)
     if len(chunks) <= 1:
         return await _run_tenant_synthesis_llm(payload, max_tokens=max_tokens)
 
+    from ...pipelines.llm import get_pipeline_llm
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
+    )
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        store_b2b_exact_stage_text,
+    )
+    from ...services.llm.anthropic import AnthropicLLM
+
     partials: list[dict[str, Any]] = []
     total_input = 0
     total_output = 0
     model_name = ""
+    provider_name = ""
     chunk_failures = 0
+    batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
 
-    for chunk in chunks:
+    batch_requested = bool(
+        getattr(settings.b2b_churn, "anthropic_batch_enabled", False)
+        and getattr(settings.b2b_churn, "tenant_report_anthropic_batch_enabled", True)
+    )
+    batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
+    if not isinstance(batch_llm, AnthropicLLM):
+        batch_llm = None
+
+    chunk_entries = []
+    for index, chunk in enumerate(chunks):
         chunk_payload = _filter_tenant_payload_for_vendors(payload, chunk)
-        try:
-            parsed, usage = await _run_tenant_synthesis_llm(chunk_payload, max_tokens=max_tokens)
+        chunk_entries.append(
+            {
+                "chunk_index": index,
+                "vendors": chunk,
+                "payload": chunk_payload,
+            }
+        )
+
+    if batch_llm is not None:
+        prepared_entries: list[dict[str, Any]] = []
+        for entry in chunk_entries:
+            request, messages = _prepare_tenant_synthesis_request(
+                entry["payload"],
+                max_tokens=max_tokens,
+                llm=batch_llm,
+            )
+            cached = (
+                await lookup_b2b_exact_stage_text(request)
+                if request is not None
+                else None
+            )
+            prepared_entries.append(
+                {
+                    **entry,
+                    "custom_id": f"tenant_report:{entry['chunk_index']}",
+                    "request": request,
+                    "messages": messages,
+                    "cached_response_text": (
+                        str(cached["response_text"] or "")
+                        if cached is not None
+                        else None
+                    ),
+                }
+            )
+
+        execution = await run_anthropic_message_batch(
+            llm=batch_llm,
+            stage_id=_TENANT_REPORT_CACHE_STAGE,
+            task_name="b2b_tenant_report",
+            items=[
+                AnthropicBatchItem(
+                    custom_id=str(entry["custom_id"]),
+                    artifact_type="tenant_report_chunk",
+                    artifact_id=f"chunk-{entry['chunk_index']}",
+                    vendor_name=", ".join(entry["vendors"][:5]) or None,
+                    messages=entry["messages"],
+                    max_tokens=max_tokens,
+                    temperature=0.4,
+                    trace_span_name=_TENANT_REPORT_TRACE_SPAN,
+                    trace_metadata={
+                        **_tenant_synthesis_trace_metadata(
+                            vendors=entry["vendors"],
+                            account_id=str(account_id) if account_id is not None else None,
+                            run_id=run_id,
+                            chunk_index=int(entry["chunk_index"]),
+                        ),
+                        "workload": "anthropic_batch",
+                    },
+                    request_metadata={
+                        "report_type": "weekly_b2b_intelligence",
+                        "chunk_index": int(entry["chunk_index"]),
+                    },
+                    cached_response_text=entry["cached_response_text"],
+                    cached_usage={},
+                )
+                for entry in prepared_entries
+            ],
+            run_id=run_id,
+            min_batch_size=int(getattr(settings.b2b_churn, "tenant_report_anthropic_batch_min_items", 2)),
+            batch_metadata={"report_type": "weekly_b2b_intelligence"},
+            pool=pool,
+        )
+        batch_metrics["jobs"] += 1 if execution.provider_batch_id else 0
+        batch_metrics["submitted_items"] += execution.submitted_items
+        batch_metrics["cache_prefiltered_items"] += execution.cache_prefiltered_items
+        batch_metrics["fallback_single_call_items"] += execution.fallback_single_call_items
+        batch_metrics["completed_items"] += execution.completed_items
+        batch_metrics["failed_items"] += execution.failed_items
+
+        for entry in prepared_entries:
+            outcome = execution.results_by_custom_id.get(str(entry["custom_id"]))
+            parsed: dict[str, Any] | None = None
+            usage: dict[str, Any] = {}
+            parse_error_text: str | None = None
+
+            if outcome is not None and outcome.response_text:
+                parsed = _parse_tenant_synthesis_response_text(outcome.response_text)
+                if parsed.get("_parse_fallback"):
+                    parsed = None
+                    parse_error_text = "failed_to_parse_batch_response"
+                else:
+                    usage = {
+                        "input_tokens": 0 if outcome.cached else int(outcome.usage.get("input_tokens") or 0),
+                        "output_tokens": 0 if outcome.cached else int(outcome.usage.get("output_tokens") or 0),
+                        "model": str(getattr(batch_llm, "model", "") or ""),
+                        "provider": str(getattr(batch_llm, "name", "") or ""),
+                        "cache_hit": bool(outcome.cached),
+                    }
+                    if entry["request"] is not None and not outcome.cached:
+                        await store_b2b_exact_stage_text(
+                            entry["request"],
+                            response_text=outcome.response_text,
+                            usage=outcome.usage,
+                            metadata={"task": "tenant_report", "cache_stage": _TENANT_REPORT_CACHE_STAGE},
+                            pool=pool,
+                        )
+
+            if parsed is None:
+                try:
+                    parsed, usage = await _run_tenant_synthesis_llm(
+                        entry["payload"],
+                        max_tokens=max_tokens,
+                    )
+                    await mark_batch_fallback_result(
+                        batch_id=execution.local_batch_id,
+                        custom_id=str(entry["custom_id"]),
+                        succeeded=True,
+                        response_text=json.dumps(parsed, separators=(",", ":"), default=str),
+                        usage=usage,
+                        provider=str(usage.get("provider") or "") or None,
+                        model=str(usage.get("model") or "") or None,
+                        pool=pool,
+                    )
+                except Exception:
+                    chunk_failures += 1
+                    await mark_batch_fallback_result(
+                        batch_id=execution.local_batch_id,
+                        custom_id=str(entry["custom_id"]),
+                        succeeded=False,
+                        error_text=parse_error_text or (outcome.error_text if outcome is not None else None),
+                        pool=pool,
+                    )
+                    logger.warning(
+                        "Tenant-report synthesis chunk failed for vendors=%s",
+                        ", ".join(entry["vendors"]),
+                        exc_info=True,
+                    )
+                    continue
+
             partials.append(parsed)
             total_input += int(usage.get("input_tokens") or 0)
             total_output += int(usage.get("output_tokens") or 0)
             if not model_name and usage.get("model"):
                 model_name = str(usage.get("model") or "")
-        except Exception:
-            chunk_failures += 1
-            logger.warning(
-                "Tenant-report synthesis chunk failed for vendors=%s",
-                ", ".join(chunk),
-                exc_info=True,
-            )
+            if not provider_name and usage.get("provider"):
+                provider_name = str(usage.get("provider") or "")
+    else:
+        for entry in chunk_entries:
+            try:
+                parsed, usage = await _run_tenant_synthesis_llm(
+                    entry["payload"],
+                    max_tokens=max_tokens,
+                )
+                partials.append(parsed)
+                total_input += int(usage.get("input_tokens") or 0)
+                total_output += int(usage.get("output_tokens") or 0)
+                if not model_name and usage.get("model"):
+                    model_name = str(usage.get("model") or "")
+                if not provider_name and usage.get("provider"):
+                    provider_name = str(usage.get("provider") or "")
+            except Exception:
+                chunk_failures += 1
+                logger.warning(
+                    "Tenant-report synthesis chunk failed for vendors=%s",
+                    ", ".join(entry["vendors"]),
+                    exc_info=True,
+                )
 
     if not partials:
         raise ValueError("tenant report llm returned no analysis")
@@ -975,10 +1227,17 @@ async def _run_chunked_tenant_synthesis(
     merged = _merge_tenant_chunk_outputs(partials, data_context=data_context)
     usage = {
         "model": model_name,
+        "provider": provider_name,
         "input_tokens": total_input,
         "output_tokens": total_output,
         "chunk_count": len(chunks),
         "chunk_failures": chunk_failures,
+        "batch_jobs": batch_metrics["jobs"],
+        "batch_items_submitted": batch_metrics["submitted_items"],
+        "batch_cache_prefiltered_items": batch_metrics["cache_prefiltered_items"],
+        "batch_fallback_single_call_items": batch_metrics["fallback_single_call_items"],
+        "batch_completed_items": batch_metrics["completed_items"],
+        "batch_failed_items": batch_metrics["failed_items"],
     }
     return merged, usage
 
@@ -1224,6 +1483,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 payload,
                 max_tokens=cfg.intelligence_max_tokens,
                 data_context=payload.get("data_context") or {},
+                run_id=str(task.id),
+                account_id=str(account_id),
+                pool=pool,
             )
             llm_summary = str(llm_parsed.get("executive_summary") or "").strip()
             if llm_summary:

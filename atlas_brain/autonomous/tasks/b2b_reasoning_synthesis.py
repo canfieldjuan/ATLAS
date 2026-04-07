@@ -23,6 +23,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from datetime import date, datetime, timezone
 from typing import Any
@@ -1367,7 +1368,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.info("Reasoning synthesis v2: vendor phase skipped; cross-vendor scope still active")
 
     # Resolve LLM via standard pipeline routing
-    from ...pipelines.llm import get_pipeline_llm
+    from ...pipelines.llm import get_pipeline_llm, parse_json_response
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
+    )
+    from ...services.llm.anthropic import AnthropicLLM
 
     synthesis_model = str(
         getattr(cfg, "reasoning_synthesis_model", "") or ""
@@ -1385,6 +1392,19 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return await _finalize_scope_result(
             {"_skip_synthesis": "No LLM available for reasoning synthesis"}
         )
+    batch_requested = bool(settings.b2b_churn.anthropic_batch_enabled) and bool(
+        getattr(cfg, "reasoning_synthesis_anthropic_batch_enabled", True)
+        or getattr(cfg, "cross_vendor_anthropic_batch_enabled", True)
+    )
+    batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
+    vendor_batch_enabled = bool(
+        getattr(cfg, "reasoning_synthesis_anthropic_batch_enabled", True)
+    ) and isinstance(batch_llm, AnthropicLLM)
+    cross_vendor_batch_enabled = bool(
+        getattr(cfg, "cross_vendor_anthropic_batch_enabled", True)
+    ) and isinstance(batch_llm, AnthropicLLM)
+    vendor_generation_llm = batch_llm if vendor_batch_enabled else llm
+    cross_vendor_generation_llm = batch_llm if cross_vendor_batch_enabled else llm
 
     from ...reasoning.single_pass_prompts.reasoning_synthesis import (
         REASONING_SYNTHESIS_PROMPT,
@@ -1392,6 +1412,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...services.protocols import Message
 
     from ._b2b_pool_compression import compress_vendor_pools
+    from ._b2b_reasoning_atoms import build_reasoning_delta
     from ._b2b_reasoning_contracts import build_persistable_synthesis
     from ._b2b_synthesis_validation import (
         normalize_synthesis_source_ids,
@@ -1438,7 +1459,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     feedback_limit = max(
         1, int(getattr(cfg, "reasoning_synthesis_feedback_limit", 5)),
     )
-    sem = asyncio.Semaphore(max_concurrent)
+    prep_sem = asyncio.Semaphore(max_concurrent)
+    direct_call_sem = asyncio.Semaphore(max_concurrent)
     total_tokens = 0
     succeeded = 0
     failed = 0
@@ -1446,17 +1468,36 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     witness_count = 0
     witness_vendor_rows = 0
     input_budget_rejections = 0
+    vendor_batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
+    cross_vendor_batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
     payload_mode_full = 0
     payload_mode_lean = 0
     failed_vendors: list[dict[str, Any]] = []
 
-    async def _reason_one(
-        vendor_name: str, layers: dict, ev_hash: str, decision: dict[str, Any],
-    ) -> None:
-        nonlocal total_tokens, succeeded, failed, validation_failures, failed_vendors
+    async def _prepare_vendor_reasoning_entry(
+        vendor_name: str,
+        layers: dict[str, Any],
+        ev_hash: str,
+        decision: dict[str, Any],
+    ) -> dict[str, Any] | None:
         nonlocal witness_count, witness_vendor_rows
         nonlocal input_budget_rejections, payload_mode_full, payload_mode_lean
-        async with sem:
+        nonlocal failed, failed_vendors
+        async with prep_sem:
             packet = compress_vendor_pools(
                 vendor_name,
                 layers,
@@ -1553,9 +1594,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 failed_vendors.append({
                     "vendor_name": vendor_name,
                     "stage": "input_budget",
-                    "reasons": [
-                        "input token budget exceeded",
-                    ],
+                    "reasons": ["input token budget exceeded"],
                     "tokens_used": 0,
                     "attempts_used": 0,
                 })
@@ -1588,9 +1627,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     event_type="input_budget_rejected",
                     entity_type="vendor",
                     entity_id=vendor_name,
-                    summary=(
-                        "Vendor reasoning prompt exceeded the configured input token cap"
-                    ),
+                    summary="Vendor reasoning prompt exceeded the configured input token cap",
                     severity="warning",
                     actionable=True,
                     artifact_type="reasoning_synthesis",
@@ -1602,527 +1639,762 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         "payload_mode": payload_mode,
                     },
                 )
-                return
+                return None
             if payload_mode == "lean":
                 payload_mode_lean += 1
             else:
                 payload_mode_full += 1
-            failure_reasons: list[str] = []
-            last_text = ""
-            last_validation = None
-            synthesis: dict[str, Any] | None = None
-            vendor_tokens = 0
+            return {
+                "vendor_name": vendor_name,
+                "decision": decision,
+                "evidence_hash": ev_hash,
+                "packet": packet,
+                "prompt_packet": prompt_packet,
+                "payload_packet": payload_packet,
+                "payload": payload,
+                "payload_mode": payload_mode,
+                "payload_items_per_pool": payload_items_per_pool,
+                "payload_witness_count": payload_witness_count,
+                "estimated_input_tokens": estimated_input_tokens,
+                "include_contradiction_rows": include_contradiction_rows,
+                "include_minority_signals": include_minority_signals,
+                "section_packets_included": section_packets_included,
+                "custom_id": f"vendor:{vendor_name.strip().lower()}",
+            }
 
-            for attempt in range(max_attempts):
-                messages = [
-                    Message(role="system", content=REASONING_SYNTHESIS_PROMPT),
-                    Message(role="user", content=payload),
-                ]
-                if attempt > 0 and last_text:
-                    messages.append(Message(role="assistant", content=last_text))
-                if attempt > 0 and failure_reasons:
-                    feedback = "\n".join(
-                        f"- {reason}" for reason in failure_reasons[:feedback_limit]
-                    )
-                    retry_guidance = (
-                        _retry_guidance(last_validation)
-                        if last_validation is not None
-                        else []
-                    )
-                    guidance_block = ""
-                    if retry_guidance:
-                        guidance_block = (
-                            "\nAdditional requirements:\n"
-                            + "\n".join(f"- {item}" for item in retry_guidance)
-                        )
-                    messages.append(Message(
-                        role="user",
-                        content=(
-                            "Your previous response was rejected. "
-                            "Return a complete corrected JSON object only.\n"
-                            f"Fix these issues:\n{feedback}"
-                            f"{guidance_block}"
-                        ),
-                    ))
-                try:
-                    call_started = time.monotonic()
-                    import re
-                    from ...pipelines.llm import parse_json_response
+    async def _reason_one_prepared(
+        entry: dict[str, Any],
+        *,
+        initial_response_text: str | None = None,
+        initial_usage: dict[str, Any] | None = None,
+        batch_origin: bool = False,
+        initial_attempt_consumed: bool = False,
+    ) -> dict[str, Any]:
+        nonlocal total_tokens, succeeded, failed, validation_failures, failed_vendors
 
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            llm.chat,
-                            messages=messages,
-                            max_tokens=llm_max_tokens,
-                            temperature=llm_temperature,
-                            response_format={"type": "json_object"},
-                        ),
-                        timeout=llm_timeout_seconds,
-                    )
-                    _trace_reasoning_result(
-                        "task.b2b_reasoning_synthesis",
-                        llm=llm,
-                        messages=messages,
-                        result=result,
-                        metadata={
-                            "run_id": run_id,
-                            "vendor_name": vendor_name,
-                            "reasoning_mode": "vendor_synthesis",
-                            "attempt_no": attempt + 1,
-                            "schema_version": _SCHEMA_VERSION,
-                            "rerun_reason": decision["reason"],
-                            "payload_mode": payload_mode,
-                            "estimated_input_tokens": estimated_input_tokens,
-                            "prior_row_age_days": decision.get("prior_row_age_days"),
-                            "prior_row_as_of_date": (
-                                decision["prior_as_of_date"].isoformat()
-                                if decision.get("prior_as_of_date") is not None
-                                else None
-                            ),
-                            "hash_changed": bool(decision.get("hash_changed")),
-                            "forced": decision["reason"] == "forced",
-                        },
-                        duration_ms=(time.monotonic() - call_started) * 1000,
-                    )
-                    text = result.get("response", "").strip()
-                    usage = result.get("usage", {})
-                    tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-                    vendor_tokens += tokens
-                    total_tokens += tokens
+        vendor_name = str(entry["vendor_name"])
+        decision = entry["decision"]
+        packet = entry["packet"]
+        prompt_packet = entry["prompt_packet"]
+        payload_packet = entry["payload_packet"]
+        payload = str(entry["payload"])
+        payload_mode = str(entry["payload_mode"])
+        payload_items_per_pool = int(entry["payload_items_per_pool"])
+        payload_witness_count = int(entry["payload_witness_count"])
+        estimated_input_tokens = int(entry["estimated_input_tokens"])
+        include_contradiction_rows = bool(entry["include_contradiction_rows"])
+        include_minority_signals = bool(entry["include_minority_signals"])
+        section_packets_included = bool(entry["section_packets_included"])
+        ev_hash = str(entry["evidence_hash"])
 
-                    text = re.sub(
-                        r"<think>.*?</think>", "", text, flags=re.DOTALL,
-                    ).strip()
-                    if "<scratchpad>" in text:
-                        text = text.split("</scratchpad>")[-1].strip()
-                    last_text = text
+        failure_reasons: list[str] = []
+        last_text = ""
+        last_validation = None
+        synthesis: dict[str, Any] | None = None
+        vendor_tokens = 0
+        attempt_no_used = 0
+        used_fallback_single_call = False
+        fallback_usage: dict[str, Any] = {}
 
-                    parsed = parse_json_response(text, recover_truncated=True)
-                    if not isinstance(parsed, dict):
-                        failure_reasons = ["LLM did not return a JSON object"]
-                        synthesis = None
-                    elif parsed.get("_parse_fallback"):
-                        failure_reasons = ["LLM did not return valid JSON"]
-                        synthesis = None
-                    else:
-                        parsed = normalize_synthesis_source_ids(parsed, prompt_packet)
-                        # Validate the canonical persisted shape, not the raw model
-                        # payload. Deterministic contract repairs already know how to
-                        # normalize migration semantics, named examples, and related
-                        # evidence wiring; paying for a second LLM call before those
-                        # repairs run is wasted token burn.
-                        candidate = build_persistable_synthesis(parsed, prompt_packet)
-                        candidate = normalize_synthesis_source_ids(candidate, prompt_packet)
-                        vresult = validate_synthesis(
-                            candidate, prompt_packet, governance_blocking=True,
-                        )
-                        if vresult.is_valid:
-                            synthesis = candidate
-                            last_validation = vresult
-                            break
-                        synthesis = None
-                        last_validation = vresult
-                        await _record_validation_attempt(
-                            pool,
-                            vendor_name=vendor_name,
-                            run_id=run_id,
-                            as_of_date=today,
-                            analysis_window_days=window_days,
-                            attempt_no=attempt + 1,
-                            vresult=vresult,
-                            feedback_limit=feedback_limit,
-                            attempt_tokens=tokens,
-                            escalation_window_hours=max(
-                                1,
-                                int(getattr(cfg, "reasoning_retry_escalation_window_hours", 24)),
-                            ),
-                            repeat_rule_threshold=max(
-                                2,
-                                int(getattr(cfg, "reasoning_retry_repeat_rule_threshold", 3)),
-                            ),
-                            cost_min_retries=max(
-                                1,
-                                int(getattr(cfg, "reasoning_retry_cost_min_retries", 2)),
-                            ),
-                            cost_tokens_threshold=max(
-                                1000,
-                                int(getattr(cfg, "reasoning_retry_cost_tokens_threshold", 80000)),
-                            ),
-                            emit_retry_event=(attempt + 1) < max_attempts,
-                        )
-                        failure_reasons = _validation_feedback(
-                            vresult, feedback_limit,
-                        ) or [vresult.summary()]
-                        for err in vresult.errors:
-                            logger.debug(
-                                "  [%s] %s: %s", err.code, err.path, err.message,
-                            )
-                except asyncio.TimeoutError:
-                    synthesis = None
-                    failure_reasons = [
-                        "TimeoutError: reasoning LLM call exceeded "
-                        f"{llm_timeout_seconds:.1f}s",
+        def _accumulate_fallback_usage(result: dict[str, Any]) -> None:
+            usage = result.get("usage", {}) if isinstance(result, dict) else {}
+            trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
+            fallback_usage["input_tokens"] = int(fallback_usage.get("input_tokens") or 0) + int((usage or {}).get("input_tokens") or 0)
+            fallback_usage["billable_input_tokens"] = int(fallback_usage.get("billable_input_tokens") or 0) + int(
+                (trace_meta or {}).get("billable_input_tokens")
+                if (trace_meta or {}).get("billable_input_tokens") is not None
+                else (usage or {}).get("input_tokens") or 0
+            )
+            fallback_usage["cached_tokens"] = int(fallback_usage.get("cached_tokens") or 0) + int(
+                (trace_meta or {}).get("cached_tokens")
+                or (trace_meta or {}).get("cache_read_tokens")
+                or 0
+            )
+            fallback_usage["cache_write_tokens"] = int(fallback_usage.get("cache_write_tokens") or 0) + int(
+                (trace_meta or {}).get("cache_write_tokens")
+                or (trace_meta or {}).get("cache_creation_tokens")
+                or 0
+            )
+            fallback_usage["output_tokens"] = int(fallback_usage.get("output_tokens") or 0) + int((usage or {}).get("output_tokens") or 0)
+            fallback_usage["provider"] = str(getattr(vendor_generation_llm, "name", "") or "")
+            fallback_usage["model"] = str(
+                getattr(vendor_generation_llm, "model", "")
+                or getattr(vendor_generation_llm, "model_id", "")
+                or ""
+            )
+            if (trace_meta or {}).get("provider_request_id"):
+                fallback_usage["provider_request_id"] = str((trace_meta or {}).get("provider_request_id") or "")
+
+        async def _consume_response_text(text: str, *, tokens: int, attempt_no: int) -> None:
+            nonlocal failure_reasons, last_text, last_validation, synthesis
+            nonlocal vendor_tokens, total_tokens
+
+            vendor_tokens += tokens
+            total_tokens += tokens
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            if "<scratchpad>" in text:
+                text = text.split("</scratchpad>")[-1].strip()
+            last_text = text
+
+            parsed = parse_json_response(text, recover_truncated=True)
+            if not isinstance(parsed, dict):
+                failure_reasons = ["LLM did not return a JSON object"]
+                synthesis = None
+                return
+            if parsed.get("_parse_fallback"):
+                failure_reasons = ["LLM did not return valid JSON"]
+                synthesis = None
+                return
+            parsed = normalize_synthesis_source_ids(parsed, prompt_packet)
+            candidate = build_persistable_synthesis(parsed, prompt_packet)
+            candidate = normalize_synthesis_source_ids(candidate, prompt_packet)
+            vresult = validate_synthesis(
+                candidate, prompt_packet, governance_blocking=True,
+            )
+            if vresult.is_valid:
+                synthesis = candidate
+                last_validation = vresult
+                return
+            synthesis = None
+            last_validation = vresult
+            await _record_validation_attempt(
+                pool,
+                vendor_name=vendor_name,
+                run_id=run_id,
+                as_of_date=today,
+                analysis_window_days=window_days,
+                attempt_no=attempt_no,
+                vresult=vresult,
+                feedback_limit=feedback_limit,
+                attempt_tokens=tokens,
+                escalation_window_hours=max(
+                    1,
+                    int(getattr(cfg, "reasoning_retry_escalation_window_hours", 24)),
+                ),
+                repeat_rule_threshold=max(
+                    2,
+                    int(getattr(cfg, "reasoning_retry_repeat_rule_threshold", 3)),
+                ),
+                cost_min_retries=max(
+                    1,
+                    int(getattr(cfg, "reasoning_retry_cost_min_retries", 2)),
+                ),
+                cost_tokens_threshold=max(
+                    1000,
+                    int(getattr(cfg, "reasoning_retry_cost_tokens_threshold", 80000)),
+                ),
+                emit_retry_event=attempt_no < max_attempts,
+            )
+            failure_reasons = _validation_feedback(
+                vresult, feedback_limit,
+            ) or [vresult.summary()]
+            for err in vresult.errors:
+                logger.debug("  [%s] %s: %s", err.code, err.path, err.message)
+
+        if initial_response_text is not None:
+            attempt_no_used = 1
+            usage = dict(initial_usage or {})
+            await _consume_response_text(
+                initial_response_text,
+                tokens=int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0),
+                attempt_no=1,
+            )
+
+        if synthesis is None:
+            if batch_origin:
+                used_fallback_single_call = True
+            loop_start = 1 if initial_attempt_consumed else 0
+            async with direct_call_sem:
+                for attempt in range(loop_start, max_attempts):
+                    attempt_no_used = attempt + 1
+                    messages = [
+                        Message(role="system", content=REASONING_SYNTHESIS_PROMPT),
+                        Message(role="user", content=payload),
                     ]
+                    if attempt > 0 and last_text:
+                        messages.append(Message(role="assistant", content=last_text))
+                    if attempt > 0 and failure_reasons:
+                        feedback = "\n".join(
+                            f"- {reason}" for reason in failure_reasons[:feedback_limit]
+                        )
+                        retry_guidance = (
+                            _retry_guidance(last_validation)
+                            if last_validation is not None
+                            else []
+                        )
+                        guidance_block = ""
+                        if retry_guidance:
+                            guidance_block = (
+                                "\nAdditional requirements:\n"
+                                + "\n".join(f"- {item}" for item in retry_guidance)
+                            )
+                        messages.append(Message(
+                            role="user",
+                            content=(
+                                "Your previous response was rejected. "
+                                "Return a complete corrected JSON object only.\n"
+                                f"Fix these issues:\n{feedback}"
+                                f"{guidance_block}"
+                            ),
+                        ))
+                    try:
+                        call_started = time.monotonic()
+                        result = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                vendor_generation_llm.chat,
+                                messages=messages,
+                                max_tokens=llm_max_tokens,
+                                temperature=llm_temperature,
+                                response_format={"type": "json_object"},
+                            ),
+                            timeout=llm_timeout_seconds,
+                        )
+                        _trace_reasoning_result(
+                            "task.b2b_reasoning_synthesis",
+                            llm=vendor_generation_llm,
+                            messages=messages,
+                            result=result,
+                            metadata={
+                                "run_id": run_id,
+                                "vendor_name": vendor_name,
+                                "reasoning_mode": "vendor_synthesis",
+                                "attempt_no": attempt + 1,
+                                "schema_version": _SCHEMA_VERSION,
+                                "rerun_reason": decision["reason"],
+                                "payload_mode": payload_mode,
+                                "estimated_input_tokens": estimated_input_tokens,
+                                "prior_row_age_days": decision.get("prior_row_age_days"),
+                                "prior_row_as_of_date": (
+                                    decision["prior_as_of_date"].isoformat()
+                                    if decision.get("prior_as_of_date") is not None
+                                    else None
+                                ),
+                                "hash_changed": bool(decision.get("hash_changed")),
+                                "forced": decision["reason"] == "forced",
+                                "workload": "anthropic" if vendor_batch_enabled else "synthesis",
+                            },
+                            duration_ms=(time.monotonic() - call_started) * 1000,
+                        )
+                        _accumulate_fallback_usage(result)
+                        await _consume_response_text(
+                            str(result.get("response", "") or "").strip(),
+                            tokens=int((result.get("usage") or {}).get("input_tokens", 0) or 0)
+                            + int((result.get("usage") or {}).get("output_tokens", 0) or 0),
+                            attempt_no=attempt + 1,
+                        )
+                    except asyncio.TimeoutError:
+                        synthesis = None
+                        failure_reasons = [
+                            "TimeoutError: reasoning LLM call exceeded "
+                            f"{llm_timeout_seconds:.1f}s",
+                        ]
+                        if attempt + 1 >= max_attempts:
+                            logger.warning(
+                                "Reasoning synthesis timed out for %s after %.1fs",
+                                vendor_name,
+                                llm_timeout_seconds,
+                            )
+                            failed_vendors.append({
+                                "vendor_name": vendor_name,
+                                "stage": "llm_exception",
+                                "reasons": failure_reasons[:feedback_limit],
+                                "tokens_used": vendor_tokens,
+                                "attempts_used": attempt + 1,
+                            })
+                            failed += 1
+                            from ..visibility import emit_event, record_attempt
+                            await record_attempt(
+                                pool, artifact_type="reasoning_synthesis",
+                                artifact_id=vendor_name,
+                                run_id=run_id, attempt_no=attempt + 1,
+                                stage="llm_call", status="failed",
+                                failure_step="timeout",
+                                error_message=f"LLM call exceeded {llm_timeout_seconds:.1f}s",
+                            )
+                            await emit_event(
+                                pool, stage="synthesis", event_type="llm_timeout",
+                                entity_type="vendor", entity_id=vendor_name,
+                                summary=f"Reasoning synthesis timed out for {vendor_name}",
+                                severity="warning", actionable=True,
+                                artifact_type="reasoning_synthesis",
+                                run_id=run_id, reason_code="llm_timeout",
+                            )
+                            return {
+                                "succeeded": False,
+                                "used_fallback_single_call": used_fallback_single_call,
+                                "error_text": failure_reasons[0],
+                                "fallback_usage": fallback_usage,
+                            }
+                    except Exception as exc:
+                        synthesis = None
+                        failure_reasons = [f"{type(exc).__name__}: {exc}"]
+                        if attempt + 1 >= max_attempts:
+                            logger.warning(
+                                "Reasoning synthesis failed for %s",
+                                vendor_name, exc_info=True,
+                            )
+                            failed_vendors.append({
+                                "vendor_name": vendor_name,
+                                "stage": "llm_exception",
+                                "reasons": failure_reasons[:feedback_limit],
+                                "tokens_used": vendor_tokens,
+                                "attempts_used": attempt + 1,
+                            })
+                            failed += 1
+                            from ..visibility import record_attempt, emit_event
+                            await record_attempt(
+                                pool, artifact_type="reasoning_synthesis",
+                                artifact_id=vendor_name,
+                                run_id=run_id, attempt_no=attempt + 1,
+                                stage="llm_call", status="failed",
+                                failure_step="llm_exception",
+                                error_message=str(exc)[:200],
+                            )
+                            await emit_event(
+                                pool, stage="synthesis", event_type="llm_exception",
+                                entity_type="vendor", entity_id=vendor_name,
+                                summary=f"Reasoning synthesis exception for {vendor_name}: {type(exc).__name__}",
+                                severity="error", actionable=True,
+                                artifact_type="reasoning_synthesis",
+                                run_id=run_id, reason_code="llm_exception",
+                            )
+                            return {
+                                "succeeded": False,
+                                "used_fallback_single_call": used_fallback_single_call,
+                                "error_text": failure_reasons[0],
+                                "fallback_usage": fallback_usage,
+                            }
+
+                    if synthesis is not None:
+                        break
+
                     if attempt + 1 >= max_attempts:
-                        logger.warning(
-                            "Reasoning synthesis timed out for %s after %.1fs",
-                            vendor_name,
-                            llm_timeout_seconds,
-                        )
-                        failed_vendors.append({
-                            "vendor_name": vendor_name,
-                            "stage": "llm_exception",
-                            "reasons": failure_reasons[:feedback_limit],
-                            "tokens_used": vendor_tokens,
-                            "attempts_used": attempt + 1,
-                        })
+                        attempts_used = max(1, attempt_no_used)
+                        if last_validation is not None:
+                            logger.warning(
+                                "Reasoning synthesis for %s failed validation: %s",
+                                vendor_name, last_validation.summary(),
+                            )
+                            failed_vendors.append({
+                                "vendor_name": vendor_name,
+                                "stage": "validation",
+                                "summary": last_validation.summary(),
+                                "reasons": failure_reasons[:feedback_limit],
+                                "tokens_used": vendor_tokens,
+                                "attempts_used": attempts_used,
+                            })
+                            validation_failures += 1
+                        else:
+                            logger.warning(
+                                "Reasoning synthesis for %s failed: %s",
+                                vendor_name, "; ".join(failure_reasons[:3]),
+                            )
+                            failed_vendors.append({
+                                "vendor_name": vendor_name,
+                                "stage": "llm_response",
+                                "reasons": failure_reasons[:feedback_limit],
+                                "tokens_used": vendor_tokens,
+                                "attempts_used": attempts_used,
+                            })
                         failed += 1
-                        from ..visibility import record_attempt, emit_event
-                        await record_attempt(
-                            pool, artifact_type="reasoning_synthesis",
-                            artifact_id=vendor_name,
-                            run_id=run_id, attempt_no=attempt + 1,
-                            stage="llm_call", status="failed",
-                            failure_step="timeout",
-                            error_message=f"LLM call exceeded {llm_timeout_seconds:.1f}s",
-                        )
-                        await emit_event(
-                            pool, stage="synthesis", event_type="llm_timeout",
-                            entity_type="vendor", entity_id=vendor_name,
-                            summary=f"Reasoning synthesis timed out for {vendor_name}",
-                            severity="warning", actionable=True,
-                            artifact_type="reasoning_synthesis",
-                            run_id=run_id, reason_code="llm_timeout",
-                        )
-                        return
-                except Exception as exc:
-                    synthesis = None
-                    failure_reasons = [f"{type(exc).__name__}: {exc}"]
-                    if attempt + 1 >= max_attempts:
-                        logger.warning(
-                            "Reasoning synthesis failed for %s",
-                            vendor_name, exc_info=True,
-                        )
-                        failed_vendors.append({
-                            "vendor_name": vendor_name,
-                            "stage": "llm_exception",
-                            "reasons": failure_reasons[:feedback_limit],
-                            "tokens_used": vendor_tokens,
-                            "attempts_used": attempt + 1,
-                        })
-                        failed += 1
-                        from ..visibility import record_attempt, emit_event
-                        await record_attempt(
-                            pool, artifact_type="reasoning_synthesis",
-                            artifact_id=vendor_name,
-                            run_id=run_id, attempt_no=attempt + 1,
-                            stage="llm_call", status="failed",
-                            failure_step="llm_exception",
-                            error_message=str(exc)[:200],
-                        )
-                        await emit_event(
-                            pool, stage="synthesis", event_type="llm_exception",
-                            entity_type="vendor", entity_id=vendor_name,
-                            summary=f"Reasoning synthesis exception for {vendor_name}: {type(exc).__name__}",
-                            severity="error", actionable=True,
-                            artifact_type="reasoning_synthesis",
-                            run_id=run_id, reason_code="llm_exception",
-                        )
-                        return
+                        if last_validation is None:
+                            from ..visibility import record_attempt
+                            await record_attempt(
+                                pool, artifact_type="reasoning_synthesis",
+                                artifact_id=vendor_name,
+                                run_id=run_id, attempt_no=attempts_used,
+                                stage="validation", status="rejected",
+                                blocker_count=len(failure_reasons),
+                                blocking_issues=failure_reasons[:5],
+                                failure_step="llm_response",
+                                error_message="; ".join(failure_reasons[:2])[:200],
+                            )
+                        return {
+                            "succeeded": False,
+                            "used_fallback_single_call": used_fallback_single_call,
+                            "error_text": (
+                                last_validation.summary()
+                                if last_validation is not None
+                                else "; ".join(failure_reasons[:2])[:200]
+                            ),
+                            "fallback_usage": fallback_usage,
+                        }
 
-                if synthesis is not None:
-                    break
-
-                if attempt + 1 >= max_attempts:
-                    if last_validation is not None:
-                        logger.warning(
-                            "Reasoning synthesis for %s failed validation: %s",
-                            vendor_name, last_validation.summary(),
-                        )
-                        failed_vendors.append({
-                            "vendor_name": vendor_name,
-                            "stage": "validation",
-                            "summary": last_validation.summary(),
-                            "reasons": failure_reasons[:feedback_limit],
-                            "tokens_used": vendor_tokens,
-                            "attempts_used": attempt + 1,
-                        })
-                        validation_failures += 1
-                    else:
-                        logger.warning(
-                            "Reasoning synthesis for %s failed: %s",
-                            vendor_name, "; ".join(failure_reasons[:3]),
-                        )
-                        failed_vendors.append({
-                            "vendor_name": vendor_name,
-                            "stage": "llm_response",
-                            "reasons": failure_reasons[:feedback_limit],
-                            "tokens_used": vendor_tokens,
-                            "attempts_used": attempt + 1,
-                        })
-                    failed += 1
-                    if last_validation is None:
-                        from ..visibility import record_attempt
-                        await record_attempt(
-                            pool, artifact_type="reasoning_synthesis",
-                            artifact_id=vendor_name,
-                            run_id=run_id, attempt_no=attempt + 1,
-                            stage="validation", status="rejected",
-                            blocker_count=len(failure_reasons),
-                            blocking_issues=failure_reasons[:5],
-                            failure_step="llm_response",
-                            error_message="; ".join(failure_reasons[:2])[:200],
-                        )
-                    return
-
-                logger.info(
-                    "Reasoning synthesis retrying %s (%d/%d): %s",
-                    vendor_name,
-                    attempt + 2,
-                    max_attempts,
-                    "; ".join(failure_reasons[:3]),
-                )
-                if retry_delay > 0:
-                    await asyncio.sleep(retry_delay)
-
-            assert synthesis is not None
-            assert last_validation is not None
-            vresult = last_validation
-
-            if "meta" not in synthesis:
-                synthesis["meta"] = {}
-            meta = synthesis["meta"]
-            meta.setdefault(
-                "synthesized_at",
-                datetime.now(timezone.utc).isoformat(),
-            )
-            total_items = sum(
-                len(items) for items in packet.pools.values()
-            )
-            meta.setdefault("total_evidence_items", total_items)
-            meta["rerun_reason"] = decision["reason"]
-            meta["payload_mode"] = payload_mode
-            meta["estimated_input_tokens"] = estimated_input_tokens
-            meta["packet_witness_count"] = payload_witness_count
-            meta["packet_items_per_pool"] = payload_items_per_pool
-            meta["section_packets_included"] = section_packets_included
-            meta["payload_component_tokens"] = payload_packet.reasoning_payload_component_tokens(
-                compact_metric_ledger=True,
-                compact_aggregates=True,
-                include_contradiction_rows=include_contradiction_rows,
-                include_minority_signals=include_minority_signals,
-                include_section_packets=section_packets_included,
-            )
-            if decision.get("prior_as_of_date") is not None:
-                meta["prior_row_as_of_date"] = decision["prior_as_of_date"].isoformat()
-            if decision.get("prior_row_age_days") is not None:
-                meta["prior_row_age_days"] = int(decision["prior_row_age_days"])
-            synthesis = build_persistable_synthesis(synthesis, packet)
-            if payload_mode == "lean":
-                lean_mode_info = {
-                    "omitted": [
-                        k for k, v in [
-                            ("contradiction_rows", not include_contradiction_rows),
-                            ("minority_signals", not include_minority_signals),
-                            ("section_packets", not section_packets_included),
-                        ] if v
-                    ],
-                    "items_per_pool": payload_items_per_pool,
-                    "witness_count": payload_witness_count,
-                }
-                # Store in both meta (canonical) and top-level (quality gate reads it)
-                synthesis.setdefault("meta", {})["lean_mode"] = lean_mode_info
-                synthesis["_lean_mode"] = lean_mode_info
-            persisted_vresult = validate_synthesis(synthesis, packet, governance_blocking=True)
-            if not persisted_vresult.is_valid:
-                logger.warning(
-                    "Persisted reasoning synthesis for %s failed validation: %s",
-                    vendor_name, persisted_vresult.summary(),
-                )
-                from ..visibility import emit_event, record_synthesis_validation_results
-                await record_synthesis_validation_results(
-                    pool,
-                    vendor_name=vendor_name,
-                    as_of_date=today,
-                    analysis_window_days=window_days,
-                    schema_version=_SCHEMA_VERSION,
-                    run_id=run_id,
-                    attempt_no=attempt + 1,
-                    results=_validation_rows(persisted_vresult),
-                )
-                await emit_event(
-                    pool, stage="synthesis", event_type="validation_failure",
-                    entity_type="vendor", entity_id=vendor_name,
-                    summary=f"Synthesis validation failed: {persisted_vresult.summary()[:120]}",
-                    severity="error", actionable=True,
-                    artifact_type="reasoning_synthesis",
-                    run_id=run_id,
-                    reason_code="validation_blocked",
-                    detail={"errors": [str(e) for e in persisted_vresult.errors[:5]]},
-                )
-                failed_vendors.append({
-                    "vendor_name": vendor_name,
-                    "stage": "persisted_validation",
-                    "summary": persisted_vresult.summary(),
-                    "reasons": _validation_feedback(
-                        persisted_vresult, feedback_limit,
-                    ) or [persisted_vresult.summary()],
-                    "tokens_used": vendor_tokens,
-                    "attempts_used": max_attempts,
-                })
-                validation_failures += 1
-                failed += 1
-                return
-            if persisted_vresult.warnings:
-                from ..visibility import record_synthesis_validation_results
-                await record_synthesis_validation_results(
-                    pool,
-                    vendor_name=vendor_name,
-                    as_of_date=today,
-                    analysis_window_days=window_days,
-                    schema_version=_SCHEMA_VERSION,
-                    run_id=run_id,
-                    attempt_no=attempt + 1,
-                    results=_validation_rows(persisted_vresult),
-                )
-                synthesis["_validation_warnings"] = [
-                    {
-                        "path": w.path,
-                        "code": w.code,
-                        "message": w.message,
-                    }
-                    for w in persisted_vresult.warnings
-                ]
-                # Emit per-rule visibility events for queryable warning surface
-                from ..visibility import emit_event
-                for w in persisted_vresult.warnings[:10]:
-                    await emit_event(
-                        pool, stage="synthesis", event_type="validation_warning",
-                        entity_type="vendor", entity_id=vendor_name,
-                        summary=f"{w.code}: {w.message[:100]}",
-                        severity="warning",
-                        artifact_type="reasoning_synthesis",
-                        run_id=run_id,
-                        reason_code=w.code,
-                        rule_code=w.code,
-                        detail={"path": w.path, "message": w.message},
+                    logger.info(
+                        "Reasoning synthesis retrying %s (%d/%d): %s",
+                        vendor_name,
+                        attempt + 2,
+                        max_attempts,
+                        "; ".join(failure_reasons[:3]),
                     )
-            else:
-                from ..visibility import record_synthesis_validation_results
-                await record_synthesis_validation_results(
-                    pool,
-                    vendor_name=vendor_name,
-                    as_of_date=today,
-                    analysis_window_days=window_days,
-                    schema_version=_SCHEMA_VERSION,
-                    run_id=run_id,
-                    attempt_no=attempt + 1,
-                    results=_validation_rows(persisted_vresult),
-                )
-                synthesis.pop("_validation_warnings", None)
-            vresult = persisted_vresult
+                    if retry_delay > 0:
+                        await asyncio.sleep(retry_delay)
 
-            # Quality gate: reject or flag weak synthesis before persistence
-            quality_status, quality_reasons = _evaluate_synthesis_quality(synthesis)
-            synthesis["_quality_status"] = quality_status
-            synthesis["_quality_reasons"] = quality_reasons
+        assert synthesis is not None
+        assert last_validation is not None
+        vresult = last_validation
 
-            if quality_status == _QUALITY_STATUS_REJECTED:
-                logger.warning(
-                    "Synthesis quality gate REJECTED for %s: %s",
-                    vendor_name, ", ".join(quality_reasons),
-                )
-                failed_vendors.append({
-                    "vendor_name": vendor_name,
-                    "reason": "quality_gate_rejected",
-                    "quality_reasons": quality_reasons,
-                })
-                failed += 1
-                return
-
-            if quality_status == _QUALITY_STATUS_WEAK:
-                logger.info(
-                    "Synthesis quality gate WEAK for %s: %s",
-                    vendor_name, ", ".join(quality_reasons),
-                )
-
-            try:
-                await pool.execute(
-                    """
-                    INSERT INTO b2b_reasoning_synthesis
-                        (vendor_name, as_of_date, analysis_window_days,
-                         schema_version, evidence_hash, synthesis,
-                         tokens_used, llm_model)
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-                    ON CONFLICT (vendor_name, as_of_date,
-                                 analysis_window_days, schema_version)
-                    DO UPDATE SET
-                        evidence_hash = EXCLUDED.evidence_hash,
-                        synthesis = EXCLUDED.synthesis,
-                        tokens_used = EXCLUDED.tokens_used,
-                        llm_model = EXCLUDED.llm_model,
-                        created_at = NOW()
-                    """,
-                    vendor_name,
-                    today,
-                    window_days,
-                    _SCHEMA_VERSION,
-                    ev_hash,
-                    json.dumps(synthesis, default=str),
-                    vendor_tokens,
-                    getattr(llm, "model", getattr(llm, "model_id", "")),
-                )
-            except Exception as persist_exc:
-                logger.warning(
-                    "Reasoning synthesis failed for %s",
-                    vendor_name, exc_info=True,
-                )
-                failed_vendors.append({
-                    "vendor_name": vendor_name,
-                    "stage": "persist",
-                    "reasons": ["Failed to persist reasoning synthesis row"],
-                    "tokens_used": vendor_tokens,
-                    "attempts_used": max_attempts,
-                })
-                failed += 1
-                from ..visibility import emit_event, record_attempt
-                await record_attempt(
-                    pool, artifact_type="reasoning_synthesis",
-                    artifact_id=vendor_name,
-                    run_id=run_id, attempt_no=max_attempts,
-                    stage="persistence", status="failed",
-                    failure_step="persist",
-                    error_message=str(persist_exc)[:200],
-                )
+        if "meta" not in synthesis:
+            synthesis["meta"] = {}
+        meta = synthesis["meta"]
+        meta.setdefault("synthesized_at", datetime.now(timezone.utc).isoformat())
+        total_items = sum(len(items) for items in packet.pools.values())
+        meta.setdefault("total_evidence_items", total_items)
+        meta["rerun_reason"] = decision["reason"]
+        meta["payload_mode"] = payload_mode
+        meta["estimated_input_tokens"] = estimated_input_tokens
+        meta["packet_witness_count"] = payload_witness_count
+        meta["packet_items_per_pool"] = payload_items_per_pool
+        meta["section_packets_included"] = section_packets_included
+        meta["payload_component_tokens"] = payload_packet.reasoning_payload_component_tokens(
+            compact_metric_ledger=True,
+            compact_aggregates=True,
+            include_contradiction_rows=include_contradiction_rows,
+            include_minority_signals=include_minority_signals,
+            include_section_packets=section_packets_included,
+        )
+        if decision.get("prior_as_of_date") is not None:
+            meta["prior_row_as_of_date"] = decision["prior_as_of_date"].isoformat()
+        if decision.get("prior_row_age_days") is not None:
+            meta["prior_row_age_days"] = int(decision["prior_row_age_days"])
+        synthesis = build_persistable_synthesis(synthesis, packet)
+        latest_row = latest_rows.get(vendor_name) or {}
+        prior_synthesis = latest_row.get("synthesis")
+        if not isinstance(prior_synthesis, dict):
+            prior_synthesis = None
+        synthesis["reasoning_delta"] = build_reasoning_delta(
+            synthesis,
+            prior_synthesis,
+            current_as_of_date=today.isoformat(),
+            previous_as_of_date=(
+                decision["prior_as_of_date"].isoformat()
+                if decision.get("prior_as_of_date") is not None
+                else ""
+            ),
+        )
+        if payload_mode == "lean":
+            lean_mode_info = {
+                "omitted": [
+                    key for key, omitted in [
+                        ("contradiction_rows", not include_contradiction_rows),
+                        ("minority_signals", not include_minority_signals),
+                        ("section_packets", not section_packets_included),
+                    ] if omitted
+                ],
+                "items_per_pool": payload_items_per_pool,
+                "witness_count": payload_witness_count,
+            }
+            synthesis.setdefault("meta", {})["lean_mode"] = lean_mode_info
+            synthesis["_lean_mode"] = lean_mode_info
+        persisted_vresult = validate_synthesis(synthesis, packet, governance_blocking=True)
+        if not persisted_vresult.is_valid:
+            logger.warning(
+                "Persisted reasoning synthesis for %s failed validation: %s",
+                vendor_name, persisted_vresult.summary(),
+            )
+            from ..visibility import emit_event, record_synthesis_validation_results
+            await record_synthesis_validation_results(
+                pool,
+                vendor_name=vendor_name,
+                as_of_date=today,
+                analysis_window_days=window_days,
+                schema_version=_SCHEMA_VERSION,
+                run_id=run_id,
+                attempt_no=max(1, attempt_no_used),
+                results=_validation_rows(persisted_vresult),
+            )
+            await emit_event(
+                pool, stage="synthesis", event_type="validation_failure",
+                entity_type="vendor", entity_id=vendor_name,
+                summary=f"Synthesis validation failed: {persisted_vresult.summary()[:120]}",
+                severity="error", actionable=True,
+                artifact_type="reasoning_synthesis",
+                run_id=run_id,
+                reason_code="validation_blocked",
+                detail={"errors": [str(e) for e in persisted_vresult.errors[:5]]},
+            )
+            failed_vendors.append({
+                "vendor_name": vendor_name,
+                "stage": "persisted_validation",
+                "summary": persisted_vresult.summary(),
+                "reasons": _validation_feedback(
+                    persisted_vresult, feedback_limit,
+                ) or [persisted_vresult.summary()],
+                "tokens_used": vendor_tokens,
+                "attempts_used": max(1, attempt_no_used),
+            })
+            validation_failures += 1
+            failed += 1
+            return {
+                "succeeded": False,
+                "used_fallback_single_call": used_fallback_single_call,
+                "error_text": persisted_vresult.summary(),
+                "fallback_usage": fallback_usage,
+            }
+        if persisted_vresult.warnings:
+            from ..visibility import emit_event, record_synthesis_validation_results
+            await record_synthesis_validation_results(
+                pool,
+                vendor_name=vendor_name,
+                as_of_date=today,
+                analysis_window_days=window_days,
+                schema_version=_SCHEMA_VERSION,
+                run_id=run_id,
+                attempt_no=max(1, attempt_no_used),
+                results=_validation_rows(persisted_vresult),
+            )
+            synthesis["_validation_warnings"] = [
+                {
+                    "path": w.path,
+                    "code": w.code,
+                    "message": w.message,
+                }
+                for w in persisted_vresult.warnings
+            ]
+            for w in persisted_vresult.warnings[:10]:
                 await emit_event(
-                    pool, stage="synthesis", event_type="persistence_failure",
+                    pool, stage="synthesis", event_type="validation_warning",
                     entity_type="vendor", entity_id=vendor_name,
-                    summary=f"Failed to persist synthesis for {vendor_name}: {persist_exc}",
-                    severity="error", actionable=True,
+                    summary=f"{w.code}: {w.message[:100]}",
+                    severity="warning",
                     artifact_type="reasoning_synthesis",
                     run_id=run_id,
-                    reason_code="persistence_exception",
+                    reason_code=w.code,
+                    rule_code=w.code,
+                    detail={"path": w.path, "message": w.message},
                 )
-                return
+        else:
+            from ..visibility import record_synthesis_validation_results
+            await record_synthesis_validation_results(
+                pool,
+                vendor_name=vendor_name,
+                as_of_date=today,
+                analysis_window_days=window_days,
+                schema_version=_SCHEMA_VERSION,
+                run_id=run_id,
+                attempt_no=max(1, attempt_no_used),
+                results=_validation_rows(persisted_vresult),
+            )
+            synthesis.pop("_validation_warnings", None)
+        vresult = persisted_vresult
 
-            succeeded += 1
-            from ..visibility import record_attempt as _rec_ok
-            await _rec_ok(
+        quality_status, quality_reasons = _evaluate_synthesis_quality(synthesis)
+        synthesis["_quality_status"] = quality_status
+        synthesis["_quality_reasons"] = quality_reasons
+
+        if quality_status == _QUALITY_STATUS_REJECTED:
+            logger.warning(
+                "Synthesis quality gate REJECTED for %s: %s",
+                vendor_name, ", ".join(quality_reasons),
+            )
+            failed_vendors.append({
+                "vendor_name": vendor_name,
+                "reason": "quality_gate_rejected",
+                "quality_reasons": quality_reasons,
+            })
+            failed += 1
+            return {
+                "succeeded": False,
+                "used_fallback_single_call": used_fallback_single_call,
+                "error_text": "quality_gate_rejected",
+                "fallback_usage": fallback_usage,
+            }
+
+        if quality_status == _QUALITY_STATUS_WEAK:
+            logger.info(
+                "Synthesis quality gate WEAK for %s: %s",
+                vendor_name, ", ".join(quality_reasons),
+            )
+
+        try:
+            await pool.execute(
+                """
+                INSERT INTO b2b_reasoning_synthesis
+                    (vendor_name, as_of_date, analysis_window_days,
+                     schema_version, evidence_hash, synthesis,
+                     tokens_used, llm_model)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+                ON CONFLICT (vendor_name, as_of_date,
+                             analysis_window_days, schema_version)
+                DO UPDATE SET
+                    evidence_hash = EXCLUDED.evidence_hash,
+                    synthesis = EXCLUDED.synthesis,
+                    tokens_used = EXCLUDED.tokens_used,
+                    llm_model = EXCLUDED.llm_model,
+                    created_at = NOW()
+                """,
+                vendor_name,
+                today,
+                window_days,
+                _SCHEMA_VERSION,
+                ev_hash,
+                json.dumps(synthesis, default=str),
+                vendor_tokens,
+                getattr(vendor_generation_llm, "model", getattr(vendor_generation_llm, "model_id", "")),
+            )
+        except Exception as persist_exc:
+            logger.warning(
+                "Reasoning synthesis failed for %s",
+                vendor_name, exc_info=True,
+            )
+            failed_vendors.append({
+                "vendor_name": vendor_name,
+                "stage": "persist",
+                "reasons": ["Failed to persist reasoning synthesis row"],
+                "tokens_used": vendor_tokens,
+                "attempts_used": max(1, attempt_no_used),
+            })
+            failed += 1
+            from ..visibility import emit_event, record_attempt
+            await record_attempt(
                 pool, artifact_type="reasoning_synthesis",
                 artifact_id=vendor_name,
-                run_id=run_id, attempt_no=attempt + 1,
-                stage="complete", status="succeeded",
-                warning_count=len(vresult.warnings),
+                run_id=run_id, attempt_no=max(1, attempt_no_used),
+                stage="persistence", status="failed",
+                failure_step="persist",
+                error_message=str(persist_exc)[:200],
             )
-            logger.info(
-                "Reasoning synthesis v2: %s (%d tokens, %d warnings)",
-                vendor_name, vendor_tokens, len(vresult.warnings),
+            await emit_event(
+                pool, stage="synthesis", event_type="persistence_failure",
+                entity_type="vendor", entity_id=vendor_name,
+                summary=f"Failed to persist synthesis for {vendor_name}: {persist_exc}",
+                severity="error", actionable=True,
+                artifact_type="reasoning_synthesis",
+                run_id=run_id,
+                reason_code="persistence_exception",
             )
+            return {
+                "succeeded": False,
+                "used_fallback_single_call": used_fallback_single_call,
+                "error_text": "persist_failure",
+                "fallback_usage": fallback_usage,
+            }
 
-    await asyncio.gather(*[
-        _reason_one(vn, layers, eh, decision)
-        for vn, layers, eh, decision in vendors_to_reason
-    ])
+        succeeded += 1
+        from ..visibility import record_attempt as _rec_ok
+        await _rec_ok(
+            pool, artifact_type="reasoning_synthesis",
+            artifact_id=vendor_name,
+            run_id=run_id, attempt_no=max(1, attempt_no_used),
+            stage="complete", status="succeeded",
+            warning_count=len(vresult.warnings),
+        )
+        logger.info(
+            "Reasoning synthesis v2: %s (%d tokens, %d warnings)",
+            vendor_name, vendor_tokens, len(vresult.warnings),
+        )
+        return {
+            "succeeded": True,
+            "used_fallback_single_call": used_fallback_single_call,
+            "error_text": None,
+            "fallback_usage": fallback_usage,
+        }
+
+    async def _reason_one(
+        vendor_name: str, layers: dict, ev_hash: str, decision: dict[str, Any],
+    ) -> None:
+        entry = await _prepare_vendor_reasoning_entry(vendor_name, layers, ev_hash, decision)
+        if entry is None:
+            return
+        await _reason_one_prepared(entry)
+
+    if vendor_batch_enabled and vendors_to_reason:
+        vendor_entries = [
+            entry
+            for entry in await asyncio.gather(*[
+                _prepare_vendor_reasoning_entry(vn, layers, eh, decision)
+                for vn, layers, eh, decision in vendors_to_reason
+            ])
+            if entry is not None
+        ]
+        if vendor_entries:
+            execution = await run_anthropic_message_batch(
+                llm=batch_llm,
+                stage_id="b2b_reasoning_synthesis.vendor",
+                task_name="b2b_reasoning_synthesis",
+                items=[
+                    AnthropicBatchItem(
+                        custom_id=entry["custom_id"],
+                        artifact_type="reasoning_synthesis",
+                        artifact_id=entry["vendor_name"],
+                        vendor_name=entry["vendor_name"],
+                        messages=[
+                            Message(role="system", content=REASONING_SYNTHESIS_PROMPT),
+                            Message(role="user", content=entry["payload"]),
+                        ],
+                        max_tokens=llm_max_tokens,
+                        temperature=llm_temperature,
+                        trace_span_name="task.b2b_reasoning_synthesis",
+                        trace_metadata={
+                            "run_id": run_id,
+                            "vendor_name": entry["vendor_name"],
+                            "reasoning_mode": "vendor_synthesis",
+                            "attempt_no": 1,
+                            "schema_version": _SCHEMA_VERSION,
+                            "rerun_reason": entry["decision"]["reason"],
+                            "payload_mode": entry["payload_mode"],
+                            "estimated_input_tokens": entry["estimated_input_tokens"],
+                            "prior_row_age_days": entry["decision"].get("prior_row_age_days"),
+                            "prior_row_as_of_date": (
+                                entry["decision"]["prior_as_of_date"].isoformat()
+                                if entry["decision"].get("prior_as_of_date") is not None
+                                else None
+                            ),
+                            "hash_changed": bool(entry["decision"].get("hash_changed")),
+                            "forced": entry["decision"]["reason"] == "forced",
+                            "workload": "anthropic_batch",
+                        },
+                        request_metadata={
+                            "reasoning_mode": "vendor_synthesis",
+                            "schema_version": _SCHEMA_VERSION,
+                        },
+                    )
+                    for entry in vendor_entries
+                ],
+                run_id=run_id,
+                min_batch_size=int(getattr(cfg, "reasoning_synthesis_anthropic_batch_min_items", 2)),
+                batch_metadata={"reasoning_mode": "vendor_synthesis"},
+                pool=pool,
+            )
+            vendor_batch_metrics["jobs"] += 1 if execution.provider_batch_id else 0
+            vendor_batch_metrics["submitted_items"] += execution.submitted_items
+            vendor_batch_metrics["cache_prefiltered_items"] += execution.cache_prefiltered_items
+            vendor_batch_metrics["fallback_single_call_items"] += execution.fallback_single_call_items
+            vendor_batch_metrics["completed_items"] += execution.completed_items
+            vendor_batch_metrics["failed_items"] += execution.failed_items
+
+            for entry in vendor_entries:
+                outcome = execution.results_by_custom_id.get(entry["custom_id"])
+                result = await _reason_one_prepared(
+                    entry,
+                    initial_response_text=outcome.response_text if outcome and outcome.response_text else None,
+                    initial_usage=outcome.usage if outcome is not None else None,
+                    batch_origin=True,
+                    initial_attempt_consumed=bool(outcome and outcome.response_text),
+                )
+                if result["used_fallback_single_call"]:
+                    await mark_batch_fallback_result(
+                        batch_id=execution.local_batch_id,
+                        custom_id=entry["custom_id"],
+                        succeeded=bool(result["succeeded"]),
+                        error_text=(
+                            outcome.error_text
+                            if outcome is not None and outcome.error_text and not result["succeeded"]
+                            else result["error_text"]
+                        ),
+                        usage=result.get("fallback_usage"),
+                        provider=str((result.get("fallback_usage") or {}).get("provider") or "") or None,
+                        model=str((result.get("fallback_usage") or {}).get("model") or "") or None,
+                        provider_request_id=(
+                            str((result.get("fallback_usage") or {}).get("provider_request_id") or "") or None
+                        ),
+                        pool=pool,
+                    )
+    else:
+        await asyncio.gather(*[
+            _reason_one(vn, layers, eh, decision)
+            for vn, layers, eh, decision in vendors_to_reason
+        ])
 
     vendor_elapsed = round(time.monotonic() - t0, 1)
     logger.info(
@@ -2145,12 +2417,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             xv_succeeded, xv_failed, xv_tokens, xv_mirrored, xv_rejected_input_budget = await _run_cross_vendor_synthesis(
                 pool=pool,
                 vendor_pools=vendor_pools,
-                llm=llm,
+                llm=cross_vendor_generation_llm,
                 cfg=cfg,
                 today=today,
                 window_days=window_days,
                 run_id=run_id,
                 force=force_cross_vendor,
+                batch_llm=batch_llm if cross_vendor_batch_enabled else None,
+                batch_metrics=cross_vendor_batch_metrics,
                 scope_pairwise_pairs=scoped_pairwise_pairs_for_run,
                 scope_category_names=scoped_category_names_for_run,
                 scope_asymmetry_pairs=scoped_asymmetry_pairs_for_run,
@@ -2187,6 +2461,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "vendors_forced": rerun_reason_counts["forced"],
         "vendors_payload_mode_full": payload_mode_full,
         "vendors_payload_mode_lean": payload_mode_lean,
+        "vendor_batch_jobs": vendor_batch_metrics["jobs"],
+        "vendor_batch_items_submitted": vendor_batch_metrics["submitted_items"],
+        "vendor_batch_cache_prefiltered": vendor_batch_metrics["cache_prefiltered_items"],
+        "vendor_batch_fallback_single_call": vendor_batch_metrics["fallback_single_call_items"],
+        "vendor_batch_completed_items": vendor_batch_metrics["completed_items"],
+        "vendor_batch_failed_items": vendor_batch_metrics["failed_items"],
         "changed_vendors_only": changed_vendors_only,
         "total_tokens": total_tokens,
         "elapsed_seconds": elapsed,
@@ -2197,6 +2477,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "cross_vendor_failed": xv_failed,
         "cross_vendor_tokens": xv_tokens,
         "cross_vendor_mirrored": xv_mirrored,
+        "cross_vendor_batch_jobs": cross_vendor_batch_metrics["jobs"],
+        "cross_vendor_batch_items_submitted": cross_vendor_batch_metrics["submitted_items"],
+        "cross_vendor_batch_cache_prefiltered": cross_vendor_batch_metrics["cache_prefiltered_items"],
+        "cross_vendor_batch_fallback_single_call": cross_vendor_batch_metrics["fallback_single_call_items"],
+        "cross_vendor_batch_completed_items": cross_vendor_batch_metrics["completed_items"],
+        "cross_vendor_batch_failed_items": cross_vendor_batch_metrics["failed_items"],
         "cross_vendor_scoped_pairwise_jobs": len(scoped_pairwise_pairs_for_run),
         "cross_vendor_scoped_category_jobs": len(scoped_category_names_for_run),
         "cross_vendor_scoped_asymmetry_jobs": len(scoped_asymmetry_pairs_for_run),
@@ -2220,10 +2506,12 @@ async def _run_cross_vendor_synthesis(
     window_days: int,
     run_id: str | None = None,
     force: bool = False,
+    batch_llm: Any | None = None,
+    batch_metrics: dict[str, int] | None = None,
     scope_pairwise_pairs: list[tuple[str, str]] | None = None,
     scope_category_names: list[str] | None = None,
     scope_asymmetry_pairs: list[tuple[str, str]] | None = None,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     """Run cross-vendor synthesis: battles, councils, asymmetry.
 
     Returns (succeeded, failed, tokens_used, mirrored_to_legacy, input_budget_rejections).
@@ -2243,6 +2531,11 @@ async def _run_cross_vendor_synthesis(
     )
     from ...reasoning.single_pass_prompts.resource_asymmetry_synthesis import (
         RESOURCE_ASYMMETRY_SYNTHESIS_PROMPT,
+    )
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
     )
     from ...services.protocols import Message
     from ._b2b_cross_vendor_synthesis import (
@@ -2649,7 +2942,7 @@ async def _run_cross_vendor_synthesis(
 
     if not work_items:
         logger.info("No cross-vendor synthesis targets selected")
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0
 
     # --- Check existing hashes to skip unchanged ---
     existing_xv = await pool.fetch(
@@ -2697,348 +2990,526 @@ async def _run_cross_vendor_synthesis(
     _mirrored = 0
     _input_budget_rejections = 0
     llm_model_name = getattr(llm, "model", getattr(llm, "model_id", ""))
+    if batch_metrics is None:
+        batch_metrics = {
+            "jobs": 0,
+            "submitted_items": 0,
+            "cache_prefiltered_items": 0,
+            "fallback_single_call_items": 0,
+            "completed_items": 0,
+            "failed_items": 0,
+        }
 
-    async def _xv_one(
+    async def _prepare_xv_entry(
         analysis_type: str,
         prompt: str,
         vendors: list[str],
         category: str | None,
         packet: dict[str, Any],
-    ) -> None:
-        nonlocal _succeeded, _failed, _tokens, _mirrored, _input_budget_rejections
+    ) -> dict[str, Any] | None:
+        nonlocal _failed, _input_budget_rejections
 
         ev_hash = compute_cross_vendor_evidence_hash(packet)
         v_key = "|".join(sorted(vendors))
         cache_key = f"{analysis_type}:{v_key}:{category or ''}"
         artifact_id = _cross_vendor_artifact_id(analysis_type, vendors, category)
         if not force and existing_xv_hashes.get(cache_key) == ev_hash:
-            return  # unchanged
+            return None
 
-        async with xv_sem:
-            payload = json.dumps(
-                prompt_compact_cross_vendor_packet(packet),
-                separators=(",", ":"),
-                sort_keys=True,
-                default=str,
+        payload = json.dumps(
+            prompt_compact_cross_vendor_packet(packet),
+            separators=(",", ":"),
+            sort_keys=True,
+            default=str,
+        )
+        estimated_input_tokens = _approx_prompt_input_tokens(prompt, payload)
+        if estimated_input_tokens > xv_llm_max_input_tokens:
+            _failed += 1
+            _input_budget_rejections += 1
+            logger.warning(
+                "Cross-vendor synthesis rejected for %s %s: estimated input %d exceeds cap %d",
+                analysis_type,
+                vendors,
+                estimated_input_tokens,
+                xv_llm_max_input_tokens,
             )
-            estimated_input_tokens = _approx_prompt_input_tokens(prompt, payload)
-            if estimated_input_tokens > xv_llm_max_input_tokens:
-                _failed += 1
-                _input_budget_rejections += 1
-                logger.warning(
-                    "Cross-vendor synthesis rejected for %s %s: estimated input %d exceeds cap %d",
-                    analysis_type,
-                    vendors,
-                    estimated_input_tokens,
-                    xv_llm_max_input_tokens,
-                )
-                await record_attempt(
-                    pool,
-                    artifact_type="cross_vendor_reasoning",
-                    artifact_id=artifact_id,
-                    run_id=run_id,
-                    attempt_no=1,
-                    stage="generation",
-                    status="rejected",
-                    blocker_count=1,
-                    blocking_issues=[
-                        (
-                            "input token budget exceeded: "
-                            f"estimated_input_tokens={estimated_input_tokens}, "
-                            f"cap={xv_llm_max_input_tokens}"
-                        ),
-                    ],
-                    failure_step="input_budget",
-                    error_message=(
-                        "Cross-vendor prompt exceeded the configured input token cap"
-                    ),
-                )
-                await emit_event(
-                    pool,
-                    stage="synthesis",
-                    event_type="input_budget_rejected",
-                    entity_type="cross_vendor",
-                    entity_id=artifact_id,
-                    summary=(
-                        "Cross-vendor reasoning prompt exceeded the configured input token cap"
-                    ),
-                    severity="warning",
-                    actionable=True,
-                    artifact_type="cross_vendor_reasoning",
-                    run_id=run_id,
-                    reason_code="input_budget",
-                    detail={
-                        "estimated_input_tokens": estimated_input_tokens,
-                        "cap": xv_llm_max_input_tokens,
-                        "analysis_type": analysis_type,
-                        "vendors": vendors,
-                        "category": category,
-                    },
-                )
-                return
-            synthesis: dict[str, Any] | None = None
-            item_tokens = 0
-            last_failure_reasons: list[str] = []
-            last_failure_step = "llm_response"
-            terminal_attempt_recorded = False
-            attempt_no = 1
-
-            for attempt in range(xv_max_attempts):
-                attempt_no = attempt + 1
-                messages = [
-                    Message(role="system", content=prompt),
-                    Message(role="user", content=payload),
-                ]
-                try:
-                    call_started = time.monotonic()
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            llm.chat,
-                            messages=messages,
-                            max_tokens=xv_llm_max_tokens,
-                            temperature=xv_llm_temperature,
-                            response_format={"type": "json_object"},
-                        ),
-                        timeout=xv_llm_timeout_seconds,
-                    )
-                    _trace_reasoning_result(
-                        "task.b2b_reasoning_synthesis.cross_vendor",
-                        llm=llm,
-                        messages=messages,
-                        result=result,
-                        metadata={
-                            "run_id": run_id,
-                            "reasoning_mode": "cross_vendor",
-                            "analysis_type": analysis_type,
-                            "vendor_name": vendors[0] if len(vendors) == 1 else None,
-                            "vendors": vendors,
-                            "artifact_id": artifact_id,
-                            "attempt_no": attempt + 1,
-                        },
-                        duration_ms=(time.monotonic() - call_started) * 1000,
-                    )
-                    text = result.get("response", "").strip()
-                    usage = result.get("usage", {})
-                    tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-                    item_tokens += tokens
-                    _tokens += tokens
-
-                    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-                    parsed = parse_json_response(text, recover_truncated=True)
-                    if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-                        synthesis = normalize_cross_vendor_contract(parsed, analysis_type)
-                        synthesis = materialize_cross_vendor_reference_ids(
-                            synthesis, packet,
-                        )
-                        break
-                    last_failure_reasons = ["LLM did not return valid JSON object"]
-                    last_failure_step = "llm_response"
-                except asyncio.TimeoutError:
-                    last_failure_reasons = [
-                        "TimeoutError: cross-vendor reasoning LLM call exceeded "
-                        f"{xv_llm_timeout_seconds:.1f}s",
-                    ]
-                    last_failure_step = "timeout"
-                    if attempt + 1 >= xv_max_attempts:
-                        logger.warning(
-                            "Cross-vendor synthesis timed out: %s %s after %.1fs",
-                            analysis_type,
-                            vendors,
-                            xv_llm_timeout_seconds,
-                        )
-                        terminal_attempt_recorded = True
-                        await record_attempt(
-                            pool,
-                            artifact_type="cross_vendor_reasoning",
-                            artifact_id=artifact_id,
-                            run_id=run_id,
-                            attempt_no=attempt_no,
-                            stage="llm_call",
-                            status="failed",
-                            failure_step="timeout",
-                            error_message=(
-                                f"LLM call exceeded {xv_llm_timeout_seconds:.1f}s"
-                            ),
-                        )
-                except Exception:
-                    last_failure_reasons = [
-                        "Cross-vendor reasoning LLM call raised an exception",
-                    ]
-                    last_failure_step = "llm_exception"
-                    if attempt + 1 >= xv_max_attempts:
-                        logger.warning(
-                            "Cross-vendor synthesis failed: %s %s",
-                            analysis_type, vendors, exc_info=True,
-                        )
-                        terminal_attempt_recorded = True
-                        await record_attempt(
-                            pool,
-                            artifact_type="cross_vendor_reasoning",
-                            artifact_id=artifact_id,
-                            run_id=run_id,
-                            attempt_no=attempt_no,
-                            stage="llm_call",
-                            status="failed",
-                            failure_step="llm_exception",
-                            error_message=last_failure_reasons[0],
-                        )
-
-            if synthesis is None:
-                _failed += 1
-                if not terminal_attempt_recorded:
-                    await record_attempt(
-                        pool,
-                        artifact_type="cross_vendor_reasoning",
-                        artifact_id=artifact_id,
-                        run_id=run_id,
-                        attempt_no=attempt_no,
-                        stage="generation",
-                        status="rejected",
-                        blocker_count=len(last_failure_reasons),
-                        blocking_issues=last_failure_reasons[:5],
-                        failure_step=last_failure_step,
-                        error_message="; ".join(last_failure_reasons[:2])[:200],
-                    )
-                return
-
-            # Persist to canonical table (upsert -- reruns update with fresh synthesis).
-            # Uses ON CONFLICT on the named partial unique index so PostgreSQL
-            # matches the correct predicate automatically.
-            try:
-                if analysis_type == "category_council":
-                    await pool.execute(
-                        """
-                        INSERT INTO b2b_cross_vendor_reasoning_synthesis
-                            (analysis_type, vendors, category, as_of_date,
-                             analysis_window_days, schema_version, evidence_hash,
-                             synthesis, tokens_used, llm_model)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-                        ON CONFLICT (analysis_type, category, as_of_date,
-                                     analysis_window_days, schema_version)
-                            WHERE analysis_type = 'category_council'
-                        DO UPDATE SET
-                            evidence_hash = EXCLUDED.evidence_hash,
-                            synthesis = EXCLUDED.synthesis,
-                            tokens_used = EXCLUDED.tokens_used,
-                            llm_model = EXCLUDED.llm_model,
-                            vendors = EXCLUDED.vendors,
-                            created_at = NOW()
-                        """,
-                        analysis_type, vendors, category, today,
-                        window_days, _XV_SCHEMA_VERSION, ev_hash,
-                        json.dumps(synthesis, default=str),
-                        item_tokens, llm_model_name,
-                    )
-                else:
-                    await pool.execute(
-                        """
-                        INSERT INTO b2b_cross_vendor_reasoning_synthesis
-                            (analysis_type, vendors, category, as_of_date,
-                             analysis_window_days, schema_version, evidence_hash,
-                             synthesis, tokens_used, llm_model)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-                        ON CONFLICT (analysis_type, vendors, as_of_date,
-                                     analysis_window_days, schema_version)
-                            WHERE analysis_type IN ('pairwise_battle', 'resource_asymmetry')
-                        DO UPDATE SET
-                            evidence_hash = EXCLUDED.evidence_hash,
-                            synthesis = EXCLUDED.synthesis,
-                            tokens_used = EXCLUDED.tokens_used,
-                            llm_model = EXCLUDED.llm_model,
-                            category = EXCLUDED.category,
-                            created_at = NOW()
-                        """,
-                        analysis_type, vendors, category, today,
-                        window_days, _XV_SCHEMA_VERSION, ev_hash,
-                        json.dumps(synthesis, default=str),
-                        item_tokens, llm_model_name,
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to persist xv synthesis: %s %s",
-                    analysis_type, vendors, exc_info=True,
-                )
-                _failed += 1
-                await record_attempt(
-                    pool,
-                    artifact_type="cross_vendor_reasoning",
-                    artifact_id=artifact_id,
-                    run_id=run_id,
-                    attempt_no=attempt_no,
-                    stage="persistence",
-                    status="failed",
-                    failure_step="persist",
-                    error_message="Failed to persist cross-vendor synthesis row",
-                )
-                return
-
-            # Mirror into legacy b2b_cross_vendor_conclusions (idempotent: delete-then-insert)
-            try:
-                legacy = to_legacy_cross_vendor_conclusion(
-                    synthesis, analysis_type, vendors,
-                    category=category,
-                    evidence_hash=ev_hash,
-                    tokens_used=item_tokens,
-                )
-                # Delete any existing synthesis-produced mirror row for this
-                # (type, vendors, date) combo, then insert fresh.  The legacy
-                # table has no unique constraint, so upsert is not possible.
-                await pool.execute(
-                    """
-                    DELETE FROM b2b_cross_vendor_conclusions
-                    WHERE analysis_type = $1
-                      AND vendors = $2::text[]
-                      AND computed_date = $3
-                      AND evidence_hash LIKE 'synth_%'
-                    """,
-                    analysis_type,
-                    vendors,
-                    today,
-                )
-                await pool.execute(
-                    """
-                    INSERT INTO b2b_cross_vendor_conclusions
-                        (analysis_type, vendors, category, conclusion,
-                         confidence, evidence_hash, tokens_used, cached,
-                         computed_date)
-                    VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
-                    """,
-                    legacy["analysis_type"],
-                    legacy["vendors"],
-                    legacy["category"],
-                    json.dumps(legacy["conclusion"], default=str),
-                    legacy["confidence"],
-                    f"synth_{ev_hash}",
-                    legacy["tokens_used"],
-                    legacy["cached"],
-                    today,
-                )
-                _mirrored += 1
-            except Exception:
-                logger.debug(
-                    "Legacy mirror failed for %s %s", analysis_type, vendors,
-                    exc_info=True,
-                )
-
-            _succeeded += 1
             await record_attempt(
                 pool,
                 artifact_type="cross_vendor_reasoning",
                 artifact_id=artifact_id,
                 run_id=run_id,
-                attempt_no=attempt_no,
-                stage="complete",
-                status="succeeded",
+                attempt_no=1,
+                stage="generation",
+                status="rejected",
+                blocker_count=1,
+                blocking_issues=[
+                    (
+                        "input token budget exceeded: "
+                        f"estimated_input_tokens={estimated_input_tokens}, "
+                        f"cap={xv_llm_max_input_tokens}"
+                    ),
+                ],
+                failure_step="input_budget",
+                error_message="Cross-vendor prompt exceeded the configured input token cap",
             )
-            logger.info(
-                "Cross-vendor synthesis: %s %s (%d tokens)",
-                analysis_type, vendors, item_tokens,
+            await emit_event(
+                pool,
+                stage="synthesis",
+                event_type="input_budget_rejected",
+                entity_type="cross_vendor",
+                entity_id=artifact_id,
+                summary="Cross-vendor reasoning prompt exceeded the configured input token cap",
+                severity="warning",
+                actionable=True,
+                artifact_type="cross_vendor_reasoning",
+                run_id=run_id,
+                reason_code="input_budget",
+                detail={
+                    "estimated_input_tokens": estimated_input_tokens,
+                    "cap": xv_llm_max_input_tokens,
+                    "analysis_type": analysis_type,
+                    "vendors": vendors,
+                    "category": category,
+                },
+            )
+            return None
+        return {
+            "analysis_type": analysis_type,
+            "prompt": prompt,
+            "vendors": vendors,
+            "category": category,
+            "packet": packet,
+            "payload": payload,
+            "artifact_id": artifact_id,
+            "evidence_hash": ev_hash,
+            "estimated_input_tokens": estimated_input_tokens,
+            "custom_id": f"xv:{artifact_id}",
+        }
+
+    async def _run_xv_entry(
+        entry: dict[str, Any],
+        *,
+        initial_response_text: str | None = None,
+        initial_usage: dict[str, Any] | None = None,
+        batch_origin: bool = False,
+        initial_attempt_consumed: bool = False,
+    ) -> dict[str, Any]:
+        nonlocal _succeeded, _failed, _tokens, _mirrored
+
+        analysis_type = str(entry["analysis_type"])
+        prompt = str(entry["prompt"])
+        vendors = list(entry["vendors"])
+        category = entry["category"]
+        packet = entry["packet"]
+        payload = str(entry["payload"])
+        artifact_id = str(entry["artifact_id"])
+        ev_hash = str(entry["evidence_hash"])
+
+        synthesis: dict[str, Any] | None = None
+        item_tokens = 0
+        last_failure_reasons: list[str] = []
+        last_failure_step = "llm_response"
+        terminal_attempt_recorded = False
+        attempt_no = 0
+        used_fallback_single_call = False
+        fallback_usage: dict[str, Any] = {}
+
+        def _accumulate_fallback_usage(result: dict[str, Any]) -> None:
+            usage = result.get("usage", {}) if isinstance(result, dict) else {}
+            trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
+            fallback_usage["input_tokens"] = int(fallback_usage.get("input_tokens") or 0) + int((usage or {}).get("input_tokens") or 0)
+            fallback_usage["billable_input_tokens"] = int(fallback_usage.get("billable_input_tokens") or 0) + int(
+                (trace_meta or {}).get("billable_input_tokens")
+                if (trace_meta or {}).get("billable_input_tokens") is not None
+                else (usage or {}).get("input_tokens") or 0
+            )
+            fallback_usage["cached_tokens"] = int(fallback_usage.get("cached_tokens") or 0) + int(
+                (trace_meta or {}).get("cached_tokens")
+                or (trace_meta or {}).get("cache_read_tokens")
+                or 0
+            )
+            fallback_usage["cache_write_tokens"] = int(fallback_usage.get("cache_write_tokens") or 0) + int(
+                (trace_meta or {}).get("cache_write_tokens")
+                or (trace_meta or {}).get("cache_creation_tokens")
+                or 0
+            )
+            fallback_usage["output_tokens"] = int(fallback_usage.get("output_tokens") or 0) + int((usage or {}).get("output_tokens") or 0)
+            fallback_usage["provider"] = str(getattr(llm, "name", "") or "")
+            fallback_usage["model"] = str(getattr(llm, "model", "") or getattr(llm, "model_id", "") or "")
+            if (trace_meta or {}).get("provider_request_id"):
+                fallback_usage["provider_request_id"] = str((trace_meta or {}).get("provider_request_id") or "")
+
+        async def _consume_response_text(text: str, *, tokens: int) -> None:
+            nonlocal synthesis, item_tokens, _tokens, last_failure_reasons, last_failure_step
+            item_tokens += tokens
+            _tokens += tokens
+            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+            parsed = parse_json_response(text, recover_truncated=True)
+            if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                synthesis = normalize_cross_vendor_contract(parsed, analysis_type)
+                synthesis = materialize_cross_vendor_reference_ids(synthesis, packet)
+                return
+            synthesis = None
+            last_failure_reasons = ["LLM did not return valid JSON object"]
+            last_failure_step = "llm_response"
+
+        if initial_response_text is not None:
+            attempt_no = 1
+            usage = dict(initial_usage or {})
+            await _consume_response_text(
+                initial_response_text,
+                tokens=int(usage.get("input_tokens", 0) or 0)
+                + int(usage.get("output_tokens", 0) or 0),
             )
 
-    await asyncio.gather(*[
-        _xv_one(at, prompt, vendors, cat, packet)
-        for at, prompt, vendors, cat, packet in work_items
-    ])
+        if synthesis is None:
+            if batch_origin:
+                used_fallback_single_call = True
+            loop_start = 1 if initial_attempt_consumed else 0
+            async with xv_sem:
+                for attempt in range(loop_start, xv_max_attempts):
+                    attempt_no = attempt + 1
+                    messages = [
+                        Message(role="system", content=prompt),
+                        Message(role="user", content=payload),
+                    ]
+                    try:
+                        call_started = time.monotonic()
+                        result = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                llm.chat,
+                                messages=messages,
+                                max_tokens=xv_llm_max_tokens,
+                                temperature=xv_llm_temperature,
+                                response_format={"type": "json_object"},
+                            ),
+                            timeout=xv_llm_timeout_seconds,
+                        )
+                        _trace_reasoning_result(
+                            "task.b2b_reasoning_synthesis.cross_vendor",
+                            llm=llm,
+                            messages=messages,
+                            result=result,
+                            metadata={
+                                "run_id": run_id,
+                                "reasoning_mode": "cross_vendor",
+                                "analysis_type": analysis_type,
+                                "vendor_name": vendors[0] if len(vendors) == 1 else None,
+                                "vendors": vendors,
+                                "artifact_id": artifact_id,
+                                "attempt_no": attempt + 1,
+                                "workload": "anthropic" if batch_llm is not None else "synthesis",
+                            },
+                            duration_ms=(time.monotonic() - call_started) * 1000,
+                        )
+                        _accumulate_fallback_usage(result)
+                        await _consume_response_text(
+                            str(result.get("response", "") or "").strip(),
+                            tokens=int((result.get("usage") or {}).get("input_tokens", 0) or 0)
+                            + int((result.get("usage") or {}).get("output_tokens", 0) or 0),
+                        )
+                    except asyncio.TimeoutError:
+                        last_failure_reasons = [
+                            "TimeoutError: cross-vendor reasoning LLM call exceeded "
+                            f"{xv_llm_timeout_seconds:.1f}s",
+                        ]
+                        last_failure_step = "timeout"
+                        if attempt + 1 >= xv_max_attempts:
+                            logger.warning(
+                                "Cross-vendor synthesis timed out: %s %s after %.1fs",
+                                analysis_type,
+                                vendors,
+                                xv_llm_timeout_seconds,
+                            )
+                            terminal_attempt_recorded = True
+                            await record_attempt(
+                                pool,
+                                artifact_type="cross_vendor_reasoning",
+                                artifact_id=artifact_id,
+                                run_id=run_id,
+                                attempt_no=attempt_no,
+                                stage="llm_call",
+                                status="failed",
+                                failure_step="timeout",
+                                error_message=f"LLM call exceeded {xv_llm_timeout_seconds:.1f}s",
+                            )
+                    except Exception:
+                        last_failure_reasons = [
+                            "Cross-vendor reasoning LLM call raised an exception",
+                        ]
+                        last_failure_step = "llm_exception"
+                        if attempt + 1 >= xv_max_attempts:
+                            logger.warning(
+                                "Cross-vendor synthesis failed: %s %s",
+                                analysis_type, vendors, exc_info=True,
+                            )
+                            terminal_attempt_recorded = True
+                            await record_attempt(
+                                pool,
+                                artifact_type="cross_vendor_reasoning",
+                                artifact_id=artifact_id,
+                                run_id=run_id,
+                                attempt_no=attempt_no,
+                                stage="llm_call",
+                                status="failed",
+                                failure_step="llm_exception",
+                                error_message=last_failure_reasons[0],
+                            )
+                    if synthesis is not None:
+                        break
+
+        if synthesis is None:
+            _failed += 1
+            if not terminal_attempt_recorded:
+                await record_attempt(
+                    pool,
+                    artifact_type="cross_vendor_reasoning",
+                    artifact_id=artifact_id,
+                    run_id=run_id,
+                    attempt_no=max(1, attempt_no),
+                    stage="generation",
+                    status="rejected",
+                    blocker_count=len(last_failure_reasons),
+                    blocking_issues=last_failure_reasons[:5],
+                    failure_step=last_failure_step,
+                    error_message="; ".join(last_failure_reasons[:2])[:200],
+                )
+            return {
+                "succeeded": False,
+                "used_fallback_single_call": used_fallback_single_call,
+                "error_text": "; ".join(last_failure_reasons[:2])[:200],
+                "fallback_usage": fallback_usage,
+            }
+
+        try:
+            if analysis_type == "category_council":
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_cross_vendor_reasoning_synthesis
+                        (analysis_type, vendors, category, as_of_date,
+                         analysis_window_days, schema_version, evidence_hash,
+                         synthesis, tokens_used, llm_model)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+                    ON CONFLICT (analysis_type, category, as_of_date,
+                                 analysis_window_days, schema_version)
+                        WHERE analysis_type = 'category_council'
+                    DO UPDATE SET
+                        evidence_hash = EXCLUDED.evidence_hash,
+                        synthesis = EXCLUDED.synthesis,
+                        tokens_used = EXCLUDED.tokens_used,
+                        llm_model = EXCLUDED.llm_model,
+                        vendors = EXCLUDED.vendors,
+                        created_at = NOW()
+                    """,
+                    analysis_type, vendors, category, today,
+                    window_days, _XV_SCHEMA_VERSION, ev_hash,
+                    json.dumps(synthesis, default=str),
+                    item_tokens, llm_model_name,
+                )
+            else:
+                await pool.execute(
+                    """
+                    INSERT INTO b2b_cross_vendor_reasoning_synthesis
+                        (analysis_type, vendors, category, as_of_date,
+                         analysis_window_days, schema_version, evidence_hash,
+                         synthesis, tokens_used, llm_model)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+                    ON CONFLICT (analysis_type, vendors, as_of_date,
+                                 analysis_window_days, schema_version)
+                        WHERE analysis_type IN ('pairwise_battle', 'resource_asymmetry')
+                    DO UPDATE SET
+                        evidence_hash = EXCLUDED.evidence_hash,
+                        synthesis = EXCLUDED.synthesis,
+                        tokens_used = EXCLUDED.tokens_used,
+                        llm_model = EXCLUDED.llm_model,
+                        category = EXCLUDED.category,
+                        created_at = NOW()
+                    """,
+                    analysis_type, vendors, category, today,
+                    window_days, _XV_SCHEMA_VERSION, ev_hash,
+                    json.dumps(synthesis, default=str),
+                    item_tokens, llm_model_name,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to persist xv synthesis: %s %s",
+                analysis_type, vendors, exc_info=True,
+            )
+            _failed += 1
+            await record_attempt(
+                pool,
+                artifact_type="cross_vendor_reasoning",
+                artifact_id=artifact_id,
+                run_id=run_id,
+                attempt_no=max(1, attempt_no),
+                stage="persistence",
+                status="failed",
+                failure_step="persist",
+                error_message="Failed to persist cross-vendor synthesis row",
+            )
+            return {
+                "succeeded": False,
+                "used_fallback_single_call": used_fallback_single_call,
+                "error_text": "persist_failure",
+                "fallback_usage": fallback_usage,
+            }
+
+        try:
+            legacy = to_legacy_cross_vendor_conclusion(
+                synthesis, analysis_type, vendors,
+                category=category,
+                evidence_hash=ev_hash,
+                tokens_used=item_tokens,
+            )
+            await pool.execute(
+                """
+                DELETE FROM b2b_cross_vendor_conclusions
+                WHERE analysis_type = $1
+                  AND vendors = $2::text[]
+                  AND computed_date = $3
+                  AND evidence_hash LIKE 'synth_%'
+                """,
+                analysis_type,
+                vendors,
+                today,
+            )
+            await pool.execute(
+                """
+                INSERT INTO b2b_cross_vendor_conclusions
+                    (analysis_type, vendors, category, conclusion,
+                     confidence, evidence_hash, tokens_used, cached,
+                     computed_date)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
+                """,
+                legacy["analysis_type"],
+                legacy["vendors"],
+                legacy["category"],
+                json.dumps(legacy["conclusion"], default=str),
+                legacy["confidence"],
+                f"synth_{ev_hash}",
+                legacy["tokens_used"],
+                legacy["cached"],
+                today,
+            )
+            _mirrored += 1
+        except Exception:
+            logger.debug(
+                "Legacy mirror failed for %s %s", analysis_type, vendors,
+                exc_info=True,
+            )
+
+        _succeeded += 1
+        await record_attempt(
+            pool,
+            artifact_type="cross_vendor_reasoning",
+            artifact_id=artifact_id,
+            run_id=run_id,
+            attempt_no=max(1, attempt_no),
+            stage="complete",
+            status="succeeded",
+        )
+        logger.info(
+            "Cross-vendor synthesis: %s %s (%d tokens)",
+            analysis_type, vendors, item_tokens,
+        )
+        return {
+            "succeeded": True,
+            "used_fallback_single_call": used_fallback_single_call,
+            "error_text": None,
+            "fallback_usage": fallback_usage,
+        }
+
+    xv_entries = [
+        entry
+        for entry in await asyncio.gather(*[
+            _prepare_xv_entry(at, prompt, vendors, cat, packet)
+            for at, prompt, vendors, cat, packet in work_items
+        ])
+        if entry is not None
+    ]
+    if not xv_entries:
+        logger.info("No cross-vendor synthesis targets selected after scope/hash checks")
+        return _succeeded, _failed, _tokens, _mirrored, _input_budget_rejections
+
+    if batch_llm is not None:
+        execution = await run_anthropic_message_batch(
+            llm=batch_llm,
+            stage_id="b2b_reasoning_synthesis.cross_vendor",
+            task_name="b2b_reasoning_synthesis",
+            items=[
+                AnthropicBatchItem(
+                    custom_id=entry["custom_id"],
+                    artifact_type="cross_vendor_reasoning",
+                    artifact_id=entry["artifact_id"],
+                    vendor_name=entry["vendors"][0] if len(entry["vendors"]) == 1 else None,
+                    messages=[
+                        Message(role="system", content=entry["prompt"]),
+                        Message(role="user", content=entry["payload"]),
+                    ],
+                    max_tokens=xv_llm_max_tokens,
+                    temperature=xv_llm_temperature,
+                    trace_span_name="task.b2b_reasoning_synthesis.cross_vendor",
+                    trace_metadata={
+                        "run_id": run_id,
+                        "reasoning_mode": "cross_vendor",
+                        "analysis_type": entry["analysis_type"],
+                        "vendor_name": entry["vendors"][0] if len(entry["vendors"]) == 1 else None,
+                        "vendors": entry["vendors"],
+                        "artifact_id": entry["artifact_id"],
+                        "attempt_no": 1,
+                        "workload": "anthropic_batch",
+                    },
+                    request_metadata={
+                        "reasoning_mode": "cross_vendor",
+                        "analysis_type": entry["analysis_type"],
+                    },
+                )
+                for entry in xv_entries
+            ],
+            run_id=run_id,
+            min_batch_size=int(getattr(cfg, "cross_vendor_anthropic_batch_min_items", 2)),
+            batch_metadata={"reasoning_mode": "cross_vendor"},
+            pool=pool,
+        )
+        batch_metrics["jobs"] += 1 if execution.provider_batch_id else 0
+        batch_metrics["submitted_items"] += execution.submitted_items
+        batch_metrics["cache_prefiltered_items"] += execution.cache_prefiltered_items
+        batch_metrics["fallback_single_call_items"] += execution.fallback_single_call_items
+        batch_metrics["completed_items"] += execution.completed_items
+        batch_metrics["failed_items"] += execution.failed_items
+
+        for entry in xv_entries:
+            outcome = execution.results_by_custom_id.get(entry["custom_id"])
+            result = await _run_xv_entry(
+                entry,
+                initial_response_text=outcome.response_text if outcome and outcome.response_text else None,
+                initial_usage=outcome.usage if outcome is not None else None,
+                batch_origin=True,
+                initial_attempt_consumed=bool(outcome and outcome.response_text),
+            )
+            if result["used_fallback_single_call"]:
+                await mark_batch_fallback_result(
+                    batch_id=execution.local_batch_id,
+                    custom_id=entry["custom_id"],
+                    succeeded=bool(result["succeeded"]),
+                    error_text=(
+                        outcome.error_text
+                        if outcome is not None and outcome.error_text and not result["succeeded"]
+                        else result["error_text"]
+                    ),
+                    usage=result.get("fallback_usage"),
+                    provider=str((result.get("fallback_usage") or {}).get("provider") or "") or None,
+                    model=str((result.get("fallback_usage") or {}).get("model") or "") or None,
+                    provider_request_id=(
+                        str((result.get("fallback_usage") or {}).get("provider_request_id") or "") or None
+                    ),
+                    pool=pool,
+                )
+    else:
+        await asyncio.gather(*[
+            _run_xv_entry(entry)
+            for entry in xv_entries
+        ])
 
     logger.info(
         "Cross-vendor synthesis complete: %d succeeded, %d failed, "

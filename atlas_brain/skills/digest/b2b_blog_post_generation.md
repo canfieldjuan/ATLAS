@@ -120,6 +120,28 @@ If `source_name` is not provided in the quotable phrase data, use `> "quote text
     "market_regime": "Optional category regime",
     "proof_anchors": [...]
   },
+  "reasoning_scope_summary": {
+    "selection_strategy": "vendor_facet_packet_v1",
+    "reviews_considered_total": 847,
+    "reviews_in_scope": 93,
+    "witnesses_in_scope": 12,
+    "witness_mix": {"anchor_examples": 3, "timing": 2, "displacement": 3, "retention": 2, "contradictions": 1}
+  },
+  "reasoning_atom_context": {
+    "top_theses": [...],
+    "timing_windows": [...],
+    "proof_points": [...],
+    "account_signals": [...],
+    "coverage_limits": [...],
+    "counterevidence": [...]
+  },
+  "reasoning_delta_summary": {
+    "changed": true,
+    "wedge_changed": false,
+    "confidence_changed": true,
+    "theses_added": [...],
+    "new_timing_windows": [...]
+  },
   "anchor_examples_b": {...},
   "witness_highlights_b": [...],
   "reference_ids_b": {"witness_ids": [...], "metric_ids": [...]},
@@ -196,6 +218,9 @@ Return valid JSON with exactly these keys:
 20. **Use witness-backed anchors when present**: When `anchor_examples`, `witness_highlights`, or `claim_plan` are present, the article must use at least one concrete proof anchor in the core narrative. Prefer timing windows, spend or seat signals, named competitors, or specific pain/workflow details over abstract summary language.
 21. **Do not quote anchor context directly unless it also appears in `quotable_phrases`**: The witness-backed anchor fields exist to sharpen claims, not to bypass the quote attribution rules. Use them to make the narrative specific, then use `quotable_phrases` for blockquotes with proper attribution.
 22. **Protect company privacy in anchor context**: Anchor fields may already be sanitized. Do not infer or invent company names from them. Never reveal an actual company name unless it is explicitly allowed elsewhere in the input.
+23. **Use atom summaries as structured support, not as a replacement for evidence**: When `reasoning_atom_context` is present, prefer its `top_theses`, `timing_windows`, `proof_points`, and `coverage_limits` to sharpen section framing, timing cues, and comparison claims. These are evidence-linked summaries, not standalone proof.
+24. **Use scope transparency when present**: When `reasoning_scope_summary` is present, treat it as the authoritative statement of what evidence packet was in scope. Use it to calibrate confidence language and avoid overclaiming on sparse vendors.
+25. **Use delta summaries for update framing only**: When `reasoning_delta_summary` is present, you may use it to frame what changed since the prior synthesis run, but do not turn delta metadata into unsupported market claims.
 
 ## Linking Rules
 

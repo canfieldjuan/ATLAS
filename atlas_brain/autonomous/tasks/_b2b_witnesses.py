@@ -353,6 +353,7 @@ def derive_evidence_spans(
         str(source_row.get(field) or "")
         for field in ("summary", "review_text", "pros", "cons")
     )
+    contract_context = _coerce_json_dict(result.get("contract_context"))
     company_name = reviewer_company or _coerce_json_dict(result.get("reviewer_context")).get("company_name")
     default_pain = str(result.get("pain_category") or "").strip() or None
     default_time_anchor = (
@@ -372,7 +373,12 @@ def derive_evidence_spans(
     ]
     primary_competitor = str(competitors[0].get("name") or "").strip() if competitors else None
     item_sources: list[tuple[str, list[Any], str | None, str | None]] = [
-        ("pricing_backlash", result.get("pricing_phrases") or [], "pricing", None),
+        (
+            "pricing_backlash",
+            (result.get("pricing_phrases") or []) if bool(contract_context.get("price_complaint")) else [],
+            "pricing",
+            None,
+        ),
         ("complaint", result.get("specific_complaints") or [], default_pain, None),
         ("feature_gap", result.get("feature_gaps") or [], "features", None),
         ("recommendation", result.get("recommendation_language") or [], default_pain, None),

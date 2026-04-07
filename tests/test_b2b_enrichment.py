@@ -1858,6 +1858,63 @@ def test_compute_derived_fields_adds_witness_primitives(monkeypatch):
     assert any(span["productivity_delta_claim"] == "more_productive" for span in derived["evidence_spans"])
 
 
+def test_compute_derived_fields_positive_pricing_context_does_not_emit_pricing_backlash():
+    row = {
+        "id": uuid4(),
+        "summary": "Pricing fit",
+        "review_text": (
+            "Trello met all our expectations for sprint management. "
+            "I find the pricing reasonable."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": None,
+        "reviewer_company": "Infohob",
+        "raw_metadata": {"source_weight": 0.8},
+        "content_type": "review",
+        "rating": 4.5,
+        "rating_max": 5,
+        "source": "peerspot",
+    }
+    result = {
+        "churn_signals": {
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "contract_renewal_mentioned": False,
+            "renewal_timing": None,
+            "migration_in_progress": False,
+            "support_escalation": False,
+        },
+        "reviewer_context": {
+            "role_level": "executive",
+            "decision_maker": True,
+            "company_name": "Infohob",
+        },
+        "budget_signals": {},
+        "use_case": {"modules_mentioned": [], "integration_stack": [], "lock_in_level": "low"},
+        "content_classification": "review",
+        "competitors_mentioned": [],
+        "specific_complaints": [],
+        "quotable_phrases": ["I find the pricing reasonable."],
+        "positive_aspects": ["Trello met all our expectations for sprint management."],
+        "feature_gaps": [],
+        "recommendation_language": [],
+        "pricing_phrases": ["I find the pricing reasonable."],
+        "event_mentions": [],
+        "timeline": {},
+        "contract_context": {},
+        "buyer_authority": {},
+        "sentiment_trajectory": {},
+    }
+
+    derived = b2b_enrichment._compute_derived_fields(result, row)
+
+    assert derived["contract_context"]["price_complaint"] is False
+    assert derived["contract_context"]["price_context"] == "I find the pricing reasonable."
+    assert derived["urgency_indicators"]["price_pressure_language"] is False
+    assert not any(span["signal_type"] == "pricing_backlash" for span in derived["evidence_spans"])
+
+
 def test_repair_target_fields_flags_semantic_pricing_and_timeline_gaps():
     row = {
         "summary": "Renewal confusion",

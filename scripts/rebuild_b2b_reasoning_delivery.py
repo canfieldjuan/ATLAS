@@ -29,6 +29,7 @@ VALID_REPORT_TYPES = (
     "vendor_scorecard",
     "displacement_report",
     "category_overview",
+    "vendor_deep_dive",
 )
 
 
@@ -236,8 +237,10 @@ async def _main(args: argparse.Namespace) -> None:
             report_results: dict[str, dict] = {}
             skipped: dict[str, str] = {}
             for report_type in selected_report_types:
-                if vendor_names and report_type != "vendor_scorecard":
-                    skipped[report_type] = "Scoped refresh only supports vendor_scorecard"
+                if vendor_names and report_type not in {"vendor_scorecard", "vendor_deep_dive"}:
+                    skipped[report_type] = (
+                        "Scoped refresh only supports vendor_scorecard and vendor_deep_dive"
+                    )
                     continue
                 report_results[report_type] = await _run_report_refresh(
                     vendors=vendor_names,

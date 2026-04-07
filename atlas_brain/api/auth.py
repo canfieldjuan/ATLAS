@@ -81,6 +81,37 @@ class UserResponse(BaseModel):
     vendor_limit: int = 1
 
 
+def _onboarding_sequence_company_context(
+    *,
+    account_id: _uuid.UUID,
+    product: str,
+    plan: str,
+    trial_ends: datetime,
+) -> dict[str, str]:
+    seq_cfg = settings.campaign_sequence
+    return {
+        "recipient_type": "onboarding",
+        "product": product,
+        "product_name": seq_cfg.onboarding_product_name,
+        "plan": plan,
+        "trial_ends_at": trial_ends.isoformat(),
+        "account_id": str(account_id),
+    }
+
+
+def _onboarding_sequence_selling_context() -> dict[str, str]:
+    seq_cfg = settings.campaign_sequence
+    return {
+        key: value
+        for key, value in {
+            "sender_name": seq_cfg.onboarding_sender_name,
+            "sender_company": seq_cfg.onboarding_sender_company,
+            "booking_url": settings.b2b_campaign.default_booking_url or "",
+        }.items()
+        if value
+    }
+
+
 # -- Endpoints --
 
 @router.post("/register", response_model=TokenResponse)
@@ -145,6 +176,7 @@ async def register(req: RegisterRequest):
     # Create onboarding sequence for B2B accounts (outside transaction -- non-critical)
     if is_b2b:
         try:
+            seq_cfg = settings.campaign_sequence
             await pool.execute(
                 """
                 INSERT INTO campaign_sequences (
@@ -152,26 +184,22 @@ async def register(req: RegisterRequest):
                     recipient_email, max_steps,
                     company_context, selling_context,
                     next_step_after
-                ) VALUES ($1, $2, 'onboarding', $3, 4, $4, $5, NOW())
+                ) VALUES ($1, $2, 'onboarding', $3, $4, $5, $6, NOW())
                 ON CONFLICT DO NOTHING
                 """,
                 req.account_name,
                 f"onboarding_{account_id}",
                 req.email.lower(),
-                json.dumps({
-                    "recipient_type": "onboarding",
-                    "product": product,
-                    "plan": plan,
-                    "trial_ends_at": trial_ends.isoformat(),
-                    "account_id": str(account_id),
-                }),
-                json.dumps({
-                    k: v for k, v in {
-                        "sender_name": "Atlas Intel",
-                        "sender_company": "Atlas Intelligence",
-                        "booking_url": settings.b2b_campaign.default_booking_url or None,
-                    }.items() if v is not None
-                }),
+                seq_cfg.onboarding_max_steps,
+                json.dumps(
+                    _onboarding_sequence_company_context(
+                        account_id=account_id,
+                        product=product,
+                        plan=plan,
+                        trial_ends=trial_ends,
+                    ),
+                ),
+                json.dumps(_onboarding_sequence_selling_context()),
             )
         except Exception as e:
             logger.warning("Onboarding sequence creation failed: %s", e)
@@ -206,21 +234,22 @@ async def register(req: RegisterRequest):
 
 async def _send_welcome_email(email: str, full_name: str, product: str) -> None:
     """Send a welcome email via Resend (fire-and-forget)."""
-    cfg = settings.campaign_sequence
-    if not cfg.resend_api_key or not cfg.resend_from_email:
+    seq_cfg = settings.campaign_sequence
+    auth_cfg = settings.saas_auth
+    if not seq_cfg.resend_api_key or not seq_cfg.resend_from_email:
         return
 
     if product in ("b2b_retention", "b2b_challenger"):
-        subject = "Welcome to Atlas B2B Intelligence"
-        heading = "B2B Churn Intelligence"
+        subject = f"Welcome to {auth_cfg.b2b_welcome_product_name}"
+        heading = auth_cfg.b2b_welcome_heading
         steps = (
             "<li>Add your first vendor to your churn intelligence watchlist</li>"
             "<li>Review churn signals and competitive intelligence</li>"
             "<li>Set up weekly intelligence reports</li>"
         )
     else:
-        subject = "Welcome to Amazon Seller Intelligence"
-        heading = "Amazon Seller Intelligence"
+        subject = f"Welcome to {auth_cfg.consumer_welcome_product_name}"
+        heading = auth_cfg.consumer_welcome_product_name
         steps = (
             "<li>Add your first ASIN to start tracking</li>"
             "<li>Explore brand health, safety signals, and competitive flows</li>"
@@ -233,7 +262,7 @@ async def _send_welcome_email(email: str, full_name: str, product: str) -> None:
         f"<p>Hi {name},</p>"
         f"<p>Your account is ready. Here's how to get started:</p>"
         f"<ol>{steps}</ol>"
-        f"<p>Your 14-day trial gives you full access to all features. "
+        f"<p>Your {auth_cfg.trial_days}-day trial gives you full access to all features. "
         f"Upgrade anytime from your account settings.</p>"
         f"<hr>"
         f"<p><em>Questions? Reply to this email and we'll help you out.</em></p>"
@@ -244,11 +273,11 @@ async def _send_welcome_email(email: str, full_name: str, product: str) -> None:
             resp = await client.post(
                 "https://api.resend.com/emails",
                 headers={
-                    "Authorization": f"Bearer {cfg.resend_api_key}",
+                    "Authorization": f"Bearer {seq_cfg.resend_api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "from": cfg.resend_from_email,
+                    "from": seq_cfg.resend_from_email,
                     "to": [email],
                     "subject": subject,
                     "html": body,
@@ -436,7 +465,7 @@ async def forgot_password(req: ForgotPasswordRequest):
         req.email.lower(),
     )
 
-    # Always return 200 — send email only when user exists and is active
+    # Always return 200 - send email only when user exists and is active
     if row and row["is_active"]:
         token = create_password_reset_token(str(row["id"]))
         asyncio.create_task(
@@ -481,28 +510,21 @@ async def reset_password(req: ResetPasswordRequest):
 
 async def _send_password_reset_email(email: str, full_name: str | None, token: str) -> None:
     """Send a password-reset email via Resend (fire-and-forget)."""
-    cfg = settings.campaign_sequence
-    if not cfg.resend_api_key or not cfg.resend_from_email:
-        logger.warning("Resend not configured — cannot send password reset email")
+    seq_cfg = settings.campaign_sequence
+    auth_cfg = settings.saas_auth
+    if not seq_cfg.resend_api_key or not seq_cfg.resend_from_email:
+        logger.warning("Resend not configured - cannot send password reset email")
         return
 
-    # Determine the correct frontend URL for the reset link
-    origins = settings.saas_auth.cors_origins or ""
-    # Pick the first real domain, fall back to localhost
-    reset_base = "http://localhost:5173"
-    for origin in origins.split(","):
-        origin = origin.strip()
-        if origin and "vercel.app" not in origin and "localhost" not in origin:
-            reset_base = origin
-            break
-
-    reset_link = f"{reset_base}/reset-password?token={token}"
+    reset_link = f"{auth_cfg.frontend_base_url.rstrip('/')}/reset-password?token={token}"
     name = full_name or "there"
+    product_name = auth_cfg.email_product_name
+    company_name = auth_cfg.email_company_name
 
     body = (
         "<h2>Reset your password</h2>"
         f"<p>Hi {name},</p>"
-        "<p>We received a request to reset your Churn Signals password. "
+        f"<p>We received a request to reset your {product_name} password. "
         "Click the button below to choose a new password:</p>"
         f'<p><a href="{reset_link}" style="display:inline-block;padding:12px 24px;'
         'background-color:#0891b2;color:#fff;text-decoration:none;border-radius:8px;'
@@ -510,7 +532,7 @@ async def _send_password_reset_email(email: str, full_name: str | None, token: s
         "<p>This link expires in 1 hour. If you didn't request a reset, "
         "you can safely ignore this email.</p>"
         "<hr>"
-        "<p><em>Churn Signals by Atlas Intelligence</em></p>"
+        f"<p><em>{product_name} by {company_name}</em></p>"
     )
 
     try:
@@ -518,13 +540,13 @@ async def _send_password_reset_email(email: str, full_name: str | None, token: s
             resp = await client.post(
                 "https://api.resend.com/emails",
                 headers={
-                    "Authorization": f"Bearer {cfg.resend_api_key}",
+                    "Authorization": f"Bearer {seq_cfg.resend_api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "from": cfg.resend_from_email,
+                    "from": seq_cfg.resend_from_email,
                     "to": [email],
-                    "subject": "Reset your Churn Signals password",
+                    "subject": f"Reset your {product_name} password",
                     "html": body,
                 },
             )

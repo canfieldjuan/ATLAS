@@ -4041,6 +4041,19 @@ async def _fetch_high_intent_companies(
     filters = _eligible_review_filters(window_param=2, source_param=3, alias="r")
     params: list = [urgency_threshold, window_days, sources]
     extra_where = ""
+    signal_where = ""
+    if _high_intent_signal_evidence_enabled():
+        signal_where = """
+          AND (
+                COALESCE((r.enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+             OR COALESCE((r.enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+             OR COALESCE((r.enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+             OR COALESCE((r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean, false)
+             OR COALESCE((r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean, false)
+             OR COALESCE((r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean, false)
+             OR COALESCE((r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean, false)
+          )
+        """
     idx = 4
     if vendor_name:
         extra_where += f"\n          AND r.vendor_name ILIKE '%' || ${idx} || '%'"
@@ -4101,6 +4114,9 @@ async def _fetch_high_intent_companies(
             r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
             r.relevance_score,
             r.author_churn_score,
+            (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
+            (r.enrichment->'churn_signals'->>'actively_evaluating')::boolean AS actively_evaluating,
+            (r.enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean AS contract_renewal_mentioned,
             -- v2 urgency indicators for richer account intelligence
             (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
             (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
@@ -4119,6 +4135,7 @@ async def _fetch_high_intent_companies(
           AND (r.enrichment->>'urgency_score')::numeric >= $1
           AND r.reviewer_company IS NOT NULL AND r.reviewer_company != ''
           AND COALESCE(r.relevance_score, 0.5) >= 0.3
+          {signal_where}
         ORDER BY (r.enrichment->>'urgency_score')::numeric
                  * (0.7 + 0.3 * COALESCE(r.relevance_score, 0.5)) DESC{limit_clause}
         """,
@@ -4139,6 +4156,8 @@ async def _fetch_high_intent_companies(
             source=r["source"],
             confidence_score=None,
         ):
+            continue
+        if _high_intent_signal_evidence_enabled() and not _high_intent_row_has_signal_evidence(dict(r)):
             continue
         try:
             urgency = float(r["urgency"]) if r["urgency"] is not None else 0
@@ -4212,6 +4231,13 @@ async def _fetch_existing_company_signals(
                cs.review_id, cs.source, cs.confidence_score,
                cs.first_seen_at, cs.last_seen_at,
                r.content_type,
+               (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
+               (r.enrichment->'churn_signals'->>'actively_evaluating')::boolean AS actively_evaluating,
+               (r.enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean AS contract_renewal_mentioned,
+               (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
+               (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
+               (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
+               (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch,
                r.reviewer_title,
                r.company_size_raw,
                COALESCE(
@@ -4248,6 +4274,8 @@ async def _fetch_existing_company_signals(
     for row in rows:
         vendor = _canonicalize_vendor(row.get("vendor_name") or "")
         if not vendor:
+            continue
+        if _high_intent_signal_evidence_enabled() and not _high_intent_row_has_signal_evidence(dict(row)):
             continue
         lookup.setdefault(vendor, []).append({
             "company_name": row.get("company_name"),
@@ -9925,6 +9953,25 @@ def _company_signal_exclusion_reason(
     return None
 
 
+def _high_intent_signal_evidence_enabled() -> bool:
+    return bool(getattr(settings.b2b_churn, "high_intent_require_signal_evidence", True))
+
+
+def _high_intent_row_has_signal_evidence(row: dict[str, Any]) -> bool:
+    return any(
+        bool(row.get(key))
+        for key in (
+            "intent_to_leave",
+            "actively_evaluating",
+            "contract_renewal_mentioned",
+            "indicator_cancel",
+            "indicator_migration",
+            "indicator_evaluation",
+            "indicator_switch",
+        )
+    )
+
+
 def _battle_card_company_is_display_safe(
     raw_name: Any,
     *,
@@ -11051,7 +11098,7 @@ def _build_deterministic_vendor_scorecards(
     turning_point_lookup: dict[str, list[dict]] | None = None,
     tenure_lookup: dict[str, list[dict]] | None = None,
     evidence_vault_lookup: dict[str, dict[str, Any]] | None = None,
-    limit: int = 15,
+    limit: int | None = 15,
 ) -> list[dict[str, Any]]:
     """Build vendor deep-dive scorecards from aggregated numeric data.
 
@@ -11405,6 +11452,8 @@ def _build_deterministic_vendor_scorecards(
         reasoning_boost = min(conf * 5, 5.0) if has_arch else 0
         return (-(x["avg_urgency"] + reasoning_boost), -(x["churn_signal_density"]), x["vendor"])
     results.sort(key=_sc_sort_key)
+    if limit is None:
+        return results
     return results[:limit]
 
 

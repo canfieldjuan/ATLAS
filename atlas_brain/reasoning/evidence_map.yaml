@@ -97,6 +97,15 @@ enrichment:
 
   price_complaint_derivation:
     description: "Derive price_complaint from Tier 1 flags + extracted phrases"
+    positive_patterns:
+      - "\\bpricing (?:is )?reasonable\\b"
+      - "\\bprice(?:s|d)? (?:is|are|was|were)? reasonable\\b"
+      - "\\b(?:cost|pricing) (?:is|was|were|seems)? fair\\b"
+      - "\\baffordable\\b"
+      - "\\bgood value\\b"
+      - "\\bworth (?:the|its) price\\b"
+      - "\\bpricing (?:works|worked) for us\\b"
+      - "\\bmet all (?:of )?our expectations\\b"
     true_if_any:
       - {field: "budget_signals.price_increase_mentioned", eq: true}
       - {field: "pricing_phrases", min_count: 1}

@@ -2735,9 +2735,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         cache_hits=0,
     )
 
-    # --- Phase 5: LLM sales copy (parallel with semantic cache) ---
-    from ...pipelines.llm import call_llm_with_skill
+    # --- Phase 5: LLM sales copy (semantic cache first, Anthropic batch optional) ---
+    from ...pipelines.llm import call_llm_with_skill, get_pipeline_llm
     from ...reasoning.semantic_cache import SemanticCache, CacheEntry, compute_evidence_hash
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
+    )
+    from ...services.b2b.llm_exact_cache import build_skill_messages
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.protocols import Message
 
     _bc_cache = SemanticCache(pool)
     bc_llm_failures = 0
@@ -2758,18 +2766,35 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     llm_timeout = cfg.battle_card_llm_timeout_seconds
     cache_confidence = cfg.battle_card_cache_confidence
     llm_options = _battle_card_llm_options(cfg)
+    batch_requested = (
+        settings.b2b_churn.anthropic_batch_enabled
+        and bool(getattr(cfg, "battle_card_anthropic_batch_enabled", True))
+        and str(llm_options.get("workload") or "").strip().lower() == "anthropic"
+        and not bool(llm_options.get("try_openrouter"))
+    )
+    batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
+    battle_card_batch_enabled = isinstance(batch_llm, AnthropicLLM)
+    battle_card_batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
 
     async def _request_sales_copy(
         card: dict[str, Any],
-        payload: dict[str, Any],
+        payload_input: str,
         *,
         attempt: int,
+        usage_out: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         sales_copy = await asyncio.wait_for(
             asyncio.to_thread(
                 call_llm_with_skill,
                 "digest/battle_card_sales_copy",
-                json.dumps(payload, default=str),
+                payload_input,
                 max_tokens=llm_max_tokens,
                 temperature=llm_temperature,
                 guided_json=_BATTLE_CARD_SALES_COPY_JSON_SCHEMA,
@@ -2777,19 +2802,71 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 workload=llm_options["workload"],
                 try_openrouter=llm_options["try_openrouter"],
                 openrouter_model=llm_options["openrouter_model"],
+                span_name="b2b.churn_intelligence.battle_card_sales_copy",
                 trace_metadata=_battle_card_trace_metadata(
                     task,
                     card,
                     attempt=attempt,
                 ),
+                usage_out=usage_out,
             ),
             timeout=llm_timeout,
         )
         return _parse_battle_card_sales_copy(sales_copy)
 
-    async def _enrich_one(card: dict[str, Any]) -> None:
+    async def _persist_overlay_card(
+        card: dict[str, Any],
+        *,
+        log_context: str,
+        failure: bool = False,
+        cache_hit: bool = False,
+    ) -> bool:
         nonlocal bc_llm_failures, bc_cache_hits, bc_llm_updates, bc_overlay_completed
 
+        persisted_ok = False
+        try:
+            persisted = await _persist_battle_card(
+                pool,
+                today=today,
+                card=card,
+                data_density=data_density,
+                report_source_review_count=report_source_review_count,
+                report_source_dist=report_source_dist,
+                llm_model=_battle_card_llm_model_label(card, llm_options),
+                status=_battle_card_row_status(card),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist %s battle card for %s",
+                log_context,
+                card.get("vendor"),
+            )
+        else:
+            persisted_ok = bool(persisted)
+
+        async with progress_lock:
+            bc_llm_failures += int(failure)
+            bc_cache_hits += int(cache_hit)
+            bc_llm_updates += int(persisted_ok)
+            bc_overlay_completed += 1
+            await _update_execution_progress(
+                task,
+                stage=_STAGE_LLM_OVERLAY,
+                progress_current=bc_overlay_completed,
+                progress_total=total_cards,
+                progress_message="Applying LLM overlay to battle cards.",
+                cards_built=total_cards,
+                cards_persisted=cards_persisted,
+                cards_llm_updated=bc_llm_updates,
+                llm_failures=bc_llm_failures,
+                cache_hits=bc_cache_hits,
+            )
+        return persisted_ok
+
+    async def _prepare_overlay_entry(
+        index: int,
+        card: dict[str, Any],
+    ) -> dict[str, Any] | None:
         preflight_quality = _battle_card_preflight_quality_gate(card)
         if preflight_quality is not None:
             card["llm_render_status"] = "skipped_preflight_quality_gate"
@@ -2800,42 +2877,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             if failed_checks:
                 card["llm_render_error"] = "; ".join(str(item) for item in failed_checks[:3])
-            persisted_ok = False
-            try:
-                persisted = await _persist_battle_card(
-                    pool,
-                    today=today,
-                    card=card,
-                    data_density=data_density,
-                    report_source_review_count=report_source_review_count,
-                    report_source_dist=report_source_dist,
-                    llm_model=_battle_card_llm_model_label(card, llm_options),
-                    status=_battle_card_row_status(card),
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to persist preflight-gated battle card for %s",
-                    card.get("vendor"),
-                )
-            else:
-                persisted_ok = bool(persisted)
-            async with progress_lock:
-                bc_llm_failures += 1
-                bc_llm_updates += int(persisted_ok)
-                bc_overlay_completed += 1
-                await _update_execution_progress(
-                    task,
-                    stage=_STAGE_LLM_OVERLAY,
-                    progress_current=bc_overlay_completed,
-                    progress_total=total_cards,
-                    progress_message="Applying LLM overlay to battle cards.",
-                    cards_built=total_cards,
-                    cards_persisted=cards_persisted,
-                    cards_llm_updated=bc_llm_updates,
-                    llm_failures=bc_llm_failures,
-                    cache_hits=bc_cache_hits,
-                )
-            return
+            await _persist_overlay_card(
+                card,
+                log_context="preflight-gated",
+                failure=True,
+            )
+            return None
 
         payload = _build_battle_card_render_payload(card)
         card_hash = compute_evidence_hash(payload)
@@ -2863,48 +2910,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         card["llm_render_error"] = "; ".join(str(item) for item in failed_checks[:3])
                 else:
                     await _bc_cache.validate(pattern_sig)
-                persisted_ok = False
-                try:
-                    persisted = await _persist_battle_card(
-                        pool,
-                        today=today,
-                        card=card,
-                        data_density=data_density,
-                        report_source_review_count=report_source_review_count,
-                        report_source_dist=report_source_dist,
-                        llm_model=_battle_card_llm_model_label(card, llm_options),
-                        status=_battle_card_row_status(card),
-                    )
-                except Exception:
-                    logger.exception("Failed to persist cached battle card for %s", card.get("vendor"))
-                else:
-                    persisted_ok = bool(persisted)
-                async with progress_lock:
-                    if quality.get("status") == _QUALITY_STATUS_FALLBACK:
-                        bc_llm_failures += 1
-                    else:
-                        bc_cache_hits += 1
-                    bc_llm_updates += int(persisted_ok)
-                    bc_overlay_completed += 1
-                    await _update_execution_progress(
-                        task,
-                        stage=_STAGE_LLM_OVERLAY,
-                        progress_current=bc_overlay_completed,
-                        progress_total=total_cards,
-                        progress_message="Applying LLM overlay to battle cards.",
-                        cards_built=total_cards,
-                        cards_persisted=cards_persisted,
-                        cards_llm_updated=bc_llm_updates,
-                        llm_failures=bc_llm_failures,
-                        cache_hits=bc_cache_hits,
-                    )
-                return
+                await _persist_overlay_card(
+                    card,
+                    log_context="cached",
+                    failure=quality.get("status") == _QUALITY_STATUS_FALLBACK,
+                    cache_hit=quality.get("status") != _QUALITY_STATUS_FALLBACK,
+                )
+                return None
 
-        from ...services.b2b.llm_exact_cache import build_skill_messages
-
-        estimated_input_tokens = _approx_message_input_tokens(
-            build_skill_messages("digest/battle_card_sales_copy", payload),
+        payload_input = json.dumps(payload, default=str)
+        request_messages = build_skill_messages(
+            "digest/battle_card_sales_copy",
+            payload_input,
         )
+        estimated_input_tokens = _approx_message_input_tokens(request_messages)
         if estimated_input_tokens > llm_max_input_tokens:
             logger.warning(
                 "Skipping battle card LLM for %s: estimated input %d exceeds cap %d",
@@ -2919,221 +2938,326 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 f"({estimated_input_tokens}>{llm_max_input_tokens})"
             )
             _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
-            persisted_ok = False
-            try:
-                persisted = await _persist_battle_card(
-                    pool,
-                    today=today,
-                    card=card,
-                    data_density=data_density,
-                    report_source_review_count=report_source_review_count,
-                    report_source_dist=report_source_dist,
-                    llm_model=_battle_card_llm_model_label(card, llm_options),
-                    status=_battle_card_row_status(card),
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to persist input-capped battle card for %s",
-                    card.get("vendor"),
-                )
-            else:
-                persisted_ok = bool(persisted)
-            async with progress_lock:
-                bc_llm_failures += 1
-                bc_llm_updates += int(persisted_ok)
-                bc_overlay_completed += 1
-                await _update_execution_progress(
-                    task,
-                    stage=_STAGE_LLM_OVERLAY,
-                    progress_current=bc_overlay_completed,
-                    progress_total=total_cards,
-                    progress_message="Applying LLM overlay to battle cards.",
-                    cards_built=total_cards,
-                    cards_persisted=cards_persisted,
-                    cards_llm_updated=bc_llm_updates,
-                    llm_failures=bc_llm_failures,
-                    cache_hits=bc_cache_hits,
-                )
-            return
+            await _persist_overlay_card(
+                card,
+                log_context="input-capped",
+                failure=True,
+            )
+            return None
 
-        async with bc_sem:
-            failure_reasons: list[str] = []
-            render_succeeded = False
-            for attempt in range(max_attempts):
-                candidate_for_retry: dict[str, Any] = {}
-                try:
-                    parsed_copy = await _request_sales_copy(
-                        card,
-                        payload,
-                        attempt=attempt + 1,
-                    )
-                except Exception as exc:
-                    parsed_copy = {}
-                    candidate_for_retry = {}
-                    failure_reasons = [f"transport failure: {type(exc).__name__}"]
-                else:
-                    candidate_for_retry = parsed_copy if isinstance(parsed_copy, dict) else {}
-                    if parsed_copy.get("_parse_fallback"):
-                        failure_reasons = ["LLM did not return valid JSON"]
-                    else:
-                        copy_errors = _validate_battle_card_sales_copy(card, parsed_copy)
-                        if copy_errors:
-                            sanitized_copy = _sanitize_battle_card_sales_copy(card, parsed_copy)
-                            sanitized_errors = _validate_battle_card_sales_copy(card, sanitized_copy)
-                            candidate_for_retry = sanitized_copy if isinstance(sanitized_copy, dict) else candidate_for_retry
-                            if not sanitized_errors:
-                                parsed_copy = sanitized_copy
-                                copy_errors = []
-                            else:
-                                failure_reasons = sanitized_errors
-                        if not copy_errors:
-                            for _f in _BATTLE_CARD_LLM_FIELDS:
-                                if _f in parsed_copy:
-                                    card[_f] = parsed_copy[_f]
-                            card["llm_render_status"] = "succeeded"
-                            card.pop("llm_render_error", None)
-                            render_succeeded = True
-                            break
-                        if not failure_reasons:
-                            failure_reasons = copy_errors
-                if attempt + 1 >= max_attempts:
-                    card["llm_render_status"] = "failed"
-                    if failure_reasons:
-                        card["llm_render_error"] = "; ".join(failure_reasons[:3])
-                    logger.warning("Battle card rejected for %s: %s",
-                                   card.get("vendor"), "; ".join(failure_reasons[:3]))
-                    _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
-                    persisted_ok = False
-                    try:
-                        persisted = await _persist_battle_card(
-                            pool,
-                            today=today,
-                            card=card,
-                            data_density=data_density,
-                            report_source_review_count=report_source_review_count,
-                            report_source_dist=report_source_dist,
-                            llm_model=_battle_card_llm_model_label(card, llm_options),
-                            status=_battle_card_row_status(card),
-                        )
-                    except Exception:
-                        logger.exception("Failed to persist rejected battle card for %s", card.get("vendor"))
-                    else:
-                        persisted_ok = bool(persisted)
-                    async with progress_lock:
-                        bc_llm_failures += 1
-                        bc_llm_updates += int(persisted_ok)
-                        bc_overlay_completed += 1
-                        await _update_execution_progress(
-                            task,
-                            stage=_STAGE_LLM_OVERLAY,
-                            progress_current=bc_overlay_completed,
-                            progress_total=total_cards,
-                            progress_message="Applying LLM overlay to battle cards.",
-                            cards_built=total_cards,
-                            cards_persisted=cards_persisted,
-                            cards_llm_updated=bc_llm_updates,
-                            llm_failures=bc_llm_failures,
-                            cache_hits=bc_cache_hits,
-                        )
-                    return
-                payload = _build_battle_card_render_payload(
-                    card,
-                    prior_attempt=_battle_card_prior_attempt(candidate_for_retry or parsed_copy),
-                    validation_feedback=failure_reasons[:feedback_limit],
+        return {
+            "index": index,
+            "card": card,
+            "payload": payload,
+            "payload_input": payload_input,
+            "pattern_sig": pattern_sig,
+            "card_hash": card_hash,
+            "request_messages": request_messages,
+            "custom_id": (
+                f"battle_card:{index}:"
+                f"{str(card.get('vendor') or '').strip().lower()}"
+            ),
+        }
+
+    async def _run_overlay_entry(
+        entry: dict[str, Any],
+        *,
+        initial_response_text: str | None = None,
+        initial_usage: dict[str, Any] | None = None,
+        batch_origin: bool = False,
+        initial_attempt_consumed: bool = False,
+    ) -> dict[str, Any]:
+        card = entry["card"]
+        payload = entry["payload"]
+        payload_input = str(entry["payload_input"])
+        pattern_sig = str(entry["pattern_sig"])
+        card_hash = str(entry["card_hash"])
+
+        failure_reasons: list[str] = []
+        parsed_copy: dict[str, Any] = {}
+        candidate_for_retry: Any = {}
+        render_succeeded = False
+        used_fallback_single_call = False
+        result_error: str | None = None
+        fallback_usage: dict[str, Any] = {}
+
+        def _accumulate_usage(sample: dict[str, Any] | None) -> None:
+            if not sample:
+                return
+            fallback_usage["input_tokens"] = int(fallback_usage.get("input_tokens") or 0) + int(sample.get("input_tokens") or 0)
+            fallback_usage["billable_input_tokens"] = int(fallback_usage.get("billable_input_tokens") or 0) + int(
+                sample.get("billable_input_tokens")
+                if sample.get("billable_input_tokens") is not None
+                else sample.get("input_tokens") or 0
+            )
+            fallback_usage["cached_tokens"] = int(fallback_usage.get("cached_tokens") or 0) + int(sample.get("cached_tokens") or 0)
+            fallback_usage["cache_write_tokens"] = int(fallback_usage.get("cache_write_tokens") or 0) + int(sample.get("cache_write_tokens") or 0)
+            fallback_usage["output_tokens"] = int(fallback_usage.get("output_tokens") or 0) + int(sample.get("output_tokens") or 0)
+            if sample.get("provider"):
+                fallback_usage["provider"] = str(sample.get("provider") or "")
+            if sample.get("model"):
+                fallback_usage["model"] = str(sample.get("model") or "")
+            if sample.get("provider_request_id"):
+                fallback_usage["provider_request_id"] = str(sample.get("provider_request_id") or "")
+
+        def _consume_parsed_copy(candidate: dict[str, Any]) -> bool:
+            nonlocal parsed_copy, candidate_for_retry, failure_reasons, render_succeeded
+
+            parsed_copy = candidate if isinstance(candidate, dict) else {}
+            candidate_for_retry = parsed_copy if isinstance(parsed_copy, dict) else {}
+            if parsed_copy.get("_parse_fallback"):
+                failure_reasons = ["LLM did not return valid JSON"]
+                candidate_for_retry = {}
+                return False
+
+            copy_errors = _validate_battle_card_sales_copy(card, parsed_copy)
+            if copy_errors:
+                sanitized_copy = _sanitize_battle_card_sales_copy(card, parsed_copy)
+                sanitized_errors = _validate_battle_card_sales_copy(card, sanitized_copy)
+                candidate_for_retry = (
+                    sanitized_copy if isinstance(sanitized_copy, dict) else candidate_for_retry
                 )
-                if retry_delay > 0:
-                    await asyncio.sleep(retry_delay)
+                if not sanitized_errors:
+                    parsed_copy = sanitized_copy
+                    copy_errors = []
+                else:
+                    failure_reasons = sanitized_errors
+            if copy_errors:
+                if not failure_reasons:
+                    failure_reasons = copy_errors
+                return False
+
+            for field in _BATTLE_CARD_LLM_FIELDS:
+                if field in parsed_copy:
+                    card[field] = parsed_copy[field]
+            card["llm_render_status"] = "succeeded"
+            card.pop("llm_render_error", None)
+            render_succeeded = True
+            return True
+
+        if initial_response_text is not None:
+            _consume_parsed_copy(_parse_battle_card_sales_copy(initial_response_text))
+
+        if not render_succeeded:
+            if batch_origin:
+                used_fallback_single_call = True
+            loop_start = 1 if initial_attempt_consumed else 0
+            async with bc_sem:
+                for attempt in range(loop_start, max_attempts):
+                    try:
+                        attempt_usage: dict[str, Any] = {}
+                        parsed_copy = await _request_sales_copy(
+                            card,
+                            payload_input,
+                            attempt=attempt + 1,
+                            usage_out=attempt_usage,
+                        )
+                        _accumulate_usage(attempt_usage)
+                    except Exception as exc:
+                        parsed_copy = {}
+                        candidate_for_retry = {}
+                        failure_reasons = [f"transport failure: {type(exc).__name__}"]
+                    else:
+                        if _consume_parsed_copy(parsed_copy):
+                            break
+
+                    if attempt + 1 >= max_attempts:
+                        card["llm_render_status"] = "failed"
+                        if failure_reasons:
+                            result_error = "; ".join(failure_reasons[:3])
+                            card["llm_render_error"] = result_error
+                        logger.warning(
+                            "Battle card rejected for %s: %s",
+                            card.get("vendor"),
+                            "; ".join(failure_reasons[:3]),
+                        )
+                        _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
+                        await _persist_overlay_card(
+                            card,
+                            log_context="rejected",
+                            failure=True,
+                        )
+                        return {
+                            "succeeded": False,
+                            "used_fallback_single_call": used_fallback_single_call,
+                            "error_text": result_error,
+                            "fallback_usage": fallback_usage,
+                        }
+
+                    payload = _build_battle_card_render_payload(
+                        card,
+                        prior_attempt=_battle_card_prior_attempt(
+                            candidate_for_retry or parsed_copy,
+                        ),
+                        validation_feedback=failure_reasons[:feedback_limit],
+                    )
+                    payload_input = json.dumps(payload, default=str)
+                    if retry_delay > 0:
+                        await asyncio.sleep(retry_delay)
 
             if not render_succeeded:
-                return
+                return {
+                    "succeeded": False,
+                    "used_fallback_single_call": used_fallback_single_call,
+                    "error_text": result_error,
+                    "fallback_usage": fallback_usage,
+                }
 
-            quality = _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
-            if quality.get("status") == _QUALITY_STATUS_FALLBACK:
-                _drop_llm_sales_copy(card)
-                _populate_battle_card_fallback_sales_copy(card)
-                card["llm_render_status"] = "failed_quality_gate"
-                failed_checks = quality.get("failed_checks") if isinstance(quality.get("failed_checks"), list) else []
-                if failed_checks:
-                    card["llm_render_error"] = "; ".join(str(item) for item in failed_checks[:3])
-                try:
-                    persisted = await _persist_battle_card(
-                        pool,
-                        today=today,
-                        card=card,
-                        data_density=data_density,
-                        report_source_review_count=report_source_review_count,
-                        report_source_dist=report_source_dist,
-                        llm_model=_battle_card_llm_model_label(card, llm_options),
-                        status=_battle_card_row_status(card),
-                    )
-                except Exception:
-                    logger.exception("Failed to persist quality-gated battle card for %s", card.get("vendor"))
-                    persisted_ok = False
-                else:
-                    persisted_ok = bool(persisted)
-                async with progress_lock:
-                    bc_llm_failures += 1
-                    bc_llm_updates += int(persisted_ok)
-                    bc_overlay_completed += 1
-                    await _update_execution_progress(
-                        task,
-                        stage=_STAGE_LLM_OVERLAY,
-                        progress_current=bc_overlay_completed,
-                        progress_total=total_cards,
-                        progress_message="Applying LLM overlay to battle cards.",
-                        cards_built=total_cards,
-                        cards_persisted=cards_persisted,
-                        cards_llm_updated=bc_llm_updates,
-                        llm_failures=bc_llm_failures,
-                        cache_hits=bc_cache_hits,
-                    )
-                return
+        quality = _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
+        if quality.get("status") == _QUALITY_STATUS_FALLBACK:
+            _drop_llm_sales_copy(card)
+            _populate_battle_card_fallback_sales_copy(card)
+            card["llm_render_status"] = "failed_quality_gate"
+            failed_checks = (
+                quality.get("failed_checks")
+                if isinstance(quality.get("failed_checks"), list)
+                else []
+            )
+            if failed_checks:
+                result_error = "; ".join(str(item) for item in failed_checks[:3])
+                card["llm_render_error"] = result_error
+            await _persist_overlay_card(
+                card,
+                log_context="quality-gated",
+                failure=True,
+            )
+            return {
+                "succeeded": False,
+                "used_fallback_single_call": used_fallback_single_call,
+                "error_text": result_error,
+                "fallback_usage": fallback_usage,
+            }
 
-            try:
-                await _bc_cache.store(CacheEntry(
+        try:
+            await _bc_cache.store(
+                CacheEntry(
                     pattern_sig=pattern_sig,
                     pattern_class="battle_card_sales_copy",
-                    conclusion={_f: card[_f] for _f in _BATTLE_CARD_LLM_FIELDS if _f in card},
+                    conclusion={
+                        field: card[field]
+                        for field in _BATTLE_CARD_LLM_FIELDS
+                        if field in card
+                    },
                     confidence=cache_confidence,
                     evidence_hash=card_hash,
                     vendor_name=card.get("vendor"),
                     conclusion_type="sales_copy",
-                ))
-            except Exception:
-                logger.warning("Failed to cache battle card for %s", card.get("vendor"))
-            try:
-                persisted = await _persist_battle_card(
-                    pool,
-                    today=today,
-                    card=card,
-                    data_density=data_density,
-                    report_source_review_count=report_source_review_count,
-                    report_source_dist=report_source_dist,
-                    llm_model=_battle_card_llm_model_label(card, llm_options),
-                    status=_battle_card_row_status(card),
                 )
-            except Exception:
-                logger.exception("Failed to persist enriched battle card for %s", card.get("vendor"))
-                persisted_ok = False
-            else:
-                persisted_ok = bool(persisted)
-            async with progress_lock:
-                bc_llm_updates += int(persisted_ok)
-                bc_overlay_completed += 1
-                await _update_execution_progress(
-                    task,
-                    stage=_STAGE_LLM_OVERLAY,
-                    progress_current=bc_overlay_completed,
-                    progress_total=total_cards,
-                    progress_message="Applying LLM overlay to battle cards.",
-                    cards_built=total_cards,
-                    cards_persisted=cards_persisted,
-                    cards_llm_updated=bc_llm_updates,
-                    llm_failures=bc_llm_failures,
-                    cache_hits=bc_cache_hits,
+            )
+        except Exception:
+            logger.warning("Failed to cache battle card for %s", card.get("vendor"))
+
+        await _persist_overlay_card(
+            card,
+            log_context="enriched",
+        )
+        return {
+            "succeeded": True,
+            "used_fallback_single_call": used_fallback_single_call,
+            "error_text": None,
+            "fallback_usage": fallback_usage,
+        }
+
+    overlay_entries: list[dict[str, Any]] = []
+    for index, card in enumerate(deterministic_battle_cards):
+        entry = await _prepare_overlay_entry(index, card)
+        if entry is not None:
+            overlay_entries.append(entry)
+
+    if battle_card_batch_enabled and overlay_entries:
+        execution = await run_anthropic_message_batch(
+            llm=batch_llm,
+            stage_id="b2b_battle_cards.sales_copy",
+            task_name="b2b_battle_cards",
+            items=[
+                AnthropicBatchItem(
+                    custom_id=str(entry["custom_id"]),
+                    artifact_type="battle_card_sales_copy",
+                    artifact_id=str(entry["card"].get("vendor") or f"battle-card-{entry['index']}"),
+                    vendor_name=str(entry["card"].get("vendor") or "") or None,
+                    messages=[
+                        Message(
+                            role=str(message.get("role") or ""),
+                            content=str(message.get("content") or ""),
+                        )
+                        for message in entry["request_messages"]
+                    ],
+                    max_tokens=llm_max_tokens,
+                    temperature=llm_temperature,
+                    trace_span_name="b2b.churn_intelligence.battle_card_sales_copy",
+                    trace_metadata={
+                        **_battle_card_trace_metadata(
+                            task,
+                            entry["card"],
+                            attempt=1,
+                        ),
+                        "workload": "anthropic_batch",
+                    },
+                    request_metadata={
+                        "report_type": "battle_card",
+                    },
+                )
+                for entry in overlay_entries
+            ],
+            run_id=str(task.id),
+            min_batch_size=int(getattr(cfg, "battle_card_anthropic_batch_min_items", 2)),
+            batch_metadata={
+                "report_type": "battle_card",
+            },
+            pool=pool,
+        )
+        battle_card_batch_metrics["jobs"] += 1 if execution.provider_batch_id else 0
+        battle_card_batch_metrics["submitted_items"] += execution.submitted_items
+        battle_card_batch_metrics["cache_prefiltered_items"] += execution.cache_prefiltered_items
+        battle_card_batch_metrics["fallback_single_call_items"] += execution.fallback_single_call_items
+        battle_card_batch_metrics["completed_items"] += execution.completed_items
+        battle_card_batch_metrics["failed_items"] += execution.failed_items
+
+        async def _run_batched_entry(entry: dict[str, Any]) -> None:
+            outcome = execution.results_by_custom_id.get(str(entry["custom_id"]))
+            result = await _run_overlay_entry(
+                entry,
+                initial_response_text=(
+                    outcome.response_text
+                    if outcome is not None and outcome.response_text
+                    else None
+                ),
+                initial_usage=outcome.usage if outcome is not None else None,
+                batch_origin=True,
+                initial_attempt_consumed=bool(
+                    outcome is not None and outcome.response_text
+                ),
+            )
+            if result["used_fallback_single_call"]:
+                await mark_batch_fallback_result(
+                    batch_id=execution.local_batch_id,
+                    custom_id=str(entry["custom_id"]),
+                    succeeded=bool(result["succeeded"]),
+                    error_text=(
+                        outcome.error_text
+                        if outcome is not None
+                        and outcome.error_text
+                        and not result["succeeded"]
+                        else result["error_text"]
+                    ),
+                    usage=result.get("fallback_usage"),
+                    provider=str((result.get("fallback_usage") or {}).get("provider") or "") or None,
+                    model=str((result.get("fallback_usage") or {}).get("model") or "") or None,
+                    provider_request_id=(
+                        str((result.get("fallback_usage") or {}).get("provider_request_id") or "") or None
+                    ),
+                    pool=pool,
                 )
 
-    await asyncio.gather(*[_enrich_one(c) for c in deterministic_battle_cards])
+        await asyncio.gather(*[
+            _run_batched_entry(entry)
+            for entry in overlay_entries
+        ])
+    else:
+        await asyncio.gather(*[
+            _run_overlay_entry(entry)
+            for entry in overlay_entries
+        ])
 
     logger.info(
         "Battle card LLM: %d cache hits, %d generated, %d failed (of %d)",
@@ -3192,6 +3316,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "cards_llm_updated": bc_llm_updates,
         "cache_hits": bc_cache_hits,
         "llm_failures": bc_llm_failures,
+        "battle_card_batch_jobs": battle_card_batch_metrics["jobs"],
+        "battle_card_batch_items_submitted": battle_card_batch_metrics["submitted_items"],
+        "battle_card_batch_cache_prefiltered": battle_card_batch_metrics["cache_prefiltered_items"],
+        "battle_card_batch_fallback_single_call": battle_card_batch_metrics["fallback_single_call_items"],
+        "battle_card_batch_completed_items": battle_card_batch_metrics["completed_items"],
+        "battle_card_batch_failed_items": battle_card_batch_metrics["failed_items"],
         "reasoning_vendors": len(reasoning_lookup),
         "cards_gated_out": len(gated_out_vendors),
         "gated_out_vendors": gated_out_vendors,

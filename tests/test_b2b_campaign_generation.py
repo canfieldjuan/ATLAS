@@ -1506,6 +1506,149 @@ async def test_call_llm_uses_configured_campaign_timeout(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_llm_populates_usage_out(monkeypatch):
+    import asyncio
+
+    async def _fake_to_thread(fn, *args, **kwargs):
+        return {
+            "response": "ok",
+            "usage": {"input_tokens": 12, "output_tokens": 4},
+            "_trace_meta": {
+                "provider_request_id": "req_campaign_123",
+                "billable_input_tokens": 9,
+            },
+        }
+
+    async def _fake_wait_for(coro, timeout):
+        return await coro
+
+    monkeypatch.setattr(asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(asyncio, "wait_for", _fake_wait_for)
+
+    class _FakeSyncLLM:
+        model = "claude-sonnet-4-5"
+        name = "anthropic"
+
+        def chat(self, *, messages, max_tokens, temperature):
+            return {"response": "unused"}
+
+    usage_out = {}
+    result = await mod._call_llm(
+        _FakeSyncLLM(),
+        "system",
+        "user",
+        256,
+        0.1,
+        usage_out=usage_out,
+    )
+
+    assert result == "ok"
+    assert usage_out["input_tokens"] == 12
+    assert usage_out["output_tokens"] == 4
+    assert usage_out["billable_input_tokens"] == 9
+    assert usage_out["provider"] == "anthropic"
+    assert usage_out["model"] == "claude-sonnet-4-5"
+    assert usage_out["provider_request_id"] == "req_campaign_123"
+
+
+@pytest.mark.asyncio
+async def test_generate_content_usage_out_aggregates_retry_attempts(monkeypatch):
+    responses = [
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": "<p>Short body.</p>",
+            "cta": "Book time",
+        }),
+        json.dumps({
+            "subject": "Renewal pressure",
+            "body": _html_body_with_min_words(
+                "Teams are hitting a concrete renewal issue with a $200k/year pricing increase during Q2, and that timing is forcing a real evaluation instead of a soft complaint.",
+                "Freshdesk keeps showing up in those conversations often enough to make the next action credible before the renewal closes.",
+            ),
+            "cta": "Book time",
+        }),
+    ]
+    usage_samples = [
+        {
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "billable_input_tokens": 8,
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "provider_request_id": "req_campaign_first",
+        },
+        {
+            "input_tokens": 12,
+            "output_tokens": 5,
+            "billable_input_tokens": 9,
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "provider_request_id": "req_campaign_second",
+        },
+    ]
+
+    async def _fake_call_llm(llm, system_prompt, user_content, max_tokens, temperature, **kwargs):
+        usage_out = kwargs.get("usage_out")
+        sample = usage_samples.pop(0)
+        if usage_out is not None:
+            usage_out.clear()
+            usage_out.update(sample)
+        return responses.pop(0)
+
+    monkeypatch.setattr(mod, "_call_llm", _fake_call_llm)
+
+    payload = {
+        "channel": "email_followup",
+        "briefing_context": {
+            "reasoning_anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "witness:r1:0",
+                        "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                        "time_anchor": "Q2 renewal",
+                        "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                        "competitor": "Freshdesk",
+                        "pain_category": "pricing",
+                    },
+                ],
+            },
+            "reasoning_witness_highlights": [
+                {
+                    "witness_id": "witness:r1:0",
+                    "excerpt_text": "Hack Club said Slack tried to charge $200k/year at Q2 renewal.",
+                    "time_anchor": "Q2 renewal",
+                    "numeric_literals": {"currency_mentions": ["$200k/year"]},
+                    "competitor": "Freshdesk",
+                    "pain_category": "pricing",
+                },
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
+        },
+        "selling": {
+            "sender_name": "Juan Canfield",
+            "sender_title": "Founder",
+            "sender_company": "Atlas Intel",
+        },
+    }
+    usage_out = {}
+
+    result = await mod._generate_content(
+        llm=object(),
+        system_prompt="skill",
+        payload=payload,
+        max_tokens=256,
+        temperature=0.1,
+        usage_out=usage_out,
+    )
+
+    assert result is not None
+    assert usage_out["input_tokens"] == 22
+    assert usage_out["output_tokens"] == 9
+    assert usage_out["billable_input_tokens"] == 17
+    assert usage_out["provider_request_id"] == "req_campaign_second"
+
+
+@pytest.mark.asyncio
 async def test_generate_content_retries_when_body_is_too_short_for_mode(monkeypatch):
     user_contents = []
     responses = [

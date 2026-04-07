@@ -6,6 +6,7 @@ import pytest
 
 from atlas_brain.autonomous.tasks._b2b_shared import (
     _build_evidence_vault_pass2_rollups,
+    _fetch_existing_company_signals,
     _fetch_latest_evidence_vault,
     _fetch_product_profiles,
     _merge_company_lookup_with_evidence_vault,
@@ -61,6 +62,100 @@ async def test_fetch_latest_evidence_vault_normalizes_vendor_lookup():
 
     assert "Acme" in lookup
     assert lookup["Acme"]["vendor_name"] == "Acme"
+
+
+@pytest.mark.asyncio
+async def test_fetch_existing_company_signals_filters_rows_without_signal_evidence():
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(return_value=[
+        {
+            "company_name": "Infohob",
+            "vendor_name": "Trello",
+            "urgency_score": 7.0,
+            "pain_category": "pricing",
+            "buyer_role": "executive",
+            "decision_maker": True,
+            "seat_count": None,
+            "contract_end": None,
+            "buying_stage": "active_purchase",
+            "review_id": "r-1",
+            "source": "peerspot",
+            "confidence_score": 0.54,
+            "first_seen_at": "2026-04-01T00:00:00+00:00",
+            "last_seen_at": "2026-04-05T00:00:00+00:00",
+            "content_type": "review",
+            "intent_to_leave": False,
+            "actively_evaluating": False,
+            "contract_renewal_mentioned": False,
+            "indicator_cancel": False,
+            "indicator_migration": False,
+            "indicator_evaluation": False,
+            "indicator_switch": False,
+            "reviewer_title": None,
+            "company_size_raw": None,
+            "industry": None,
+            "verified_employee_count": None,
+            "company_country": None,
+            "company_domain": None,
+            "founded_year": None,
+            "total_funding": None,
+            "latest_funding_stage": None,
+            "headcount_growth_6m": None,
+            "headcount_growth_12m": None,
+            "headcount_growth_24m": None,
+            "publicly_traded_exchange": None,
+            "publicly_traded_symbol": None,
+            "company_description": None,
+            "alternatives": [],
+            "quotes": [],
+        },
+        {
+            "company_name": "Acme Corp",
+            "vendor_name": "Zendesk",
+            "urgency_score": 8.2,
+            "pain_category": "pricing",
+            "buyer_role": "vp",
+            "decision_maker": True,
+            "seat_count": 120,
+            "contract_end": "2026-06-30",
+            "buying_stage": "evaluation",
+            "review_id": "r-2",
+            "source": "g2",
+            "confidence_score": 0.74,
+            "first_seen_at": "2026-04-01T00:00:00+00:00",
+            "last_seen_at": "2026-04-05T00:00:00+00:00",
+            "content_type": "review",
+            "intent_to_leave": False,
+            "actively_evaluating": True,
+            "contract_renewal_mentioned": False,
+            "indicator_cancel": False,
+            "indicator_migration": False,
+            "indicator_evaluation": True,
+            "indicator_switch": False,
+            "reviewer_title": "VP Ops",
+            "company_size_raw": "500-1000",
+            "industry": "SaaS",
+            "verified_employee_count": 320,
+            "company_country": "US",
+            "company_domain": "acme.example",
+            "founded_year": 2012,
+            "total_funding": 25000000,
+            "latest_funding_stage": "Series B",
+            "headcount_growth_6m": 0.1,
+            "headcount_growth_12m": 0.2,
+            "headcount_growth_24m": 0.3,
+            "publicly_traded_exchange": None,
+            "publicly_traded_symbol": None,
+            "company_description": "Ops platform",
+            "alternatives": [{"name": "Freshdesk"}],
+            "quotes": [{"quote": "We are evaluating alternatives"}],
+        },
+    ])
+
+    lookup = await _fetch_existing_company_signals(pool, window_days=30)
+
+    assert "Trello" not in lookup
+    assert lookup["Zendesk"][0]["company_name"] == "Acme Corp"
 
 
 def test_build_evidence_vault_accepts_stringified_product_profile_fields():

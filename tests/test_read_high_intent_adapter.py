@@ -56,6 +56,9 @@ def _make_db_row(**overrides):
         "buying_stage": "evaluation",
         "relevance_score": Decimal("0.85"),
         "author_churn_score": Decimal("0.7"),
+        "intent_to_leave": False,
+        "actively_evaluating": True,
+        "contract_renewal_mentioned": False,
         "indicator_cancel": False,
         "indicator_migration": True,
         "indicator_evaluation": True,
@@ -189,6 +192,31 @@ async def test_intent_signals_mapped():
         "evaluation": True,
         "completed_switch": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_rows_without_explicit_signal_evidence_are_filtered_out():
+    pool = FakePool([_make_db_row(
+        intent_to_leave=False,
+        actively_evaluating=False,
+        contract_renewal_mentioned=False,
+        indicator_cancel=False,
+        indicator_migration=False,
+        indicator_evaluation=False,
+        indicator_switch=False,
+    )])
+    results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_signal_evidence_clause_is_present_in_sql():
+    pool = FakePool([_make_db_row()])
+    await read_high_intent_companies(pool, min_urgency=7.0, window_days=30)
+    sql = pool.fetch.call_args[0][0]
+    assert "intent_to_leave" in sql
+    assert "actively_evaluating" in sql
+    assert "contract_renewal_mentioned" in sql
 
 
 @pytest.mark.asyncio

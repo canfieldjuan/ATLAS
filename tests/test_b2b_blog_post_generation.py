@@ -3,6 +3,7 @@
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
@@ -22,6 +23,7 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
     _merge_blog_quotes_with_evidence_vault,
     _merge_blog_signals_with_evidence_vault,
 )
+from atlas_brain.storage.models import ScheduledTask
 
 
 def test_merge_blog_signals_with_evidence_vault_prefers_canonical_rows():
@@ -228,11 +230,13 @@ async def test_generate_content_async_traces_blog_business_metadata(monkeypatch)
         lambda *args, **kwargs: trace_calls.append((args, kwargs)),
     )
 
+    usage_out = {}
     result = await blog_mod._generate_content_async(
         DummyLLM(),
         blueprint,
         4096,
         run_id="run-blog-123",
+        usage_out=usage_out,
     )
 
     assert result is not None
@@ -246,6 +250,207 @@ async def test_generate_content_async_traces_blog_business_metadata(monkeypatch)
     assert kwargs["metadata"]["entity_type"] == "blog_post"
     assert kwargs["metadata"]["entity_id"] == "jira-deep-dive-2026-04"
     assert kwargs["provider_request_id"] == "req_blog_123"
+    assert usage_out["input_tokens"] == 1234
+    assert usage_out["output_tokens"] == 456
+    assert usage_out["provider"] == "openrouter"
+    assert usage_out["model"] == "anthropic/claude-sonnet-4-5"
+    assert usage_out["provider_request_id"] == "req_blog_123"
+
+
+@pytest.mark.asyncio
+async def test_run_uses_anthropic_batch_for_blog_first_pass(monkeypatch):
+    task = ScheduledTask(
+        id=uuid4(),
+        name="b2b_blog_post_generation",
+        task_type="builtin",
+        schedule_type="interval",
+        interval_seconds=300,
+        enabled=True,
+        metadata={"builtin_handler": "b2b_blog_post_generation"},
+    )
+
+    class FakePool:
+        is_initialized = True
+
+        def __init__(self):
+            self.fetch = AsyncMock(return_value=[])
+
+    class FakeAnthropicLLM:
+        model = "claude-sonnet-4-5"
+        name = "anthropic"
+
+    class FakeDirectLLM:
+        model = "anthropic/claude-sonnet-4-5"
+        name = "openrouter"
+
+    pool = FakePool()
+    direct_llm = FakeDirectLLM()
+    batch_llm = FakeAnthropicLLM()
+    assembled: list[dict[str, object]] = []
+    fallback_mark = AsyncMock()
+    notify = AsyncMock()
+    record_attempt = AsyncMock()
+
+    monkeypatch.setattr(blog_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_enabled", True, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "anthropic_batch_enabled", True, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_anthropic_batch_enabled", True, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_anthropic_batch_min_items", 1, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_max_per_run", 1, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_temperature", 0.7, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_max_tokens", 4096, raising=False)
+    monkeypatch.setattr(blog_mod.settings.b2b_churn, "blog_post_regenerate_mode", False, raising=False)
+
+    monkeypatch.setattr(
+        "atlas_brain.services.llm.anthropic.AnthropicLLM",
+        FakeAnthropicLLM,
+    )
+
+    def _fake_get_pipeline_llm(*, workload, **_kwargs):
+        if workload == "anthropic":
+            return batch_llm
+        return direct_llm
+
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        _fake_get_pipeline_llm,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.notify.send_pipeline_notification",
+        notify,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.visibility.record_attempt",
+        record_attempt,
+    )
+
+    class DummyRegistry:
+        def get(self, name):
+            assert name == "digest/b2b_blog_post_generation"
+            return SimpleNamespace(content="system")
+
+    monkeypatch.setattr(
+        "atlas_brain.skills.registry.get_skill_registry",
+        lambda: DummyRegistry(),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_select_topic",
+        AsyncMock(side_effect=[
+            ("vendor_deep_dive", {"vendor": "Jira", "slug": "jira-deep-dive-2026-04"}),
+            None,
+        ]),
+    )
+    monkeypatch.setattr(blog_mod, "_gather_data", AsyncMock(return_value={}))
+    monkeypatch.setattr(blog_mod, "_load_pool_layers_for_blog", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        blog_mod,
+        "_check_data_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_build_blueprint",
+        lambda *_args, **_kwargs: blog_mod.PostBlueprint(
+            topic_type="vendor_deep_dive",
+            slug="jira-deep-dive-2026-04",
+            suggested_title="Jira Deep Dive",
+            tags=["jira"],
+            data_context={"vendor": "Jira", "topic_ctx": {"vendor": "Jira"}},
+            sections=[],
+            charts=[],
+        ),
+    )
+    monkeypatch.setattr(blog_mod, "_fetch_related_for_linking", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_stage_request",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider="anthropic",
+            model="claude-sonnet-4-5",
+            request_envelope={"messages": []},
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text",
+        AsyncMock(return_value=None),
+    )
+
+    async def _fake_run_batch(**kwargs):
+        assert kwargs["llm"] is batch_llm
+        assert kwargs["stage_id"] == "b2b_blog_post_generation.content"
+        assert len(kwargs["items"]) == 1
+        item = kwargs["items"][0]
+        assert item.artifact_id == "jira-deep-dive-2026-04"
+        return SimpleNamespace(
+            local_batch_id="batch-1",
+            provider_batch_id="provider-batch-1",
+            results_by_custom_id={
+                item.custom_id: SimpleNamespace(
+                    response_text=json.dumps({
+                        "title": "Jira Deep Dive",
+                        "description": "Desc",
+                        "content": "# Jira\n\nBody",
+                    }),
+                    usage={"input_tokens": 10, "output_tokens": 20},
+                    error_text=None,
+                ),
+            },
+            submitted_items=1,
+            cache_prefiltered_items=0,
+            fallback_single_call_items=0,
+            completed_items=1,
+            failed_items=0,
+        )
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        _fake_run_batch,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.mark_batch_fallback_result",
+        fallback_mark,
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_enforce_blog_quality_async",
+        AsyncMock(return_value=(
+            {
+                "title": "Jira Deep Dive",
+                "description": "Desc",
+                "content": "# Jira\n\nBody",
+            },
+            {"status": "pass", "_retry_requested": False},
+        )),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_canonicalize_blog_quality",
+        lambda *_args, **_kwargs: {
+            "score": 88,
+            "threshold": 70,
+            "blocking_issues": [],
+            "warnings": [],
+        },
+    )
+
+    async def _fake_assemble_and_store(_pool, _blueprint, content, llm, **_kwargs):
+        assembled.append({"llm": llm, "content": content})
+        return "post-1"
+
+    monkeypatch.setattr(blog_mod, "_assemble_and_store", _fake_assemble_and_store)
+
+    result = await blog_mod.run(task)
+
+    assert result["count"] == 1
+    assert result["blog_batch_jobs"] == 1
+    assert result["blog_batch_items_submitted"] == 1
+    assert result["blog_batch_completed_items"] == 1
+    assert result["blog_batch_failed_items"] == 0
+    fallback_mark.assert_not_awaited()
+    assert len(assembled) == 1
+    assert assembled[0]["llm"] is batch_llm
+    assert assembled[0]["content"]["title"] == "Jira Deep Dive"
+    notify.assert_awaited_once()
 
 
 def _blog_anchor_context() -> dict:
@@ -275,6 +480,21 @@ def _blog_anchor_context() -> dict:
             },
         ],
         "reasoning_reference_ids": {"witness_ids": ["witness:r1:0"]},
+        "reasoning_scope_summary": {
+            "selection_strategy": "vendor_facet_packet_v1",
+            "witnesses_in_scope": 8,
+        },
+        "reasoning_atom_context": {
+            "theses": [{"thesis_id": "primary_wedge", "summary": "Pricing pressure is driving the story."}],
+            "timing_windows": [{"window_id": "trigger_1", "start_or_anchor": "Q2 renewal"}],
+            "proof_points": [{"label": "switch_volume"}],
+            "account_signals": [{"company": "Hack Club"}],
+            "counterevidence": [{"counterevidence_id": "counterevidence_1"}],
+            "coverage_limits": [{"coverage_limit_id": "limit_1"}],
+        },
+        "reasoning_delta_summary": {
+            "changed": True,
+        },
     }
 
 
@@ -354,6 +574,14 @@ async def test_load_pool_layers_for_blog_injects_anchor_context_and_claim_plan(m
                 "anchor_examples": _blog_anchor_context()["reasoning_anchor_examples"],
                 "witness_highlights": _blog_anchor_context()["reasoning_witness_highlights"],
                 "reference_ids": _blog_anchor_context()["reasoning_reference_ids"],
+                "scope_manifest": _blog_anchor_context()["reasoning_scope_summary"],
+                "theses": _blog_anchor_context()["reasoning_atom_context"]["theses"],
+                "timing_windows": _blog_anchor_context()["reasoning_atom_context"]["timing_windows"],
+                "proof_points": _blog_anchor_context()["reasoning_atom_context"]["proof_points"],
+                "account_signals": _blog_anchor_context()["reasoning_atom_context"]["account_signals"],
+                "counterevidence": _blog_anchor_context()["reasoning_atom_context"]["counterevidence"],
+                "coverage_limits": _blog_anchor_context()["reasoning_atom_context"]["coverage_limits"],
+                "reasoning_delta": _blog_anchor_context()["reasoning_delta_summary"],
             }
 
         def filtered_consumer_context(self, consumer):
@@ -401,6 +629,11 @@ async def test_load_pool_layers_for_blog_injects_anchor_context_and_claim_plan(m
     assert data["data_context"]["reasoning_reference_ids"]["witness_ids"] == ["witness:r1:0"]
     assert data["data_context"]["reasoning_section_disclaimers"]["timing_intelligence"]
     assert data["data_context"]["blog_claim_plan"]["primary_thesis"] == "Pricing pressure is driving the story."
+    assert data["reasoning_scope_summary"]["selection_strategy"] == "vendor_facet_packet_v1"
+    assert data["reasoning_atom_context"]["top_theses"][0]["summary"] == "Pricing pressure is driving the story."
+    assert data["reasoning_delta_summary"]["changed"] is True
+    assert data["data_context"]["reasoning_scope_summary"]["witnesses_in_scope"] == 8
+    assert data["data_context"]["reasoning_atom_context"]["timing_windows"][0]["anchor"] == "Q2 renewal"
 
 
 def test_apply_blog_quality_gate_blocks_generic_copy_when_anchors_available():

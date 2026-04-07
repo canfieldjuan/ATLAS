@@ -1376,9 +1376,45 @@ async def mark_batch_fallback_result(
     pool: Any | None = None,
     error_text: str | None = None,
     response_text: str | None = None,
+    usage: dict[str, Any] | None = None,
+    provider_request_id: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> None:
     """Finalize a fallback item after the caller runs the single-call path."""
     db_pool = _resolve_pool(pool)
+    usage_payload = dict(usage or {})
+    resolved_provider = str(provider or usage_payload.get("provider") or "").strip()
+    resolved_model = str(model or usage_payload.get("model") or "").strip()
+    resolved_provider_request_id = (
+        str(provider_request_id or usage_payload.get("provider_request_id") or "").strip() or None
+    )
+
+    input_tokens: int | None = None
+    billable_input_tokens: int | None = None
+    cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    if usage_payload:
+        input_tokens = int(usage_payload.get("input_tokens") or 0)
+        cached_tokens = int(usage_payload.get("cached_tokens") or 0)
+        cache_write_tokens = int(usage_payload.get("cache_write_tokens") or 0)
+        output_tokens = int(usage_payload.get("output_tokens") or 0)
+        if usage_payload.get("billable_input_tokens") is not None:
+            billable_input_tokens = int(usage_payload["billable_input_tokens"])
+        else:
+            billable_input_tokens = input_tokens
+        if resolved_provider and resolved_model:
+            cost_usd = _standard_cost_usd(
+                provider=resolved_provider,
+                model=resolved_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_tokens=cached_tokens,
+                cache_write_tokens=cache_write_tokens,
+                billable_input_tokens=billable_input_tokens,
+            )
     await _safe_execute(
         db_pool,
         """
@@ -1386,6 +1422,13 @@ async def mark_batch_fallback_result(
         SET status = $3,
             error_text = COALESCE($4, error_text),
             response_text = COALESCE($5, response_text),
+            input_tokens = input_tokens + COALESCE($6, 0),
+            billable_input_tokens = billable_input_tokens + COALESCE($7, 0),
+            cached_tokens = cached_tokens + COALESCE($8, 0),
+            cache_write_tokens = cache_write_tokens + COALESCE($9, 0),
+            output_tokens = output_tokens + COALESCE($10, 0),
+            cost_usd = cost_usd + COALESCE($11, 0),
+            provider_request_id = COALESCE($12, provider_request_id),
             fallback_single_call = TRUE,
             completed_at = NOW()
         WHERE batch_id = $1::uuid
@@ -1396,4 +1439,11 @@ async def mark_batch_fallback_result(
         "fallback_succeeded" if succeeded else "fallback_failed",
         error_text,
         response_text,
+        input_tokens,
+        billable_input_tokens,
+        cached_tokens,
+        cache_write_tokens,
+        output_tokens,
+        cost_usd,
+        resolved_provider_request_id,
     )

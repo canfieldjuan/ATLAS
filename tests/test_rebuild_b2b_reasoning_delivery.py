@@ -135,6 +135,42 @@ async def test_main_reports_only_refreshes_reports_without_reasoning(capsys, mon
 
 
 @pytest.mark.asyncio
+async def test_main_reports_only_allows_scoped_vendor_deep_dive_refresh(capsys, monkeypatch):
+    monkeypatch.setattr(rebuild_mod, "init_database", AsyncMock())
+    monkeypatch.setattr(rebuild_mod, "get_db_pool", Mock(return_value=object()))
+    monkeypatch.setattr(rebuild_mod, "close_database", AsyncMock())
+    monkeypatch.setattr(rebuild_mod, "_discover_stale_vendors", AsyncMock(return_value=[]))
+    monkeypatch.setattr(rebuild_mod, "_summarize_report_coverage", AsyncMock(return_value=[]))
+    run_rebuild = AsyncMock(return_value={"unexpected": True})
+    monkeypatch.setattr(rebuild_mod, "_run_reasoning_rebuild", run_rebuild)
+    run_refresh = AsyncMock(return_value={"reports_persisted": 1})
+    monkeypatch.setattr(rebuild_mod, "_run_report_refresh", run_refresh)
+
+    args = argparse.Namespace(
+        apply=True,
+        vendors="Zendesk,Freshdesk",
+        limit=None,
+        reports_only=True,
+        cross_vendor_only=False,
+        vendor_reasoning_only=False,
+        full_refresh=False,
+        include_reports=False,
+        report_types="vendor_deep_dive",
+        rebuild_cross_vendor=False,
+    )
+
+    await rebuild_mod._main(args)
+
+    run_rebuild.assert_not_awaited()
+    run_refresh.assert_awaited_once_with(
+        vendors=["Zendesk", "Freshdesk"],
+        report_type="vendor_deep_dive",
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["report_refresh"]["vendor_deep_dive"] == {"reports_persisted": 1}
+
+
+@pytest.mark.asyncio
 async def test_main_cross_vendor_only_preserves_selected_vendor_scope(capsys, monkeypatch):
     monkeypatch.setattr(rebuild_mod, "init_database", AsyncMock())
     monkeypatch.setattr(rebuild_mod, "get_db_pool", Mock(return_value=object()))

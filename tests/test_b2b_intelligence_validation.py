@@ -45,6 +45,7 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     _build_battle_card_locked_facts,
     _build_company_signal_blocked_names_by_vendor,
     _build_deterministic_battle_cards,
+    _build_deterministic_vendor_scorecards,
     _build_deterministic_battle_card_competitive_landscape,
     _build_deterministic_battle_card_weakness_analysis,
     _battle_card_fallback_recommended_plays,
@@ -686,6 +687,7 @@ class TestChurnVendorScoping:
 
         async def fake_build_bundle(*_args, **kwargs):
             captured["vendor_scores"] = kwargs["vendor_scores"]
+            captured["vendor_scorecard_limit"] = kwargs["vendor_scorecard_limit"]
             return {
                 "weekly_churn_feed": [],
                 "vendor_scorecards": [
@@ -746,6 +748,138 @@ class TestChurnVendorScoping:
         assert result["scorecard_cache_hits"] == 0
         assert result["selected_report_types"] == ["vendor_scorecard"]
         assert result["scoped_vendors"] == ["Zendesk"]
+        assert captured["vendor_scorecard_limit"] is None
+
+
+@pytest.mark.asyncio
+async def test_scoped_vendor_scorecard_persistence_can_store_more_than_default_limit(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class FakeConn:
+        async def fetchrow(self, query, *args):
+            captured["insert_query"] = query
+            captured["report_type"] = args[1]
+            captured["vendor_filter"] = args[2]
+            captured["intelligence_data"] = json.loads(args[3])
+            return {"id": uuid4()}
+
+    class FakeTransaction:
+        async def __aenter__(self):
+            return FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakePool:
+        is_initialized = True
+
+        def transaction(self):
+            return FakeTransaction()
+
+    pool = FakePool()
+
+    async def fake_gather(*_coros):
+        for coro in _coros:
+            close = getattr(coro, "close", None)
+            if callable(close):
+                close()
+        vendor_scores = [
+            {
+                "vendor_name": f"Vendor {idx}",
+                "product_category": "Testing",
+                "total_reviews": 30,
+                "signal_reviews": 30,
+                "churn_intent": 6,
+                "avg_urgency": 6.5,
+            }
+            for idx in range(20)
+        ]
+        return (
+            vendor_scores,                       # vendor_scores
+            [], [], [], [], [], [], [], [], [], # competitive_disp .. budget_signals
+            [], [], [], {}, [], [], [],         # use_case_dist .. keyword_spikes
+            {"reviews_in_analysis_window": 20, "source_distribution": {}},  # data_context
+            [],                                 # product_profiles_raw
+            [],                                 # prior_reports
+            {},                                 # displacement_provenance
+            ([], []),                           # review_text_agg
+            [],                                 # department_dist
+            ([], []),                           # contract_ctx
+            [],                                 # turning_points
+        )
+
+    async def fake_build_bundle(*_args, **kwargs):
+        scorecards = [
+            {
+                "vendor": f"Vendor {idx}",
+                "vendor_name": f"Vendor {idx}",
+                "reasoning_summary": f"Scoped summary {idx}",
+                "cross_vendor_comparisons": [],
+            }
+            for idx in range(20)
+        ]
+        return {
+            "weekly_churn_feed": [],
+            "vendor_scorecards": scorecards,
+            "displacement_map": [],
+            "category_insights": [],
+            "vendor_deep_dives": [],
+            "reasoning_lookup": {
+                f"Vendor {idx}": {"mode": "synthesis"}
+                for idx in range(20)
+            },
+            "xv_lookup": {"battles": {}, "councils": {}, "asymmetries": {}},
+            "synthesis_views": {},
+            "evidence_vault_lookup": {},
+            "attached_contract_vendors": 0,
+        }
+
+    monkeypatch.setattr(churn_reports_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(churn_reports_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+    monkeypatch.setattr(churn_reports_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(churn_reports_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 31)))
+    monkeypatch.setattr(churn_reports_mod.asyncio, "gather", fake_gather)
+    monkeypatch.setattr(churn_reports_mod, "_build_deterministic_report_bundle", fake_build_bundle)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared._build_validated_executive_summary",
+        lambda *args, **kwargs: "summary",
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared._executive_source_list",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.visibility.record_attempt",
+        AsyncMock(return_value=str(uuid4())),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.visibility.emit_event",
+        AsyncMock(return_value=None),
+    )
+
+    task = type(
+        "Task",
+        (),
+        {
+            "id": uuid4(),
+            "metadata": {
+                "_execution_id": str(uuid4()),
+                "test_vendors": [f"Vendor {idx}" for idx in range(20)],
+                "test_report_type": "vendor_scorecard",
+                "persist_scoped_reports": True,
+            },
+        },
+    )()
+
+    result = await churn_reports_mod.run(task)
+
+    assert result["reports_persisted"] == 1
+    assert result["persistence_skipped"] is False
+    assert captured["report_type"] == "vendor_scorecard"
+    assert captured["vendor_filter"] == churn_reports_mod._scoped_report_vendor_filter(
+        [f"Vendor {idx}" for idx in range(20)]
+    )
+    assert len(captured["intelligence_data"]) == 20
 
 
 @pytest.mark.asyncio
@@ -2873,6 +3007,531 @@ class TestBattleCardExecutionProgress:
         assert payload["cards_built"] == 15
 
 
+class TestBattleCardAnthropicBatching:
+    @pytest.mark.asyncio
+    async def test_run_uses_anthropic_batch_for_sales_copy(self, monkeypatch):
+        import atlas_brain.autonomous.tasks.b2b_battle_cards as battle_cards_mod
+
+        class FakePool:
+            is_initialized = True
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                return None
+
+        class FakeAnthropicLLM:
+            model = "fake-anthropic-batch"
+
+        class FakeDirectLLM:
+            model = "fake-direct"
+
+        fake_pool = FakePool()
+        batch_llm = FakeAnthropicLLM()
+        direct_llm = FakeDirectLLM()
+        batch_calls: list[dict[str, Any]] = []
+        fallback_calls: list[dict[str, Any]] = []
+        direct_calls: list[dict[str, Any]] = []
+        persisted_cards: list[dict[str, Any]] = []
+        semantic_cache_instances: list[Any] = []
+
+        vendor_scores = [
+            {
+                "vendor_name": "Shopify",
+                "product_category": "Commerce",
+                "total_reviews": 1156,
+                "avg_urgency": 6.4,
+                "churn_pressure_score": 43.1,
+            }
+        ]
+
+        class FakeSemanticCache:
+            def __init__(self, pool):
+                self.pool = pool
+                self.stored = []
+                semantic_cache_instances.append(self)
+
+            async def lookup(self, pattern_sig):
+                return None
+
+            async def store(self, entry):
+                self.stored.append(entry)
+
+            async def invalidate(self, pattern_sig, reason=""):
+                return None
+
+            async def validate(self, pattern_sig):
+                return None
+
+        async def _fake_check_freshness(pool):
+            return date(2026, 4, 6)
+
+        async def _fake_gather(*coros, **kwargs):
+            if len(coros) == 23:
+                for coro in coros:
+                    close = getattr(coro, "close", None)
+                    if close:
+                        close()
+                return (
+                    vendor_scores,
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    {
+                        "reviews_in_analysis_window": 1156,
+                        "source_distribution": {"g2": {"reviews": 100}},
+                    },
+                    {},
+                    {},
+                    {},
+                    [],
+                    ([], []),
+                    [],
+                    ([], []),
+                )
+            return [await coro for coro in coros]
+
+        async def _fake_load_best_reasoning_views(*args, **kwargs):
+            return {}
+
+        async def _fake_load_best_cross_vendor_lookup(*args, **kwargs):
+            return {"battles": {}, "councils": {}, "asymmetries": {}}
+
+        class FakeEcosystemAnalyzer:
+            def __init__(self, pool):
+                self.pool = pool
+
+            async def analyze_all_categories(self):
+                return {}
+
+        def _fake_build_deterministic_battle_cards(*args, **kwargs):
+            return [_sample_battle_card()]
+
+        async def _fake_persist_battle_card(*args, card, **kwargs):
+            persisted_cards.append(json.loads(json.dumps(card, default=str)))
+            return True
+
+        def _fake_apply_quality(card, *, phase):
+            card["quality_status"] = "sales_ready"
+            return {"status": "sales_ready", "failed_checks": []}
+
+        def _fake_get_pipeline_llm(*, workload=None, **kwargs):
+            if workload == "anthropic":
+                return batch_llm
+            return direct_llm
+
+        def _unexpected_direct_call(*args, **kwargs):
+            direct_calls.append({"args": args, "kwargs": kwargs})
+            raise AssertionError(
+                "Direct battle-card LLM path should not be used when batch succeeds"
+            )
+
+        async def _fake_run_anthropic_message_batch(**kwargs):
+            batch_calls.append(kwargs)
+            return SimpleNamespace(
+                local_batch_id="battle-batch-1",
+                provider_batch_id="msgbatch_battle_1",
+                results_by_custom_id={
+                    "battle_card:0:shopify": SimpleNamespace(
+                        response_text=json.dumps(
+                            {
+                                "executive_summary": "Batch summary",
+                                "discovery_questions": ["Why now?"],
+                                "landmine_questions": ["What broke?"],
+                                "objection_handlers": [{"objection": "Price", "response": "Value"}],
+                                "talk_track": {
+                                    "opening": "Open",
+                                    "mid_call_pivot": "Pivot",
+                                    "closing": "Close",
+                                },
+                                "recommended_plays": ["Lead with pricing clarity"],
+                                "why_they_stay": {
+                                    "strengths_to_acknowledge": ["ecosystem breadth"],
+                                    "mitigation_to_neutralize": "Address pricing concerns directly",
+                                },
+                            }
+                        ),
+                        usage={"input_tokens": 120, "output_tokens": 80},
+                        error_text=None,
+                    )
+                },
+                submitted_items=1,
+                cache_prefiltered_items=0,
+                fallback_single_call_items=0,
+                completed_items=1,
+                failed_items=0,
+            )
+
+        async def _fake_mark_batch_fallback_result(**kwargs):
+            fallback_calls.append(kwargs)
+
+        monkeypatch.setattr(
+            battle_cards_mod.settings.b2b_churn, "enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod.settings.b2b_churn, "anthropic_batch_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod.settings.b2b_churn, "battle_card_anthropic_batch_enabled", True, raising=False,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod.settings.b2b_churn, "battle_card_anthropic_batch_min_items", 1, raising=False,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod.settings.b2b_churn, "battle_card_llm_backend", "anthropic", raising=False,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod.settings.b2b_churn, "battle_card_llm_attempts", 1, raising=False,
+        )
+
+        monkeypatch.setattr(battle_cards_mod, "get_db_pool", lambda: fake_pool)
+        monkeypatch.setattr(battle_cards_mod, "_check_freshness", _fake_check_freshness)
+        monkeypatch.setattr(battle_cards_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(
+            battle_cards_mod.asyncio,
+            "gather",
+            _fake_gather,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.load_best_reasoning_views",
+            _fake_load_best_reasoning_views,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.load_best_cross_vendor_lookup",
+            _fake_load_best_cross_vendor_lookup,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.ecosystem.EcosystemAnalyzer",
+            FakeEcosystemAnalyzer,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._build_deterministic_battle_cards",
+            _fake_build_deterministic_battle_cards,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod,
+            "_persist_battle_card",
+            _fake_persist_battle_card,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod,
+            "_battle_card_preflight_quality_gate",
+            lambda card: None,
+        )
+        monkeypatch.setattr(
+            battle_cards_mod,
+            "_apply_battle_card_quality",
+            _fake_apply_quality,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._validate_battle_card_sales_copy",
+            lambda card, generated: [],
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._sanitize_battle_card_sales_copy",
+            lambda card, generated: generated,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.reasoning.semantic_cache.SemanticCache",
+            FakeSemanticCache,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.services.llm.anthropic.AnthropicLLM",
+            FakeAnthropicLLM,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.get_pipeline_llm",
+            _fake_get_pipeline_llm,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.pipelines.llm.call_llm_with_skill",
+            _unexpected_direct_call,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+            _fake_run_anthropic_message_batch,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.services.b2b.anthropic_batch.mark_batch_fallback_result",
+            _fake_mark_batch_fallback_result,
+        )
+
+        task = type(
+            "Task",
+            (),
+            {"id": uuid4(), "name": "b2b_battle_cards", "metadata": {"_execution_id": str(uuid4())}},
+        )()
+
+        result = await battle_cards_mod.run(task)
+
+        assert result["cards_built"] == 1
+        assert result["cards_llm_updated"] == 1
+        assert result["llm_failures"] == 0
+        assert result["battle_card_batch_jobs"] == 1
+        assert result["battle_card_batch_items_submitted"] == 1
+        assert result["battle_card_batch_completed_items"] == 1
+        assert result["battle_card_batch_failed_items"] == 0
+        assert len(batch_calls) == 1
+        assert direct_calls == []
+        assert fallback_calls == []
+        assert semantic_cache_instances
+        assert len(semantic_cache_instances[0].stored) == 1
+        assert persisted_cards[-1]["llm_render_status"] == "succeeded"
+        assert persisted_cards[-1]["executive_summary"] == "Batch summary"
+
+    @pytest.mark.asyncio
+    async def test_run_marks_battle_card_batch_fallback_with_usage(self, monkeypatch):
+        import atlas_brain.autonomous.tasks.b2b_battle_cards as battle_cards_mod
+
+        class FakePool:
+            is_initialized = True
+
+            async def fetch(self, query, *args):
+                return []
+
+            async def execute(self, query, *args):
+                return None
+
+        class FakeAnthropicLLM:
+            model = "fake-anthropic-batch"
+
+        class FakeDirectLLM:
+            model = "claude-sonnet-4-5"
+            name = "anthropic"
+
+        fake_pool = FakePool()
+        batch_llm = FakeAnthropicLLM()
+        direct_llm = FakeDirectLLM()
+        fallback_calls: list[dict[str, Any]] = []
+
+        vendor_scores = [
+            {
+                "vendor_name": "Shopify",
+                "product_category": "Commerce",
+                "total_reviews": 1156,
+                "avg_urgency": 6.4,
+                "churn_pressure_score": 43.1,
+            }
+        ]
+
+        class FakeSemanticCache:
+            def __init__(self, pool):
+                self.pool = pool
+
+            async def lookup(self, pattern_sig):
+                return None
+
+            async def store(self, entry):
+                return None
+
+            async def invalidate(self, pattern_sig, reason=""):
+                return None
+
+            async def validate(self, pattern_sig):
+                return None
+
+        async def _fake_check_freshness(pool):
+            return date(2026, 4, 6)
+
+        async def _fake_gather(*coros, **kwargs):
+            if len(coros) == 23:
+                for coro in coros:
+                    close = getattr(coro, "close", None)
+                    if close:
+                        close()
+                return (
+                    vendor_scores,
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    {
+                        "reviews_in_analysis_window": 1156,
+                        "source_distribution": {"g2": {"reviews": 100}},
+                    },
+                    {},
+                    {},
+                    {},
+                    [],
+                    ([], []),
+                    [],
+                    ([], []),
+                )
+            return [await coro for coro in coros]
+
+        async def _fake_load_best_reasoning_views(*args, **kwargs):
+            return {}
+
+        async def _fake_load_best_cross_vendor_lookup(*args, **kwargs):
+            return {"battles": {}, "councils": {}, "asymmetries": {}}
+
+        class FakeEcosystemAnalyzer:
+            def __init__(self, pool):
+                self.pool = pool
+
+            async def analyze_all_categories(self):
+                return {}
+
+        def _fake_build_deterministic_battle_cards(*args, **kwargs):
+            return [_sample_battle_card()]
+
+        async def _fake_persist_battle_card(*args, **kwargs):
+            return True
+
+        def _fake_apply_quality(card, *, phase):
+            card["quality_status"] = "sales_ready"
+            return {"status": "sales_ready", "failed_checks": []}
+
+        def _fake_get_pipeline_llm(*, workload=None, **kwargs):
+            if workload == "anthropic":
+                return batch_llm
+            return direct_llm
+
+        async def _fake_run_anthropic_message_batch(**kwargs):
+            return SimpleNamespace(
+                local_batch_id="battle-batch-fallback",
+                provider_batch_id="msgbatch_battle_fallback",
+                results_by_custom_id={
+                    "battle_card:0:shopify": SimpleNamespace(
+                        response_text='{"broken_json"',
+                        usage={"input_tokens": 120, "output_tokens": 80},
+                        error_text=None,
+                    )
+                },
+                submitted_items=1,
+                cache_prefiltered_items=0,
+                fallback_single_call_items=1,
+                completed_items=0,
+                failed_items=1,
+            )
+
+        def _fake_direct_call(*args, usage_out=None, **kwargs):
+            if usage_out is not None:
+                usage_out.update(
+                    {
+                        "input_tokens": 55,
+                        "output_tokens": 22,
+                        "billable_input_tokens": 40,
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-4-5",
+                        "provider_request_id": "req_battle_123",
+                    }
+                )
+            return json.dumps(
+                {
+                    "executive_summary": "Fallback summary",
+                    "discovery_questions": ["Why now?"],
+                    "landmine_questions": ["What broke?"],
+                    "objection_handlers": [{"objection": "Price", "response": "Value"}],
+                    "talk_track": {
+                        "opening": "Open",
+                        "mid_call_pivot": "Pivot",
+                        "closing": "Close",
+                    },
+                    "recommended_plays": ["Lead with pricing clarity"],
+                    "why_they_stay": {
+                        "strengths_to_acknowledge": ["ecosystem breadth"],
+                        "mitigation_to_neutralize": "Address pricing concerns directly",
+                    },
+                }
+            )
+
+        async def _fake_mark_batch_fallback_result(**kwargs):
+            fallback_calls.append(kwargs)
+
+        monkeypatch.setattr(battle_cards_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(battle_cards_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(battle_cards_mod.settings.b2b_churn, "anthropic_batch_enabled", True, raising=False)
+        monkeypatch.setattr(battle_cards_mod.settings.b2b_churn, "battle_card_anthropic_batch_enabled", True, raising=False)
+        monkeypatch.setattr(battle_cards_mod.settings.b2b_churn, "battle_card_anthropic_batch_min_items", 1, raising=False)
+        monkeypatch.setattr(battle_cards_mod.settings.b2b_churn, "battle_card_llm_backend", "anthropic", raising=False)
+        monkeypatch.setattr(battle_cards_mod.settings.b2b_churn, "battle_card_llm_attempts", 2, raising=False)
+
+        monkeypatch.setattr(battle_cards_mod, "get_db_pool", lambda: fake_pool)
+        monkeypatch.setattr(battle_cards_mod, "_check_freshness", _fake_check_freshness)
+        monkeypatch.setattr(battle_cards_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(battle_cards_mod.asyncio, "gather", _fake_gather)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.load_best_reasoning_views",
+            _fake_load_best_reasoning_views,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.load_best_cross_vendor_lookup",
+            _fake_load_best_cross_vendor_lookup,
+        )
+        monkeypatch.setattr("atlas_brain.reasoning.ecosystem.EcosystemAnalyzer", FakeEcosystemAnalyzer)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._build_deterministic_battle_cards",
+            _fake_build_deterministic_battle_cards,
+        )
+        monkeypatch.setattr(battle_cards_mod, "_persist_battle_card", _fake_persist_battle_card)
+        monkeypatch.setattr(battle_cards_mod, "_battle_card_preflight_quality_gate", lambda card: None)
+        monkeypatch.setattr(battle_cards_mod, "_apply_battle_card_quality", _fake_apply_quality)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._validate_battle_card_sales_copy",
+            lambda card, generated: [],
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_shared._sanitize_battle_card_sales_copy",
+            lambda card, generated: generated,
+        )
+        monkeypatch.setattr("atlas_brain.reasoning.semantic_cache.SemanticCache", FakeSemanticCache)
+        monkeypatch.setattr("atlas_brain.services.llm.anthropic.AnthropicLLM", FakeAnthropicLLM)
+        monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", _fake_get_pipeline_llm)
+        monkeypatch.setattr("atlas_brain.pipelines.llm.call_llm_with_skill", _fake_direct_call)
+        monkeypatch.setattr(
+            "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+            _fake_run_anthropic_message_batch,
+        )
+        monkeypatch.setattr(
+            "atlas_brain.services.b2b.anthropic_batch.mark_batch_fallback_result",
+            _fake_mark_batch_fallback_result,
+        )
+
+        task = type(
+            "Task",
+            (),
+            {"id": uuid4(), "name": "b2b_battle_cards", "metadata": {"_execution_id": str(uuid4())}},
+        )()
+
+        result = await battle_cards_mod.run(task)
+
+        assert result["cards_built"] == 1
+        assert fallback_calls
+        kwargs = fallback_calls[0]
+        assert kwargs["succeeded"] is True
+        assert kwargs["usage"]["input_tokens"] == 55
+        assert kwargs["usage"]["output_tokens"] == 22
+        assert kwargs["provider"] == "anthropic"
+        assert kwargs["model"] == "claude-sonnet-4-5"
+        assert kwargs["provider_request_id"] == "req_battle_123"
+
+
 class TestDeterministicBattleCardBuild:
     def test_build_deterministic_battle_cards_is_not_capped_at_fifteen_by_default(self):
         vendor_scores = [
@@ -2903,6 +3562,40 @@ class TestDeterministicBattleCardBuild:
         )
 
         assert len(cards) == 20
+
+
+class TestDeterministicVendorScorecardBuild:
+    def test_build_deterministic_vendor_scorecards_is_not_capped_for_explicit_unbounded_limit(self):
+        vendor_scores = [
+            {
+                "vendor_name": f"Vendor {idx}",
+                "product_category": "Testing",
+                "total_reviews": 30,
+                "signal_reviews": 30,
+                "churn_intent": 6,
+                "avg_urgency": 6.5,
+            }
+            for idx in range(20)
+        ]
+
+        scorecards = _build_deterministic_vendor_scorecards(
+            vendor_scores,
+            pain_lookup={},
+            competitor_lookup={},
+            feature_gap_lookup={},
+            quote_lookup={},
+            budget_lookup={},
+            sentiment_lookup={},
+            buyer_auth_lookup={},
+            dm_lookup={},
+            price_lookup={},
+            company_lookup={},
+            product_profile_lookup={},
+            prior_reports=[],
+            limit=None,
+        )
+
+        assert len(scorecards) == 20
 
     def test_build_deterministic_battle_cards_respects_explicit_limit(self):
         vendor_scores = [
@@ -3123,12 +3816,12 @@ class TestBattleCardCompanyPrioritization:
         min_urgency = float(settings.b2b_churn.battle_card_quality_min_high_intent_urgency)
         vault = {
             "company_signals": [
-                {"company_name": "Account A", "urgency_score": min_urgency + 2.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
-                {"company_name": "Account B", "urgency_score": min_urgency + 1.5, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
-                {"company_name": "Account C", "urgency_score": min_urgency + 1.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
-                {"company_name": "Account D", "urgency_score": min_urgency + 0.5, "buyer_role": "ic", "buying_stage": "unknown", "source": "reddit"},
-                {"company_name": "Account E", "urgency_score": min_urgency + 0.2, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
-                {"company_name": "Account Eval", "urgency_score": min_urgency, "buyer_role": "evaluator", "buying_stage": "evaluation", "source": "reddit"},
+                {"company_name": "Account A", "urgency_score": min_urgency + 2.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit", "confidence_score": 0.95},
+                {"company_name": "Account B", "urgency_score": min_urgency + 1.5, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit", "confidence_score": 0.92},
+                {"company_name": "Account C", "urgency_score": min_urgency + 1.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit", "confidence_score": 0.9},
+                {"company_name": "Account D", "urgency_score": min_urgency + 0.5, "buyer_role": "ic", "buying_stage": "unknown", "source": "reddit", "confidence_score": 0.88},
+                {"company_name": "Account E", "urgency_score": min_urgency + 0.2, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit", "confidence_score": 0.86},
+                {"company_name": "Account Eval", "urgency_score": min_urgency, "buyer_role": "evaluator", "buying_stage": "evaluation", "source": "reddit", "confidence_score": 0.91},
             ],
         }
 
@@ -3141,8 +3834,8 @@ class TestBattleCardCompanyPrioritization:
         min_urgency = float(settings.b2b_churn.battle_card_quality_min_high_intent_urgency)
         vault = {
             "company_signals": [
-                {"company_name": "High Urgency Post", "urgency_score": min_urgency + 2.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit"},
-                {"company_name": "Low Urgency Eval", "urgency_score": max(min_urgency - 2.0, 0.0), "buyer_role": "evaluator", "buying_stage": "evaluation", "source": "reddit"},
+                {"company_name": "High Urgency Post", "urgency_score": min_urgency + 2.0, "buyer_role": "ic", "buying_stage": "post_purchase", "source": "reddit", "confidence_score": 0.95},
+                {"company_name": "Low Urgency Eval", "urgency_score": max(min_urgency - 2.0, 0.0), "buyer_role": "evaluator", "buying_stage": "evaluation", "source": "reddit", "confidence_score": 0.9},
             ],
         }
 

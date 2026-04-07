@@ -18,9 +18,23 @@ import httpx
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._campaign_sequence_context import (
+    plain_text_preview,
+    prepare_sequence_prompt_contexts,
+    prompt_max_tokens,
+)
 from .campaign_audit import log_campaign_event
 
 logger = logging.getLogger("atlas.autonomous.tasks.campaign_sequence_progression")
+
+
+def _progression_from_email() -> str:
+    cfg = settings.campaign_sequence
+    return cfg.ses_from_email if cfg.sender_type == "ses" else cfg.resend_from_email
+
+
+def _sequence_max_steps(seq: dict) -> int:
+    return int(seq.get("max_steps") or settings.campaign_sequence.max_steps)
 
 
 def _build_engagement_summary(seq: dict, previous_campaigns: list[dict] | None = None) -> str:
@@ -32,15 +46,11 @@ def _build_engagement_summary(seq: dict, previous_campaigns: list[dict] | None =
 
     if opens > 0:
         parts.append(f"Opened {opens} time(s)")
-        if seq.get("last_opened_at"):
-            parts.append(f"Last opened: {seq['last_opened_at'].isoformat()}")
     else:
         parts.append("No opens recorded")
 
     if clicks > 0:
         parts.append(f"Clicked {clicks} time(s)")
-        if seq.get("last_clicked_at"):
-            parts.append(f"Last clicked: {seq['last_clicked_at'].isoformat()}")
     else:
         parts.append("No clicks recorded")
 
@@ -73,27 +83,26 @@ def _build_previous_emails(campaigns: list[dict]) -> str:
     for c in campaigns:
         step = c.get("step_number", "?")
         subject = c.get("subject", "(no subject)")
-        body = (c.get("body") or "")[:500]
+        body = plain_text_preview(c.get("body") or "")
         status = c.get("status", "")
-        sent_at = c.get("sent_at", "")
 
         opened_at = c.get("opened_at")
         clicked_at = c.get("clicked_at")
         if opened_at or clicked_at:
             eng_parts = []
             if opened_at:
-                eng_parts.append(f"Opened {opened_at.isoformat() if hasattr(opened_at, 'isoformat') else opened_at}")
+                eng_parts.append("Opened")
             if clicked_at:
-                eng_parts.append(f"Clicked {clicked_at.isoformat() if hasattr(clicked_at, 'isoformat') else clicked_at}")
+                eng_parts.append("Clicked")
             engagement_line = f"Engagement: {' | '.join(eng_parts)}"
         else:
             engagement_line = "Engagement: No opens or clicks recorded"
 
         parts.append(
-            f"--- Step {step} (status: {status}, sent: {sent_at}) ---\n"
+            f"--- Step {step} (status: {status}) ---\n"
             f"Subject: {subject}\n"
             f"{engagement_line}\n"
-            f"{body}\n"
+            f"Preview: {body or '(no body)'}\n"
         )
     return "\n".join(parts)
 
@@ -117,13 +126,9 @@ async def _generate_next_step(
         logger.warning("No LLM available for sequence progression")
         return None
 
-    # Parse context from JSONB (needed early for skill selection)
-    company_context = seq.get("company_context") or {}
-    selling_context = seq.get("selling_context") or {}
-    if isinstance(company_context, str):
-        company_context = json.loads(company_context)
-    if isinstance(selling_context, str):
-        selling_context = json.loads(selling_context)
+    # Compact persisted context before prompt construction to avoid
+    # replaying cold-generation payloads and duplicate selling metadata.
+    company_context, selling_context = prepare_sequence_prompt_contexts(seq)
 
     # Select skill based on sequence type
     recipient_type = company_context.get("recipient_type")
@@ -154,6 +159,7 @@ async def _generate_next_step(
 
     engagement = _build_engagement_summary(seq, previous_campaigns)
     prev_emails = _build_previous_emails(previous_campaigns)
+    max_steps = _sequence_max_steps(seq)
 
     # Build template replacements (shared + skill-specific)
     replacements = {
@@ -161,10 +167,14 @@ async def _generate_next_step(
         "{company_context}": json.dumps(company_context, separators=(",", ":"), default=str),
         "{selling_context}": json.dumps(selling_context, separators=(",", ":"), default=str),
         "{current_step}": str(seq.get("current_step", 1) + 1),
-        "{max_steps}": str(seq.get("max_steps", 4)),
+        "{max_steps}": str(max_steps),
         "{days_since_last}": days_since,
         "{engagement_summary}": engagement,
         "{previous_emails}": prev_emails,
+        "{product_name}": str(
+            company_context.get("product_name")
+            or settings.campaign_sequence.onboarding_product_name
+        ),
     }
 
     # Extra placeholders for Amazon seller sequence skill
@@ -192,7 +202,7 @@ async def _generate_next_step(
                 None,
                 lambda msgs=messages: llm.chat(
                     messages=msgs,
-                    max_tokens=1024,
+                    max_tokens=prompt_max_tokens(),
                     temperature=0.7,
                 ),
             ),
@@ -221,7 +231,7 @@ async def _generate_next_step(
                            metadata={
                                "company_name": seq.get("company_name", ""),
                                "current_step": seq.get("current_step", 0) + 1,
-                               "max_steps": seq.get("max_steps", 4),
+                               "max_steps": max_steps,
                                "recipient_type": recipient_type or "",
                                "days_since_last": days_since,
                            })
@@ -337,9 +347,10 @@ async def run(task: ScheduledTask) -> dict:
               WHERE bc.sequence_id = cs.id AND bc.status = 'queued'
           )
         ORDER BY cs.next_step_after ASC
-        LIMIT 10
+        LIMIT $2
         """,
         now,
+        cfg.progression_batch_limit,
     )
 
     if not sequences:
@@ -355,14 +366,14 @@ async def run(task: ScheduledTask) -> dict:
         # Load all previous campaigns for this sequence
         previous = await pool.fetch(
             """
-            SELECT id, step_number, subject, body, status, sent_at,
-                   opened_at, clicked_at, esp_message_id
+            SELECT step_number, subject, body, status, opened_at, clicked_at
             FROM b2b_campaigns
             WHERE sequence_id = $1
             ORDER BY step_number ASC
-            LIMIT 20
+            LIMIT $2
             """,
             seq_id,
+            _sequence_max_steps(seq_dict),
         )
         previous_dicts = [dict(r) for r in previous]
 
@@ -406,7 +417,7 @@ async def run(task: ScheduledTask) -> dict:
             seq_id,
             next_step,
             seq_dict["recipient_email"],
-            cfg.resend_from_email,
+            _progression_from_email(),
             json.dumps({
                 "cta": content.get("cta", ""),
                 "angle_reasoning": content.get("angle_reasoning", ""),

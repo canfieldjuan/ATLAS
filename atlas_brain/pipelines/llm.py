@@ -494,7 +494,8 @@ def call_llm_with_skill(
     Caller is responsible for further parsing (JSON, etc.).
 
     If *usage_out* is provided (a mutable dict), it will be populated with:
-        input_tokens (int), output_tokens (int), model (str), provider (str)
+        input_tokens (int), output_tokens (int), model (str), provider (str),
+        and provider_request_id (str | None) when available
     """
     from ..skills import get_skill_registry
     from ..services.protocols import Message
@@ -559,6 +560,7 @@ def call_llm_with_skill(
                 usage_out["billable_input_tokens"] = billable_input_tokens
             usage_out["model"] = model_name
             usage_out["provider"] = provider_name
+            usage_out["provider_request_id"] = trace_meta.get("provider_request_id")
 
         # Emit FTL trace span with full I/O and provider metadata
         trace_llm_call(

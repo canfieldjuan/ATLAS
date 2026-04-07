@@ -387,8 +387,8 @@ class TestCopyLevelGovernance:
         )
         quality = _evaluate_battle_card_quality(card, phase="final")
         assert any(
-            "witness-backed anchor" in blocker
-            for blocker in quality["failed_checks"]
+            "witness-backed anchor" in warning
+            for warning in quality["warnings"]
         )
 
     def test_anchor_backed_specificity_accepts_concrete_copy(self):

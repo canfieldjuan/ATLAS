@@ -852,6 +852,7 @@ async def _build_deterministic_report_bundle(
     department_dist: list[dict[str, Any]],
     contract_ctx: tuple[list[dict[str, Any]], list[dict[str, Any]]],
     turning_points: list[dict[str, Any]],
+    vendor_scorecard_limit: int | None = 15,
     synthesis_views: dict[str, Any] | None = None,
     reasoning_lookup: dict[str, dict[str, Any]] | None = None,
     xv_lookup: dict[str, dict[str, Any]] | None = None,
@@ -959,6 +960,7 @@ async def _build_deterministic_report_bundle(
         turning_point_lookup=lookups["turning_point_lookup"],
         tenure_lookup=lookups["tenure_lookup"],
         evidence_vault_lookup=evidence_vault_lookup,
+        limit=vendor_scorecard_limit,
     )
     deterministic_displacement_map = _build_deterministic_displacement_map(
         competitive_disp,
@@ -1070,6 +1072,21 @@ async def _check_freshness(pool) -> date | None:
         logger.info("Core run not complete for %s, skipping", today)
         return None
     return today
+
+
+def _scoped_report_vendor_filter(vendors: list[str] | None) -> str | None:
+    """Return a stable vendor_filter token for scoped multi-vendor report rows."""
+    if not vendors:
+        return None
+    deduped: dict[str, str] = {}
+    for vendor in vendors:
+        text = str(vendor or "").strip()
+        if not text:
+            continue
+        deduped.setdefault(text.lower(), text)
+    if not deduped:
+        return None
+    return ",".join(deduped[key] for key in sorted(deduped))
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -1283,6 +1300,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not vendor_scores:
         return {"_skip_synthesis": "No vendor scores after vendor scope filter"}
 
+    vendor_scorecard_limit: int | None = int(cfg.vendor_scorecard_limit)
+    if scoped_vendors and (
+        not selected_report_types or "vendor_scorecard" in selected_report_types
+    ):
+        vendor_scorecard_limit = None
+
     bundle = await _build_deterministic_report_bundle(
         pool,
         as_of=today,
@@ -1310,6 +1333,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         department_dist=department_dist,
         contract_ctx=contract_ctx,
         turning_points=turning_points,
+        vendor_scorecard_limit=vendor_scorecard_limit,
     )
     reasoning_lookup = bundle["reasoning_lookup"]
     xv_lookup = bundle["xv_lookup"]
@@ -1416,8 +1440,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             *,
             request: Any | None,
             workload: str,
+            usage_out: dict[str, Any] | None = None,
         ) -> str:
             try:
+                llm_usage: dict[str, Any] = {}
                 narrative = await asyncio.wait_for(
                     asyncio.to_thread(
                         call_llm_with_skill,
@@ -1431,9 +1457,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "vendor_name": sc.get("vendor_name") or sc.get("vendor"),
                             "report_type": "vendor_scorecard",
                         },
+                        usage_out=llm_usage,
                     ),
                     timeout=45,
                 )
+                if usage_out is not None:
+                    usage_out.clear()
+                    usage_out.update(llm_usage)
                 if not narrative:
                     sc["expert_take"] = _fallback_scorecard_expert_take(sc)
                     return "failed"
@@ -1577,15 +1607,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         entry["llm_input"],
                         request=request,
                         workload="anthropic",
+                        usage_out=(fallback_usage := {}),
                     )
                     await mark_batch_fallback_result(
                         batch_id=execution.local_batch_id,
                         custom_id=entry["custom_id"],
                         succeeded=fallback_status != "failed",
+                        pool=pool,
                         error_text=(
                             outcome.error_text
                             if outcome is not None and outcome.error_text and fallback_status == "failed"
                             else "single_call_failed" if fallback_status == "failed" else None
+                        ),
+                        usage=fallback_usage,
+                        provider=str(fallback_usage.get("provider") or "") or None,
+                        model=str(fallback_usage.get("model") or "") or None,
+                        provider_request_id=(
+                            str(fallback_usage.get("provider_request_id") or "") or None
                         ),
                     )
                     if fallback_status == "fallback":
@@ -1727,6 +1765,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     reports_persisted = 0
     should_persist_reports = not scoped_vendors or persist_scoped_reports
+    report_vendor_filter = (
+        _scoped_report_vendor_filter(scoped_vendors)
+        if scoped_vendors and persist_scoped_reports
+        else None
+    )
     if should_persist_reports:
         try:
             async with pool.transaction() as conn:
@@ -1759,14 +1802,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     report_row = await conn.fetchrow(
                         """
                         INSERT INTO b2b_intelligence (
-                            report_date, report_type, intelligence_data,
+                            report_date, report_type, vendor_filter, intelligence_data,
                             executive_summary, data_density, status, llm_model,
                             source_review_count, source_distribution,
                             latest_run_id, latest_attempt_no, latest_failure_step,
                             latest_error_code, latest_error_summary,
                             blocker_count, warning_count, quality_score
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                                  $10, $11, $12, $13, $14, $15, $16, $17)
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                                  $11, $12, $13, $14, $15, $16, $17, $18)
                         ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
                                      LOWER(COALESCE(category_filter,'')),
                                      COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
@@ -1790,6 +1833,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         """,
                         today,
                         report_type,
+                        report_vendor_filter,
                         json.dumps(data, default=str),
                         _exec_summaries.get(report_type, _fallback_summary),
                         json.dumps(report_density),

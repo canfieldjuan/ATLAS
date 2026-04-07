@@ -24,6 +24,7 @@ from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ..visibility import emit_event, record_attempt
 from ._execution_progress import task_run_id as _task_run_id
+from ._campaign_sequence_context import prepare_sequence_storage_contexts
 from ._b2b_specificity import (
     campaign_proof_terms_from_audit,
     merge_specificity_contexts,
@@ -1375,6 +1376,10 @@ async def _create_sequence_for_cold_email(
     Returns the sequence ID if created, None on conflict (already exists).
     """
     cfg = settings.campaign_sequence
+    compact_company_context, compact_selling_context = prepare_sequence_storage_contexts(
+        context,
+        context.get("selling", {}),
+    )
 
     seq_id = await pool.fetchval(
         """
@@ -1388,8 +1393,8 @@ async def _create_sequence_for_cold_email(
         company_name,
         batch_id,
         _uuid.UUID(partner_id) if partner_id else None,
-        json.dumps(context, default=str),
-        json.dumps(context.get("selling", {}), default=str),
+        json.dumps(compact_company_context, default=str),
+        json.dumps(compact_selling_context, default=str),
         cfg.max_steps,
     )
 
@@ -4293,6 +4298,7 @@ async def _call_llm(
     *,
     trace_span_name: str | None = None,
     trace_metadata: dict[str, Any] | None = None,
+    usage_out: dict[str, Any] | None = None,
 ) -> str | None:
     """Low-level LLM call. Returns raw text or None."""
     import asyncio
@@ -4348,6 +4354,26 @@ async def _call_llm(
             inference_time_ms=(trace_meta or {}).get("inference_time_ms"),
             queue_time_ms=(trace_meta or {}).get("queue_time_ms"),
         )
+        if usage_out is not None:
+            usage_out.clear()
+            usage_out.update(
+                {
+                    "input_tokens": int((usage or {}).get("input_tokens") or 0),
+                    "output_tokens": int((usage or {}).get("output_tokens") or 0),
+                    "cached_tokens": int(cached_tokens or 0),
+                    "cache_write_tokens": int(cache_write_tokens or 0),
+                    "billable_input_tokens": int(
+                        billable_input_tokens
+                        if billable_input_tokens is not None
+                        else int((usage or {}).get("input_tokens") or 0)
+                    ),
+                    "model": str(getattr(llm, "model", "") or getattr(llm, "model_id", "") or ""),
+                    "provider": str(getattr(llm, "name", "") or ""),
+                    "provider_request_id": (
+                        str((trace_meta or {}).get("provider_request_id") or "") or None
+                    ),
+                }
+            )
         return text or None
     except Exception as exc:
         trace_llm_call(
@@ -4612,20 +4638,23 @@ async def _run_campaign_batch(
         entry: dict[str, Any],
         *,
         first_attempt_text: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         params = inspect.signature(_generate_content).parameters
         supports_kwargs = any(
             parameter.kind is inspect.Parameter.VAR_KEYWORD
             for parameter in params.values()
         )
         kwargs: dict[str, Any] = {}
+        generation_usage: dict[str, Any] = {}
         if first_attempt_text is not None and ("first_attempt_text" in params or supports_kwargs):
             kwargs["first_attempt_text"] = first_attempt_text
         if "trace_span_name" in params or supports_kwargs:
             kwargs["trace_span_name"] = "task.b2b_campaign_generation"
         if "trace_metadata" in params or supports_kwargs:
             kwargs["trace_metadata"] = entry["trace_metadata"]
-        return await _generate_content(
+        if "usage_out" in params or supports_kwargs:
+            kwargs["usage_out"] = generation_usage
+        content = await _generate_content(
             llm,
             system_prompt,
             entry["payload"],
@@ -4633,6 +4662,7 @@ async def _run_campaign_batch(
             entry["temperature"],
             **kwargs,
         )
+        return content, generation_usage
 
     if not entries:
         return {}, {
@@ -4651,7 +4681,8 @@ async def _run_campaign_batch(
     ):
         results: dict[str, dict[str, Any] | None] = {}
         for entry in entries:
-            results[entry["custom_id"]] = await _invoke_generate_content(entry)
+            content, _ = await _invoke_generate_content(entry)
+            results[entry["custom_id"]] = content
         return results, {
             "jobs": 0,
             "submitted_items": 0,
@@ -4727,12 +4758,13 @@ async def _run_campaign_batch(
         for entry in entries:
             outcome = execution.results_by_custom_id.get(entry["custom_id"])
             if outcome is not None and outcome.response_text is not None:
-                results[entry["custom_id"]] = await _invoke_generate_content(
+                content, _ = await _invoke_generate_content(
                     entry,
                     first_attempt_text=outcome.response_text,
                 )
+                results[entry["custom_id"]] = content
                 continue
-            content = await _invoke_generate_content(entry)
+            content, fallback_usage = await _invoke_generate_content(entry)
             results[entry["custom_id"]] = content
             if outcome is not None and outcome.fallback_required:
                 await mark_batch_fallback_result(
@@ -4741,6 +4773,12 @@ async def _run_campaign_batch(
                     succeeded=content is not None,
                     error_text=outcome.error_text if content is None else None,
                     response_text=json.dumps(content, separators=(",", ":"), default=str) if content else None,
+                    usage=fallback_usage,
+                    provider=str(fallback_usage.get("provider") or "") or None,
+                    model=str(fallback_usage.get("model") or "") or None,
+                    provider_request_id=(
+                        str(fallback_usage.get("provider_request_id") or "") or None
+                    ),
                 )
         return results, {
             "jobs": 0,
@@ -4765,30 +4803,45 @@ async def _run_campaign_batch(
     for entry in entries:
         outcome = execution.results_by_custom_id.get(entry["custom_id"])
         if outcome is None:
-            content = await _invoke_generate_content(entry)
+            content, fallback_usage = await _invoke_generate_content(entry)
             results[entry["custom_id"]] = content
             await mark_batch_fallback_result(
                 batch_id=execution.local_batch_id,
                 custom_id=entry["custom_id"],
                 succeeded=content is not None,
                 error_text="missing_batch_outcome" if content is None else None,
+                response_text=json.dumps(content, separators=(",", ":"), default=str) if content else None,
+                usage=fallback_usage,
+                provider=str(fallback_usage.get("provider") or "") or None,
+                model=str(fallback_usage.get("model") or "") or None,
+                provider_request_id=(
+                    str(fallback_usage.get("provider_request_id") or "") or None
+                ),
             )
             continue
 
         if outcome.response_text is not None:
-            results[entry["custom_id"]] = await _invoke_generate_content(
+            content, _ = await _invoke_generate_content(
                 entry,
                 first_attempt_text=outcome.response_text,
             )
+            results[entry["custom_id"]] = content
             continue
 
-        content = await _invoke_generate_content(entry)
+        content, fallback_usage = await _invoke_generate_content(entry)
         results[entry["custom_id"]] = content
         await mark_batch_fallback_result(
             batch_id=execution.local_batch_id,
             custom_id=entry["custom_id"],
             succeeded=content is not None,
             error_text=outcome.error_text if content is None else None,
+            response_text=json.dumps(content, separators=(",", ":"), default=str) if content else None,
+            usage=fallback_usage,
+            provider=str(fallback_usage.get("provider") or "") or None,
+            model=str(fallback_usage.get("model") or "") or None,
+            provider_request_id=(
+                str(fallback_usage.get("provider_request_id") or "") or None
+            ),
         )
 
     return results, {
@@ -5484,6 +5537,7 @@ async def _generate_content(
     first_attempt_text: str | None = None,
     trace_span_name: str | None = None,
     trace_metadata: dict[str, Any] | None = None,
+    usage_out: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Call LLM, validate output, retry once if word count exceeded."""
     import inspect
@@ -5507,11 +5561,36 @@ async def _generate_content(
     working_payload, specificity_context = _prepare_campaign_request_payload(request_payload)
     provider_name, model_name = llm_identity(llm)
     cache_namespace = "b2b_campaign_generation.content"
+    usage_total: dict[str, Any] = {}
     call_llm_params = inspect.signature(_call_llm).parameters
     call_llm_supports_kwargs = any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in call_llm_params.values()
     )
+
+    def _accumulate_usage(sample: dict[str, Any] | None) -> None:
+        if not sample:
+            return
+        usage_total["input_tokens"] = int(usage_total.get("input_tokens") or 0) + int(sample.get("input_tokens") or 0)
+        usage_total["billable_input_tokens"] = int(usage_total.get("billable_input_tokens") or 0) + int(
+            sample.get("billable_input_tokens")
+            if sample.get("billable_input_tokens") is not None
+            else sample.get("input_tokens") or 0
+        )
+        usage_total["cached_tokens"] = int(usage_total.get("cached_tokens") or 0) + int(sample.get("cached_tokens") or 0)
+        usage_total["cache_write_tokens"] = int(usage_total.get("cache_write_tokens") or 0) + int(sample.get("cache_write_tokens") or 0)
+        usage_total["output_tokens"] = int(usage_total.get("output_tokens") or 0) + int(sample.get("output_tokens") or 0)
+        if sample.get("provider"):
+            usage_total["provider"] = sample.get("provider")
+        if sample.get("model"):
+            usage_total["model"] = sample.get("model")
+        if sample.get("provider_request_id"):
+            usage_total["provider_request_id"] = sample.get("provider_request_id")
+
+    def _write_usage_out() -> None:
+        if usage_out is not None:
+            usage_out.clear()
+            usage_out.update(usage_total)
 
     for attempt in range(2):
         user_content = json.dumps(working_payload, separators=(",", ":"), default=str)
@@ -5550,14 +5629,19 @@ async def _generate_content(
         )
         cached = await lookup_b2b_exact_stage_text(request)
         text = cached["response_text"] if cached is not None else None
+        if cached is not None and usage_out is not None:
+            _write_usage_out()
         if text is None and attempt == 0 and first_attempt_text is not None:
             text = first_attempt_text
         if text is None:
             call_kwargs: dict[str, Any] = {}
+            call_usage: dict[str, Any] = {}
             if "trace_span_name" in call_llm_params or call_llm_supports_kwargs:
                 call_kwargs["trace_span_name"] = trace_span_name
             if "trace_metadata" in call_llm_params or call_llm_supports_kwargs:
                 call_kwargs["trace_metadata"] = trace_metadata
+            if "usage_out" in call_llm_params or call_llm_supports_kwargs:
+                call_kwargs["usage_out"] = call_usage
             text = await _call_llm(
                 llm,
                 system_prompt,
@@ -5566,7 +5650,10 @@ async def _generate_content(
                 temperature,
                 **call_kwargs,
             )
+            _accumulate_usage(call_usage)
+            _write_usage_out()
         if not text:
+            _write_usage_out()
             request_payload["_generation_audit"] = {
                 "status": "failed",
                 "attempts": attempt + 1,
@@ -5580,6 +5667,7 @@ async def _generate_content(
             parsed = json.loads(text)
         except json.JSONDecodeError:
             logger.warning("Failed to parse campaign generation JSON: %.200s", text)
+            _write_usage_out()
             request_payload["_generation_audit"] = {
                 "status": "failed",
                 "attempts": attempt + 1,
@@ -5590,6 +5678,7 @@ async def _generate_content(
 
         if not isinstance(parsed, dict) or "body" not in parsed:
             logger.warning("Campaign generation missing 'body' field")
+            _write_usage_out()
             request_payload["_generation_audit"] = {
                 "status": "failed",
                 "attempts": attempt + 1,
@@ -5608,6 +5697,7 @@ async def _generate_content(
 
         if issues.get("missing_field"):
             logger.warning("Campaign missing required field: %s", issues["missing_field"])
+            _write_usage_out()
             request_payload["_generation_audit"] = {
                 "status": "failed",
                 "attempts": attempt + 1,
@@ -5619,6 +5709,7 @@ async def _generate_content(
 
         if issues.get("placeholders"):
             logger.warning("Campaign body contains placeholder brackets, rejecting")
+            _write_usage_out()
             request_payload["_generation_audit"] = {
                 "status": "failed",
                 "attempts": attempt + 1,
@@ -5710,6 +5801,7 @@ async def _generate_content(
                 "Campaign specificity gate failed: %s",
                 "; ".join(specificity["blocking_issues"]),
             )
+            _write_usage_out()
             request_payload["_generation_audit"] = {
                 "status": "failed",
                 "attempts": attempt + 1,
@@ -5737,8 +5829,10 @@ async def _generate_content(
                 "target_mode": target_mode,
             },
         )
+        _write_usage_out()
         return validated
 
+    _write_usage_out()
     request_payload["_generation_audit"] = {
         "status": "failed",
         "attempts": 2,

@@ -10,7 +10,7 @@ version: 1
 
 /no_think
 
-You are generating the **next email** in a B2B onboarding sequence for a new Atlas Intel customer. The goal is to help them get value from the product quickly and convert trial to paid.
+You are generating the **next email** in a B2B onboarding sequence for a new {product_name} customer. The goal is to help them get value from the product quickly and convert trial to paid.
 
 ## Account
 
@@ -41,7 +41,7 @@ Days since last email: {days_since_last}
 
 Choose your approach based on the current step number:
 
-**Step 1 (Welcome)**: Warm welcome. Briefly explain what Atlas Intel does for them. Give ONE clear action: "Add your first tracked vendor." Keep it personal and short. Include a direct link to their dashboard.
+**Step 1 (Welcome)**: Warm welcome. Briefly explain what {product_name} does for them. Give ONE clear action: "Add your first tracked vendor." Keep it personal and short. Include a direct link to their dashboard.
 
 **Step 2 (First Insights)**: Reference whether they've added vendors yet (from engagement). If yes: highlight what intelligence is already available. If no: show a sample insight for a well-known vendor in their space to demonstrate value. One CTA: "See your vendor intelligence."
 

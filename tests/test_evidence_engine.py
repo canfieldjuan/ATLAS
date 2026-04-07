@@ -220,6 +220,14 @@ class TestPriceComplaintDerivation:
         enrichment = {"budget_signals": {"price_increase_mentioned": False}, "pricing_phrases": [], "specific_complaints": ["slow and buggy"]}
         assert engine.derive_price_complaint(enrichment) is False
 
+    def test_explicitly_positive_pricing_phrase_is_not_a_price_complaint(self, engine):
+        enrichment = {
+            "budget_signals": {"price_increase_mentioned": False},
+            "pricing_phrases": ["I find the pricing reasonable."],
+            "specific_complaints": [],
+        }
+        assert engine.derive_price_complaint(enrichment) is False
+
 
 # -- Budget Authority Derivation -------------------------------------------
 

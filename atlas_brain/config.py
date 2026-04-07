@@ -24,6 +24,30 @@ class SaaSAuthConfig(BaseSettings):
     jwt_expiry_hours: int = Field(default=24, description="Access token expiry in hours")
     jwt_refresh_expiry_days: int = Field(default=30, description="Refresh token expiry in days")
     trial_days: int = Field(default=14, description="Trial period length in days")
+    frontend_base_url: str = Field(
+        default="http://localhost:5173",
+        description="Frontend base URL used in SaaS auth emails",
+    )
+    email_product_name: str = Field(
+        default="Churn Signals",
+        description="Display product name used in SaaS auth emails",
+    )
+    email_company_name: str = Field(
+        default="Atlas Intelligence",
+        description="Display company name used in SaaS auth emails",
+    )
+    b2b_welcome_product_name: str = Field(
+        default="Atlas B2B Intelligence",
+        description="Display product name used in B2B welcome email subjects",
+    )
+    b2b_welcome_heading: str = Field(
+        default="B2B Churn Intelligence",
+        description="Heading used in B2B welcome emails",
+    )
+    consumer_welcome_product_name: str = Field(
+        default="Amazon Seller Intelligence",
+        description="Display product name used in consumer welcome emails",
+    )
 
     # CORS -- extra origins to allow (comma-separated), e.g. "https://my-app.vercel.app"
     cors_origins: str = Field(default="", description="Extra CORS origins (comma-separated)")
@@ -2640,6 +2664,22 @@ class B2BChurnConfig(BaseSettings):
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
     blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
     blog_post_openrouter_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for blog generation")
+    blog_post_temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Sampling temperature for B2B blog post generation",
+    )
+    blog_post_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow first-pass B2B blog generation to use Anthropic Message Batches when Anthropic is available",
+    )
+    blog_post_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of blog posts required before using Anthropic batching for first-pass generation",
+    )
     blog_quality_pass_score: int = Field(
         default=70,
         ge=0,
@@ -2763,6 +2803,36 @@ class B2BChurnConfig(BaseSettings):
         ge=1,
         le=10000,
         description="Minimum uncached scorecard narratives required before using Anthropic batching",
+    )
+    reasoning_synthesis_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow vendor reasoning synthesis to use Anthropic Message Batches when available",
+    )
+    reasoning_synthesis_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum vendor reasoning items required before using Anthropic batching",
+    )
+    cross_vendor_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow cross-vendor reasoning synthesis to use Anthropic Message Batches when available",
+    )
+    cross_vendor_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum cross-vendor reasoning items required before using Anthropic batching",
+    )
+    tenant_report_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow tenant report synthesis chunks to use Anthropic Message Batches when available",
+    )
+    tenant_report_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum tenant report synthesis chunks required before using Anthropic batching",
     )
 
     # Briefing gate (email capture for full report)
@@ -3083,6 +3153,16 @@ class B2BChurnConfig(BaseSettings):
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
     battle_card_llm_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0, description="Delay between battle card LLM attempts")
     battle_card_llm_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back into battle card repair attempts")
+    battle_card_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow battle-card sales copy to use Anthropic Message Batches when the battle-card backend is set to anthropic",
+    )
+    battle_card_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum battle-card sales-copy items required before using Anthropic batching",
+    )
     battle_card_llm_backend: str = Field(
         default="auto",
         description=(
@@ -3206,6 +3286,12 @@ class B2BChurnConfig(BaseSettings):
     )
     synthesis_reference_confidence_min: float = Field(default=0.6, ge=0.0, le=1.0, description="Min reasoning or cross-vendor confidence before synthesis may reference a structured conclusion directly")
     synthesis_expert_take_max_words: int = Field(default=80, ge=20, le=200, description="Max word count for synthesized scorecard expert_take narratives")
+    vendor_scorecard_limit: int = Field(
+        default=15,
+        ge=1,
+        le=500,
+        description="Default max vendors included in the unscoped vendor_scorecard report artifact",
+    )
     battle_card_leaving_patterns: list[str] = Field(
         default=[
             "customers are leaving",
@@ -3232,6 +3318,10 @@ class B2BChurnConfig(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Minimum unit-confidence required for low-trust company signals to enter canonical named-account products",
+    )
+    high_intent_require_signal_evidence: bool = Field(
+        default=True,
+        description="Require explicit churn/evaluation/renewal signal evidence before reviewer-company rows enter named-account high-intent products",
     )
     accounts_in_motion_cron: str = Field(default="35 21 * * *", description="Cron for accounts-in-motion prospecting lists")
     accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
@@ -3277,6 +3367,7 @@ class B2BAlertConfig(BaseSettings):
     dashboard_base_url: str = Field(default="", description="Optional dashboard URL included in churn alert emails")
     signal_count_threshold: int = Field(default=3, description="New signals to trigger alert")
     urgency_spike_threshold: float = Field(default=1.5, description="Avg urgency increase to trigger alert")
+    min_reviews_for_urgency: int = Field(default=10, ge=1, le=100, description="Min reviews in 7-day window before avg_urgency can trigger alerts")
     cooldown_hours: int = Field(default=24, description="Min hours between alerts for same vendor")
     interval_seconds: int = Field(default=3600, description="Alert check interval (1 hour)")
 
@@ -3731,6 +3822,26 @@ class CampaignSequenceConfig(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable stateful campaign sequences")
     max_steps: int = Field(default=4, ge=2, le=8, description="Max emails per sequence")
+    progression_batch_limit: int = Field(
+        default=10, ge=1, le=250,
+        description="Max due sequences to progress in one task run",
+    )
+    onboarding_max_steps: int = Field(
+        default=4, ge=1, le=8,
+        description="Max emails in the onboarding sequence",
+    )
+    onboarding_sender_name: str = Field(
+        default="Atlas Intel",
+        description="Sender name used in onboarding sequences",
+    )
+    onboarding_sender_company: str = Field(
+        default="Atlas Intelligence",
+        description="Sender company used in onboarding sequences",
+    )
+    onboarding_product_name: str = Field(
+        default="Atlas Intel",
+        description="Display product name used in onboarding sequence prompts",
+    )
     step_delay_days: list[int] = Field(
         default=[3, 5, 7],
         description="Days between steps 1->2, 2->3, 3->4",
@@ -3743,6 +3854,26 @@ class CampaignSequenceConfig(BaseSettings):
     )
     check_interval_seconds: int = Field(
         default=3600, ge=600, description="How often to check for due sequence steps"
+    )
+    prompt_max_tokens: int = Field(
+        default=512, ge=128, le=2048,
+        description="Max completion tokens for next-step sequence generation",
+    )
+    prompt_list_limit: int = Field(
+        default=5, ge=1, le=20,
+        description="Max list items to keep when compacting sequence context for storage and prompts",
+    )
+    prompt_quote_limit: int = Field(
+        default=3, ge=1, le=10,
+        description="Max quotes or short signal items to keep in compact sequence context",
+    )
+    prompt_blog_post_limit: int = Field(
+        default=3, ge=1, le=10,
+        description="Max blog posts to keep in compact sequence selling context",
+    )
+    prompt_email_body_preview_chars: int = Field(
+        default=220, ge=80, le=1000,
+        description="Max plain-text characters to keep per previous-email preview in sequence prompts",
     )
     resend_api_key: str = Field(default="", description="Resend ESP API key")
     resend_from_email: str = Field(default="", description="Resend sender email address")

@@ -82,8 +82,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         if not current or current["signal_count"] == 0:
             continue
 
+        signal_count = float(current["signal_count"])
         metrics = {
-            "signal_count": float(current["signal_count"]),
+            "signal_count": signal_count,
             "avg_urgency": float(current["avg_urgency"]),
             "displacement_count": float(current["displacement_count"]),
         }
@@ -126,7 +127,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if metric_name == "signal_count" and delta >= cfg.signal_count_threshold:
                 should_alert = True
             elif metric_name == "avg_urgency" and delta >= cfg.urgency_spike_threshold:
-                should_alert = True
+                if signal_count >= cfg.min_reviews_for_urgency:
+                    should_alert = True
+                else:
+                    logger.info(
+                        "Suppressed urgency alert for %s: delta=%.1f but signal_count=%d < min=%d",
+                        vendor_name, delta, int(signal_count), cfg.min_reviews_for_urgency,
+                    )
             elif metric_name == "displacement_count" and delta >= cfg.signal_count_threshold:
                 should_alert = True
 

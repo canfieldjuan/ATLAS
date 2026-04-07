@@ -1751,7 +1751,12 @@ def _derive_buyer_authority_fields(result: dict, source_row: dict[str, Any]) -> 
     return role_type, executive_sponsor_mentioned, buying_stage
 
 
-def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict[str, bool]:
+def _derive_urgency_indicators(
+    result: dict,
+    source_row: dict[str, Any],
+    *,
+    price_complaint: bool = False,
+) -> dict[str, bool]:
     churn = result.get("churn_signals") or {}
     budget = result.get("budget_signals") or {}
     timeline = result.get("timeline") or {}
@@ -1761,7 +1766,6 @@ def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict
         str(source_row.get(field) or "")
         for field in ("summary", "review_text", "pros", "cons")
     ).lower()
-    pricing_phrases = result.get("pricing_phrases") or []
     price_text = " ".join(_normalize_text_list(result.get("pricing_phrases"))).lower()
     recommendation_text = " ".join(_normalize_text_list(result.get("recommendation_language"))).lower()
     named_alt_with_reason = any(
@@ -1783,7 +1787,7 @@ def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict
         "comparison_shopping_language": _contains_any(review_blob, ("vs ", "alternative", "which should", "looking for options")),
         "named_alternative_with_reason": named_alt_with_reason,
         "frustration_without_alternative": bool(complaints) and not competitors,
-        "price_pressure_language": bool(result.get("pricing_phrases")) or _contains_any(
+        "price_pressure_language": bool(price_complaint) or _contains_any(
             review_blob + " " + price_text,
             (
                 "price increase",
@@ -1899,7 +1903,12 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
         cc = {}
         result["contract_context"] = cc
     cc["contract_value_signal"] = _derive_contract_value_signal(result)
-    result["urgency_indicators"] = _derive_urgency_indicators(result, source_row)
+    price_complaint = engine.derive_price_complaint(result)
+    result["urgency_indicators"] = _derive_urgency_indicators(
+        result,
+        source_row,
+        price_complaint=price_complaint,
+    )
 
     indicators = result.get("urgency_indicators", {})
     pain_cats = result.get("pain_categories", [])
@@ -1971,7 +1980,7 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     ba["has_budget_authority"] = engine.derive_budget_authority(result)
 
     # 7. contract_context.price_complaint + price_context
-    cc["price_complaint"] = engine.derive_price_complaint(result)
+    cc["price_complaint"] = price_complaint
     cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
 
     # 8. witness-oriented deterministic evidence primitives

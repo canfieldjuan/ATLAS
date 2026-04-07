@@ -7,6 +7,7 @@ import pytest
 
 from atlas_brain.services.b2b.anthropic_batch import (
     AnthropicBatchItem,
+    mark_batch_fallback_result,
     reconcile_anthropic_message_batch,
     run_anthropic_message_batch,
     submit_anthropic_message_batch,
@@ -156,6 +157,33 @@ class _MemoryPool:
                 if item["id"] == item_id:
                     item["request_metadata"] = {**item["request_metadata"], **patch}
                     return
+        if "UPDATE anthropic_message_batch_items" in query and "fallback_single_call = TRUE" in query:
+            batch_id = str(args[0])
+            custom_id = str(args[1])
+            key = (batch_id, custom_id)
+            item = self.items[key]
+            item["status"] = str(args[2])
+            if args[3] is not None:
+                item["error_text"] = args[3]
+            if args[4] is not None:
+                item["response_text"] = args[4]
+            if args[5] is not None:
+                item["input_tokens"] += int(args[5])
+            if args[6] is not None:
+                item["billable_input_tokens"] += int(args[6])
+            if args[7] is not None:
+                item["cached_tokens"] += int(args[7])
+            if args[8] is not None:
+                item["cache_write_tokens"] += int(args[8])
+            if args[9] is not None:
+                item["output_tokens"] += int(args[9])
+            if args[10] is not None:
+                item["cost_usd"] += float(args[10])
+            if args[11] is not None:
+                item["provider_request_id"] = args[11]
+            item["fallback_single_call"] = True
+            item["completed_at"] = datetime.now(timezone.utc)
+            return
         raise AssertionError(f"Unexpected execute query: {query}")
 
     async def fetchrow(self, query, *args):
@@ -417,3 +445,147 @@ async def test_reconcile_anthropic_message_batch_records_success_and_error_for_f
     assert pool.items[(submit_execution.local_batch_id, "bad-item")]["status"] == "batch_errored"
     assert pool.items[(submit_execution.local_batch_id, "bad-item")]["fallback_single_call"] is True
     assert len(traced) == 1
+
+
+@pytest.mark.asyncio
+async def test_mark_batch_fallback_result_persists_usage_and_cost_fields():
+    pool = _MemoryPool()
+    item = AnthropicBatchItem(
+        custom_id="fallback-item",
+        artifact_type="campaign",
+        artifact_id="artifact-fallback",
+        vendor_name="Slack",
+        messages=[
+            Message(role="system", content="system"),
+            Message(role="user", content='{"vendor":"Slack"}'),
+        ],
+        max_tokens=256,
+        temperature=0.1,
+    )
+
+    execution = await submit_anthropic_message_batch(
+        llm=_fake_llm([]),
+        stage_id="b2b_campaign_generation.content",
+        task_name="b2b_campaign_generation",
+        items=[item],
+        min_batch_size=1,
+        pool=pool,
+    )
+
+    await mark_batch_fallback_result(
+        batch_id=execution.local_batch_id,
+        custom_id="fallback-item",
+        succeeded=True,
+        pool=pool,
+        response_text='{"subject":"Fallback"}',
+        usage={
+            "input_tokens": 120,
+            "billable_input_tokens": 80,
+            "cached_tokens": 40,
+            "cache_write_tokens": 0,
+            "output_tokens": 60,
+        },
+        provider="anthropic",
+        model="claude-sonnet-4-5",
+        provider_request_id="req_fallback_123",
+    )
+
+    stored = pool.items[(execution.local_batch_id, "fallback-item")]
+    assert stored["status"] == "fallback_succeeded"
+    assert stored["response_text"] == '{"subject":"Fallback"}'
+    assert stored["input_tokens"] == 120
+    assert stored["billable_input_tokens"] == 80
+    assert stored["cached_tokens"] == 40
+    assert stored["output_tokens"] == 60
+    assert stored["provider_request_id"] == "req_fallback_123"
+    assert stored["cost_usd"] > 0.0
+
+
+@pytest.mark.asyncio
+async def test_mark_batch_fallback_result_adds_to_existing_batch_usage():
+    pool = _MemoryPool()
+    item = AnthropicBatchItem(
+        custom_id="fallback-after-batch",
+        artifact_type="campaign",
+        artifact_id="artifact-fallback",
+        vendor_name="Slack",
+        messages=[
+            Message(role="system", content="system"),
+            Message(role="user", content='{"vendor":"Slack"}'),
+        ],
+        max_tokens=256,
+        temperature=0.1,
+        trace_metadata={"model": "claude-sonnet-4-5"},
+    )
+
+    execution = await submit_anthropic_message_batch(
+        llm=_fake_llm([]),
+        stage_id="b2b_campaign_generation.content",
+        task_name="b2b_campaign_generation",
+        items=[item],
+        min_batch_size=1,
+        pool=pool,
+    )
+    await pool.execute(
+        """
+        INSERT INTO anthropic_message_batch_items (
+            id, batch_id, custom_id, stage_id, artifact_type, artifact_id,
+            vendor_name, status, cache_prefiltered, fallback_single_call,
+            response_text, input_tokens, billable_input_tokens, cached_tokens,
+            cache_write_tokens, output_tokens, cost_usd, provider_request_id,
+            error_text, request_metadata, completed_at
+        ) VALUES (
+            gen_random_uuid(), $1::uuid, $2, $3, $4, $5,
+            $6, $7, $8, $9,
+            $10, $11, $12, $13,
+            $14, $15, $16, $17,
+            $18, $19::jsonb, NOW()
+        )
+        """,
+        execution.local_batch_id,
+        "fallback-after-batch",
+        "b2b_campaign_generation.content",
+        "campaign",
+        "artifact-fallback",
+        "Slack",
+        "batch_succeeded",
+        False,
+        False,
+        '{"subject":"Batch"}',
+        30,
+        20,
+        10,
+        0,
+        15,
+        0.123,
+        "msg_batch_123",
+        None,
+        json.dumps({}),
+    )
+
+    await mark_batch_fallback_result(
+        batch_id=execution.local_batch_id,
+        custom_id="fallback-after-batch",
+        succeeded=True,
+        pool=pool,
+        response_text='{"subject":"Fallback"}',
+        usage={
+            "input_tokens": 12,
+            "billable_input_tokens": 9,
+            "cached_tokens": 3,
+            "cache_write_tokens": 0,
+            "output_tokens": 6,
+        },
+        provider="anthropic",
+        model="claude-sonnet-4-5",
+        provider_request_id="req_fallback_456",
+    )
+
+    stored = pool.items[(execution.local_batch_id, "fallback-after-batch")]
+    assert stored["status"] == "fallback_succeeded"
+    assert stored["input_tokens"] == 42
+    assert stored["billable_input_tokens"] == 29
+    assert stored["cached_tokens"] == 13
+    assert stored["output_tokens"] == 21
+    assert stored["provider_request_id"] == "req_fallback_456"
+    assert stored["cost_usd"] > 0.123

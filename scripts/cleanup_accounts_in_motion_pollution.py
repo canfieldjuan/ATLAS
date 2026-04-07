@@ -27,6 +27,8 @@ from atlas_brain.autonomous.tasks._b2b_shared import (
     _canonicalize_vendor,
     _company_signal_exclusion_reason,
     _fetch_existing_company_signals,
+    _high_intent_row_has_signal_evidence,
+    _high_intent_signal_evidence_enabled,
     build_account_intelligence,
 )
 from atlas_brain.autonomous.tasks.b2b_accounts_in_motion import (
@@ -59,12 +61,17 @@ def _polluted_company_signal_reason(
 ) -> str | None:
     vendor_name = _canonicalize_vendor(str(row.get("vendor_name") or ""))
     company_name = str(row.get("company_name") or "").strip()
-    return _company_signal_exclusion_reason(
+    exclusion_reason = _company_signal_exclusion_reason(
         company_name,
         current_vendor=vendor_name,
         source=row.get("source"),
         confidence_score=row.get("confidence_score"),
     )
+    if exclusion_reason:
+        return exclusion_reason
+    if _high_intent_signal_evidence_enabled() and not _high_intent_row_has_signal_evidence(row):
+        return "missing_signal_evidence"
+    return None
 
 
 async def _latest_core_report_date(pool) -> date | None:
@@ -88,7 +95,7 @@ async def _fetch_company_signal_rows(
     params: list[object] = [window_days]
     vendor_filter = ""
     if vendors:
-        params.append(vendors)
+        params.append([vendor.lower() for vendor in vendors])
         vendor_filter = "AND LOWER(cs.vendor_name) = ANY($2::text[])"
     rows = await pool.fetch(
         f"""
@@ -101,7 +108,14 @@ async def _fetch_company_signal_rows(
             cs.confidence_score,
             cs.first_seen_at,
             cs.last_seen_at,
-            r.content_type
+            r.content_type,
+            (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
+            (r.enrichment->'churn_signals'->>'actively_evaluating')::boolean AS actively_evaluating,
+            (r.enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean AS contract_renewal_mentioned,
+            (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
+            (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
+            (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
+            (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
         FROM b2b_company_signals cs
         LEFT JOIN b2b_reviews r ON r.id = cs.review_id
         WHERE cs.last_seen_at >= NOW() - make_interval(days => $1)
@@ -121,6 +135,13 @@ async def _fetch_company_signal_rows(
             "first_seen_at": str(row["first_seen_at"]) if row["first_seen_at"] else None,
             "last_seen_at": str(row["last_seen_at"]) if row["last_seen_at"] else None,
             "content_type": row["content_type"],
+            "intent_to_leave": row["intent_to_leave"],
+            "actively_evaluating": row["actively_evaluating"],
+            "contract_renewal_mentioned": row["contract_renewal_mentioned"],
+            "indicator_cancel": row["indicator_cancel"],
+            "indicator_migration": row["indicator_migration"],
+            "indicator_evaluation": row["indicator_evaluation"],
+            "indicator_switch": row["indicator_switch"],
         }
         for row in rows
     ]

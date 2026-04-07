@@ -65,6 +65,11 @@ class EvidenceEngine:
             re.compile(p, re.IGNORECASE)
             for p in rec.get("negative_patterns", [])
         ]
+        price = self._enrichment.get("price_complaint_derivation", {})
+        self._price_positive = [
+            re.compile(p, re.IGNORECASE)
+            for p in price.get("positive_patterns", [])
+        ]
 
     # ------------------------------------------------------------------
     # Per-review: enrichment-time compute
@@ -219,7 +224,22 @@ class EvidenceEngine:
     ) -> bool:
         """Derive price_complaint from Tier 1 flags + extracted phrases."""
         cfg = self._enrichment.get("price_complaint_derivation", {})
+        pricing_phrases = [
+            str(phrase or "").strip()
+            for phrase in enrichment.get("pricing_phrases") or []
+            if str(phrase or "").strip()
+        ]
+        all_pricing_phrases_positive = bool(pricing_phrases) and all(
+            any(pattern.search(phrase) for pattern in self._price_positive)
+            for phrase in pricing_phrases
+        )
         for rule in cfg.get("true_if_any", []):
+            if (
+                rule.get("field") == "pricing_phrases"
+                and "min_count" in rule
+                and all_pricing_phrases_positive
+            ):
+                continue
             if self._check_derivation_rule(rule, enrichment):
                 return True
         return False

@@ -20,6 +20,7 @@ from typing import Any
 from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._campaign_sequence_context import prepare_sequence_storage_contexts
 from .campaign_audit import log_campaign_event
 from ._blog_matching import fetch_relevant_blog_posts as _fetch_blog_posts
 
@@ -754,6 +755,10 @@ async def _create_seller_sequence(
             "top_root_causes": intel.get("top_root_causes", [])[:5],
         },
     }
+    compact_company_context, compact_selling_context = prepare_sequence_storage_contexts(
+        company_context,
+        selling_ctx,
+    )
 
     seq_id = await pool.fetchval(
         """
@@ -767,8 +772,8 @@ async def _create_seller_sequence(
         """,
         seller_name,
         batch_id,
-        json.dumps(company_context, default=str),
-        json.dumps(selling_ctx, default=str),
+        json.dumps(compact_company_context, default=str),
+        json.dumps(compact_selling_context, default=str),
         cfg.max_steps,
         seller_email,
     )

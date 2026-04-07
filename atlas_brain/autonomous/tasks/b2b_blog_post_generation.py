@@ -49,6 +49,10 @@ from ._b2b_specificity import (
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_blog_post_generation")
 
+_BLOG_GENERATION_CACHE_STAGE = "b2b_blog_post_generation.content"
+_BLOG_GENERATION_TRACE_SPAN = "task.b2b_blog_post_generation"
+_BLOG_BATCH_SELECTION_MULTIPLIER = 4
+_BLOG_BATCH_SELECTION_MIN_ATTEMPTS = 8
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 _BLOCKQUOTE_RE = re.compile(r"^\s*>\s*(.+?)\s*$")
@@ -603,6 +607,123 @@ def _build_blog_claim_plan(
     return plan
 
 
+def _blog_scope_summary(scope_manifest: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(scope_manifest, dict):
+        return {}
+    summary: dict[str, Any] = {}
+    for key in (
+        "selection_strategy",
+        "reviews_considered_total",
+        "reviews_in_scope",
+        "witnesses_in_scope",
+        "witness_mix",
+    ):
+        value = scope_manifest.get(key)
+        if value not in (None, "", [], {}):
+            summary[key] = copy.deepcopy(value)
+    return summary
+
+
+def _blog_atom_context(consumer_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(consumer_context, dict):
+        return {}
+    context: dict[str, Any] = {}
+    theses = [
+        {
+            "wedge": str(item.get("wedge") or "").strip(),
+            "summary": str(item.get("summary") or "").strip(),
+            "why_now": str(item.get("why_now") or "").strip(),
+            "confidence": str(item.get("confidence") or "").strip(),
+        }
+        for item in (consumer_context.get("theses") or [])[:3]
+        if isinstance(item, dict)
+    ]
+    theses = [item for item in theses if item["summary"] or item["why_now"]]
+    if theses:
+        context["top_theses"] = theses
+    timing_windows = [
+        {
+            "window_type": str(item.get("window_type") or "").strip(),
+            "anchor": str(item.get("start_or_anchor") or "").strip(),
+            "urgency": str(item.get("urgency") or "").strip(),
+            "recommended_action": str(item.get("recommended_action") or "").strip(),
+        }
+        for item in (consumer_context.get("timing_windows") or [])[:3]
+        if isinstance(item, dict)
+    ]
+    timing_windows = [item for item in timing_windows if item["anchor"]]
+    if timing_windows:
+        context["timing_windows"] = timing_windows
+    proof_points = [
+        {
+            "label": str(item.get("label") or "").strip(),
+            "value": _reasoning_scalar(item.get("value")),
+            "interpretation": str(item.get("interpretation") or "").strip(),
+            "confidence": str(item.get("confidence") or "").strip(),
+        }
+        for item in (consumer_context.get("proof_points") or [])[:3]
+        if isinstance(item, dict)
+    ]
+    proof_points = [item for item in proof_points if item["label"]]
+    if proof_points:
+        context["proof_points"] = proof_points
+    account_signals = [
+        {
+            "company": str(item.get("company") or "").strip(),
+            "buying_stage": str(item.get("buying_stage") or "").strip(),
+            "competitor_context": str(item.get("competitor_context") or "").strip(),
+            "primary_pain": str(item.get("primary_pain") or "").strip(),
+            "quote": str(item.get("quote") or "").strip(),
+        }
+        for item in (consumer_context.get("account_signals") or [])[:3]
+        if isinstance(item, dict)
+    ]
+    account_signals = [
+        item for item in account_signals
+        if item["company"] or item["primary_pain"] or item["quote"]
+    ]
+    if account_signals:
+        context["account_signals"] = account_signals
+    coverage_limits = [
+        str(item.get("label") or "").strip()
+        for item in (consumer_context.get("coverage_limits") or [])[:4]
+        if isinstance(item, dict) and str(item.get("label") or "").strip()
+    ]
+    if coverage_limits:
+        context["coverage_limits"] = coverage_limits
+    counterevidence = [
+        str(item.get("statement") or "").strip()
+        for item in (consumer_context.get("counterevidence") or [])[:2]
+        if isinstance(item, dict) and str(item.get("statement") or "").strip()
+    ]
+    if counterevidence:
+        context["counterevidence"] = counterevidence
+    return context
+
+
+def _blog_delta_summary(reasoning_delta: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(reasoning_delta, dict):
+        return {}
+    summary: dict[str, Any] = {"changed": bool(reasoning_delta.get("changed"))}
+    for key in (
+        "wedge_changed",
+        "confidence_changed",
+        "top_destination_changed",
+    ):
+        if key in reasoning_delta:
+            summary[key] = bool(reasoning_delta.get(key))
+    for key in (
+        "theses_added",
+        "new_timing_windows",
+        "new_account_signals",
+        "coverage_worsened",
+    ):
+        value = reasoning_delta.get(key)
+        if isinstance(value, list) and value:
+            summary[key] = copy.deepcopy(value[:3])
+    return summary
+
+
 def _inject_blog_reasoning_specificity(
     data: dict[str, Any],
     *,
@@ -645,6 +766,18 @@ def _inject_blog_reasoning_specificity(
     if claim_plan:
         data[f"blog_claim_plan{suffix}"] = claim_plan
         data_context[f"blog_claim_plan{suffix}"] = copy.deepcopy(claim_plan)
+    scope_summary = _blog_scope_summary(consumer_context.get("scope_manifest"))
+    if scope_summary:
+        data[f"reasoning_scope_summary{suffix}"] = scope_summary
+        data_context[f"reasoning_scope_summary{suffix}"] = copy.deepcopy(scope_summary)
+    atom_context = _blog_atom_context(consumer_context)
+    if atom_context:
+        data[f"reasoning_atom_context{suffix}"] = atom_context
+        data_context[f"reasoning_atom_context{suffix}"] = copy.deepcopy(atom_context)
+    delta_summary = _blog_delta_summary(consumer_context.get("reasoning_delta"))
+    if delta_summary:
+        data[f"reasoning_delta_summary{suffix}"] = delta_summary
+        data_context[f"reasoning_delta_summary{suffix}"] = copy.deepcopy(delta_summary)
 
 
 # -- Cross-vendor synthesis resolution helpers ----------------------
@@ -1334,6 +1467,8 @@ def _finalize_blog_generation_content(
 async def _store_blog_generation_cache(
     blueprint: PostBlueprint,
     content_obj: dict[str, Any] | None,
+    *,
+    pool: Any | None = None,
 ) -> None:
     """Persist the final approved blog generation result in the exact cache."""
     from ...services.b2b.cache_runner import (
@@ -1365,6 +1500,7 @@ async def _store_blog_generation_cache(
             "slug": blueprint.slug,
             "topic_type": blueprint.topic_type,
         },
+        pool=pool,
     )
 
 
@@ -1375,6 +1511,7 @@ async def _enforce_blog_quality_async(
     max_tokens: int,
     related_posts: list[dict[str, str]] | None = None,
     run_id: str | None = None,
+    pool: Any | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Apply quality gate and perform one retry with feedback when needed."""
     current = _ensure_methodology_context(blueprint, dict(content or {}))
@@ -1385,7 +1522,7 @@ async def _enforce_blog_quality_async(
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
     first_pass_report = dict(report)
     if not needs_retry:
-        await _store_blog_generation_cache(blueprint, current)
+        await _store_blog_generation_cache(blueprint, current, pool=pool)
         return _finalize_blog_generation_content(current), _with_first_pass_quality_metadata(
             report,
             first_pass_report=first_pass_report,
@@ -1399,6 +1536,7 @@ async def _enforce_blog_quality_async(
         related_posts=related_posts,
         quality_feedback=_quality_feedback(report),
         run_id=run_id,
+        pool=pool,
     )
     if retry is None:
         if initial_critical:
@@ -1424,7 +1562,7 @@ async def _enforce_blog_quality_async(
             first_pass_report=first_pass_report,
             retry_requested=True,
         )
-    await _store_blog_generation_cache(blueprint, retry)
+    await _store_blog_generation_cache(blueprint, retry, pool=pool)
     return _finalize_blog_generation_content(retry), _with_first_pass_quality_metadata(
         retry_report,
         first_pass_report=first_pass_report,
@@ -1565,6 +1703,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     from ...pipelines.llm import get_pipeline_llm
     from ...pipelines.notify import send_pipeline_notification
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
+    )
+    from ...services.b2b.cache_runner import lookup_b2b_exact_stage_text
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.protocols import Message
 
     llm = get_pipeline_llm(
         workload="synthesis",
@@ -1575,7 +1721,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if llm is None:
         from ...services import llm_registry
         llm = llm_registry.get_active()
-    if llm is None:
+    batch_requested = bool(
+        getattr(cfg, "anthropic_batch_enabled", False)
+        and getattr(cfg, "blog_post_anthropic_batch_enabled", True)
+    )
+    batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
+    if batch_llm is None and isinstance(llm, AnthropicLLM):
+        batch_llm = llm
+    generation_llm = batch_llm if isinstance(batch_llm, AnthropicLLM) else llm
+    blog_batch_enabled = isinstance(batch_llm, AnthropicLLM)
+
+    if generation_llm is None:
         return {"_skip_synthesis": "No LLM available for B2B blog post generation"}
 
     max_posts = max(1, cfg.blog_post_max_per_run)
@@ -1583,22 +1739,47 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Track vendors and topic types across iterations to prevent dominance
     run_seen_vendors: set[str] = set()
     run_seen_types: dict[str, int] = {}
+    attempted_slugs: set[str] = set()
+    blog_batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
 
-    # Regeneration mode: re-process existing drafts through fixed pipeline
-    if cfg.blog_post_regenerate_mode:
-        return await _regenerate_existing_posts(pool, llm, cfg, task, max_posts)
+    def _batch_payload() -> dict[str, int]:
+        return {
+            "blog_batch_jobs": int(blog_batch_metrics["jobs"]),
+            "blog_batch_items_submitted": int(blog_batch_metrics["submitted_items"]),
+            "blog_batch_cache_prefiltered": int(blog_batch_metrics["cache_prefiltered_items"]),
+            "blog_batch_fallback_single_call": int(blog_batch_metrics["fallback_single_call_items"]),
+            "blog_batch_completed_items": int(blog_batch_metrics["completed_items"]),
+            "blog_batch_failed_items": int(blog_batch_metrics["failed_items"]),
+        }
 
-    for i in range(max_posts):
-        topic = await _select_topic(
-            pool, max_posts,
-            exclude_vendors=run_seen_vendors,
-            exclude_types=run_seen_types,
-        )
-        if topic is None:
-            logger.info("No more viable B2B topics after %d posts", i)
-            break
+    def _apply_topic_scope(
+        topic_type: str,
+        topic_ctx: dict[str, Any],
+        *,
+        seen_vendors: set[str],
+        seen_types: dict[str, int],
+    ) -> None:
+        for vendor_key in ("vendor", "vendor_a", "vendor_b", "from_vendor"):
+            vendor_value = str(topic_ctx.get(vendor_key) or "").lower().strip()
+            if vendor_value:
+                seen_vendors.add(vendor_value)
+        seen_types[topic_type] = seen_types.get(topic_type, 0) + 1
 
-        topic_type, topic_ctx = topic
+    async def _prepare_post_candidate(
+        topic_type: str,
+        topic_ctx: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        topic_slug = str(topic_ctx.get("slug") or "").strip()
+        if topic_slug and topic_slug in attempted_slugs:
+            return None
+
         data = await _gather_data(pool, topic_type, topic_ctx)
         await _load_pool_layers_for_blog(pool, topic_type, topic_ctx, data)
 
@@ -1608,199 +1789,438 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "Data insufficiency for %s (%s): %s",
                 topic_ctx.get("slug", "?"), topic_type, sufficiency["reason"],
             )
-            continue
+            return None
 
         blueprint = _build_blueprint(topic_type, topic_ctx, data)
+        if blueprint.slug in attempted_slugs:
+            return None
+
         link_posts = await _fetch_related_for_linking(
             pool, blueprint.tags, blueprint.slug,
         )
-        # Store valid internal link slugs for quality gate validation
         blueprint.data_context["_valid_internal_slugs"] = [
             p["slug"] for p in (link_posts or []) if isinstance(p, dict) and p.get("slug")
         ]
-        # Store known vendor universe for data claim validation
         if "_known_vendors" not in blueprint.data_context:
             try:
-                _kv_rows = await pool.fetch(
+                vendor_rows = await pool.fetch(
                     "SELECT DISTINCT vendor_name FROM b2b_churn_signals"
                 )
                 blueprint.data_context["_known_vendors"] = [
-                    r["vendor_name"] for r in _kv_rows if r["vendor_name"]
+                    row["vendor_name"] for row in vendor_rows if row["vendor_name"]
                 ]
             except Exception:
                 blueprint.data_context["_known_vendors"] = []
-        content = await _generate_content_async(
-            llm, blueprint, cfg.blog_post_max_tokens,
-            related_posts=link_posts,
-            run_id=str(task.id),
-        )
-        if content is None:
-            logger.warning("LLM failed for B2B topic %s, skipping", blueprint.slug)
-            from ..visibility import record_attempt, emit_event
-            await _upsert_blog_post_state(
-                pool,
-                blueprint,
-                llm,
-                status="failed",
-                run_id=str(task.id),
-                attempt_no=1,
-                failure_step="llm_call",
-                error_code="llm_returned_none",
-                error_summary="LLM returned None",
-            )
-            await record_attempt(
-                pool, artifact_type="blog_post", artifact_id=blueprint.slug,
-                run_id=str(task.id), attempt_no=1, stage="generation",
-                status="failed", failure_step="llm_call",
-                error_message="LLM returned None",
-            )
-            await emit_event(
-                pool, stage="blog", event_type="generation_failure",
-                entity_type="blog_post", entity_id=blueprint.slug,
-                summary=f"LLM failed for {blueprint.slug} ({topic_type})",
-                severity="error", actionable=True,
-                artifact_type="blog_post", run_id=str(task.id),
-                reason_code="llm_returned_none",
-            )
-            continue
 
-        content, quality_report = await _enforce_blog_quality_async(
-            llm,
-            blueprint,
-            content,
-            cfg.blog_post_max_tokens,
-            related_posts=link_posts,
-            run_id=str(task.id),
-        )
-        first_pass_audit = _persist_first_pass_blog_quality(blueprint, quality_report)
-        if quality_report.get("_retry_requested"):
-            from ..visibility import record_attempt
-            await record_attempt(
-                pool,
-                artifact_type="blog_post",
-                artifact_id=blueprint.slug,
-                run_id=str(task.id),
-                attempt_no=1,
-                stage="quality_gate_first_pass",
-                status="retry_requested",
-                score=first_pass_audit.get("score"),
-                threshold=first_pass_audit.get("threshold"),
-                blocker_count=len(first_pass_audit.get("blocking_issues", [])),
-                warning_count=len(first_pass_audit.get("warnings", [])),
-                blocking_issues=first_pass_audit.get("blocking_issues"),
-                warnings=first_pass_audit.get("warnings"),
-                failure_step="quality_gate_first_pass",
-                error_message=", ".join(first_pass_audit.get("blocking_issues", [])[:3]) or None,
+        return {
+            "topic_type": topic_type,
+            "topic_ctx": topic_ctx,
+            "blueprint": blueprint,
+            "link_posts": link_posts,
+        }
+
+    async def _generate_first_pass_batch(
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any] | None]:
+        prepared_entries: list[dict[str, Any]] = []
+        first_pass_by_slug: dict[str, dict[str, Any] | None] = {}
+
+        for index, candidate in enumerate(candidates):
+            blueprint = candidate["blueprint"]
+            prepared = _prepare_blog_generation_request(
+                generation_llm,
+                blueprint,
+                cfg.blog_post_max_tokens,
+                related_posts=candidate["link_posts"],
             )
-        if content is None:
+            if prepared is None:
+                first_pass_by_slug[blueprint.slug] = None
+                continue
+
+            cached = await lookup_b2b_exact_stage_text(prepared["request"], pool=pool)
+            prepared_entries.append({
+                "custom_id": f"blog_post:{index}:{blueprint.slug}",
+                "candidate": candidate,
+                "prepared": prepared,
+                "cached_response_text": (
+                    str(cached["response_text"] or "")
+                    if cached is not None
+                    else None
+                ),
+                "cached_usage": (
+                    dict(cached.get("usage") or {})
+                    if cached is not None
+                    else {}
+                ),
+            })
+
+        if not prepared_entries:
+            return first_pass_by_slug
+
+        execution = await run_anthropic_message_batch(
+            llm=generation_llm,
+            stage_id=_BLOG_GENERATION_CACHE_STAGE,
+            task_name="b2b_blog_post_generation",
+            items=[
+                AnthropicBatchItem(
+                    custom_id=str(entry["custom_id"]),
+                    artifact_type="blog_post",
+                    artifact_id=str(entry["candidate"]["blueprint"].slug),
+                    vendor_name=(
+                        str(
+                            entry["candidate"]["blueprint"].data_context.get("vendor")
+                            or ""
+                        )
+                        or None
+                    ),
+                    messages=[
+                        Message(
+                            role=str(getattr(message, "role", "") or ""),
+                            content=str(getattr(message, "content", "") or ""),
+                        )
+                        for message in entry["prepared"]["messages"]
+                    ],
+                    max_tokens=cfg.blog_post_max_tokens,
+                    temperature=float(cfg.blog_post_temperature),
+                    trace_span_name=_BLOG_GENERATION_TRACE_SPAN,
+                    trace_metadata={
+                        **_blog_generation_trace_metadata(
+                            entry["candidate"]["blueprint"],
+                            run_id=str(task.id),
+                        ),
+                        "workload": "anthropic_batch",
+                    },
+                    request_metadata={
+                        "topic_type": entry["candidate"]["blueprint"].topic_type,
+                        "slug": entry["candidate"]["blueprint"].slug,
+                    },
+                    cached_response_text=entry["cached_response_text"],
+                    cached_usage=entry["cached_usage"],
+                )
+                for entry in prepared_entries
+            ],
+            run_id=str(task.id),
+            min_batch_size=int(getattr(cfg, "blog_post_anthropic_batch_min_items", 2)),
+            batch_metadata={
+                "report_type": "blog_post",
+            },
+            pool=pool,
+        )
+        blog_batch_metrics["jobs"] += 1 if execution.provider_batch_id else 0
+        blog_batch_metrics["submitted_items"] += execution.submitted_items
+        blog_batch_metrics["cache_prefiltered_items"] += execution.cache_prefiltered_items
+        blog_batch_metrics["fallback_single_call_items"] += execution.fallback_single_call_items
+        blog_batch_metrics["completed_items"] += execution.completed_items
+        blog_batch_metrics["failed_items"] += execution.failed_items
+
+        for entry in prepared_entries:
+            candidate = entry["candidate"]
+            blueprint = candidate["blueprint"]
+            prepared = entry["prepared"]
+            outcome = execution.results_by_custom_id.get(str(entry["custom_id"]))
+            parse_error_text: str | None = None
+            content: dict[str, Any] | None = None
+
+            if outcome is not None and outcome.response_text:
+                content = _parse_blog_generation_response_text(
+                    blueprint,
+                    outcome.response_text,
+                    request_envelope=prepared["request_envelope"],
+                    provider_name=str(prepared["provider_name"]),
+                    model_name=str(prepared["model_name"]),
+                )
+                if content is None:
+                    parse_error_text = "failed_to_parse_batch_response"
+
+            used_fallback_single_call = False
+            if content is None:
+                used_fallback_single_call = True
+                fallback_usage: dict[str, Any] = {}
+                content = await _generate_content_async(
+                    generation_llm,
+                    blueprint,
+                    cfg.blog_post_max_tokens,
+                    related_posts=candidate["link_posts"],
+                    run_id=str(task.id),
+                    pool=pool,
+                    usage_out=fallback_usage,
+                )
+                await mark_batch_fallback_result(
+                    batch_id=execution.local_batch_id,
+                    custom_id=str(entry["custom_id"]),
+                    succeeded=content is not None,
+                    error_text=(
+                        parse_error_text
+                        or (
+                            outcome.error_text
+                            if outcome is not None and outcome.error_text and content is None
+                            else None
+                        )
+                        or ("llm_returned_none" if content is None else None)
+                    ),
+                    response_text=(
+                        json.dumps(
+                            _finalize_blog_generation_content(content),
+                            separators=(",", ":"),
+                            default=str,
+                        )
+                        if content is not None
+                        else None
+                    ),
+                    usage=fallback_usage,
+                    provider=str(fallback_usage.get("provider") or "") or None,
+                    model=str(fallback_usage.get("model") or "") or None,
+                    provider_request_id=(
+                        str(fallback_usage.get("provider_request_id") or "") or None
+                    ),
+                    pool=pool,
+                )
+
+            if used_fallback_single_call:
+                logger.debug(
+                    "Blog batch fallback used for %s",
+                    blueprint.slug,
+                )
+            first_pass_by_slug[blueprint.slug] = content
+
+        return first_pass_by_slug
+
+    # Regeneration mode: re-process existing drafts through fixed pipeline
+    if cfg.blog_post_regenerate_mode:
+        return await _regenerate_existing_posts(pool, generation_llm, cfg, task, max_posts)
+
+    while len(results) < max_posts:
+        remaining_slots = max_posts - len(results)
+        candidate_entries: list[dict[str, Any]] = []
+        reserved_vendors = set(run_seen_vendors)
+        reserved_types = dict(run_seen_types)
+        selection_attempts = 0
+        selection_limit = max(
+            remaining_slots * _BLOG_BATCH_SELECTION_MULTIPLIER,
+            _BLOG_BATCH_SELECTION_MIN_ATTEMPTS,
+        )
+
+        while len(candidate_entries) < remaining_slots and selection_attempts < selection_limit:
+            selection_attempts += 1
+            topic = await _select_topic(
+                pool,
+                max_posts,
+                exclude_vendors=reserved_vendors,
+                exclude_types=reserved_types,
+            )
+            if topic is None:
+                break
+            topic_type, topic_ctx = topic
+            prepared_candidate = await _prepare_post_candidate(topic_type, topic_ctx)
+            _apply_topic_scope(
+                topic_type,
+                topic_ctx,
+                seen_vendors=reserved_vendors,
+                seen_types=reserved_types,
+            )
+            if prepared_candidate is None:
+                continue
+            attempted_slugs.add(prepared_candidate["blueprint"].slug)
+            candidate_entries.append(prepared_candidate)
+
+        if not candidate_entries:
+            logger.info("No more viable B2B topics after %d posts", len(results))
+            break
+
+        first_pass_by_slug: dict[str, dict[str, Any] | None] = {}
+        if blog_batch_enabled:
+            first_pass_by_slug = await _generate_first_pass_batch(candidate_entries)
+
+        for candidate in candidate_entries:
+            topic_type = candidate["topic_type"]
+            topic_ctx = candidate["topic_ctx"]
+            blueprint = candidate["blueprint"]
+            link_posts = candidate["link_posts"]
+            if blog_batch_enabled:
+                content = first_pass_by_slug.get(blueprint.slug)
+            else:
+                content = await _generate_content_async(
+                    generation_llm,
+                    blueprint,
+                    cfg.blog_post_max_tokens,
+                    related_posts=link_posts,
+                    run_id=str(task.id),
+                    pool=pool,
+                )
+
+            if content is None:
+                logger.warning("LLM failed for B2B topic %s, skipping", blueprint.slug)
+                from ..visibility import record_attempt, emit_event
+                await _upsert_blog_post_state(
+                    pool,
+                    blueprint,
+                    generation_llm,
+                    status="failed",
+                    run_id=str(task.id),
+                    attempt_no=1,
+                    failure_step="llm_call",
+                    error_code="llm_returned_none",
+                    error_summary="LLM returned None",
+                )
+                await record_attempt(
+                    pool, artifact_type="blog_post", artifact_id=blueprint.slug,
+                    run_id=str(task.id), attempt_no=1, stage="generation",
+                    status="failed", failure_step="llm_call",
+                    error_message="LLM returned None",
+                )
+                await emit_event(
+                    pool, stage="blog", event_type="generation_failure",
+                    entity_type="blog_post", entity_id=blueprint.slug,
+                    summary=f"LLM failed for {blueprint.slug} ({topic_type})",
+                    severity="error", actionable=True,
+                    artifact_type="blog_post", run_id=str(task.id),
+                    reason_code="llm_returned_none",
+                )
+                continue
+
+            content, quality_report = await _enforce_blog_quality_async(
+                generation_llm,
+                blueprint,
+                content,
+                cfg.blog_post_max_tokens,
+                related_posts=link_posts,
+                run_id=str(task.id),
+                pool=pool,
+            )
+            first_pass_audit = _persist_first_pass_blog_quality(blueprint, quality_report)
+            if quality_report.get("_retry_requested"):
+                from ..visibility import record_attempt
+                await record_attempt(
+                    pool,
+                    artifact_type="blog_post",
+                    artifact_id=blueprint.slug,
+                    run_id=str(task.id),
+                    attempt_no=1,
+                    stage="quality_gate_first_pass",
+                    status="retry_requested",
+                    score=first_pass_audit.get("score"),
+                    threshold=first_pass_audit.get("threshold"),
+                    blocker_count=len(first_pass_audit.get("blocking_issues", [])),
+                    warning_count=len(first_pass_audit.get("warnings", [])),
+                    blocking_issues=first_pass_audit.get("blocking_issues"),
+                    warnings=first_pass_audit.get("warnings"),
+                    failure_step="quality_gate_first_pass",
+                    error_message=", ".join(first_pass_audit.get("blocking_issues", [])[:3]) or None,
+                )
+            if content is None:
+                quality_audit = _canonicalize_blog_quality(
+                    blueprint,
+                    content=None,
+                    report=quality_report,
+                    boundary="generation",
+                )
+                logger.warning(
+                    "Quality gate failed for %s (%s): %s",
+                    blueprint.slug,
+                    blueprint.topic_type,
+                    ", ".join(quality_audit.get("blocking_issues", [])[:4]) or "unknown issues",
+                )
+                from ..visibility import record_attempt, emit_event
+                await _upsert_blog_post_state(
+                    pool,
+                    blueprint,
+                    generation_llm,
+                    status="rejected",
+                    run_id=str(task.id),
+                    attempt_no=1,
+                    score=quality_audit.get("score"),
+                    threshold=quality_audit.get("threshold"),
+                    blocker_count=len(quality_audit.get("blocking_issues", [])),
+                    warning_count=len(quality_audit.get("warnings", [])),
+                    failure_step="quality_gate",
+                    error_code="quality_gate_rejection",
+                    error_summary=", ".join(quality_audit.get("blocking_issues", [])[:3]),
+                    rejection_reason=", ".join(quality_audit.get("blocking_issues", [])[:3]),
+                    content=content,
+                )
+                await record_attempt(
+                    pool, artifact_type="blog_post", artifact_id=blueprint.slug,
+                    run_id=str(task.id), attempt_no=1, stage="quality_gate",
+                    status="rejected",
+                    score=quality_audit.get("score"),
+                    threshold=quality_audit.get("threshold"),
+                    blocker_count=len(quality_audit.get("blocking_issues", [])),
+                    warning_count=len(quality_audit.get("warnings", [])),
+                    blocking_issues=quality_audit.get("blocking_issues"),
+                    warnings=quality_audit.get("warnings"),
+                    failure_step="quality_gate",
+                    error_message=", ".join(quality_audit.get("blocking_issues", [])[:3]),
+                )
+                await emit_event(
+                    pool, stage="blog", event_type="quality_gate_rejection",
+                    entity_type="blog_post", entity_id=blueprint.slug,
+                    summary=f"Quality gate rejected {blueprint.slug} ({topic_type})",
+                    severity="warning", actionable=True,
+                    artifact_type="blog_post", run_id=str(task.id),
+                    reason_code=quality_audit.get("blocking_issues", ["unknown"])[0][:80] if quality_audit.get("blocking_issues") else "unknown",
+                    decision="rejected",
+                    detail=quality_audit,
+                )
+                continue
             quality_audit = _canonicalize_blog_quality(
                 blueprint,
-                content=None,
+                content=content,
                 report=quality_report,
                 boundary="generation",
             )
-            logger.warning(
-                "Quality gate failed for %s (%s): %s",
-                blueprint.slug,
-                blueprint.topic_type,
-                ", ".join(quality_audit.get("blocking_issues", [])[:4]) or "unknown issues",
-            )
-            from ..visibility import record_attempt, emit_event
-            await _upsert_blog_post_state(
+
+            post_id = await _assemble_and_store(
                 pool,
                 blueprint,
-                llm,
-                status="rejected",
+                content,
+                generation_llm,
                 run_id=str(task.id),
                 attempt_no=1,
-                score=quality_audit.get("score"),
-                threshold=quality_audit.get("threshold"),
-                blocker_count=len(quality_audit.get("blocking_issues", [])),
-                warning_count=len(quality_audit.get("warnings", [])),
-                failure_step="quality_gate",
-                error_code="quality_gate_rejection",
-                error_summary=", ".join(quality_audit.get("blocking_issues", [])[:3]),
-                rejection_reason=", ".join(quality_audit.get("blocking_issues", [])[:3]),
-                content=content,
             )
+            if not post_id:
+                logger.info("Slug %s already published, skipping", blueprint.slug)
+                from ..visibility import record_dedup
+                await record_dedup(
+                    pool, stage="blog", entity_type="blog_post",
+                    entity_id=blueprint.slug, run_id=str(task.id),
+                    reason=f"Slug {blueprint.slug} already published",
+                )
+                continue
+
+            from ..visibility import record_attempt
             await record_attempt(
                 pool, artifact_type="blog_post", artifact_id=blueprint.slug,
                 run_id=str(task.id), attempt_no=1, stage="quality_gate",
-                status="rejected",
+                status="succeeded",
                 score=quality_audit.get("score"),
                 threshold=quality_audit.get("threshold"),
                 blocker_count=len(quality_audit.get("blocking_issues", [])),
                 warning_count=len(quality_audit.get("warnings", [])),
-                blocking_issues=quality_audit.get("blocking_issues"),
                 warnings=quality_audit.get("warnings"),
-                failure_step="quality_gate",
-                error_message=", ".join(quality_audit.get("blocking_issues", [])[:3]),
             )
-            await emit_event(
-                pool, stage="blog", event_type="quality_gate_rejection",
-                entity_type="blog_post", entity_id=blueprint.slug,
-                summary=f"Quality gate rejected {blueprint.slug} ({topic_type})",
-                severity="warning", actionable=True,
-                artifact_type="blog_post", run_id=str(task.id),
-                reason_code=quality_audit.get("blocking_issues", ["unknown"])[0][:80] if quality_audit.get("blocking_issues") else "unknown",
-                decision="rejected",
-                detail=quality_audit,
+
+            n_charts = len(blueprint.charts)
+            results.append({
+                "post_id": str(post_id),
+                "topic_type": blueprint.topic_type,
+                "slug": blueprint.slug,
+                "charts": n_charts,
+            })
+            _apply_topic_scope(
+                topic_type,
+                topic_ctx,
+                seen_vendors=run_seen_vendors,
+                seen_types=run_seen_types,
             )
-            continue
-        quality_audit = _canonicalize_blog_quality(
-            blueprint,
-            content=content,
-            report=quality_report,
-            boundary="generation",
-        )
 
-        post_id = await _assemble_and_store(
-            pool,
-            blueprint,
-            content,
-            llm,
-            run_id=str(task.id),
-            attempt_no=1,
-        )
-        if not post_id:
-            logger.info("Slug %s already published, skipping", blueprint.slug)
-            from ..visibility import record_dedup
-            await record_dedup(
-                pool, stage="blog", entity_type="blog_post",
-                entity_id=blueprint.slug, run_id=str(task.id),
-                reason=f"Slug {blueprint.slug} already published",
-            )
-            continue
-
-        # Record successful attempt
-        from ..visibility import record_attempt
-        await record_attempt(
-            pool, artifact_type="blog_post", artifact_id=blueprint.slug,
-            run_id=str(task.id), attempt_no=1, stage="quality_gate",
-            status="succeeded",
-            score=quality_audit.get("score"),
-            threshold=quality_audit.get("threshold"),
-            blocker_count=len(quality_audit.get("blocking_issues", [])),
-            warning_count=len(quality_audit.get("warnings", [])),
-            warnings=quality_audit.get("warnings"),
-        )
-
-        n_charts = len(blueprint.charts)
-        results.append({
-            "post_id": str(post_id),
-            "topic_type": blueprint.topic_type,
-            "slug": blueprint.slug,
-            "charts": n_charts,
-        })
-        # Track for cross-iteration diversity
-        for vk in ("vendor", "vendor_a", "vendor_b", "from_vendor"):
-            v = str(topic_ctx.get(vk) or "").lower().strip()
-            if v:
-                run_seen_vendors.add(v)
-        run_seen_types[topic_type] = run_seen_types.get(topic_type, 0) + 1
+            if len(results) >= max_posts:
+                break
 
     if not results:
-        return {"_skip_synthesis": "No B2B blog posts generated this run"}
+        return {
+            "_skip_synthesis": "No B2B blog posts generated this run",
+            **_batch_payload(),
+        }
 
     slugs = ", ".join(r["slug"] for r in results)
     msg = f"B2B Blog: {len(results)} draft(s) created -- {slugs}"
@@ -1813,6 +2233,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "_skip_synthesis": msg,
         "posts": results,
         "count": len(results),
+        **_batch_payload(),
     }
 
 
@@ -6484,51 +6905,74 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
 
 # -- Stage 4: Content Generation ----------------------------------
 
-async def _generate_content_async(
-    llm, blueprint: PostBlueprint, max_tokens: int,
+def _blog_generation_trace_metadata(
+    blueprint: PostBlueprint,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "workflow": "b2b_blog_post_generation",
+        "report_type": blueprint.topic_type,
+        "topic_type": blueprint.topic_type,
+        "slug": blueprint.slug,
+        "source_name": "b2b_blog_post_generation",
+        "event_type": "llm_overlay",
+        "entity_type": "blog_post",
+        "entity_id": blueprint.slug,
+        "suggested_title": blueprint.suggested_title[:200],
+        "tags": blueprint.tags[:10],
+    }
+    if run_id:
+        metadata["run_id"] = run_id
+    data_context = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    if data_context.get("vendor"):
+        metadata["vendor_name"] = str(data_context["vendor"])[:200]
+    if data_context.get("vendor_a"):
+        metadata["vendor_a"] = str(data_context["vendor_a"])[:200]
+    if data_context.get("vendor_b"):
+        metadata["vendor_b"] = str(data_context["vendor_b"])[:200]
+    if data_context.get("category"):
+        metadata["category"] = str(data_context["category"])[:200]
+    return metadata
+
+
+def _build_blog_generation_payload(
+    blueprint: PostBlueprint,
+    *,
     related_posts: list[dict[str, str]] | None = None,
     quality_feedback: list[str] | None = None,
-    run_id: str | None = None,
-) -> dict[str, Any] | None:
-    """Single LLM call: blueprint in, {title, description, content} out."""
-    from ...pipelines.llm import clean_llm_output, parse_json_response
-    from ...skills.registry import get_skill_registry
-
-    skill = get_skill_registry().get("digest/b2b_blog_post_generation")
-    if skill is None:
-        logger.error("Skill digest/b2b_blog_post_generation not found")
-        return None
-
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "topic_type": blueprint.topic_type,
         "suggested_title": blueprint.suggested_title,
         "data_context": blueprint.data_context,
         "sections": [
             {
-                "id": s.id,
-                "heading": s.heading,
-                "goal": s.goal,
-                "key_stats": s.key_stats,
-                "chart_ids": s.chart_ids,
-                "data_summary": s.data_summary,
+                "id": section.id,
+                "heading": section.heading,
+                "goal": section.goal,
+                "key_stats": section.key_stats,
+                "chart_ids": section.chart_ids,
+                "data_summary": section.data_summary,
             }
-            for s in blueprint.sections
+            for section in blueprint.sections
         ],
         "available_charts": [
             {
-                "chart_id": c.chart_id,
-                "chart_type": c.chart_type,
-                "title": c.title,
+                "chart_id": chart.chart_id,
+                "chart_type": chart.chart_type,
+                "title": chart.title,
                 "data_labels": [
                     str(row.get("name") or row.get("label") or row.get("category") or "")
-                    for row in c.data if isinstance(row, dict)
+                    for row in chart.data
+                    if isinstance(row, dict)
                 ][:10],
             }
-            for c in blueprint.charts
+            for chart in blueprint.charts
         ],
         "quotable_phrases": blueprint.quotable_phrases[:5],
     }
-    ctx = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    data_context = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
     for src_key, dest_key in (
         ("reasoning_anchor_examples", "anchor_examples"),
         ("reasoning_witness_highlights", "witness_highlights"),
@@ -6539,7 +6983,7 @@ async def _generate_content_async(
         ("reasoning_reference_ids_b", "reference_ids_b"),
         ("blog_claim_plan_b", "claim_plan_b"),
     ):
-        value = ctx.get(src_key)
+        value = data_context.get(src_key)
         if value not in (None, "", [], {}):
             payload[dest_key] = value
     if blueprint.cta:
@@ -6552,132 +6996,273 @@ async def _generate_content_async(
         payload["related_posts"] = related_posts
     if quality_feedback:
         payload["quality_feedback"] = quality_feedback[:10]
+    return payload
 
+
+def _prepare_blog_generation_request(
+    llm,
+    blueprint: PostBlueprint,
+    max_tokens: int,
+    *,
+    related_posts: list[dict[str, str]] | None = None,
+    quality_feedback: list[str] | None = None,
+) -> dict[str, Any] | None:
+    from ...services.b2b.cache_runner import prepare_b2b_exact_stage_request
     from ...services.protocols import Message
-    from ...services.b2b.cache_runner import (
-        lookup_b2b_exact_stage_text,
-        prepare_b2b_exact_stage_request,
-    )
+    from ...skills.registry import get_skill_registry
 
+    skill = get_skill_registry().get("digest/b2b_blog_post_generation")
+    if skill is None:
+        logger.error("Skill digest/b2b_blog_post_generation not found")
+        return None
+
+    payload = _build_blog_generation_payload(
+        blueprint,
+        related_posts=related_posts,
+        quality_feedback=quality_feedback,
+    )
     messages = [
         Message(role="system", content=skill.content),
-        Message(role="user", content=json.dumps(payload, separators=(",", ":"), default=str)),
+        Message(
+            role="user",
+            content=json.dumps(payload, separators=(",", ":"), default=str),
+        ),
     ]
     request = prepare_b2b_exact_stage_request(
-        "b2b_blog_post_generation.content",
+        _BLOG_GENERATION_CACHE_STAGE,
         llm=llm,
         messages=messages,
         max_tokens=max_tokens,
-        temperature=0.7,
+        temperature=float(settings.b2b_churn.blog_post_temperature),
     )
-    provider_name = request.provider
-    model_name = request.model
-    request_envelope = request.request_envelope
+    return {
+        "payload": payload,
+        "messages": messages,
+        "request": request,
+        "provider_name": request.provider,
+        "model_name": request.model,
+        "request_envelope": request.request_envelope,
+    }
+
+
+def _trace_blog_generation_call(
+    llm,
+    blueprint: PostBlueprint,
+    *,
+    messages: list[Any],
+    result: Any,
+    run_id: str | None = None,
+) -> None:
+    usage = result.get("usage", {}) if isinstance(result, dict) else {}
+    if not usage.get("input_tokens"):
+        return
+
+    logger.info(
+        "b2b_blog_post_generation LLM tokens: in=%d out=%d",
+        usage["input_tokens"],
+        usage.get("output_tokens", 0),
+    )
+    from ...pipelines.llm import trace_llm_call
+
+    trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
+    response_text = (result.get("response", "") if isinstance(result, dict) else str(result)) or ""
+    trace_llm_call(
+        _BLOG_GENERATION_TRACE_SPAN,
+        input_tokens=usage["input_tokens"],
+        output_tokens=usage.get("output_tokens", 0),
+        cached_tokens=trace_meta.get("cached_tokens") or trace_meta.get("cache_read_tokens"),
+        cache_write_tokens=trace_meta.get("cache_write_tokens") or trace_meta.get("cache_creation_tokens"),
+        billable_input_tokens=trace_meta.get("billable_input_tokens"),
+        model=getattr(llm, "model", ""),
+        provider=getattr(llm, "name", ""),
+        input_data={
+            "messages": [
+                {
+                    "role": getattr(message, "role", ""),
+                    "content": str(getattr(message, "content", "") or "")[:500],
+                }
+                for message in messages
+            ]
+        },
+        output_data={"response": response_text[:2000]},
+        api_endpoint=trace_meta.get("api_endpoint"),
+        provider_request_id=trace_meta.get("provider_request_id"),
+        ttft_ms=trace_meta.get("ttft_ms"),
+        inference_time_ms=trace_meta.get("inference_time_ms"),
+        queue_time_ms=trace_meta.get("queue_time_ms"),
+        metadata=_blog_generation_trace_metadata(
+            blueprint,
+            run_id=run_id,
+        ),
+    )
+
+
+def _parse_blog_generation_response_text(
+    blueprint: PostBlueprint,
+    text: str | None,
+    *,
+    request_envelope: dict[str, Any],
+    provider_name: str,
+    model_name: str,
+    debug_result: Any | None = None,
+) -> dict[str, Any] | None:
+    from ...pipelines.llm import clean_llm_output, parse_json_response
+
+    logger.info("Blog LLM raw response length: %d chars", len(text or ""))
+    if not text:
+        logger.error("Blog LLM returned empty response for %s", blueprint.slug)
+        if debug_result is not None:
+            try:
+                with open("/tmp/blog_empty_response.txt", "w") as handle:
+                    handle.write(json.dumps(debug_result, indent=2, default=str)[:5000])
+            except Exception:
+                pass
+        return None
+
+    cleaned_text = clean_llm_output(text)
+    parsed = parse_json_response(cleaned_text, recover_truncated=True)
+    if parsed.get("_parse_fallback"):
+        logger.error(
+            "Failed to parse LLM response as JSON (text[:500]=%s)",
+            cleaned_text[:500],
+        )
+        try:
+            with open("/tmp/blog_llm_fail.txt", "w") as handle:
+                handle.write(
+                    f"PARSE FALLBACK\ntext_len={len(cleaned_text)}\ntext[:2000]={cleaned_text[:2000]}\n"
+                )
+        except Exception:
+            pass
+        return None
+
+    if not all(key in parsed for key in ("title", "description", "content")):
+        logger.error(
+            "LLM response missing required keys: %s (text[:300]=%s)",
+            list(parsed.keys()),
+            cleaned_text[:300],
+        )
+        return None
+
+    if "seo_title" not in parsed or not parsed["seo_title"]:
+        parsed["seo_title"] = parsed["title"][:60]
+    if "seo_description" not in parsed or not parsed["seo_description"]:
+        parsed["seo_description"] = parsed["description"][:155]
+    if "target_keyword" not in parsed:
+        parsed["target_keyword"] = ""
+    if "secondary_keywords" not in parsed:
+        parsed["secondary_keywords"] = []
+    if "faq" not in parsed or not isinstance(parsed["faq"], list):
+        parsed["faq"] = []
+
+    if blueprint.cta and parsed.get("cta_body"):
+        blueprint.cta["body"] = str(parsed["cta_body"])[:200]
+
+    parsed["_cache_request_envelope"] = request_envelope
+    parsed["_cache_provider"] = provider_name
+    parsed["_cache_model"] = model_name
+    return parsed
+
+
+async def _generate_content_async(
+    llm, blueprint: PostBlueprint, max_tokens: int,
+    related_posts: list[dict[str, str]] | None = None,
+    quality_feedback: list[str] | None = None,
+    run_id: str | None = None,
+    pool: Any | None = None,
+    usage_out: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Single LLM call: blueprint in, {title, description, content} out."""
+    from ...services.b2b.cache_runner import lookup_b2b_exact_stage_text
+
+    prepared = _prepare_blog_generation_request(
+        llm,
+        blueprint,
+        max_tokens,
+        related_posts=related_posts,
+        quality_feedback=quality_feedback,
+    )
+    if prepared is None:
+        return None
+
+    request = prepared["request"]
+    messages = prepared["messages"]
 
     try:
-        cached = await lookup_b2b_exact_stage_text(request)
-        result = None
-        text = cached["response_text"] if cached is not None else None
-        if text is None:
-            result = await asyncio.to_thread(
-                llm.chat,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.7,
+        cached = await lookup_b2b_exact_stage_text(request, pool=pool)
+        if cached is not None:
+            if usage_out is not None:
+                usage_out.clear()
+                usage_out.update(
+                    {
+                        "input_tokens": 0,
+                        "billable_input_tokens": 0,
+                        "cached_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "output_tokens": 0,
+                        "provider": str(cached.get("provider") or prepared["provider_name"]),
+                        "model": str(cached.get("model") or prepared["model_name"]),
+                    }
+                )
+            return _parse_blog_generation_response_text(
+                blueprint,
+                str(cached["response_text"] or ""),
+                request_envelope=prepared["request_envelope"],
+                provider_name=str(prepared["provider_name"]),
+                model_name=str(prepared["model_name"]),
             )
-        _usage = result.get("usage", {}) if isinstance(result, dict) else {}
-        if _usage.get("input_tokens"):
-            logger.info("b2b_blog_post_generation LLM tokens: in=%d out=%d",
-                         _usage["input_tokens"], _usage.get("output_tokens", 0))
-            from ...pipelines.llm import trace_llm_call
-            _trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
-            _resp_text = (result.get("response", "") if isinstance(result, dict) else str(result)) or ""
-            _biz_ctx = {
-                "workflow": "b2b_blog_post_generation",
-                "report_type": blueprint.topic_type,
-                "topic_type": blueprint.topic_type,
-                "slug": blueprint.slug,
-                "source_name": "b2b_blog_post_generation",
-                "event_type": "llm_overlay",
-                "entity_type": "blog_post",
-                "entity_id": blueprint.slug,
-                "suggested_title": blueprint.suggested_title[:200],
-                "tags": blueprint.tags[:10],
-            }
-            if run_id:
-                _biz_ctx["run_id"] = run_id
-            _dc = blueprint.data_context or {}
-            if _dc.get("vendor"):
-                _biz_ctx["vendor_name"] = str(_dc["vendor"])[:200]
-            if _dc.get("vendor_a"):
-                _biz_ctx["vendor_a"] = str(_dc["vendor_a"])[:200]
-            if _dc.get("vendor_b"):
-                _biz_ctx["vendor_b"] = str(_dc["vendor_b"])[:200]
-            if _dc.get("category"):
-                _biz_ctx["category"] = str(_dc["category"])[:200]
-            trace_llm_call("task.b2b_blog_post_generation", input_tokens=_usage["input_tokens"],
-                           output_tokens=_usage.get("output_tokens", 0),
-                           cached_tokens=_trace_meta.get("cached_tokens") or _trace_meta.get("cache_read_tokens"),
-                           cache_write_tokens=_trace_meta.get("cache_write_tokens") or _trace_meta.get("cache_creation_tokens"),
-                           billable_input_tokens=_trace_meta.get("billable_input_tokens"),
-                           model=getattr(llm, "model", ""), provider=getattr(llm, "name", ""),
-                           input_data={"messages": [{"role": m.role, "content": (m.content or "")[:500]} for m in messages]},
-                           output_data={"response": _resp_text[:2000]},
-                           api_endpoint=_trace_meta.get("api_endpoint"),
-                           provider_request_id=_trace_meta.get("provider_request_id"),
-                           ttft_ms=_trace_meta.get("ttft_ms"),
-                           inference_time_ms=_trace_meta.get("inference_time_ms"),
-                           queue_time_ms=_trace_meta.get("queue_time_ms"),
-                           metadata=_biz_ctx)
-        if text is None:
-            text = result.get("response", "") if isinstance(result, dict) else str(result)
-        logger.info("Blog LLM raw response length: %d chars", len(text or ""))
-        if not text:
-            logger.error("Blog LLM returned empty response for %s", blueprint.slug)
-            try:
-                with open("/tmp/blog_empty_response.txt", "w") as _ef:
-                    import json as _j2
-                    _ef.write(_j2.dumps(result, indent=2, default=str)[:5000])
-            except Exception:
-                pass
-            return None
-        text = clean_llm_output(text)
-        parsed = parse_json_response(text, recover_truncated=True)
 
-        if parsed.get("_parse_fallback"):
-            logger.error("Failed to parse LLM response as JSON (text[:500]=%s)", text[:500])
-            # Dump for diagnosis
-            try:
-                with open("/tmp/blog_llm_fail.txt", "w") as _bf:
-                    _bf.write(f"PARSE FALLBACK\ntext_len={len(text)}\ntext[:2000]={text[:2000]}\n")
-            except Exception:
-                pass
-            return None
-
-        if not all(k in parsed for k in ("title", "description", "content")):
-            logger.error("LLM response missing required keys: %s (text[:300]=%s)", list(parsed.keys()), text[:300])
-            return None
-
-        # Ensure SEO fields have sane defaults if LLM didn't produce them
-        if "seo_title" not in parsed or not parsed["seo_title"]:
-            parsed["seo_title"] = parsed["title"][:60]
-        if "seo_description" not in parsed or not parsed["seo_description"]:
-            parsed["seo_description"] = parsed["description"][:155]
-        if "target_keyword" not in parsed:
-            parsed["target_keyword"] = ""
-        if "secondary_keywords" not in parsed:
-            parsed["secondary_keywords"] = []
-        if "faq" not in parsed or not isinstance(parsed["faq"], list):
-            parsed["faq"] = []
-
-        # Extract CTA body from LLM response and inject into blueprint
-        if blueprint.cta and parsed.get("cta_body"):
-            blueprint.cta["body"] = str(parsed["cta_body"])[:200]
-
-        parsed["_cache_request_envelope"] = request_envelope
-        parsed["_cache_provider"] = provider_name
-        parsed["_cache_model"] = model_name
-        return parsed
+        result = await asyncio.to_thread(
+            llm.chat,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=float(settings.b2b_churn.blog_post_temperature),
+        )
+        if usage_out is not None:
+            usage = result.get("usage", {}) if isinstance(result, dict) else {}
+            trace_meta = result.get("_trace_meta", {}) if isinstance(result, dict) else {}
+            usage_out.clear()
+            usage_out.update(
+                {
+                    "input_tokens": int((usage or {}).get("input_tokens") or 0),
+                    "billable_input_tokens": int(
+                        (trace_meta or {}).get("billable_input_tokens")
+                        or (usage or {}).get("input_tokens")
+                        or 0
+                    ),
+                    "cached_tokens": int(
+                        (trace_meta or {}).get("cached_tokens")
+                        or (trace_meta or {}).get("cache_read_tokens")
+                        or 0
+                    ),
+                    "cache_write_tokens": int(
+                        (trace_meta or {}).get("cache_write_tokens")
+                        or (trace_meta or {}).get("cache_creation_tokens")
+                        or 0
+                    ),
+                    "output_tokens": int((usage or {}).get("output_tokens") or 0),
+                    "provider": str(getattr(llm, "name", "") or ""),
+                    "model": str(getattr(llm, "model", "") or ""),
+                    "provider_request_id": (
+                        str((trace_meta or {}).get("provider_request_id") or "") or None
+                    ),
+                }
+            )
+        _trace_blog_generation_call(
+            llm,
+            blueprint,
+            messages=messages,
+            result=result,
+            run_id=run_id,
+        )
+        text = result.get("response", "") if isinstance(result, dict) else str(result)
+        return _parse_blog_generation_response_text(
+            blueprint,
+            text,
+            request_envelope=prepared["request_envelope"],
+            provider_name=str(prepared["provider_name"]),
+            model_name=str(prepared["model_name"]),
+            debug_result=result,
+        )
     except Exception:
         logger.exception("LLM content generation failed")
         return None
