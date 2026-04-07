@@ -92,6 +92,33 @@ function formatWholeNumber(value: number | null | undefined) {
   }).format(value)
 }
 
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => asString(item)).filter(Boolean)
+    : []
+}
+
+function summarizeReasoningDelta(signal: ChurnSignal): string[] {
+  const delta = signal.reasoning_delta
+  if (!delta) return []
+  const items: string[] = []
+  if (delta.wedge_changed) items.push('Wedge changed')
+  if (delta.confidence_changed) items.push('Confidence shifted')
+  if (delta.top_destination_changed) {
+    const destination = asString(delta.current_top_destination)
+    items.push(destination ? `Destination: ${destination}` : 'Destination shifted')
+  }
+  const timingWindows = toStringArray(delta.new_timing_windows)
+  if (timingWindows.length > 0) items.push(`Timing +${timingWindows.length}`)
+  const accounts = toStringArray(delta.new_account_signals)
+  if (accounts.length > 0) items.push(`Accounts +${accounts.length}`)
+  return items
+}
+
 export default function Watchlists() {
   const navigate = useNavigate()
   const [searchInput, setSearchInput] = useState('')
@@ -441,6 +468,9 @@ export default function Watchlists() {
         <div>
           <div className="font-medium text-white">{row.vendor_name}</div>
           <div className="text-xs text-slate-500">{row.product_category ?? 'Uncategorized'}</div>
+          {row.synthesis_wedge_label && (
+            <div className="mt-1 text-[11px] text-cyan-300">{row.synthesis_wedge_label}</div>
+          )}
         </div>
       ),
       sortable: true,
@@ -465,6 +495,27 @@ export default function Watchlists() {
       ),
       sortable: true,
       sortValue: (row) => row.archetype ?? '',
+    },
+    {
+      key: 'delta',
+      header: 'Change Signal',
+      render: (row) => {
+        const items = summarizeReasoningDelta(row)
+        if (items.length === 0) {
+          return <span className="text-xs text-slate-500">Stable</span>
+        }
+        return (
+          <div className="space-y-1">
+            {items.slice(0, 2).map((item, index) => (
+              <div key={`${row.vendor_name}-${index}`} className="text-xs text-slate-300">
+                {item}
+              </div>
+            ))}
+          </div>
+        )
+      },
+      sortable: true,
+      sortValue: (row) => summarizeReasoningDelta(row).join(' ') || row.synthesis_wedge_label || '',
     },
     {
       key: 'support',

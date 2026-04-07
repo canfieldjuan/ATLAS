@@ -1,4 +1,4 @@
-export interface ChurnSignal {
+export interface ChurnSignal extends ReasoningOverlayFields {
   vendor_name: string
   product_category: string | null
   total_reviews: number

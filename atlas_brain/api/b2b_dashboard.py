@@ -161,6 +161,18 @@ def _overlay_reasoning_summary_from_view(target: dict[str, Any], view: Any) -> N
         target["reasoning_mode"] = entry["mode"]
     if entry.get("risk_level"):
         target["reasoning_risk_level"] = entry["risk_level"]
+    primary_wedge = getattr(view, "primary_wedge", None)
+    if primary_wedge:
+        target["synthesis_wedge"] = primary_wedge.value
+        target["synthesis_wedge_label"] = view.wedge_label
+    reasoning_delta = getattr(view, "reasoning_delta", None)
+    if isinstance(reasoning_delta, dict) and reasoning_delta:
+        target["reasoning_delta"] = reasoning_delta
+    target["reasoning_source"] = (
+        "b2b_reasoning_synthesis"
+        if getattr(view, "schema_version", "") != "legacy"
+        else "b2b_churn_signals_legacy_fallback"
+    )
 
 
 def _overlay_reasoning_detail_from_view(
@@ -194,6 +206,15 @@ def _overlay_reasoning_detail_from_view(
     reference_ids = context.get("reference_ids")
     if isinstance(reference_ids, dict) and reference_ids:
         target["reasoning_reference_ids"] = reference_ids
+    scope_manifest = context.get("scope_manifest")
+    if isinstance(scope_manifest, dict) and scope_manifest:
+        target["reasoning_scope_manifest"] = scope_manifest
+    atoms = context.get("reasoning_atoms")
+    if isinstance(atoms, dict) and atoms:
+        target["reasoning_atoms"] = atoms
+    delta = context.get("reasoning_delta")
+    if isinstance(delta, dict) and delta:
+        target["reasoning_delta"] = delta
     contract_gaps = context.get("reasoning_contract_gaps")
     if isinstance(contract_gaps, list) and contract_gaps:
         target["reasoning_contract_gaps"] = contract_gaps
