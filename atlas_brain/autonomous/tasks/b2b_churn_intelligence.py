@@ -195,6 +195,63 @@ def _should_use_cross_vendor_category(category: str) -> bool:
     return bool(text) and not _is_generic_product_category(text)
 
 
+async def _load_category_council_lookup(
+    pool,
+    vendor_scores: list[dict[str, Any]],
+    *,
+    as_of: date,
+    analysis_window_days: int = 90,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Load synthesis-first category council context for non-generic categories."""
+    from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
+
+    council_lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    try:
+        xv_lookup = await load_best_cross_vendor_lookup(
+            pool,
+            as_of=as_of,
+            analysis_window_days=analysis_window_days,
+            allow_legacy_fallback=False,
+        )
+    except Exception:
+        logger.debug("Cross-vendor council lookup failed", exc_info=True)
+        return council_lookup
+
+    councils = (xv_lookup or {}).get("councils") or {}
+    for row in vendor_scores:
+        if not isinstance(row, dict):
+            continue
+        category = str(row.get("product_category") or row.get("category") or "").strip()
+        if not _should_use_cross_vendor_category(category):
+            continue
+        council = councils.get(category)
+        if not isinstance(council, dict):
+            continue
+        conclusion = council.get("conclusion") or {}
+        if not any(
+            [
+                conclusion.get("winner"),
+                conclusion.get("loser"),
+                conclusion.get("conclusion"),
+                conclusion.get("market_regime"),
+                conclusion.get("key_insights"),
+            ]
+        ):
+            continue
+        vendor_key = _canonicalize_vendor(row.get("vendor_name") or row.get("vendor") or "")
+        category_key = category.lower()
+        council_lookup[(vendor_key, category_key)] = {
+            "winner": conclusion.get("winner") or "",
+            "loser": conclusion.get("loser") or "",
+            "conclusion": conclusion.get("conclusion") or "",
+            "market_regime": conclusion.get("market_regime") or "",
+            "durability": conclusion.get("durability_assessment") or "",
+            "confidence": council.get("confidence"),
+            "key_insights": list(conclusion.get("key_insights") or [])[:3],
+        }
+    return council_lookup
+
+
 _PLACEHOLDER_VENDOR_REFS = {"vendor a", "vendor b", "vendor_a", "vendor_b"}
 
 
@@ -3245,42 +3302,11 @@ async def gather_intelligence_data(
             sorted(scoped_vendors),
         )
 
-    council_lookup: dict[tuple[str, str], dict[str, Any]] = {}
-    try:
-        xv_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=date.today())
-        for row in data["vendor_scores"]:
-            if not isinstance(row, dict):
-                continue
-            category = str(row.get("product_category") or row.get("category") or "").strip()
-            if not _should_use_cross_vendor_category(category):
-                continue
-            council = (xv_lookup.get("councils") or {}).get(category)
-            if not isinstance(council, dict):
-                continue
-            conclusion = council.get("conclusion") or {}
-            if not any(
-                [
-                    conclusion.get("winner"),
-                    conclusion.get("loser"),
-                    conclusion.get("conclusion"),
-                    conclusion.get("market_regime"),
-                    conclusion.get("key_insights"),
-                ]
-            ):
-                continue
-            vendor_key = _canonicalize_vendor(row.get("vendor_name") or row.get("vendor") or "")
-            category_key = str(category).strip().lower()
-            council_lookup[(vendor_key, category_key)] = {
-                "winner": conclusion.get("winner") or "",
-                "loser": conclusion.get("loser") or "",
-                "conclusion": conclusion.get("conclusion") or "",
-                "market_regime": conclusion.get("market_regime") or "",
-                "durability": conclusion.get("durability_assessment") or "",
-                "confidence": council.get("confidence"),
-                "key_insights": list(conclusion.get("key_insights") or [])[:3],
-            }
-    except Exception:
-        logger.debug("Cross-vendor council enrichment skipped for gathered payload", exc_info=True)
+    council_lookup = await _load_category_council_lookup(
+        pool,
+        data["vendor_scores"],
+        as_of=date.today(),
+    )
 
     prior_reports = await _fetch_prior_reports(pool, limit=prior_limit)
 

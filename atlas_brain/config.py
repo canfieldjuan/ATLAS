@@ -2724,7 +2724,54 @@ class B2BChurnConfig(BaseSettings):
     )
     # Regeneration mode -- re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
-    blog_post_max_rejection_retries: int = Field(default=2, ge=0, le=10, description="Max times a rejected blog slug can be retried before permanent block")
+    blog_post_min_words_default: int = Field(
+        default=1800,
+        ge=500,
+        le=5000,
+        description="Default minimum word count required for a blog draft to pass the deterministic quality gate",
+    )
+    blog_post_target_words_default: int = Field(
+        default=2300,
+        ge=500,
+        le=5000,
+        description="Default SEO target word count used as a warning threshold for blog drafts",
+    )
+    blog_post_min_words_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 2000,
+            "market_landscape": 1900,
+            "best_fit_guide": 1900,
+            "vendor_deep_dive": 1800,
+            "vendor_alternative": 1700,
+            "churn_report": 1700,
+            "pain_point_roundup": 1700,
+            "pricing_reality_check": 1600,
+            "migration_guide": 1500,
+            "switching_story": 1500,
+        },
+        description="Per-topic minimum word counts for the blog quality gate",
+    )
+    blog_post_target_words_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 2600,
+            "market_landscape": 2600,
+            "best_fit_guide": 2500,
+            "vendor_deep_dive": 2400,
+            "vendor_alternative": 2300,
+            "churn_report": 2300,
+            "pain_point_roundup": 2300,
+            "pricing_reality_check": 2200,
+            "migration_guide": 2100,
+            "switching_story": 2100,
+        },
+        description="Per-topic SEO target word counts used as warning thresholds for blog drafts",
+    )
+    blog_post_max_rejection_retries: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        description="Max rejected reruns allowed after an initial rejection before permanent block",
+    )
     blog_post_rejection_cooldown_hours: int = Field(
         default=24,
         ge=0,
@@ -3151,6 +3198,13 @@ class B2BChurnConfig(BaseSettings):
         description=(
             "Default changed-vendors-only policy for scoped competitive-set runs "
             "when the caller does not explicitly choose full refresh behavior"
+        ),
+    )
+    legacy_reasoning_fallback_enabled: bool = Field(
+        default=True,
+        description=(
+            "Allow explicit compatibility opt-ins to fall back to legacy reasoning "
+            "stored in b2b_churn_signals and b2b_cross_vendor_conclusions during burn-in"
         ),
     )
     reasoning_synthesis_scheduled_scope_strategy: str = Field(

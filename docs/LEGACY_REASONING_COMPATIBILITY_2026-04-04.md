@@ -13,6 +13,7 @@ path during burn-in.
 ## Burn-In Removal Target
 
 - Burn-in window ends: `2026-04-18`
+- Runtime kill switch: `ATLAS_B2B_CHURN_LEGACY_REASONING_FALLBACK_ENABLED`
 - If no production incidents require legacy reasoning before that date:
   - delete `reconstruct_reasoning_lookup()`
   - delete `reconstruct_cross_vendor_lookup()`

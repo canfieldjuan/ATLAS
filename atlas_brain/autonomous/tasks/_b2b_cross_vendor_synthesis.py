@@ -19,7 +19,13 @@ import re
 from datetime import date
 from typing import Any
 
+from ...config import settings
+
 logger = logging.getLogger("atlas.autonomous.tasks._b2b_cross_vendor_synthesis")
+
+
+def _legacy_reasoning_fallback_enabled() -> bool:
+    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", True))
 
 
 async def _emit_legacy_cross_vendor_opt_in(
@@ -1010,7 +1016,7 @@ async def load_best_cross_vendor_lookup(
         logger.debug("Cross-vendor synthesis lookup failed", exc_info=True)
         synthesis_lookup = empty_cross_vendor_lookup()
 
-    if allow_legacy_fallback:
+    if allow_legacy_fallback and _legacy_reasoning_fallback_enabled():
         try:
             from .b2b_churn_intelligence import reconstruct_cross_vendor_lookup
 
@@ -1025,7 +1031,7 @@ async def load_best_cross_vendor_lookup(
         primary=synthesis_lookup,
         fallback=legacy_lookup,
     )
-    if allow_legacy_fallback:
+    if allow_legacy_fallback and _legacy_reasoning_fallback_enabled():
         battle_count = len((legacy_lookup or {}).get("battles", {}) or {})
         council_count = len((legacy_lookup or {}).get("councils", {}) or {})
         asymmetry_count = len((legacy_lookup or {}).get("asymmetries", {}) or {})

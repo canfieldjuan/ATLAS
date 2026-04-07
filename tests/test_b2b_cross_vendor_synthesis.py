@@ -13,6 +13,7 @@ from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
     build_pairwise_battle_packet,
     build_resource_asymmetry_packet,
     compute_cross_vendor_evidence_hash,
+    load_best_cross_vendor_lookup,
     load_cross_vendor_synthesis_lookup,
     materialize_cross_vendor_reference_ids,
     normalize_cross_vendor_contract,
@@ -456,6 +457,38 @@ async def test_load_cross_vendor_synthesis_lookup_backfills_pairwise_refs_from_d
 
     entry = lookup["battles"][("HubSpot", "Salesforce")]
     assert entry["reference_ids"]["witness_ids"] == ["review-1", "review-2"]
+
+
+@pytest.mark.asyncio
+async def test_load_best_cross_vendor_lookup_legacy_gate_blocks_compatibility_path(monkeypatch):
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.load_cross_vendor_synthesis_lookup",
+        AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
+    )
+    reconstruct = AsyncMock(return_value={
+        "battles": {("A", "B"): {"conclusion": {"winner": "A"}}},
+        "councils": {},
+        "asymmetries": {},
+    })
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_cross_vendor_lookup",
+        reconstruct,
+        raising=False,
+    )
+
+    lookup = await load_best_cross_vendor_lookup(
+        MagicMock(),
+        as_of=date(2026, 4, 7),
+        allow_legacy_fallback=True,
+    )
+
+    assert lookup == {"battles": {}, "councils": {}, "asymmetries": {}}
+    reconstruct.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

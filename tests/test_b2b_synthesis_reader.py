@@ -34,6 +34,7 @@ for _mod in (
 from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
     SynthesisView,
     contract_gaps_for_consumer,
+    discover_reasoning_vendor_names,
     legacy_reasoning_to_contracts,
     load_best_reasoning_view,
     load_best_reasoning_views,
@@ -335,6 +336,21 @@ def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
         assert view is None
 
     @pytest.mark.asyncio
+    async def test_legacy_fallback_gate_blocks_view_compatibility_path(self, monkeypatch):
+        legacy = _make_legacy_row()
+        pool = _mock_pool(synth_row=None, legacy_row=legacy)
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            False,
+            raising=False,
+        )
+
+        view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
+
+        assert view is None
+
+    @pytest.mark.asyncio
     async def test_hydrates_packet_artifacts_from_packet_table_when_inline_missing(self):
         synth = _make_synthesis_row(
             synthesis={
@@ -489,6 +505,47 @@ class TestLoadBestReasoningViews:
         views = await load_best_reasoning_views(pool, ["VendorB"])
 
         assert views == {}
+
+    @pytest.mark.asyncio
+    async def test_legacy_fallback_gate_blocks_batch_compatibility_path(self, monkeypatch):
+        legacy_rows = [_make_legacy_row(vendor_name="VendorB")]
+        pool = _mock_pool(synth_rows=[], legacy_rows=legacy_rows)
+
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            False,
+            raising=False,
+        )
+
+        views = await load_best_reasoning_views(
+            pool,
+            ["VendorB"],
+            allow_legacy_fallback=True,
+        )
+
+        assert views == {}
+
+
+@pytest.mark.asyncio
+async def test_discover_reasoning_vendor_names_respects_legacy_fallback_gate(monkeypatch):
+    pool = _mock_pool(
+        synth_rows=[{"vendor_name": "VendorA"}],
+        legacy_rows=[{"vendor_name": "VendorB"}],
+    )
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+        False,
+        raising=False,
+    )
+
+    vendor_names = await discover_reasoning_vendor_names(
+        pool,
+        as_of=date(2026, 4, 7),
+        include_legacy=True,
+    )
+
+    assert vendor_names == ["VendorA"]
 
 
 class TestLoadPriorReasoningSnapshots:

@@ -57,6 +57,10 @@ _SECTION_CONTRACT_PATHS = {
     "migration_proof": ("displacement_reasoning", "migration_proof"),
 }
 
+
+def _legacy_reasoning_fallback_enabled() -> bool:
+    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", True))
+
 _CONSUMER_REQUIRED_CONTRACTS = {
     "battle_card": (
         "vendor_core_reasoning",
@@ -1582,7 +1586,7 @@ async def load_best_reasoning_view(
                 as_of_date=synth_row["as_of_date"],
             )
 
-    if not allow_legacy_fallback:
+    if not allow_legacy_fallback or not _legacy_reasoning_fallback_enabled():
         return None
 
     # --- Fall back to legacy churn signals ---------------------------------
@@ -1669,7 +1673,7 @@ async def discover_reasoning_vendor_names(
         "WHERE as_of_date <= $1 AND analysis_window_days = $2",
         as_of, analysis_window_days,
     )
-    if not include_legacy:
+    if not include_legacy or not _legacy_reasoning_fallback_enabled():
         return list({
             r["vendor_name"] for r in synth_names
             if r.get("vendor_name")
@@ -1781,7 +1785,7 @@ async def load_best_reasoning_views(
         )
         covered.add(vname.lower())
 
-    if not allow_legacy_fallback:
+    if not allow_legacy_fallback or not _legacy_reasoning_fallback_enabled():
         return views
 
     # --- Bulk legacy fallback for remaining vendors ------------------------
