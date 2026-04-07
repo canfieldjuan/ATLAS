@@ -2202,7 +2202,8 @@ async def _check_freshness(pool) -> date | None:
 async def run(task: ScheduledTask) -> dict[str, Any]:
     """Build battle cards + LLM sales copy from persisted artifacts."""
     cfg = settings.b2b_churn
-    if not cfg.enabled or not cfg.intelligence_enabled:
+    maintenance_run = bool((task.metadata or {}).get("maintenance_run"))
+    if (not cfg.enabled or not cfg.intelligence_enabled) and not maintenance_run:
         return {"_skip_synthesis": "B2B churn intelligence disabled"}
 
     pool = get_db_pool()
@@ -2746,6 +2747,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from ...services.b2b.llm_exact_cache import build_skill_messages
     from ...services.llm.anthropic import AnthropicLLM
     from ...services.protocols import Message
+    from ..visibility import record_attempt, emit_event
 
     _bc_cache = SemanticCache(pool)
     bc_llm_failures = 0
@@ -2862,6 +2864,103 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 cache_hits=bc_cache_hits,
             )
         return persisted_ok
+
+    def _overlay_failure_step(
+        failure_reasons: list[str],
+        *,
+        quality_gate: bool = False,
+    ) -> str:
+        if quality_gate:
+            return "quality_gate"
+        normalized = [str(reason or "").strip().lower() for reason in failure_reasons]
+        if any(reason.startswith("transport failure:") for reason in normalized):
+            return "transport"
+        if any(reason == "llm did not return valid json" for reason in normalized):
+            return "parse"
+        return "response_validation"
+
+    async def _record_overlay_attempt(
+        card: dict[str, Any],
+        *,
+        attempt_no: int,
+        status: str,
+        failure_reasons: list[str] | None = None,
+        quality: dict[str, Any] | None = None,
+        failure_step: str | None = None,
+    ) -> None:
+        vendor = str(card.get("vendor") or "").strip()
+        if attempt_no < 1 or not vendor:
+            return
+        quality_obj = quality if isinstance(quality, dict) else {}
+        warning_items = quality_obj.get("warnings")
+        warnings = [
+            str(item).strip()
+            for item in (warning_items if isinstance(warning_items, list) else [])
+            if str(item).strip()
+        ]
+        blockers = [
+            str(item).strip()
+            for item in (failure_reasons or [])
+            if str(item).strip()
+        ]
+        score = quality_obj.get("score")
+        threshold = quality_obj.get("threshold")
+        await record_attempt(
+            pool,
+            artifact_type="battle_card",
+            artifact_id=vendor,
+            run_id=str(task.id),
+            attempt_no=attempt_no,
+            stage="llm_overlay",
+            status=status,
+            score=score if isinstance(score, int) else None,
+            threshold=threshold if isinstance(threshold, int) else None,
+            blocker_count=len(blockers),
+            warning_count=len(warnings),
+            blocking_issues=blockers,
+            warnings=warnings,
+            feedback_summary="; ".join(blockers[:3]) or None,
+            failure_step=failure_step,
+            error_message="; ".join(blockers[:3]) or None,
+        )
+
+    async def _finalize_overlay_failure(
+        card: dict[str, Any],
+        *,
+        attempt_no: int,
+        failure_reasons: list[str],
+        used_fallback_single_call: bool,
+        fallback_usage: dict[str, Any],
+        failure_step: str | None = None,
+    ) -> dict[str, Any]:
+        result_error = "; ".join(failure_reasons[:3]) or "Battle card generation failed"
+        card["llm_render_status"] = "failed"
+        card["llm_render_error"] = result_error
+        logger.warning(
+            "Battle card rejected for %s: %s",
+            card.get("vendor"),
+            result_error,
+        )
+        quality = _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
+        await _record_overlay_attempt(
+            card,
+            attempt_no=attempt_no,
+            status="failed",
+            failure_reasons=failure_reasons,
+            quality=quality,
+            failure_step=failure_step or _overlay_failure_step(failure_reasons),
+        )
+        await _persist_overlay_card(
+            card,
+            log_context="rejected",
+            failure=True,
+        )
+        return {
+            "succeeded": False,
+            "used_fallback_single_call": used_fallback_single_call,
+            "error_text": result_error,
+            "fallback_usage": fallback_usage,
+        }
 
     async def _prepare_overlay_entry(
         index: int,
@@ -2980,6 +3079,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         used_fallback_single_call = False
         result_error: str | None = None
         fallback_usage: dict[str, Any] = {}
+        successful_attempt_no = 0
+        last_attempt_no = 0
 
         def _accumulate_usage(sample: dict[str, Any] | None) -> None:
             if not sample:
@@ -3036,14 +3137,35 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             return True
 
         if initial_response_text is not None:
-            _consume_parsed_copy(_parse_battle_card_sales_copy(initial_response_text))
+            last_attempt_no = 1
+            if _consume_parsed_copy(_parse_battle_card_sales_copy(initial_response_text)):
+                successful_attempt_no = 1
 
         if not render_succeeded:
             if batch_origin:
                 used_fallback_single_call = True
             loop_start = 1 if initial_attempt_consumed else 0
+            if initial_attempt_consumed and initial_response_text is not None:
+                if max_attempts <= 1:
+                    return await _finalize_overlay_failure(
+                        card,
+                        attempt_no=1,
+                        failure_reasons=failure_reasons or ["LLM did not return valid JSON"],
+                        used_fallback_single_call=used_fallback_single_call,
+                        fallback_usage=fallback_usage,
+                    )
+                await _record_overlay_attempt(
+                    card,
+                    attempt_no=1,
+                    status="retry_requested",
+                    failure_reasons=failure_reasons or ["LLM did not return valid JSON"],
+                    failure_step=_overlay_failure_step(
+                        failure_reasons or ["LLM did not return valid JSON"]
+                    ),
+                )
             async with bc_sem:
                 for attempt in range(loop_start, max_attempts):
+                    last_attempt_no = attempt + 1
                     try:
                         attempt_usage: dict[str, Any] = {}
                         parsed_copy = await _request_sales_copy(
@@ -3059,30 +3181,26 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         failure_reasons = [f"transport failure: {type(exc).__name__}"]
                     else:
                         if _consume_parsed_copy(parsed_copy):
+                            successful_attempt_no = attempt + 1
                             break
 
                     if attempt + 1 >= max_attempts:
-                        card["llm_render_status"] = "failed"
-                        if failure_reasons:
-                            result_error = "; ".join(failure_reasons[:3])
-                            card["llm_render_error"] = result_error
-                        logger.warning(
-                            "Battle card rejected for %s: %s",
-                            card.get("vendor"),
-                            "; ".join(failure_reasons[:3]),
-                        )
-                        _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
-                        await _persist_overlay_card(
+                        return await _finalize_overlay_failure(
                             card,
-                            log_context="rejected",
-                            failure=True,
+                            attempt_no=attempt + 1,
+                            failure_reasons=failure_reasons,
+                            used_fallback_single_call=used_fallback_single_call,
+                            fallback_usage=fallback_usage,
+                            failure_step=_overlay_failure_step(failure_reasons),
                         )
-                        return {
-                            "succeeded": False,
-                            "used_fallback_single_call": used_fallback_single_call,
-                            "error_text": result_error,
-                            "fallback_usage": fallback_usage,
-                        }
+
+                    await _record_overlay_attempt(
+                        card,
+                        attempt_no=attempt + 1,
+                        status="retry_requested",
+                        failure_reasons=failure_reasons,
+                        failure_step=_overlay_failure_step(failure_reasons),
+                    )
 
                     payload = _build_battle_card_render_payload(
                         card,
@@ -3096,12 +3214,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         await asyncio.sleep(retry_delay)
 
             if not render_succeeded:
-                return {
-                    "succeeded": False,
-                    "used_fallback_single_call": used_fallback_single_call,
-                    "error_text": result_error,
-                    "fallback_usage": fallback_usage,
-                }
+                return await _finalize_overlay_failure(
+                    card,
+                    attempt_no=max(last_attempt_no, 1),
+                    failure_reasons=failure_reasons or ["Battle card generation failed"],
+                    used_fallback_single_call=used_fallback_single_call,
+                    fallback_usage=fallback_usage,
+                )
 
         quality = _apply_battle_card_quality(card, phase=_QUALITY_PHASE_FINAL)
         if quality.get("status") == _QUALITY_STATUS_FALLBACK:
@@ -3116,6 +3235,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             if failed_checks:
                 result_error = "; ".join(str(item) for item in failed_checks[:3])
                 card["llm_render_error"] = result_error
+            await _record_overlay_attempt(
+                card,
+                attempt_no=max(successful_attempt_no, 1),
+                status="failed",
+                failure_reasons=failed_checks,
+                quality=quality,
+                failure_step=_overlay_failure_step(failed_checks, quality_gate=True),
+            )
             await _persist_overlay_card(
                 card,
                 log_context="quality-gated",
@@ -3125,8 +3252,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "succeeded": False,
                 "used_fallback_single_call": used_fallback_single_call,
                 "error_text": result_error,
-                "fallback_usage": fallback_usage,
+                    "fallback_usage": fallback_usage,
             }
+
+        await _record_overlay_attempt(
+            card,
+            attempt_no=max(successful_attempt_no, 1),
+            status="succeeded",
+            quality=quality,
+        )
 
         try:
             await _bc_cache.store(
@@ -3286,7 +3420,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     # Record battle card run summary to visibility system
-    from ..visibility import record_attempt, emit_event
     await record_attempt(
         pool, artifact_type="battle_card", artifact_id="batch",
         run_id=str(task.id), stage="generation",
