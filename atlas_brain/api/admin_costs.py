@@ -244,6 +244,52 @@ def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | No
     return span_name, detail
 
 
+def _serialize_recent_llm_call(row, *, run_id_override: str | None = None) -> dict:
+    metadata = _normalize_metadata(row["metadata"])
+    title, detail = _describe_recent_call(row["span_name"], metadata)
+    row_run_id = row["run_id"] if "run_id" in row else None
+    run_id = str(run_id_override or row_run_id or "").strip() or None
+    vendor_name = str(_recent_metadata_value(metadata, "vendor_name") or "").strip() or None
+    source_name = str(_recent_metadata_value(metadata, "source_name") or "").strip() or None
+    event_type = str(_recent_metadata_value(metadata, "event_type") or "").strip() or None
+    entity_type = str(_recent_metadata_value(metadata, "entity_type") or "").strip() or None
+    entity_id = str(_recent_metadata_value(metadata, "entity_id") or "").strip() or None
+    return {
+        "id": str(row["id"]),
+        "run_id": run_id,
+        "span_name": row["span_name"],
+        "operation_type": row["operation_type"],
+        "title": title,
+        "detail": detail,
+        "vendor_name": vendor_name,
+        "source_name": source_name,
+        "event_type": event_type,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "model": row["model_name"],
+        "provider": row["model_provider"],
+        "input_tokens": row["input_tokens"],
+        "billable_input_tokens": row["billable_input_tokens"],
+        "cached_tokens": row["cached_tokens"],
+        "cache_write_tokens": row["cache_write_tokens"],
+        "output_tokens": row["output_tokens"],
+        "total_tokens": row["total_tokens"],
+        "cost_usd": float(row["cost_usd"]) if row["cost_usd"] else 0,
+        "duration_ms": row["duration_ms"],
+        "ttft_ms": row["ttft_ms"],
+        "inference_time_ms": row["inference_time_ms"],
+        "queue_time_ms": row["queue_time_ms"],
+        "tokens_per_second": row["tokens_per_second"],
+        "status": row["status"],
+        "cache_hit": bool(row["cached_tokens"]),
+        "cache_write": bool(row["cache_write_tokens"]),
+        "api_endpoint": row["api_endpoint"],
+        "provider_request_id": row["provider_request_id"],
+        "metadata": metadata,
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
 def _build_recent_filters(
     *,
     days: int | None = None,
@@ -252,6 +298,9 @@ def _build_recent_filters(
     span_name: str | None = None,
     operation_type: str | None = None,
     status: str | None = None,
+    source_name: str | None = None,
+    event_type: str | None = None,
+    entity_type: str | None = None,
     cache_only: bool | None = None,
 ) -> tuple[list[str], list[object]]:
     clauses: list[str] = []
@@ -273,6 +322,15 @@ def _build_recent_filters(
         clauses.append(f"operation_type = {_add(operation_type)}")
     if status:
         clauses.append(f"status = {_add(status)}")
+    source_expr = _llm_usage_text_expr("source_name")
+    event_expr = _llm_usage_text_expr("event_type")
+    entity_expr = _llm_usage_text_expr("entity_type")
+    if source_name:
+        clauses.append(f"LOWER({source_expr}) = LOWER({_add(source_name)})")
+    if event_type:
+        clauses.append(f"LOWER({event_expr}) = LOWER({_add(event_type)})")
+    if entity_type:
+        clauses.append(f"LOWER({entity_expr}) = LOWER({_add(entity_type)})")
     if cache_only is True:
         clauses.append("(cached_tokens > 0 OR cache_write_tokens > 0)")
     elif cache_only is False:
@@ -1661,6 +1719,9 @@ async def cost_by_operation(
     span_name: str | None = Query(default=None),
     operation_type: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    source_name: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    entity_type: str | None = Query(default=None),
     cache_only: bool | None = Query(default=None),
 ):
     """Detailed cost rollup by operation + provider + model."""
@@ -1672,6 +1733,9 @@ async def cost_by_operation(
         span_name=span_name,
         operation_type=operation_type,
         status=status,
+        source_name=source_name,
+        event_type=event_type,
+        entity_type=entity_type,
         cache_only=cache_only,
     )
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -2222,6 +2286,9 @@ async def recent_calls(
     span_name: str | None = Query(default=None),
     operation_type: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    source_name: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    entity_type: str | None = Query(default=None),
     cache_only: bool | None = Query(default=None),
 ):
     """Most recent LLM calls for the activity feed."""
@@ -2233,12 +2300,15 @@ async def recent_calls(
         span_name=span_name,
         operation_type=operation_type,
         status=status,
+        source_name=source_name,
+        event_type=event_type,
+        entity_type=entity_type,
         cache_only=cache_only,
     )
     where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     args.append(limit)
     rows = await pool.fetch(
-        f"""SELECT id, span_name, operation_type, model_name, model_provider,
+        f"""SELECT id, run_id, span_name, operation_type, model_name, model_provider,
                   input_tokens, billable_input_tokens, cached_tokens, cache_write_tokens,
                   output_tokens, total_tokens, cost_usd, duration_ms, ttft_ms,
                   inference_time_ms, queue_time_ms, tokens_per_second, status,
@@ -2249,38 +2319,7 @@ async def recent_calls(
            LIMIT ${len(args)}""",
         *args,
     )
-    calls = []
-    for r in rows:
-        metadata = _normalize_metadata(r["metadata"])
-        title, detail = _describe_recent_call(r["span_name"], metadata)
-        calls.append({
-            "id": str(r["id"]),
-            "span_name": r["span_name"],
-            "operation_type": r["operation_type"],
-            "title": title,
-            "detail": detail,
-            "model": r["model_name"],
-            "provider": r["model_provider"],
-            "input_tokens": r["input_tokens"],
-            "billable_input_tokens": r["billable_input_tokens"],
-            "cached_tokens": r["cached_tokens"],
-            "cache_write_tokens": r["cache_write_tokens"],
-            "output_tokens": r["output_tokens"],
-            "total_tokens": r["total_tokens"],
-            "cost_usd": float(r["cost_usd"]) if r["cost_usd"] else 0,
-            "duration_ms": r["duration_ms"],
-            "ttft_ms": r["ttft_ms"],
-            "inference_time_ms": r["inference_time_ms"],
-            "queue_time_ms": r["queue_time_ms"],
-            "tokens_per_second": r["tokens_per_second"],
-            "status": r["status"],
-            "cache_hit": bool(r["cached_tokens"]),
-            "cache_write": bool(r["cache_write_tokens"]),
-            "api_endpoint": r["api_endpoint"],
-            "provider_request_id": r["provider_request_id"],
-            "metadata": metadata,
-            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
-        })
+    calls = [_serialize_recent_llm_call(r) for r in rows]
     return {
         "calls": calls,
     }
@@ -2902,7 +2941,7 @@ async def cost_run_detail(
         pool,
         """
         SELECT
-            id, span_name, operation_type, model_name, model_provider,
+            id, run_id, span_name, operation_type, model_name, model_provider,
             input_tokens, billable_input_tokens, cached_tokens, cache_write_tokens,
             output_tokens, total_tokens, cost_usd, duration_ms, ttft_ms,
             inference_time_ms, queue_time_ms, tokens_per_second, status,
@@ -3036,38 +3075,7 @@ async def cost_run_detail(
     ):
         raise HTTPException(status_code=404, detail="Run not found")
 
-    calls = []
-    for row in llm_call_rows:
-        metadata = _normalize_metadata(row["metadata"])
-        title, detail = _describe_recent_call(row["span_name"], metadata)
-        calls.append({
-            "id": str(row["id"]),
-            "span_name": row["span_name"],
-            "operation_type": row["operation_type"],
-            "title": title,
-            "detail": detail,
-            "model": row["model_name"],
-            "provider": row["model_provider"],
-            "input_tokens": row["input_tokens"],
-            "billable_input_tokens": row["billable_input_tokens"],
-            "cached_tokens": row["cached_tokens"],
-            "cache_write_tokens": row["cache_write_tokens"],
-            "output_tokens": row["output_tokens"],
-            "total_tokens": row["total_tokens"],
-            "cost_usd": float(row["cost_usd"]) if row["cost_usd"] else 0,
-            "duration_ms": row["duration_ms"],
-            "ttft_ms": row["ttft_ms"],
-            "inference_time_ms": row["inference_time_ms"],
-            "queue_time_ms": row["queue_time_ms"],
-            "tokens_per_second": row["tokens_per_second"],
-            "status": row["status"],
-            "cache_hit": bool(row["cached_tokens"]),
-            "cache_write": bool(row["cache_write_tokens"]),
-            "api_endpoint": row["api_endpoint"],
-            "provider_request_id": row["provider_request_id"],
-            "metadata": metadata,
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-        })
+    calls = [_serialize_recent_llm_call(row, run_id_override=normalized_run_id) for row in llm_call_rows]
 
     return {
         "run_id": normalized_run_id,

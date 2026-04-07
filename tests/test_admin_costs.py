@@ -797,8 +797,47 @@ class _FakePool:
                 "avg_duration_ms": 811.5,
                 "latest_created_at": datetime(2026, 3, 31, 22, 0, tzinfo=timezone.utc),
             }]
+        if (
+            "FROM llm_usage" in query
+            and "LOWER(" in query
+            and "source_name" in query
+            and "event_type" in query
+            and "entity_type" in query
+        ):
+            return [{
+                "id": uuid4(),
+                "run_id": "run-battle-1",
+                "span_name": "b2b.churn_intelligence.battle_card_sales_copy",
+                "operation_type": "llm_call",
+                "model_name": "anthropic/claude-sonnet-4-6",
+                "model_provider": "openrouter",
+                "input_tokens": 14800,
+                "billable_input_tokens": 9900,
+                "cached_tokens": 2800,
+                "cache_write_tokens": 0,
+                "output_tokens": 1900,
+                "total_tokens": 16700,
+                "cost_usd": Decimal("0.0337"),
+                "duration_ms": 1012,
+                "ttft_ms": 201,
+                "inference_time_ms": 711,
+                "queue_time_ms": 9,
+                "tokens_per_second": 31.4,
+                "status": "completed",
+                "api_endpoint": "https://openrouter.ai/api/v1/chat/completions",
+                "provider_request_id": "req_battle_123",
+                "metadata": {
+                    "vendor_name": "Slack",
+                    "source_name": "b2b_battle_cards",
+                    "event_type": "llm_overlay",
+                    "entity_type": "battle_card",
+                    "entity_id": "Slack",
+                },
+                "created_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
+            }]
         return [{
             "id": uuid4(),
+            "run_id": "run-blog-1",
             "span_name": "task.b2b_blog_post_generation",
             "operation_type": "llm_call",
             "model_name": "anthropic/claude-sonnet-4-6",
@@ -857,6 +896,19 @@ def test_cost_by_operation_exposes_cache_rollups(monkeypatch):
     assert row["cache_hit_calls"] == 3
 
 
+def test_cost_by_operation_accepts_recent_context_filters(monkeypatch):
+    client, pool = _client(monkeypatch)
+    with client:
+        res = client.get(
+            "/admin/costs/by-operation?days=7&source_name=b2b_battle_cards&event_type=llm_overlay&entity_type=battle_card&limit=25"
+        )
+    assert res.status_code == 200
+    assert "LOWER(" in pool.last_fetch_query
+    assert "source_name" in pool.last_fetch_query
+    assert "event_type" in pool.last_fetch_query
+    assert "entity_type" in pool.last_fetch_query
+
+
 def test_recent_calls_returns_granular_cache_fields(monkeypatch):
     client, pool = _client(monkeypatch)
     with client:
@@ -873,6 +925,29 @@ def test_recent_calls_returns_granular_cache_fields(monkeypatch):
     assert row["cache_write"] is True
     assert "model_provider = $2" in pool.last_fetch_query
     assert "(cached_tokens > 0 OR cache_write_tokens > 0)" in pool.last_fetch_query
+    assert row["run_id"] == "run-blog-1"
+    assert row["vendor_name"] == "HubSpot"
+
+
+def test_recent_calls_filters_and_surfaces_battle_card_context(monkeypatch):
+    client, pool = _client(monkeypatch)
+    with client:
+        res = client.get(
+            "/admin/costs/recent?days=7&source_name=b2b_battle_cards&event_type=llm_overlay&entity_type=battle_card&limit=10"
+        )
+    assert res.status_code == 200
+    row = res.json()["calls"][0]
+    assert row["title"] == "Battle Card Sales Copy"
+    assert row["run_id"] == "run-battle-1"
+    assert row["vendor_name"] == "Slack"
+    assert row["source_name"] == "b2b_battle_cards"
+    assert row["event_type"] == "llm_overlay"
+    assert row["entity_type"] == "battle_card"
+    assert row["entity_id"] == "Slack"
+    assert "LOWER(" in pool.last_fetch_query
+    assert "source_name" in pool.last_fetch_query
+    assert "event_type" in pool.last_fetch_query
+    assert "entity_type" in pool.last_fetch_query
 
 
 def test_cache_health_rolls_up_exact_prompt_semantic_and_task_reuse(monkeypatch):
@@ -953,6 +1028,8 @@ def test_cost_run_detail_correlates_execution_usage_attempts_and_events(monkeypa
     assert body["batch_items"][1]["replay_contract_state"] == "missing"
     assert body["batch_items"][1]["applied_status"] is None
     assert body["calls"][0]["title"] == "task.b2b_blog_post_generation"
+    assert body["calls"][0]["run_id"] == run_id
+    assert body["calls"][0]["vendor_name"] == "HubSpot"
     assert body["artifact_attempts"][0]["artifact_type"] == "enrichment"
     assert body["visibility_events"][0]["event_type"] == "enrichment_run_summary"
     assert body["visibility_events"][0]["detail"]["quarantined"] == 1

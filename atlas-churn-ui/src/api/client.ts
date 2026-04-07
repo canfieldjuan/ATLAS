@@ -962,6 +962,9 @@ export async function fetchAdminCostByOperation(params?: {
   span_name?: string
   operation_type?: string
   status?: string
+  source_name?: string
+  event_type?: string
+  entity_type?: string
   cache_only?: boolean
 }) {
   return get<{ period_days: number; operations: AdminCostOperation[] }>(
@@ -1028,6 +1031,9 @@ export async function fetchAdminCostRecent(params?: {
   span_name?: string
   operation_type?: string
   status?: string
+  source_name?: string
+  event_type?: string
+  entity_type?: string
   cache_only?: boolean
 }) {
   return get<{ calls: AdminCostRecentCall[] }>(

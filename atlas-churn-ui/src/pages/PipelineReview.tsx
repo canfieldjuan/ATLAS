@@ -1681,6 +1681,9 @@ function CostsTab() {
   const [modelFilter, setModelFilter] = useState('')
   const [spanFilter, setSpanFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('')
+  const [eventTypeFilter, setEventTypeFilter] = useState('')
+  const [entityTypeFilter, setEntityTypeFilter] = useState('')
   const [cacheFilter, setCacheFilter] = useState('')
   const [runIdInput, setRunIdInput] = useState('')
   const [activeRunId, setActiveRunId] = useState('')
@@ -1708,6 +1711,9 @@ function CostsTab() {
           model: modelFilter || undefined,
           span_name: spanFilter || undefined,
           status: statusFilter || undefined,
+          source_name: sourceFilter || undefined,
+          event_type: eventTypeFilter || undefined,
+          entity_type: entityTypeFilter || undefined,
           cache_only: cacheOnly,
         }),
         fetchAdminCostRecent({
@@ -1717,6 +1723,9 @@ function CostsTab() {
           model: modelFilter || undefined,
           span_name: spanFilter || undefined,
           status: statusFilter || undefined,
+          source_name: sourceFilter || undefined,
+          event_type: eventTypeFilter || undefined,
+          entity_type: entityTypeFilter || undefined,
           cache_only: cacheOnly,
         }),
       ])
@@ -1726,7 +1735,7 @@ function CostsTab() {
         recent: recentResponse.calls,
       }
     },
-    [days, providerFilter, modelFilter, spanFilter, statusFilter, cacheFilter],
+    [days, providerFilter, modelFilter, spanFilter, statusFilter, sourceFilter, eventTypeFilter, entityTypeFilter, cacheFilter],
   )
 
   const {
@@ -1913,6 +1922,15 @@ function CostsTab() {
   ).sort()
   const statusOptions = Array.from(
     new Set(recentCalls.map((row) => row.status).map((value) => value.trim()).filter(Boolean)),
+  ).sort()
+  const sourceOptions = Array.from(
+    new Set(recentCalls.map((row) => row.source_name || '').map((value) => value.trim()).filter(Boolean)),
+  ).sort()
+  const eventTypeOptions = Array.from(
+    new Set(recentCalls.map((row) => row.event_type || '').map((value) => value.trim()).filter(Boolean)),
+  ).sort()
+  const entityTypeOptions = Array.from(
+    new Set(recentCalls.map((row) => row.entity_type || '').map((value) => value.trim()).filter(Boolean)),
   ).sort()
 
   const reconciliationColumns: Column<AdminCostReconciliationRow>[] = [
@@ -3068,6 +3086,20 @@ function CostsTab() {
       sortValue: (row) => row.input_tokens,
     },
     {
+      key: 'context',
+      header: 'Context',
+      render: (row) => (
+        <div className="max-w-[220px]">
+          <p className="truncate text-sm text-white">{row.vendor_name || row.entity_id || '--'}</p>
+          <p className="truncate text-xs text-slate-500">
+            {[row.source_name, row.event_type, row.entity_type].filter(Boolean).join(' | ') || '--'}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.vendor_name || row.entity_id || ''}:${row.source_name || ''}:${row.event_type || ''}:${row.entity_type || ''}`,
+    },
+    {
       key: 'cache_mode',
       header: 'Cache',
       render: (row) => (
@@ -3128,6 +3160,26 @@ function CostsTab() {
           {row.provider_request_id || '--'}
         </span>
       ),
+    },
+    {
+      key: 'run_id',
+      header: 'Run',
+      render: (row) =>
+        row.run_id ? (
+          <button
+            onClick={() => {
+              setRunIdInput(row.run_id || '')
+              setActiveRunId(row.run_id || '')
+            }}
+            className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+          >
+            Open
+          </button>
+        ) : (
+          <span className="text-xs text-slate-500">--</span>
+        ),
+      sortable: true,
+      sortValue: (row) => row.run_id || '',
     },
   ]
 
@@ -3406,6 +3458,28 @@ function CostsTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-4">
         <Filter className="h-4 w-4 text-slate-500" />
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => {
+              setSourceFilter('')
+              setEventTypeFilter('')
+              setEntityTypeFilter('')
+            }}
+            className="rounded border border-slate-700/60 px-2.5 py-1 text-xs text-slate-300 transition hover:border-slate-500/60 hover:text-white"
+          >
+            All Calls
+          </button>
+          <button
+            onClick={() => {
+              setSourceFilter('b2b_battle_cards')
+              setEventTypeFilter('llm_overlay')
+              setEntityTypeFilter('battle_card')
+            }}
+            className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200 transition hover:border-cyan-400/50 hover:text-white"
+          >
+            Battle Card Overlays
+          </button>
+        </div>
         <FilterSelect
           label="Window"
           value={days}
@@ -3462,6 +3536,33 @@ function CostsTab() {
           options={[
             { value: '', label: 'All statuses' },
             ...statusOptions.map((value) => ({ value, label: value })),
+          ]}
+        />
+        <FilterSelect
+          label="Source"
+          value={sourceFilter}
+          onChange={setSourceFilter}
+          options={[
+            { value: '', label: 'All sources' },
+            ...sourceOptions.map((value) => ({ value, label: value })),
+          ]}
+        />
+        <FilterSelect
+          label="Event"
+          value={eventTypeFilter}
+          onChange={setEventTypeFilter}
+          options={[
+            { value: '', label: 'All events' },
+            ...eventTypeOptions.map((value) => ({ value, label: value })),
+          ]}
+        />
+        <FilterSelect
+          label="Entity"
+          value={entityTypeFilter}
+          onChange={setEntityTypeFilter}
+          options={[
+            { value: '', label: 'All entities' },
+            ...entityTypeOptions.map((value) => ({ value, label: value })),
           ]}
         />
         <FilterSelect

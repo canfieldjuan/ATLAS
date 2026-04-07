@@ -1072,10 +1072,16 @@ export interface AdminCostReasoningActivity {
 
 export interface AdminCostRecentCall {
   id: string
+  run_id: string | null
   span_name: string
   operation_type: string
   title: string
   detail: string | null
+  vendor_name: string | null
+  source_name: string | null
+  event_type: string | null
+  entity_type: string | null
+  entity_id: string | null
   model: string | null
   provider: string | null
   input_tokens: number
