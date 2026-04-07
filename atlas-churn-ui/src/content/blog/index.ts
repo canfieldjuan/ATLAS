@@ -15,6 +15,17 @@ import closeVsZohoCrm202604 from './close-vs-zoho-crm-2026-04'
 import switchToWoocommerce202604 from './switch-to-woocommerce-2026-04'
 import tableauDeepDive202604 from './tableau-deep-dive-2026-04'
 import magentoDeepDive202604 from './magento-deep-dive-2026-04'
+import intercomDeepDive202604 from './intercom-deep-dive-2026-04'
+import zohoCrmDeepDive202604 from './zoho-crm-deep-dive-2026-04'
+import workdayDeepDive202604 from './workday-deep-dive-2026-04'
+import realCostOfShopify202604 from './real-cost-of-shopify-2026-04'
+import salesforceDeepDive202604 from './salesforce-deep-dive-2026-04'
+import switchToSalesforce202604 from './switch-to-salesforce-2026-04'
+import hubspotDeepDive202604 from './hubspot-deep-dive-2026-04'
+import basecampDeepDive202604 from './basecamp-deep-dive-2026-04'
+import amazonWebServicesDeepDive202604 from './amazon-web-services-deep-dive-2026-04'
+import fortinetDeepDive202604 from './fortinet-deep-dive-2026-04'
+import switchToAsana202604 from './switch-to-asana-2026-04'
 
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
@@ -100,4 +111,15 @@ export const POSTS: BlogPost[] = [
   switchToWoocommerce202604,
   tableauDeepDive202604,
   magentoDeepDive202604,
+  intercomDeepDive202604,
+  zohoCrmDeepDive202604,
+  workdayDeepDive202604,
+  realCostOfShopify202604,
+  salesforceDeepDive202604,
+  switchToSalesforce202604,
+  hubspotDeepDive202604,
+  basecampDeepDive202604,
+  amazonWebServicesDeepDive202604,
+  fortinetDeepDive202604,
+  switchToAsana202604,
 ]
