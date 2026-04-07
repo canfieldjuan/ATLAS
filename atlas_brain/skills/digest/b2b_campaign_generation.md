@@ -44,8 +44,17 @@ You receive a JSON object with:
   - `primary_blog_post`
   - `supporting_blog_posts`
 - `reasoning_anchor_examples` / `reasoning_witness_highlights` / `reasoning_reference_ids` (optional): Sanitized witness-backed proof anchors derived from the grouped opportunity set. Use them to sharpen timing, spend, pain, workflow, and competitor specifics without revealing protected identities.
+- `reasoning_scope_summary` (optional): Compact summary of the evidence packet scope used upstream. Includes witness counts and facet mix. Use it to calibrate confidence, not as copy itself.
+- `reasoning_atom_context` (optional): Compact evidence-linked reasoning atoms:
+  - `top_theses`: ranked wedge summaries with why-now framing
+  - `timing_windows`: structured timing cues and recommended actions
+  - `proof_points`: reusable numeric or competitive proof points
+  - `account_signals`: named-company-safe account context when available
+  - `coverage_limits`: machine-readable confidence limits
+- `reasoning_delta_summary` (optional): Compact summary of what changed since the prior synthesis run. Use it to sharpen urgency only when it supports the outreach angle.
 - `campaign_proof_terms` (optional): Array of exact witness-backed proof terms selected by the pipeline. When present, prefer these exact terms in the body. If the list includes a numeric or timing term, use at least one.
 - `reasoning_context` (optional): Object with `{wedge, confidence, summary, key_signals, falsification}` -- the vendor's canonical reasoning from synthesis (preferred) or legacy churn signals (fallback). `wedge` is one of: "price_squeeze", "feature_parity", "support_erosion", "integration_lock", "category_shift", "acquisition_hangover", "compliance_exposure", "ux_regression", "segment_mismatch", "stable". `confidence` is "high", "medium", "low", or "insufficient". `summary` is the causal narrative. `key_signals` is an array of supporting evidence. `falsification` is an array of conditions that would disprove the classification.
+- `reasoning_context.atom_context` / `reasoning_context.delta_summary` / `reasoning_context.scope_summary` (optional): Compact atom and delta supplements for the canonical reasoning context. Prefer these over raw contract scanning when they are present.
 - `reasoning_contracts` (optional): Full materialized reasoning contracts from synthesis. Contains `vendor_core_reasoning`, `displacement_reasoning`, `category_reasoning`, `account_reasoning` when available. Use these for deeper context on timing, segments, and displacement dynamics.
 - `briefing_context.reasoning_anchor_examples` / `briefing_context.reasoning_witness_highlights` / `briefing_context.reasoning_reference_ids` (optional): Sanitized witness-backed proof anchors. Use them to sharpen timing, spend, pain, workflow, and competitor specifics without revealing private account identities.
 - `archetype_context` (deprecated): No longer populated. Use `reasoning_context` instead.
@@ -168,5 +177,7 @@ Return a JSON object with the generated content. The structure depends on the ch
 30. **`campaign_proof_terms` is authoritative when present.**
    - Use at least one exact term from `campaign_proof_terms` in the body.
    - If a numeric or timing term is present in that list, prefer it over generic phrasing.
+31. **Prefer compact atom context over raw contracts for specificity**: When `reasoning_atom_context` or `reasoning_context.atom_context` is present, use `top_theses`, `timing_windows`, `proof_points`, and `account_signals` to sharpen the message before falling back to deeper `reasoning_contracts`.
+32. **Use coverage limits honestly**: When `coverage_limits` is present, soften claims and avoid turning sparse signals into definitive migration or competitor statements.
 
 Return ONLY the JSON object, no markdown fences, no explanation.

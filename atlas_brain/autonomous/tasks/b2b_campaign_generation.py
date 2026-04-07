@@ -337,9 +337,125 @@ def _inject_reasoning_campaign_context(
     reference_ids = consumer_context.get("reference_ids")
     if isinstance(reference_ids, dict) and reference_ids:
         target["reasoning_reference_ids"] = reference_ids
+    scope_summary = _campaign_reasoning_scope_summary(
+        consumer_context.get("scope_manifest"),
+    )
+    if scope_summary:
+        target["reasoning_scope_summary"] = scope_summary
+    atom_context = _campaign_reasoning_atom_context(consumer_context)
+    if atom_context:
+        target["reasoning_atom_context"] = atom_context
+    delta_summary = _campaign_reasoning_delta_summary(
+        consumer_context.get("reasoning_delta"),
+    )
+    if delta_summary:
+        target["reasoning_delta_summary"] = delta_summary
     disclaimers = consumer_context.get("reasoning_section_disclaimers")
     if isinstance(disclaimers, dict) and disclaimers:
         target["reasoning_section_disclaimers"] = disclaimers
+
+
+def _campaign_reasoning_scope_summary(scope_manifest: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(scope_manifest, dict):
+        return {}
+    summary: dict[str, Any] = {}
+    for key in (
+        "selection_strategy",
+        "reviews_considered_total",
+        "reviews_in_scope",
+        "witnesses_in_scope",
+        "witness_mix",
+    ):
+        value = scope_manifest.get(key)
+        if value not in (None, "", [], {}):
+            summary[key] = value
+    return summary
+
+
+def _campaign_reasoning_atom_context(consumer_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(consumer_context, dict):
+        return {}
+    context: dict[str, Any] = {}
+    theses = [
+        {
+            "wedge": str(item.get("wedge") or "").strip(),
+            "summary": str(item.get("summary") or "").strip(),
+            "why_now": str(item.get("why_now") or "").strip(),
+            "confidence": str(item.get("confidence") or "").strip(),
+        }
+        for item in (consumer_context.get("theses") or [])[:2]
+        if isinstance(item, dict)
+    ]
+    theses = [item for item in theses if item["summary"] or item["why_now"]]
+    if theses:
+        context["top_theses"] = theses
+    timing_windows = [
+        {
+            "window_type": str(item.get("window_type") or "").strip(),
+            "anchor": str(item.get("start_or_anchor") or "").strip(),
+            "urgency": str(item.get("urgency") or "").strip(),
+            "recommended_action": str(item.get("recommended_action") or "").strip(),
+        }
+        for item in (consumer_context.get("timing_windows") or [])[:2]
+        if isinstance(item, dict)
+    ]
+    timing_windows = [item for item in timing_windows if item["anchor"]]
+    if timing_windows:
+        context["timing_windows"] = timing_windows
+    proof_points = [
+        {
+            "label": str(item.get("label") or "").strip(),
+            "value": item.get("value"),
+            "interpretation": str(item.get("interpretation") or "").strip(),
+        }
+        for item in (consumer_context.get("proof_points") or [])[:2]
+        if isinstance(item, dict)
+    ]
+    proof_points = [item for item in proof_points if item["label"]]
+    if proof_points:
+        context["proof_points"] = proof_points
+    account_signals = [
+        {
+            "company": str(item.get("company") or "").strip(),
+            "buying_stage": str(item.get("buying_stage") or "").strip(),
+            "competitor_context": str(item.get("competitor_context") or "").strip(),
+            "primary_pain": str(item.get("primary_pain") or "").strip(),
+        }
+        for item in (consumer_context.get("account_signals") or [])[:2]
+        if isinstance(item, dict)
+    ]
+    account_signals = [
+        item for item in account_signals
+        if item["company"] or item["primary_pain"] or item["competitor_context"]
+    ]
+    if account_signals:
+        context["account_signals"] = account_signals
+    coverage_limits = [
+        str(item.get("label") or "").strip()
+        for item in (consumer_context.get("coverage_limits") or [])[:3]
+        if isinstance(item, dict) and str(item.get("label") or "").strip()
+    ]
+    if coverage_limits:
+        context["coverage_limits"] = coverage_limits
+    return context
+
+
+def _campaign_reasoning_delta_summary(reasoning_delta: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(reasoning_delta, dict):
+        return {}
+    summary: dict[str, Any] = {"changed": bool(reasoning_delta.get("changed"))}
+    for key in (
+        "wedge_changed",
+        "confidence_changed",
+        "top_destination_changed",
+    ):
+        if key in reasoning_delta:
+            summary[key] = bool(reasoning_delta.get(key))
+    for key in ("theses_added", "new_timing_windows", "new_account_signals"):
+        value = reasoning_delta.get(key)
+        if isinstance(value, list) and value:
+            summary[key] = value[:3]
+    return summary
 
 
 def _campaign_specificity_audit(
@@ -2459,6 +2575,21 @@ async def _generate_vendor_campaigns(
             acct = vendor_reasoning.contract("account_reasoning")
             if acct and acct.get("market_summary"):
                 reasoning_ctx["account_summary"] = acct["market_summary"]
+            atom_context = _campaign_reasoning_atom_context(
+                vendor_reasoning.filtered_consumer_context("campaign"),
+            )
+            if atom_context:
+                reasoning_ctx["atom_context"] = atom_context
+            delta_summary = _campaign_reasoning_delta_summary(
+                vendor_reasoning.reasoning_delta,
+            )
+            if delta_summary:
+                reasoning_ctx["delta_summary"] = delta_summary
+            scope_summary = _campaign_reasoning_scope_summary(
+                vendor_reasoning.scope_manifest,
+            )
+            if scope_summary:
+                reasoning_ctx["scope_summary"] = scope_summary
 
             vendor_ctx["reasoning_context"] = reasoning_ctx
             contracts = vendor_reasoning.materialized_contracts()

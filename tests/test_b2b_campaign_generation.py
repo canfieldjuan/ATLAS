@@ -1882,6 +1882,28 @@ def test_inject_reasoning_campaign_context_surfaces_section_disclaimers():
     assert target["reasoning_section_disclaimers"]["timing_intelligence"]
 
 
+def test_inject_reasoning_campaign_context_surfaces_atoms_and_delta():
+    target = {}
+    mod._inject_reasoning_campaign_context(
+        target,
+        {
+            "scope_manifest": {"selection_strategy": "vendor_facet_packet_v1"},
+            "theses": [{"thesis_id": "primary_wedge", "summary": "Pricing pressure is clustering"}],
+            "timing_windows": [{"window_id": "trigger_1", "start_or_anchor": "Q2 renewal"}],
+            "proof_points": [{"label": "switch_volume"}],
+            "account_signals": [{"company": "Acme"}],
+            "counterevidence": [{"counterevidence_id": "counterevidence_1"}],
+            "coverage_limits": [{"coverage_limit_id": "limit_1"}],
+            "reasoning_delta": {"changed": True},
+        },
+    )
+
+    assert target["reasoning_scope_summary"]["selection_strategy"] == "vendor_facet_packet_v1"
+    assert target["reasoning_atom_context"]["top_theses"]
+    assert target["reasoning_atom_context"]["proof_points"][0]["label"] == "switch_volume"
+    assert target["reasoning_delta_summary"]["changed"] is True
+
+
 # ---------------------------------------------------------------------------
 # Phase 5: reasoning_context enrichment
 # ---------------------------------------------------------------------------
