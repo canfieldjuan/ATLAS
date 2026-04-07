@@ -14,6 +14,9 @@ _SPEC.loader.exec_module(_MODULE)
 
 _as_dict = _MODULE._as_dict
 _exit_code = _MODULE._exit_code
+_REQUIRED_MIGRATIONS = _MODULE._REQUIRED_MIGRATIONS
+_REQUIRED_TABLES = _MODULE._REQUIRED_TABLES
+_REQUIRED_TASKS = _MODULE._REQUIRED_TASKS
 _reasoning_v2_schema_predicate = _MODULE._reasoning_v2_schema_predicate
 _status = _MODULE._status
 
@@ -45,6 +48,21 @@ def test_reasoning_v2_schema_predicate_accepts_canonical_versions():
     assert "IN ('v2', '2')" in predicate
     assert "LIKE 'v2.%'" in predicate
     assert "LIKE '2.%'" in predicate
+
+
+def test_required_rollout_migrations_include_report_subscription_tables():
+    assert "265_b2b_report_subscriptions" in _REQUIRED_MIGRATIONS
+    assert "266_b2b_report_subscription_delivery_log" in _REQUIRED_MIGRATIONS
+
+
+def test_required_rollout_tables_include_report_subscription_tables():
+    assert "b2b_report_subscriptions" in _REQUIRED_TABLES
+    assert "b2b_report_subscription_delivery_log" in _REQUIRED_TABLES
+
+
+def test_required_rollout_tasks_include_report_delivery():
+    assert "b2b_reasoning_synthesis" in _REQUIRED_TASKS
+    assert "b2b_report_subscription_delivery" in _REQUIRED_TASKS
 
 
 def test_exit_code_is_nonzero_when_required_check_fails():

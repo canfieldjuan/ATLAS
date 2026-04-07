@@ -23,6 +23,23 @@ _REQUIRED_MIGRATIONS = (
     "261_b2b_competitive_sets",
     "262_b2b_competitive_set_runs",
     "263_b2b_competitive_set_run_constraints",
+    "265_b2b_report_subscriptions",
+    "266_b2b_report_subscription_delivery_log",
+)
+
+_REQUIRED_TABLES = (
+    "b2b_cross_vendor_reasoning_synthesis",
+    "b2b_vendor_reasoning_packets",
+    "b2b_vendor_witnesses",
+    "b2b_competitive_sets",
+    "b2b_competitive_set_runs",
+    "b2b_report_subscriptions",
+    "b2b_report_subscription_delivery_log",
+)
+
+_REQUIRED_TASKS = (
+    "b2b_reasoning_synthesis",
+    "b2b_report_subscription_delivery",
 )
 
 
@@ -87,22 +104,10 @@ async def _run(limit: int) -> dict[str, Any]:
           AND table_name = ANY($1::text[])
         ORDER BY table_name
         """,
-        [
-            "b2b_cross_vendor_reasoning_synthesis",
-            "b2b_vendor_reasoning_packets",
-            "b2b_vendor_witnesses",
-            "b2b_competitive_sets",
-            "b2b_competitive_set_runs",
-        ],
+        list(_REQUIRED_TABLES),
     )
     present_tables = {str(row["table_name"]) for row in table_rows}
-    expected_tables = {
-        "b2b_cross_vendor_reasoning_synthesis",
-        "b2b_vendor_reasoning_packets",
-        "b2b_vendor_witnesses",
-        "b2b_competitive_sets",
-        "b2b_competitive_set_runs",
-    }
+    expected_tables = set(_REQUIRED_TABLES)
     checks.append(
         _status(
             "required_tables",
@@ -141,19 +146,25 @@ async def _run(limit: int) -> dict[str, Any]:
         ),
     )
 
-    task_row = await pool.fetchrow(
+    task_rows = await pool.fetch(
         """
         SELECT name, metadata
         FROM scheduled_tasks
-        WHERE name = 'b2b_reasoning_synthesis'
-        LIMIT 1
-        """
+        WHERE name = ANY($1::text[])
+        ORDER BY name
+        """,
+        list(_REQUIRED_TASKS),
     )
+    task_map = {str(row["name"]): _as_dict(row["metadata"]) for row in task_rows}
     checks.append(
         _status(
-            "reasoning_synthesis_task_registered",
-            task_row is not None,
-            detail=(_as_dict(task_row["metadata"]) if task_row else None),
+            "required_tasks_registered",
+            set(_REQUIRED_TASKS).issubset(task_map.keys()),
+            detail={
+                "present": sorted(task_map.keys()),
+                "missing": sorted(set(_REQUIRED_TASKS) - set(task_map.keys())),
+                "metadata": task_map,
+            },
         ),
     )
 

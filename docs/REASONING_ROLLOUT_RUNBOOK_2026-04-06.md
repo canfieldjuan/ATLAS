@@ -8,6 +8,7 @@ This runbook covers the additive Stage 5 rollout that introduced:
 - `reasoning_atoms`
 - `reasoning_delta`
 - competitive-set run history
+- recurring report subscriptions and delivery
 
 ## Required Migrations
 Apply these migrations before enabling the new scheduled/operator paths:
@@ -16,6 +17,8 @@ Apply these migrations before enabling the new scheduled/operator paths:
 - `261_b2b_competitive_sets`
 - `262_b2b_competitive_set_runs`
 - `263_b2b_competitive_set_run_constraints`
+- `265_b2b_report_subscriptions`
+- `266_b2b_report_subscription_delivery_log`
 
 Why they matter:
 - `245` enables the canonical cross-vendor synthesis table
@@ -23,6 +26,8 @@ Why they matter:
 - `261` adds the scoped competitive-set control plane
 - `262` stores scoped run history for previews and operator visibility
 - `263` hardens `262` with FK and enum-like constraints
+- `265` persists saved report subscriptions in the report library
+- `266` records report delivery attempts and status history
 
 ## Backfill Requirements
 No blocking DB backfill is required to deploy the new additive reasoning contract.
@@ -57,8 +62,8 @@ These improve consistency and admin/operator surfaces, but they are not a schema
 ## Readiness Criteria
 The rollout is ready when all of these are true:
 - required migrations are recorded in `schema_migrations`
-- competitive-set tables exist
-- `b2b_reasoning_synthesis` task exists
+- competitive-set and report-subscription tables exist
+- `b2b_reasoning_synthesis` and `b2b_report_subscription_delivery` tasks exist
 - latest synthesis rows are present with `schema_version LIKE '2.%'`
 - at least some fresh synthesis rows carry:
   - `scope_manifest`
