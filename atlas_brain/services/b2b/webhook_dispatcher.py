@@ -34,6 +34,7 @@ logger = logging.getLogger("atlas.services.b2b.webhook_dispatcher")
 
 VALID_EVENT_TYPES = {
     "change_event", "churn_alert", "report_generated", "signal_update",
+    "high_intent_push",
     # Consumer event types
     "consumer_change_event", "consumer_report_generated", "consumer_concurrent_shift",
 }
@@ -267,10 +268,15 @@ def _format_crm_hubspot_payload(envelope: dict) -> dict:
     vendor = envelope.get("vendor", "Unknown")
     data = envelope.get("data", {})
 
-    if event_type in ("churn_alert", "signal_update"):
-        # Create/update a deal or note with intelligence data
+    if event_type in ("churn_alert", "signal_update", "high_intent_push"):
+        company = data.get("company_name") or data.get("company") or ""
+        dealname = (
+            f"High-Intent Lead: {company} (from {vendor})"
+            if event_type == "high_intent_push"
+            else f"Churn Signal: {vendor}"
+        )
         properties = {
-            "dealname": f"Churn Signal: {vendor}",
+            "dealname": dealname,
             "pipeline": "default",
             "dealstage": "qualifiedtobuy",
             "atlas_vendor": vendor,
@@ -325,9 +331,15 @@ def _format_crm_pipedrive_payload(envelope: dict) -> dict:
     vendor = envelope.get("vendor", "Unknown")
     data = envelope.get("data", {})
 
-    if event_type in ("churn_alert", "signal_update"):
+    if event_type in ("churn_alert", "signal_update", "high_intent_push"):
+        company = data.get("company_name") or data.get("company") or ""
+        title = (
+            f"High-Intent Lead: {company} (from {vendor})"
+            if event_type == "high_intent_push"
+            else f"Churn Signal: {vendor}"
+        )
         return {
-            "title": f"Churn Signal: {vendor}",
+            "title": title,
             "status": "open",
             "atlas_vendor": vendor,
             "atlas_event_type": event_type,
@@ -481,9 +493,14 @@ async def _log_crm_push(
             except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
 
-        signal_type = "change_event" if event_type == "change_event" else (
-            "company_signal" if data.get("company_name") else "churn_signal"
-        )
+        if event_type == "high_intent_push":
+            signal_type = "high_intent_push"
+        elif event_type == "change_event":
+            signal_type = "change_event"
+        elif data.get("company_name") or data.get("company"):
+            signal_type = "company_signal"
+        else:
+            signal_type = "churn_signal"
         await pool.execute(
             """
             INSERT INTO b2b_crm_push_log
@@ -494,9 +511,9 @@ async def _log_crm_push(
             subscription_id,
             signal_type,
             vendor,
-            data.get("company_name"),
+            data.get("company_name") or data.get("company"),
             crm_record_id,
-            "deal" if event_type in ("churn_alert", "signal_update") else "note",
+            "deal" if event_type in ("churn_alert", "signal_update", "high_intent_push") else "note",
         )
     except Exception:
         logger.debug("Failed to log CRM push")

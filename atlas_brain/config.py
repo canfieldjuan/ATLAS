@@ -2796,6 +2796,33 @@ class B2BChurnConfig(BaseSettings):
         le=500,
         description="Maximum word-count shortfall eligible for deterministic coverage-snapshot repair during blog quality cleanup",
     )
+    blog_min_quotes_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 4,
+            "vendor_deep_dive": 3,
+            "market_landscape": 4,
+            "best_fit_guide": 4,
+            "migration_guide": 3,
+        },
+        description="Per-topic minimum quotable-review counts required before blog generation is allowed",
+    )
+    blog_min_vendor_profiles_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "market_landscape": 4,
+            "best_fit_guide": 4,
+        },
+        description="Per-topic minimum vendor-profile breadth required before multi-vendor blog generation is allowed",
+    )
+    blog_min_sections_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 6,
+            "vendor_deep_dive": 6,
+            "market_landscape": 7,
+            "best_fit_guide": 7,
+            "migration_guide": 5,
+        },
+        description="Per-topic minimum blueprint section counts required before blog generation is allowed",
+    )
 
     # Historical snapshots
     snapshot_enabled: bool = Field(default=True, description="Enable daily vendor health snapshots")
@@ -3467,6 +3494,42 @@ class B2BReportDeliveryConfig(BaseSettings):
     stale_claim_seconds: int = Field(default=900, ge=60, le=86400, description="How long an in-flight delivery claim can sit before another worker may reclaim it")
     fresh_hours: int = Field(default=72, ge=1, le=24 * 30, description="Artifacts newer than this are treated as fresh for delivery-policy checks")
     monitor_hours: int = Field(default=24 * 7, ge=1, le=24 * 90, description="Artifacts newer than this but older than fresh_hours are treated as monitor state")
+    require_sales_ready_for_competitive: bool = Field(
+        default=True,
+        description="Require sales_ready quality status for battle-card style deliverables when quality metadata exists",
+    )
+    max_blocker_count: int = Field(
+        default=0,
+        ge=0,
+        le=50,
+        description="Maximum blocker_count allowed for a deliverable to remain eligible",
+    )
+    max_open_review_count: int = Field(
+        default=0,
+        ge=0,
+        le=50,
+        description="Maximum unresolved operator-review count allowed for a deliverable to remain eligible",
+    )
+    report_scope_overrides_library: bool = Field(
+        default=True,
+        description="Exclude artifacts from library deliveries when an enabled report-scoped subscription exists for the same artifact",
+    )
+    suppress_unchanged_deliveries: bool = Field(
+        default=True,
+        description="Skip recurring sends when the eligible artifact package has not materially changed since the last completed delivery",
+    )
+    max_send_attempts_per_recipient: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Maximum send attempts per recipient before the delivery is marked partial or failed",
+    )
+    retry_backoff_seconds: int = Field(
+        default=3,
+        ge=0,
+        le=300,
+        description="Delay between recipient send retries",
+    )
 
 
 class B2BWebhookConfig(BaseSettings):

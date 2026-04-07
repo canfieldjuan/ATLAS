@@ -83,6 +83,9 @@ export default function Opportunities() {
   // -- Bulk selection --
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
+  // -- Local hide --
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
+
   // -- Generate --
   const [generating, setGenerating] = useState<string | null>(null)
   const [bulkGenerating, setBulkGenerating] = useState(false)
@@ -136,8 +139,11 @@ export default function Opportunities() {
         )
       })
     }
+    if (hiddenIds.size > 0) {
+      rows = rows.filter((r) => !hiddenIds.has(rowKey(r)))
+    }
     return rows
-  }, [opportunities, stageFilter, intentFilter])
+  }, [opportunities, stageFilter, intentFilter, hiddenIds])
 
   // -- Stats --
   const stats = useMemo(() => {
@@ -219,6 +225,19 @@ export default function Opportunities() {
     }
   }
 
+  function handleHide(row: HighIntentCompany) {
+    setHiddenIds((prev) => new Set(prev).add(rowKey(row)))
+    setExpandedId(null)
+  }
+  function handleBulkHide() {
+    setHiddenIds((prev) => {
+      const next = new Set(prev)
+      selectedIds.forEach((id) => next.add(id))
+      return next
+    })
+    setSelectedIds(new Set())
+  }
+
   // -- Table columns --
   const columns: Column<HighIntentCompany>[] = useMemo(() => [
     {
@@ -289,6 +308,23 @@ export default function Opportunities() {
       ),
     },
     {
+      key: 'contract',
+      header: 'Contract',
+      render: (r) => {
+        if (!r.contract_end) return <span className="text-slate-500 text-xs">--</span>
+        return <span className="text-xs text-amber-400">{r.contract_end}</span>
+      },
+    },
+    {
+      key: 'alternative',
+      header: 'Top Alt.',
+      render: (r) => {
+        const alt = r.alternatives?.[0]
+        if (!alt?.name) return <span className="text-slate-500 text-xs">--</span>
+        return <span className="text-xs text-cyan-400 truncate block max-w-[100px]" title={alt.name}>{alt.name}</span>
+      },
+    },
+    {
       key: 'seats',
       header: 'Seats',
       render: (r) => <span className="text-slate-300">{r.seat_count ?? '--'}</span>,
@@ -357,7 +393,18 @@ export default function Opportunities() {
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white">Opportunity Workbench</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-white">Opportunity Workbench</h1>
+          {hiddenIds.size > 0 && (
+            <button
+              onClick={() => setHiddenIds(new Set())}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-slate-800/50 text-slate-400 hover:text-white transition-colors"
+            >
+              {hiddenIds.size} hidden
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() =>
@@ -473,15 +520,23 @@ export default function Opportunities() {
         </div>
 
         {/* Bulk actions */}
-        {selectedIds.size > 0 && canAccessCampaigns && (
+        {selectedIds.size > 0 && (
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs text-slate-400">{selectedIds.size} selected</span>
+            {canAccessCampaigns && (
+              <button
+                onClick={handleBulkGenerate}
+                disabled={bulkGenerating}
+                className="px-3 py-1.5 text-xs font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg disabled:opacity-50"
+              >
+                {bulkGenerating ? 'Generating...' : 'Generate Campaigns'}
+              </button>
+            )}
             <button
-              onClick={handleBulkGenerate}
-              disabled={bulkGenerating}
-              className="px-3 py-1.5 text-xs font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg disabled:opacity-50"
+              onClick={handleBulkHide}
+              className="px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg"
             >
-              {bulkGenerating ? 'Generating...' : 'Generate Campaigns'}
+              Hide
             </button>
             <button
               onClick={() => setSelectedIds(new Set())}
@@ -524,6 +579,7 @@ export default function Opportunities() {
           row={expandedRow}
           onClose={() => setExpandedId(null)}
           onGenerate={canAccessCampaigns ? handleGenerate : undefined}
+          onHide={handleHide}
           generating={generating === rowKey(expandedRow)}
         />
       )}
@@ -539,11 +595,13 @@ function EvidencePanel({
   row,
   onClose,
   onGenerate,
+  onHide,
   generating,
 }: {
   row: HighIntentCompany
   onClose: () => void
   onGenerate?: (row: HighIntentCompany) => void
+  onHide?: (row: HighIntentCompany) => void
   generating: boolean
 }) {
   const signals = row.intent_signals
@@ -734,6 +792,15 @@ function EvidencePanel({
           >
             <Zap className={clsx('h-4 w-4', generating && 'animate-pulse')} />
             {generating ? 'Generating...' : 'Generate Campaign'}
+          </button>
+        )}
+        {onHide && (
+          <button
+            onClick={() => onHide(row)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+          >
+            <X className="h-4 w-4" />
+            Hide
           </button>
         )}
         <Link

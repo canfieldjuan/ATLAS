@@ -11,6 +11,7 @@ import {
   Handshake,
   Newspaper,
   Target,
+  Fingerprint,
   Telescope,
   FileSearch,
   MailSearch,
@@ -44,6 +45,7 @@ const links: SidebarLink[] = [
   { to: '/vendor-targets', icon: Shield, label: 'Targets' },
   { to: '/challengers', icon: Swords, label: 'Challengers' },
   { to: '/predictor', icon: Target, label: 'Win/Loss' },
+  { to: '/evidence', icon: Fingerprint, label: 'Evidence' },
   { to: '/affiliates', icon: Handshake, label: 'Affiliates' },
   { to: '/blog', icon: Newspaper, label: 'Blog' },
 ]

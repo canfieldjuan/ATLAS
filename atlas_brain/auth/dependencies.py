@@ -183,6 +183,10 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
 
 def require_plan(min_plan: str):
     """Return a dependency that enforces a minimum plan tier."""
+    if min_plan not in PLAN_ORDER:
+        raise ValueError(
+            f"Invalid consumer plan tier '{min_plan}'. Expected one of {PLAN_ORDER}"
+        )
     min_idx = PLAN_ORDER.index(min_plan)
 
     async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
@@ -204,6 +208,10 @@ def require_plan(min_plan: str):
 
 def require_b2b_plan(min_plan: str):
     """Return a dependency that enforces a B2B product + minimum B2B plan tier."""
+    if min_plan not in B2B_PLAN_ORDER:
+        raise ValueError(
+            f"Invalid B2B plan tier '{min_plan}'. Expected one of {B2B_PLAN_ORDER}"
+        )
     min_idx = B2B_PLAN_ORDER.index(min_plan)
 
     async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:

@@ -36,6 +36,7 @@ const Prospects = lazy(() => import('./pages/Prospects'))
 const PipelineReview = lazy(() => import('./pages/PipelineReview'))
 const Report = lazy(() => import('./pages/Report'))
 const WinLossPredictor = lazy(() => import('./pages/WinLossPredictor'))
+const EvidenceExplorer = lazy(() => import('./pages/EvidenceExplorer'))
 
 const PUBLIC_PATHS = ['/blog', '/landing', '/login', '/signup', '/forgot-password', '/reset-password', '/methodology', '/report']
 
@@ -110,6 +111,7 @@ export default function App() {
             <Route path="/pipeline-review" element={renderLazyRoute(PipelineReview)} />
             <Route path="/prospects" element={renderLazyRoute(Prospects)} />
             <Route path="/predictor" element={renderLazyRoute(WinLossPredictor)} />
+            <Route path="/evidence" element={renderLazyRoute(EvidenceExplorer)} />
             <Route path="/account" element={renderLazyRoute(Account)} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

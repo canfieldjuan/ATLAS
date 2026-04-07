@@ -967,6 +967,20 @@ def _blog_length_policy(topic_type: str) -> dict[str, int]:
     }
 
 
+def _blog_topic_threshold(raw_map: Any, topic_type: str, *, default: int = 0) -> int:
+    if not isinstance(raw_map, dict):
+        return max(0, int(default))
+    normalized_topic = str(topic_type or "").strip().lower()
+    for key, value in raw_map.items():
+        if str(key or "").strip().lower() != normalized_topic:
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return max(0, int(default))
+    return max(0, int(default))
+
+
 def _build_cta(topic_type: str, data_context: dict[str, Any]) -> dict[str, Any] | None:
     """Build structured CTA from topic type and data context."""
     cfg = _CTA_CONFIG.get(topic_type)
@@ -2480,6 +2494,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         blueprint = _build_blueprint(topic_type, topic_ctx, data)
         if blueprint.slug in attempted_slugs:
             return None
+        blueprint_sufficiency = _check_blueprint_sufficiency(blueprint)
+        if not blueprint_sufficiency["sufficient"]:
+            logger.warning(
+                "Blueprint insufficiency for %s (%s): %s",
+                blueprint.slug,
+                topic_type,
+                blueprint_sufficiency["reason"],
+            )
+            return None
 
         link_posts = await _fetch_related_for_linking(
             pool, blueprint.tags, blueprint.slug,
@@ -3014,7 +3037,19 @@ async def _regenerate_existing_posts(
 
             data = await _gather_data(pool, topic_type, topic_ctx)
             await _load_pool_layers_for_blog(pool, topic_type, topic_ctx, data)
+            sufficiency = _check_data_sufficiency(topic_type, data)
+            if not sufficiency["sufficient"]:
+                logger.warning("Regen: data insufficiency for %s: %s", slug, sufficiency["reason"])
+                continue
             blueprint = _build_blueprint(topic_type, topic_ctx, data)
+            blueprint_sufficiency = _check_blueprint_sufficiency(blueprint)
+            if not blueprint_sufficiency["sufficient"]:
+                logger.warning(
+                    "Regen: blueprint insufficiency for %s: %s",
+                    slug,
+                    blueprint_sufficiency["reason"],
+                )
+                continue
             link_posts = await _fetch_related_for_linking(
                 pool, blueprint.tags, blueprint.slug,
             )
@@ -5279,9 +5314,11 @@ async def _gather_data(
             category,
         )
         profiles = []
+        vendor_signals = []
         for vr in vendor_rows[:10]:
             vn = vr["vendor_name"]
             p = await _fetch_product_profile(pool, vn)
+            s = await _fetch_churn_signals(pool, vn)
             if p:
                 # Also pull avg rating from raw reviews
                 rating_row = await pool.fetchrow(
@@ -5294,7 +5331,17 @@ async def _gather_data(
                     "avg_rating": float(rating_row["avg_rating"]) if rating_row and rating_row["avg_rating"] else None,
                     "review_count": rating_row["cnt"] if rating_row else 0,
                 })
+                vendor_signals.append(
+                    {
+                        "vendor": vn,
+                        "signals": _merge_blog_signals_with_evidence_vault(
+                            s,
+                            evidence_vault_lookup.get(vn),
+                        ),
+                    }
+                )
         data["vendor_profiles"] = profiles
+        data["vendor_signals"] = vendor_signals
         quotes = await _fetch_quotable_reviews(pool, category=category)
         data["quotes"] = quotes if not isinstance(quotes, Exception) else []
 
@@ -5332,6 +5379,7 @@ async def _gather_data(
 
     elif topic_type == "market_landscape":
         category = topic_ctx["category"]
+        sources = _blog_source_allowlist()
         # Fetch all vendors in this category
         vendor_rows = await pool.fetch(
             "SELECT DISTINCT vendor_name FROM b2b_churn_signals WHERE product_category = $1",
@@ -5344,7 +5392,16 @@ async def _gather_data(
             try:
                 p = await _fetch_product_profile(pool, vn)
                 s = await _fetch_churn_signals(pool, vn)
-                profiles.append({"vendor": vn, "profile": p})
+                rating_row = await pool.fetchrow(
+                    "SELECT ROUND(AVG(rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt FROM b2b_reviews WHERE vendor_name = $1 AND rating IS NOT NULL AND source = ANY($2)",
+                    vn, sources,
+                )
+                profiles.append({
+                    "vendor": vn,
+                    "profile": p,
+                    "avg_rating": float(rating_row["avg_rating"]) if rating_row and rating_row["avg_rating"] else None,
+                    "review_count": rating_row["cnt"] if rating_row else 0,
+                })
                 signals_list.append({
                     "vendor": vn,
                     "signals": _merge_blog_signals_with_evidence_vault(
@@ -5958,11 +6015,19 @@ def _check_data_sufficiency(topic_type: str, data: dict[str, Any]) -> dict[str, 
     Returns {"sufficient": bool, "reason": str}.
     """
     quotes = data.get("quotes", [])
+    min_quotes = _blog_topic_threshold(
+        getattr(settings.b2b_churn, "blog_min_quotes_by_topic", {}) or {},
+        topic_type,
+        default=2,
+    )
 
     # Universal: at least 2 quotable reviews
     # (pricing_reality_check builds quotes from pricing_reviews in the blueprint)
-    if topic_type != "pricing_reality_check" and len(quotes) < 2:
-        return {"sufficient": False, "reason": f"Only {len(quotes)} quotable reviews (need 2+)"}
+    if topic_type != "pricing_reality_check" and len(quotes) < min_quotes:
+        return {
+            "sufficient": False,
+            "reason": f"Only {len(quotes)} quotable reviews (need {min_quotes}+)",
+        }
 
     # Single-vendor types: product profile must exist
     if topic_type in _SINGLE_VENDOR_TYPES:
@@ -5995,9 +6060,35 @@ def _check_data_sufficiency(topic_type: str, data: dict[str, Any]) -> dict[str, 
     # Multi-vendor types: at least 2 vendor profiles
     if topic_type in _MULTI_VENDOR_TYPES:
         vendor_profiles = data.get("vendor_profiles", [])
-        if len(vendor_profiles) < 2:
-            return {"sufficient": False, "reason": f"Only {len(vendor_profiles)} vendor profiles (need 2+)"}
+        min_vendor_profiles = _blog_topic_threshold(
+            getattr(settings.b2b_churn, "blog_min_vendor_profiles_by_topic", {}) or {},
+            topic_type,
+            default=2,
+        )
+        if len(vendor_profiles) < min_vendor_profiles:
+            return {
+                "sufficient": False,
+                "reason": (
+                    f"Only {len(vendor_profiles)} vendor profiles "
+                    f"(need {min_vendor_profiles}+)"
+                ),
+            }
 
+    return {"sufficient": True, "reason": ""}
+
+
+def _check_blueprint_sufficiency(blueprint: PostBlueprint) -> dict[str, Any]:
+    min_sections = _blog_topic_threshold(
+        getattr(settings.b2b_churn, "blog_min_sections_by_topic", {}) or {},
+        blueprint.topic_type,
+        default=0,
+    )
+    section_count = len(blueprint.sections or [])
+    if section_count < min_sections:
+        return {
+            "sufficient": False,
+            "reason": f"Only {section_count} blueprint sections (need {min_sections}+)",
+        }
     return {"sufficient": True, "reason": ""}
 
 
@@ -6022,6 +6113,108 @@ def _build_blueprint(
     bp = builder(topic_ctx, data)
     bp.cta = _build_cta(bp.topic_type, bp.data_context)
     return bp
+
+
+def _blog_quote_highlights(
+    quotes: list[dict[str, Any]] | None,
+    *,
+    limit: int = 4,
+    vendors: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    allowed_vendors = {
+        str(value or "").strip().lower()
+        for value in (vendors or [])
+        if str(value or "").strip()
+    }
+    seen: set[str] = set()
+    highlights: list[dict[str, Any]] = []
+    for item in quotes or []:
+        if not isinstance(item, dict):
+            continue
+        vendor = str(item.get("vendor") or "").strip()
+        if allowed_vendors and vendor.lower() not in allowed_vendors:
+            continue
+        phrase = " ".join(str(item.get("phrase") or "").split())
+        if not phrase:
+            continue
+        marker = phrase.lower()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        row: dict[str, Any] = {
+            "vendor": vendor,
+            "phrase": phrase[:220],
+            "sentiment": str(item.get("sentiment") or "").strip(),
+        }
+        for key in ("role", "company", "source_name"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                row[key] = value[:120]
+        highlights.append(row)
+        if len(highlights) >= max(1, int(limit)):
+            break
+    return highlights
+
+
+def _aggregate_category_pain_rows(
+    vendor_signals: list[dict[str, Any]] | None,
+    *,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    aggregated: dict[str, dict[str, Any]] = {}
+    for vendor_row in vendor_signals or []:
+        if not isinstance(vendor_row, dict):
+            continue
+        vendor = str(vendor_row.get("vendor") or "").strip()
+        for signal in vendor_row.get("signals") or []:
+            if not isinstance(signal, dict):
+                continue
+            pain = str(signal.get("pain_category") or "").strip()
+            if not pain or pain.lower() in {"none", "null"}:
+                continue
+            bucket = aggregated.setdefault(
+                pain,
+                {
+                    "name": pain,
+                    "vendor_count": 0,
+                    "signal_count": 0,
+                    "avg_urgency_total": 0.0,
+                    "_vendors": set(),
+                },
+            )
+            vendors = bucket["_vendors"]
+            if vendor and vendor not in vendors:
+                vendors.add(vendor)
+                bucket["vendor_count"] += 1
+            try:
+                bucket["signal_count"] += int(signal.get("signal_count") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                bucket["avg_urgency_total"] += float(signal.get("avg_urgency") or 0.0)
+            except (TypeError, ValueError):
+                pass
+    rows: list[dict[str, Any]] = []
+    for bucket in aggregated.values():
+        vendor_count = int(bucket.get("vendor_count") or 0)
+        avg_total = float(bucket.get("avg_urgency_total") or 0.0)
+        rows.append(
+            {
+                "name": bucket["name"],
+                "vendor_count": vendor_count,
+                "signal_count": int(bucket.get("signal_count") or 0),
+                "avg_urgency": round(avg_total / max(vendor_count, 1), 1),
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("vendor_count") or 0),
+            -int(item.get("signal_count") or 0),
+            -float(item.get("avg_urgency") or 0.0),
+            str(item.get("name") or "").lower(),
+        )
+    )
+    return rows[: max(1, int(limit))]
 
 
 def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
@@ -6241,6 +6434,11 @@ def _blueprint_vendor_alternative(ctx: dict, data: dict) -> PostBlueprint:
 def _blueprint_vendor_showdown(ctx: dict, data: dict) -> PostBlueprint:
     vendor_a, vendor_b = ctx["vendor_a"], ctx["vendor_b"]
     category = ctx.get("category", "software")
+    quote_highlights = _blog_quote_highlights(
+        data.get("quotes", []),
+        limit=4,
+        vendors=[vendor_a, vendor_b],
+    )
 
     # Head-to-head comparison chart
     h2h_data = [
@@ -6448,7 +6646,17 @@ def _blueprint_vendor_showdown(ctx: dict, data: dict) -> PostBlueprint:
         heading="The Verdict",
         goal="Declare which vendor fares better and the decisive factor",
         key_stats=verdict_stats,
+        data_summary=f"Final comparison of urgency, displacement, and buyer-fit signals for {vendor_a} and {vendor_b}.",
     ))
+
+    if quote_highlights:
+        sections.append(SectionSpec(
+            id="reviewer_voice",
+            heading=f"What Reviewers Say About {vendor_a} and {vendor_b}",
+            goal="Keep the comparison grounded in direct reviewer language from both vendors",
+            key_stats={"quote_highlights": quote_highlights},
+            data_summary=f"{len(quote_highlights)} quote-backed snippets comparing {vendor_a} and {vendor_b}.",
+        ))
 
     return PostBlueprint(
         topic_type="vendor_showdown",
@@ -6879,6 +7087,11 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
     contract_timing = _blog_timing_reasoning_stats(timing_intelligence)
     contract_account = _blog_account_reasoning_stats(account_reasoning)
     contract_category = _blog_category_reasoning_stats(category_reasoning)
+    quote_highlights = _blog_quote_highlights(
+        data.get("quotes", []),
+        limit=4,
+        vendors=[vendor],
+    )
 
     charts = []
     sections = [
@@ -7029,6 +7242,42 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Top buyer roles: {', '.join(p['role_type'] for p in ext_buyer_profiles[:3] if p.get('role_type'))}.",
         ))
 
+    if contract_segment:
+        sections.append(SectionSpec(
+            id="segment_timing",
+            heading=f"Which Teams Feel {vendor} Pain First",
+            goal="Translate segment targeting and timing intelligence into who feels the pressure first and why",
+            key_stats=contract_segment,
+            data_summary=(
+                str(contract_segment.get("segment_targeting_summary") or "").strip()
+                or f"Priority segments surfaced from reasoning for {vendor}."
+            ),
+        ))
+
+    if contract_timing:
+        sections.append(SectionSpec(
+            id="timing_signals",
+            heading=f"When {vendor} Friction Turns Into Action",
+            goal="Show renewal windows, sentiment direction, and timing triggers that make dissatisfaction operational",
+            key_stats=contract_timing,
+            data_summary=(
+                str(contract_timing.get("timing_summary") or "").strip()
+                or f"Timing intelligence surfaced for {vendor}."
+            ),
+        ))
+
+    if contract_account:
+        sections.append(SectionSpec(
+            id="account_pressure",
+            heading=f"Where {vendor} Pressure Shows Up in Accounts",
+            goal="Surface named-account and account-pattern pressure without overstating certainty",
+            key_stats=contract_account,
+            data_summary=(
+                str(contract_account.get("account_pressure_summary") or "").strip()
+                or f"Account-pressure patterns were surfaced for {vendor}."
+            ),
+        ))
+
     # Competitive landscape
     compared = profile.get("commonly_compared_to", [])
     if compared:
@@ -7042,6 +7291,46 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
             goal="Position the vendor relative to frequently compared alternatives",
             key_stats={"competitors": comp_names},
             data_summary=f"Commonly compared to: {', '.join(comp_names)}.",
+        ))
+
+    market_position_stats: dict[str, Any] = {}
+    if contract_category:
+        market_position_stats.update(contract_category)
+    if competitor_profiles:
+        market_position_stats["competitor_snapshots"] = [
+            {
+                "vendor": str(profile_row.get("vendor_name") or profile_row.get("vendor") or "").strip(),
+                "strengths": [
+                    str(item.get("area", item)) if isinstance(item, dict) else str(item)
+                    for item in (profile_row.get("strengths") or [])[:2]
+                ],
+                "weaknesses": [
+                    str(item.get("area", item)) if isinstance(item, dict) else str(item)
+                    for item in (profile_row.get("weaknesses") or [])[:2]
+                ],
+            }
+            for profile_row in competitor_profiles[:3]
+            if str(profile_row.get("vendor_name") or profile_row.get("vendor") or "").strip()
+        ]
+    if market_position_stats:
+        sections.append(SectionSpec(
+            id="market_position",
+            heading=f"Where {vendor} Sits in the {category} Market",
+            goal="Connect the vendor profile to broader category dynamics and the nearest competitive alternatives",
+            key_stats=market_position_stats,
+            data_summary=(
+                str(contract_category.get("narrative") or "").strip()
+                or f"Competitive context for {vendor} in the {category} market."
+            ),
+        ))
+
+    if quote_highlights:
+        sections.append(SectionSpec(
+            id="reviewer_voice",
+            heading=f"What Reviewers Actually Say About {vendor}",
+            goal="Anchor the analysis in direct review language so the conclusions stay evidence-backed",
+            key_stats={"quote_highlights": quote_highlights},
+            data_summary=f"{len(quote_highlights)} representative quote-backed snippets for {vendor}.",
         ))
 
     verdict_stats: dict[str, Any] = {"vendor": vendor, "review_count": ctx["review_count"]}
@@ -7071,6 +7360,7 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
         heading=f"The Bottom Line on {vendor}",
         goal="Synthesize all data into actionable guidance for potential buyers",
         key_stats=verdict_stats,
+        data_summary=f"Final synthesis of category position, buyer pressure, and timing risk for {vendor}.",
     ))
 
     return PostBlueprint(
@@ -7092,6 +7382,13 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
     vendor_profiles = data.get("vendor_profiles", [])
     vendor_signals = data.get("vendor_signals", [])
     market_regime = (data.get("category_overview", {}).get("cross_vendor_analysis") or {}).get("market_regime")
+    pain_rows = _aggregate_category_pain_rows(vendor_signals, limit=6)
+    quote_highlights = _blog_quote_highlights(data.get("quotes", []), limit=4)
+    signals_by_vendor = {
+        str(item.get("vendor") or "").strip(): item.get("signals") or []
+        for item in vendor_signals
+        if isinstance(item, dict)
+    }
 
     charts = []
     sections = [
@@ -7149,12 +7446,46 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Urgency scores across {len(urgency_data)} vendors.",
         ))
 
+    if pain_rows:
+        pain_chart = ChartSpec(
+            chart_id="category-pain-map",
+            chart_type="horizontal_bar",
+            title=f"Common Pain Patterns Across {category}",
+            data=pain_rows,
+            config={
+                "x_key": "name",
+                "bars": [
+                    {"dataKey": "vendor_count", "color": "#f87171"},
+                    {"dataKey": "avg_urgency", "color": "#fbbf24"},
+                ],
+            },
+        )
+        charts.append(pain_chart)
+        sections.append(SectionSpec(
+            id="category_pain_patterns",
+            heading=f"What Keeps Coming Up Across {category} Vendors",
+            goal="Show the pain categories that recur across vendors, not just inside one product",
+            chart_ids=["category-pain-map"],
+            data_summary=(
+                f"Recurring pain patterns across {len(pain_rows)} category themes, "
+                f"led by {', '.join(row['name'] for row in pain_rows[:3])}."
+            ),
+        ))
+
     # Per-vendor breakdowns
     for vp in vendor_profiles[:5]:
         vendor = vp["vendor"]
         profile = vp.get("profile", {})
         strengths = profile.get("strengths", [])
         weaknesses = profile.get("weaknesses", [])
+        vendor_signal_rows = signals_by_vendor.get(vendor, [])
+        top_pains = [
+            str(item.get("pain_category") or "").strip()
+            for item in vendor_signal_rows[:3]
+            if str(item.get("pain_category") or "").strip()
+        ]
+        avg_rating = vp.get("avg_rating")
+        review_count = vp.get("review_count")
         if strengths or weaknesses:
             sections.append(SectionSpec(
                 id=f"vendor-{_slugify(vendor)}",
@@ -7162,9 +7493,21 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
                 goal=f"Brief profile of {vendor} in the {category} space",
                 key_stats={
                     "vendor": vendor,
+                    "avg_rating": avg_rating,
+                    "review_count": review_count,
+                    "top_pains": top_pains,
                     "strengths": [str(s.get("area", s)) if isinstance(s, dict) else str(s) for s in strengths[:3]],
                     "weaknesses": [str(w.get("area", w)) if isinstance(w, dict) else str(w) for w in weaknesses[:3]],
                 },
+                data_summary=(
+                    f"{vendor} has {review_count or 0} reviews in scope"
+                    + (f", rating {avg_rating}" if avg_rating is not None else "")
+                    + (
+                        f", with pain pressure concentrated in {', '.join(top_pains)}."
+                        if top_pains
+                        else "."
+                    )
+                ),
             ))
 
     takeaway_stats: dict[str, Any] = {"category": category, "vendor_count": vendor_count}
@@ -7203,7 +7546,17 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
         heading=f"Choosing the Right {category} Platform",
         goal="Synthesize the landscape and help readers pick the right tool",
         key_stats=takeaway_stats,
+        data_summary=f"Decision framework across vendor breadth, churn urgency, and category-level pressure in {category}.",
     ))
+
+    if quote_highlights:
+        sections.append(SectionSpec(
+            id="reviewer_voice",
+            heading=f"What Reviewers Say Across the {category} Market",
+            goal="Use direct reviewer snippets to keep the market overview grounded in visible evidence",
+            key_stats={"quote_highlights": quote_highlights},
+            data_summary=f"{len(quote_highlights)} quote-backed examples spanning the {category} market.",
+        ))
 
     vendor_names = [vp["vendor"] for vp in vendor_profiles[:5]]
     return PostBlueprint(
@@ -7563,6 +7916,14 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
     """Recommend the right tool based on team size, needs, and budget -- not commissions."""
     category = ctx["category"]
     vendor_profiles = data.get("vendor_profiles", [])
+    vendor_signals = data.get("vendor_signals", [])
+    pain_rows = _aggregate_category_pain_rows(vendor_signals, limit=6)
+    quote_highlights = _blog_quote_highlights(data.get("quotes", []), limit=4)
+    signals_by_vendor = {
+        str(item.get("vendor") or "").strip(): item.get("signals") or []
+        for item in vendor_signals
+        if isinstance(item, dict)
+    }
 
     charts = []
     sections = [
@@ -7605,6 +7966,31 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
             heading="Ratings at a Glance (But Don't Stop Here)",
             goal="Show ratings but warn that averages hide important nuances",
             chart_ids=["ratings"],
+            data_summary=f"Ratings and review volume across {len(rating_data)} vendors in the {category} set.",
+        ))
+
+    if pain_rows:
+        charts.append(ChartSpec(
+            chart_id="category-pain-fit-map",
+            chart_type="horizontal_bar",
+            title=f"Common Pain Patterns in {category}",
+            data=pain_rows,
+            config={
+                "x_key": "name",
+                "bars": [
+                    {"dataKey": "vendor_count", "color": "#f87171"},
+                    {"dataKey": "avg_urgency", "color": "#fbbf24"},
+                ],
+            },
+        ))
+        sections.append(SectionSpec(
+            id="category_tradeoffs",
+            heading=f"What Teams Consistently Struggle With in {category}",
+            goal="Explain the tradeoffs that keep showing up across vendors before recommending specific fits",
+            chart_ids=["category-pain-fit-map"],
+            data_summary=(
+                f"Category-wide pain patterns led by {', '.join(row['name'] for row in pain_rows[:3])}."
+            ),
         ))
 
     # Per-vendor recommendation sections
@@ -7614,6 +8000,12 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
         size_str = ", ".join(f"{k}" for k, v in sorted(company_size.items(), key=lambda x: x[1], reverse=True)[:2]) if isinstance(company_size, dict) and company_size else "all sizes"
         strengths = profile.get("strengths", [])
         weaknesses = profile.get("weaknesses", [])
+        vendor_signal_rows = signals_by_vendor.get(vp["vendor"], [])
+        top_pains = [
+            str(item.get("pain_category") or "").strip()
+            for item in vendor_signal_rows[:3]
+            if str(item.get("pain_category") or "").strip()
+        ]
         sections.append(SectionSpec(
             id=f"vendor-{_slugify(vp['vendor'])}",
             heading=f"{vp['vendor']}: Best For {size_str} Teams",
@@ -7622,9 +8014,20 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
                 "vendor": vp["vendor"],
                 "company_size": size_str,
                 "avg_rating": vp.get("avg_rating"),
+                "review_count": vp.get("review_count"),
+                "top_pains": top_pains,
                 "strengths": [str(s.get("area", s)) if isinstance(s, dict) else str(s) for s in strengths[:3]],
                 "weaknesses": [str(w.get("area", w)) if isinstance(w, dict) else str(w) for w in weaknesses[:3]],
             },
+            data_summary=(
+                f"{vp['vendor']} is strongest for {size_str} teams"
+                + (f", with rating {vp.get('avg_rating')}" if vp.get("avg_rating") is not None else "")
+                + (
+                    f", but recurring pain shows up around {', '.join(top_pains)}."
+                    if top_pains
+                    else "."
+                )
+            ),
         ))
 
     bf_stats: dict[str, Any] = {"category": category, "vendor_count": ctx["vendor_count"]}
@@ -7659,7 +8062,17 @@ def _blueprint_best_fit_guide(ctx: dict, data: dict) -> PostBlueprint:
         heading="How to Actually Choose",
         goal="Give a clear decision framework based on budget, team size, and must-have features",
         key_stats=bf_stats,
+        data_summary=f"Decision framework for narrowing {category} options by fit, tradeoffs, and current market pressure.",
     ))
+
+    if quote_highlights:
+        sections.append(SectionSpec(
+            id="reviewer_voice",
+            heading=f"What Reviewers Actually Say in {category}",
+            goal="Ground the buyer's guide in direct reviewer evidence, not just rating averages",
+            key_stats={"quote_highlights": quote_highlights},
+            data_summary=f"{len(quote_highlights)} quote-backed snippets from the {category} review set.",
+        ))
 
     company_size = ctx.get("company_size") or ctx.get("dominant_size") or ""
     size_label = company_size.replace("_", " ").replace("-", " ").strip() if company_size else ""
@@ -7719,6 +8132,7 @@ def _build_blog_generation_payload(
         "topic_type": blueprint.topic_type,
         "suggested_title": blueprint.suggested_title,
         "data_context": blueprint.data_context,
+        "length_policy": _blog_length_policy(blueprint.topic_type),
         "sections": [
             {
                 "id": section.id,

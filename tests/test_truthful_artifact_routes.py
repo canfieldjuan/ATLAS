@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import atlas_brain.api.b2b_tenant_dashboard as tenant_dashboard_api
+import atlas_brain.api.b2b_evidence as evidence_api
 import atlas_brain.api.blog_admin as blog_admin_api
 from atlas_brain.auth.dependencies import AuthUser, require_auth
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
@@ -220,6 +221,147 @@ def test_blog_quality_trends_returns_daily_rollups(monkeypatch):
     body = response.json()
     assert body["top_blockers"][0]["reason"] == "unsupported_data_claim:Magento"
     assert body["totals_by_day"][1]["blocker_total"] == 2
+
+
+def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *_args):
+            if "COUNT(*) AS total FROM b2b_vendor_witnesses" in query:
+                return {"total": 1}
+            return None
+
+        async def fetch(self, query, *_args):
+            if "FROM b2b_vendor_witnesses" in query and "GROUP BY pain_category" not in query:
+                return [
+                    {
+                        "witness_id": "w1",
+                        "review_id": uuid4(),
+                        "witness_type": "pain_signal",
+                        "excerpt_text": "Switching due to slow support.",
+                        "source": "g2",
+                        "reviewed_at": datetime(2026, 4, 1, tzinfo=timezone.utc),
+                        "reviewer_company": "Acme",
+                        "reviewer_title": "VP IT",
+                        "pain_category": "support",
+                        "competitor": None,
+                        "salience_score": 0.9,
+                        "specificity_score": 0.8,
+                        "selection_reason": "high_signal",
+                        "signal_tags": ["support"],
+                        "as_of_date": datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
+                    }
+                ]
+            return []
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.services.vendor_registry.resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/evidence/witnesses?vendor_name=Salesforce")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["vendor_name"] == "Salesforce"
+    assert body["total"] == 1
+    assert body["witnesses"][0]["witness_id"] == "w1"
+
+
+def test_b2b_evidence_router_rejects_invalid_as_of_date(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/evidence/vault?vendor_name=Salesforce&as_of_date=2026-99-99")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid as_of_date; expected YYYY-MM-DD"
+
+
+def test_push_to_crm_routes_high_intent_payload(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, *_args):
+            return [
+                {
+                    "id": "sub-1",
+                    "url": "https://example.com/webhook",
+                    "secret": "secret",
+                    "account_id": _auth_user().account_id,
+                    "channel": "crm_hubspot",
+                    "auth_header": None,
+                }
+            ]
+
+    captured: dict[str, object] = {}
+    deliver = AsyncMock(return_value=True)
+    log_push = AsyncMock()
+
+    def fake_format_for_channel(channel, envelope):
+        captured["channel"] = channel
+        captured["envelope"] = envelope
+        return b"{}"
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._format_for_channel",
+        fake_format_for_channel,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._deliver_single",
+        deliver,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._log_crm_push",
+        log_push,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/tenant/push-to-crm",
+            json={
+                "opportunities": [
+                    {
+                        "company": "Acme",
+                        "vendor": "Salesforce",
+                        "urgency": 8.5,
+                        "pain": "pricing",
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["pushed"] == 1
+    assert response.json()["failed"] == []
+    assert captured["channel"] == "crm_hubspot"
+    envelope = captured["envelope"]
+    assert isinstance(envelope, dict)
+    assert envelope["event"] == "high_intent_push"
+    assert envelope["vendor"] == "Salesforce"
+    assert envelope["data"]["company_name"] == "Acme"
+    assert "company" not in envelope["data"]
+    deliver.assert_awaited()
+    log_push.assert_awaited()
 
 
 def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
@@ -695,6 +837,10 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
         _fake_build_blueprint,
     )
     monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_blueprint_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
+    monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_blog_post_generation._generate_content_async",
         _fake_generate_content_async,
     )
@@ -771,6 +917,10 @@ def test_manual_blog_generate_blocks_recent_rejected_slug(monkeypatch):
             charts=[],
         ),
     )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_blueprint_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
     generate_content = AsyncMock(return_value={"title": "ignored"})
     monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_blog_post_generation._generate_content_async",
@@ -836,6 +986,10 @@ def test_manual_blog_generate_persists_quality_rejection(monkeypatch):
         ),
     )
     monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_blueprint_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
+    monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_blog_post_generation._get_blog_slug_block_reason",
         AsyncMock(return_value=None),
     )
@@ -868,3 +1022,60 @@ def test_manual_blog_generate_persists_quality_rejection(monkeypatch):
     assert upsert.await_args.kwargs["content"]["content"] == "rejected draft body"
     blog_admin_api.record_attempt.assert_awaited()
     blog_admin_api.emit_event.assert_awaited()
+
+
+def test_manual_blog_generate_blocks_insufficient_blueprint(monkeypatch):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **_kwargs: SimpleNamespace(model_name="anthropic/test"),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation.build_manual_topic_ctx",
+        AsyncMock(return_value={"vendor": "Jira", "category": "Project Management", "slug": "jira-deep-dive-2026-04"}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._gather_data",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._load_pool_layers_for_blog",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_data_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._build_blueprint",
+        lambda *_args, **_kwargs: PostBlueprint(
+            topic_type="vendor_deep_dive",
+            slug="jira-deep-dive-2026-04",
+            suggested_title="Jira Deep Dive",
+            tags=["jira"],
+            data_context={"vendor": "Jira"},
+            sections=[],
+            charts=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_blueprint_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": False, "reason": "Only 4 blueprint sections (need 6+)"},
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/blog/generate",
+            json={"vendor_name": "Jira", "topic_type": "vendor_deep_dive"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "Insufficient blueprint coverage"
+    assert response.json()["detail"]["reason"] == "Only 4 blueprint sections (need 6+)"

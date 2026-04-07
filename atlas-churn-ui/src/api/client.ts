@@ -59,6 +59,7 @@ const AFFILIATES_BASE = `${TENANT_BASE}/affiliates`
 const CAMPAIGNS_BASE = `${API_BASE}/api/v1/b2b/campaigns`
 const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
 const PREDICT_BASE = `${API_BASE}/api/v1/b2b/predict`
+const EVIDENCE_BASE = `${API_BASE}/api/v1/b2b/evidence`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
@@ -1202,4 +1203,163 @@ export function downloadPredictionCsv(predictionId: string) {
   const token = localStorage.getItem('atlas_token')
   if (token) url.searchParams.set('token', token)
   window.open(url.toString(), '_blank')
+}
+
+// -- Evidence Explorer --------------------------------------------------------
+
+export interface EvidenceWitness {
+  witness_id: string
+  review_id: string
+  witness_type: string
+  excerpt_text: string
+  source: string
+  reviewed_at: string | null
+  reviewer_company: string | null
+  reviewer_title: string | null
+  pain_category: string | null
+  competitor: string | null
+  salience_score: number | null
+  specificity_score: number | null
+  selection_reason: string | null
+  signal_tags: string[] | null
+  as_of_date: string | null
+}
+
+export interface EvidenceWitnessDetail extends EvidenceWitness {
+  review_text: string | null
+  summary: string | null
+  pros: string | null
+  cons: string | null
+  rating: number | null
+  review_source: string | null
+  source_url: string | null
+  enrichment_status: string | null
+  evidence_spans: Array<{
+    signal_type: string
+    raw_text: string
+    pain_category: string | null
+    excerpt_text: string | null
+    start_char: number | null
+    end_char: number | null
+  }>
+  all_evidence_span_count: number
+}
+
+export interface EvidenceFacets {
+  pain_categories: string[]
+  sources: string[]
+  witness_types: string[]
+}
+
+export interface EvidenceVault {
+  vendor_name: string
+  as_of_date: string | null
+  analysis_window_days: number | null
+  schema_version: string | null
+  created_at: string | null
+  weakness_evidence: Array<Record<string, unknown>>
+  strength_evidence: Array<Record<string, unknown>>
+  company_signals: Array<Record<string, unknown>>
+  metric_snapshot: Record<string, unknown>
+  provenance: Record<string, unknown>
+  witness_count: number
+}
+
+export interface EvidenceTrace {
+  vendor_name: string
+  trace: {
+    synthesis: {
+      as_of_date: string
+      schema_version: string
+      evidence_hash: string
+      sections: Record<string, unknown>
+      llm_model: string | null
+      tokens_used: number | null
+    } | null
+    reasoning_packet: {
+      as_of_date: string
+      evidence_hash: string
+      section_count: number
+      witness_pack_size: number
+    } | null
+    witnesses: EvidenceWitness[]
+    source_reviews: Array<{
+      id: string
+      source: string
+      source_url: string | null
+      vendor_name: string
+      rating: number | null
+      summary: string | null
+      review_excerpt: string | null
+      reviewer_name: string | null
+      reviewer_title: string | null
+      reviewer_company: string | null
+      reviewed_at: string | null
+    }>
+    evidence_diff: {
+      computed_date: string
+      confirmed_count: number
+      contradicted_count: number
+      novel_count: number
+      missing_count: number
+      diff_ratio: number
+      decision: string
+      has_core_contradiction: boolean
+    } | null
+  }
+  stats: {
+    witness_count: number
+    unique_reviews: number
+    has_synthesis: boolean
+    has_packet: boolean
+    has_diff: boolean
+  }
+}
+
+export async function fetchWitnesses(params: {
+  vendor_name: string
+  pain_category?: string
+  source?: string
+  competitor?: string
+  witness_type?: string
+  min_salience?: number
+  limit?: number
+  offset?: number
+}) {
+  return get<{
+    vendor_name: string
+    witnesses: EvidenceWitness[]
+    total: number
+    limit: number
+    offset: number
+    facets: EvidenceFacets
+  }>(EVIDENCE_BASE, '/witnesses', params as Record<string, string | number | boolean>)
+}
+
+export async function fetchWitness(witnessId: string, vendorName: string) {
+  return get<{ witness: EvidenceWitnessDetail }>(
+    EVIDENCE_BASE,
+    `/witnesses/${encodeURIComponent(witnessId)}`,
+    { vendor_name: vendorName },
+  )
+}
+
+export async function fetchEvidenceVault(params: {
+  vendor_name: string
+  as_of_date?: string
+  window_days?: number
+}) {
+  return get<EvidenceVault | { vendor_name: string; vault: null; message: string }>(
+    EVIDENCE_BASE, '/vault', params as Record<string, string | number | boolean>,
+  )
+}
+
+export async function fetchEvidenceTrace(params: {
+  vendor_name: string
+  as_of_date?: string
+  window_days?: number
+}) {
+  return get<EvidenceTrace>(
+    EVIDENCE_BASE, '/trace', params as Record<string, string | number | boolean>,
+  )
 }

@@ -161,6 +161,8 @@ Do not quote anchor context directly unless it also appears in `quotable_phrases
 
 ## Content rules
 
+- If the payload includes `length_policy`, treat `min_words` as a hard floor and `target_words` as the preferred range.
+- Cover every section in the payload with enough depth that the full article can realistically clear the stated floor.
 - Aim for a length that fits the topic:
   - `vendor_showdown`, `market_landscape`, `best_fit_guide`: 2600-3400 words
   - `vendor_deep_dive`, `vendor_alternative`, `churn_report`, `pain_point_roundup`: 2200-3200 words

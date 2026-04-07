@@ -428,6 +428,11 @@ async def test_run_uses_anthropic_batch_for_blog_first_pass(monkeypatch):
             charts=[],
         ),
     )
+    monkeypatch.setattr(
+        blog_mod,
+        "_check_blueprint_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
     monkeypatch.setattr(blog_mod, "_fetch_related_for_linking", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_stage_request",
@@ -906,6 +911,161 @@ def test_apply_blog_quality_gate_keeps_higher_floor_for_vendor_showdowns():
     assert "missing_vendor_mentions:Zendesk,Freshdesk" not in report["blocking_issues"]
     assert report["min_words_required"] == 2000
     assert report["target_words"] == 2600
+
+
+def test_check_data_sufficiency_uses_topic_specific_quote_floor_for_market_landscape():
+    result = blog_mod._check_data_sufficiency(
+        "market_landscape",
+        {
+            "quotes": [{"phrase": "a"}, {"phrase": "b"}, {"phrase": "c"}],
+            "vendor_profiles": [{"vendor": "A"}, {"vendor": "B"}, {"vendor": "C"}, {"vendor": "D"}],
+        },
+    )
+
+    assert result["sufficient"] is False
+    assert result["reason"] == "Only 3 quotable reviews (need 4+)"
+
+
+def test_check_data_sufficiency_requires_vendor_breadth_for_best_fit_guides():
+    result = blog_mod._check_data_sufficiency(
+        "best_fit_guide",
+        {
+            "quotes": [{"phrase": "a"}, {"phrase": "b"}, {"phrase": "c"}, {"phrase": "d"}],
+            "vendor_profiles": [{"vendor": "A"}, {"vendor": "B"}, {"vendor": "C"}],
+        },
+    )
+
+    assert result["sufficient"] is False
+    assert result["reason"] == "Only 3 vendor profiles (need 4+)"
+
+
+def test_build_blog_generation_payload_includes_length_policy():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_showdown",
+        slug="zendesk-vs-freshdesk-2026-04",
+        suggested_title="Zendesk vs Freshdesk",
+        tags=["helpdesk"],
+        data_context={},
+        sections=[],
+        charts=[],
+    )
+
+    payload = blog_mod._build_blog_generation_payload(blueprint)
+
+    assert payload["length_policy"] == {"min_words": 2000, "target_words": 2600}
+
+
+def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
+    blueprint = blog_mod._blueprint_vendor_deep_dive(
+        {
+            "vendor": "Jira",
+            "category": "Project Management",
+            "review_count": 42,
+            "profile_richness": 4,
+            "slug": "jira-deep-dive-2026-04",
+        },
+        {
+            "profile": {
+                "strengths": [{"area": "workflows"}],
+                "weaknesses": [{"area": "pricing"}],
+                "commonly_compared_to": ["Asana", "ClickUp"],
+            },
+            "signals": [
+                {"pain_category": "pricing", "avg_urgency": 7.2, "signal_count": 8, "feature_gaps": []},
+                {"pain_category": "support", "avg_urgency": 6.4, "signal_count": 5, "feature_gaps": []},
+            ],
+            "quotes": [
+                {"vendor": "Jira", "phrase": "Renewal pricing became a flashpoint for the ops team.", "sentiment": "negative"},
+            ],
+            "competitor_profiles": [
+                {"vendor_name": "Asana", "strengths": [{"area": "ease of use"}], "weaknesses": [{"area": "enterprise controls"}]},
+            ],
+            "synthesis_contracts": {
+                "vendor_core_reasoning": {
+                    "segment_playbook": {
+                        "priority_segments": [
+                            {"segment": "mid-market", "estimated_reach": 12, "best_opening_angle": "pricing at renewal"},
+                        ],
+                    },
+                    "timing_intelligence": {
+                        "best_timing_window": "60-90 days before renewal",
+                        "sentiment_direction": "declining",
+                    },
+                },
+                "account_reasoning": {
+                    "market_summary": "Named accounts surface pricing pressure and workflow friction.",
+                    "total_accounts": 6,
+                },
+                "category_reasoning": {
+                    "market_regime": "replacement wave",
+                    "narrative": "Buyers are re-evaluating project management suites with stronger cross-team workflows.",
+                    "winner": "Asana",
+                },
+            },
+            "data_context": {},
+        },
+    )
+
+    section_ids = {section.id for section in blueprint.sections}
+
+    assert {"segment_timing", "timing_signals", "account_pressure", "market_position", "reviewer_voice"} <= section_ids
+
+
+def test_blueprint_best_fit_guide_adds_tradeoff_and_voice_sections():
+    blueprint = blog_mod._blueprint_best_fit_guide(
+        {
+            "category": "CRM",
+            "vendor_count": 4,
+            "total_reviews": 120,
+            "company_size": "mid_market",
+            "slug": "best-crm-for-mid-market-2026-04",
+        },
+        {
+            "vendor_profiles": [
+                {
+                    "vendor": "HubSpot",
+                    "profile": {"typical_company_size": {"mid_market": 10}, "strengths": [{"area": "ease of use"}], "weaknesses": [{"area": "customization"}]},
+                    "avg_rating": 4.4,
+                    "review_count": 44,
+                },
+                {
+                    "vendor": "Salesforce",
+                    "profile": {"typical_company_size": {"enterprise": 12}, "strengths": [{"area": "workflow depth"}], "weaknesses": [{"area": "complexity"}]},
+                    "avg_rating": 4.1,
+                    "review_count": 38,
+                },
+                {
+                    "vendor": "Pipedrive",
+                    "profile": {"typical_company_size": {"small_business": 8}, "strengths": [{"area": "pipeline simplicity"}], "weaknesses": [{"area": "reporting"}]},
+                    "avg_rating": 4.2,
+                    "review_count": 21,
+                },
+                {
+                    "vendor": "Freshsales",
+                    "profile": {"typical_company_size": {"mid_market": 7}, "strengths": [{"area": "speed"}], "weaknesses": [{"area": "ecosystem"}]},
+                    "avg_rating": 4.0,
+                    "review_count": 17,
+                },
+            ],
+            "vendor_signals": [
+                {"vendor": "HubSpot", "signals": [{"pain_category": "pricing", "signal_count": 8, "avg_urgency": 6.8}]},
+                {"vendor": "Salesforce", "signals": [{"pain_category": "complexity", "signal_count": 10, "avg_urgency": 7.5}]},
+                {"vendor": "Pipedrive", "signals": [{"pain_category": "reporting", "signal_count": 4, "avg_urgency": 5.9}]},
+                {"vendor": "Freshsales", "signals": [{"pain_category": "ecosystem", "signal_count": 3, "avg_urgency": 5.4}]},
+            ],
+            "quotes": [
+                {"vendor": "HubSpot", "phrase": "Setup is quick, but pricing gets steep as you scale.", "sentiment": "negative"},
+                {"vendor": "Salesforce", "phrase": "The workflow power is real, but complexity slows smaller teams down.", "sentiment": "negative"},
+            ],
+            "pool_category": {},
+            "xv_synthesis_lookup": {},
+            "data_context": {},
+        },
+    )
+
+    section_ids = {section.id for section in blueprint.sections}
+
+    assert {"category_tradeoffs", "reviewer_voice", "decision_framework"} <= section_ids
 
 
 def test_apply_blog_deterministic_repairs_adds_witness_anchor_note():

@@ -1042,6 +1042,7 @@ async def generate_post(
     from ..autonomous.tasks.b2b_blog_post_generation import (
         _KNOWN_TOPIC_TYPES,
         _check_data_sufficiency,
+        _check_blueprint_sufficiency,
         _gather_data,
         _load_pool_layers_for_blog,
         _build_blueprint,
@@ -1102,6 +1103,13 @@ async def generate_post(
         })
 
     blueprint = _build_blueprint(req.topic_type, topic_ctx, data)
+    blueprint_sufficiency = _check_blueprint_sufficiency(blueprint)
+    if not blueprint_sufficiency["sufficient"] and not req.skip_sufficiency_check:
+        raise HTTPException(422, {
+            "error": "Insufficient blueprint coverage",
+            "reason": blueprint_sufficiency["reason"],
+            "hint": "Set skip_sufficiency_check=true to override",
+        })
     if not req.force_retry_blocked_slug:
         block_reason = await _get_blog_slug_block_reason(pool, blueprint.slug)
         if block_reason:

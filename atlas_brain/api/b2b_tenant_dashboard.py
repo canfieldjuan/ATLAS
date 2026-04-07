@@ -424,6 +424,25 @@ class CompetitiveSetRunRequest(BaseModel):
     changed_vendors_only: bool | None = None
 
 
+class PushToCrmOpportunity(BaseModel):
+    company: str = Field(..., min_length=1, max_length=200)
+    vendor: str = Field(..., min_length=1, max_length=200)
+    urgency: float = Field(..., ge=0, le=10)
+    pain: str | None = None
+    buying_stage: str | None = None
+    contract_end: str | None = None
+    decision_maker: bool | None = None
+    seat_count: int | None = None
+    industry: str | None = None
+    company_domain: str | None = None
+    revenue_range: str | None = None
+    alternatives: list[str] | None = None
+
+
+class PushToCrmBody(BaseModel):
+    opportunities: list[PushToCrmOpportunity] = Field(..., min_length=1, max_length=50)
+
+
 # ---------------------------------------------------------------------------
 # Vendor tracking (4 endpoints)
 # ---------------------------------------------------------------------------
@@ -649,6 +668,75 @@ async def search_available_vendors(
         ],
         "count": len(rows),
     }
+
+
+# ---------------------------------------------------------------------------
+# CRM push (export opportunities to configured CRM webhooks)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/push-to-crm")
+async def push_to_crm(
+    body: PushToCrmBody,
+    user: AuthUser = Depends(require_auth),
+):
+    """Push selected high-intent opportunities to configured CRM webhooks."""
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+
+    subs = await pool.fetch(
+        """
+        SELECT id, url, secret, account_id,
+               COALESCE(channel, 'generic') AS channel,
+               auth_header
+        FROM b2b_webhook_subscriptions
+        WHERE enabled = true
+          AND account_id = $1
+          AND channel LIKE 'crm_%'
+        """,
+        user.account_id,
+    )
+
+    if not subs:
+        raise HTTPException(
+            status_code=422,
+            detail="No CRM webhook subscriptions configured. Add one via the webhook settings.",
+        )
+
+    from ..services.b2b.webhook_dispatcher import (
+        _build_envelope,
+        _format_for_channel,
+        _deliver_single,
+        _log_crm_push,
+    )
+
+    cfg = settings.b2b_webhook
+    pushed = 0
+    failed: list[dict[str, str]] = []
+
+    for opp in body.opportunities:
+        opp_data = opp.model_dump(exclude_none=True)
+        opp_data["company_name"] = opp_data.pop("company", "")
+        envelope = _build_envelope("high_intent_push", opp.vendor, opp_data)
+
+        opp_ok = False
+        for sub in subs:
+            payload_bytes = _format_for_channel(sub["channel"], envelope)
+            ok = await _deliver_single(
+                pool, sub, "high_intent_push", envelope, payload_bytes, cfg,
+            )
+            if ok:
+                await _log_crm_push(
+                    pool, sub["id"], "high_intent_push", envelope,
+                )
+                opp_ok = True
+
+        if opp_ok:
+            pushed += 1
+        else:
+            failed.append({"company": opp.company, "reason": "delivery_failed"})
+
+    return {"pushed": pushed, "failed": failed}
 
 
 # ---------------------------------------------------------------------------

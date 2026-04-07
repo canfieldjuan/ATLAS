@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -14,6 +17,8 @@ from ...storage.models import ScheduledTask
 from ...templates.email.report_subscription_delivery import (
     render_report_subscription_delivery_html,
 )
+from .campaign_send import _unsub_headers, _wrap_with_footer
+from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.tasks.b2b_report_subscription_delivery")
 
@@ -51,6 +56,8 @@ _REPORT_FREQUENCY_DAYS = {
     "monthly": 30,
     "quarterly": 90,
 }
+_QUALITY_GATED_REPORT_TYPES = {"battle_card", "challenger_brief"}
+_DELIVERY_CONTENT_HASH_STATUSES = ("sent", "partial", "skipped")
 
 
 def _safe_json(value: Any) -> Any:
@@ -111,15 +118,27 @@ def _report_display_title(row) -> str:
     return vendor_filter or category_filter or _format_report_type_label(report_type)
 
 
-def _report_trust_label(row, intelligence_data: dict[str, Any]) -> str:
+def _quality_status(row, intelligence_data: dict[str, Any]) -> str:
     quality_record = _safe_json(intelligence_data.get("battle_card_quality"))
     quality_status = str(row["quality_status"] or intelligence_data.get("quality_status") or "").strip().lower()
     if not quality_status and isinstance(quality_record, dict):
         quality_status = str(quality_record.get("status") or "").strip().lower()
+    return quality_status
+
+
+def _row_int(row, key: str) -> int:
+    try:
+        return int(row[key] or 0)
+    except Exception:
+        return 0
+
+
+def _report_trust_label(row, intelligence_data: dict[str, Any]) -> str:
+    quality_status = _quality_status(row, intelligence_data)
     report_type = str(row["report_type"] or "")
     status = str(row["status"] or "").strip().lower()
 
-    if report_type == "battle_card" and quality_status:
+    if report_type in _QUALITY_GATED_REPORT_TYPES and quality_status:
         if quality_status == "sales_ready":
             return "Evidence-backed"
         if quality_status == "needs_review":
@@ -261,6 +280,33 @@ def _focus_allowed(scope_type: str, focus: str, report_type: str) -> bool:
     return report_type in allowed_types
 
 
+def _delivery_eligibility_reason(row, intelligence_data: dict[str, Any]) -> str | None:
+    delivery_cfg = settings.b2b_report_delivery
+    blocker_count = _row_int(row, "blocker_count")
+    unresolved_issue_count = _row_int(row, "unresolved_issue_count")
+    report_type = str(row["report_type"] or "").strip().lower()
+    quality_status = _quality_status(row, intelligence_data)
+
+    if blocker_count > int(delivery_cfg.max_blocker_count):
+        return (
+            f"blocker_count={blocker_count} exceeds "
+            f"max_blocker_count={delivery_cfg.max_blocker_count}"
+        )
+    if unresolved_issue_count > int(delivery_cfg.max_open_review_count):
+        return (
+            f"unresolved_issue_count={unresolved_issue_count} exceeds "
+            f"max_open_review_count={delivery_cfg.max_open_review_count}"
+        )
+    if (
+        delivery_cfg.require_sales_ready_for_competitive
+        and report_type in _QUALITY_GATED_REPORT_TYPES
+        and quality_status
+        and quality_status != "sales_ready"
+    ):
+        return f"quality_status={quality_status}"
+    return None
+
+
 def _shorten(value: str, limit: int = 180) -> str:
     text = " ".join(str(value or "").split())
     if len(text) <= limit:
@@ -331,9 +377,18 @@ def _frequency_label(frequency: str) -> str:
     return str(frequency or "weekly").replace("_", " ").title()
 
 
-def _next_delivery_at(frequency: str) -> datetime:
+def _delivery_interval(frequency: str) -> timedelta:
     days = _REPORT_FREQUENCY_DAYS.get(str(frequency or "weekly"), 7)
-    return datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=days)
+    return timedelta(days=days)
+
+
+def _next_delivery_at(frequency: str, anchor: datetime | None = None) -> datetime:
+    next_due = _parse_timestamp_candidate(anchor) or datetime.now(timezone.utc)
+    interval = _delivery_interval(frequency)
+    now = datetime.now(timezone.utc)
+    while next_due <= now:
+        next_due += interval
+    return next_due.replace(microsecond=0)
 
 
 def _subscription_summary(scope_type: str, artifacts: list[dict[str, Any]]) -> str:
@@ -354,11 +409,36 @@ def _aggregate_freshness_state(artifacts: list[dict[str, Any]]) -> str:
     return "mixed"
 
 
+def _delivery_content_hash(row, artifacts: list[dict[str, Any]]) -> str:
+    payload = {
+        "scope_type": str(row["scope_type"] or ""),
+        "scope_key": str(row["scope_key"] or ""),
+        "scope_label": str(row["scope_label"] or ""),
+        "delivery_note": str(row["delivery_note"] or "").strip(),
+        "artifacts": [
+            {
+                "report_id": str(artifact["report_id"]),
+                "report_type": str(artifact["report_type"] or ""),
+                "title": str(artifact["title"] or ""),
+                "trust_label": str(artifact["trust_label"] or ""),
+                "quality_status": str(artifact.get("quality_status") or ""),
+                "blocker_count": int(artifact.get("blocker_count") or 0),
+                "unresolved_issue_count": int(artifact.get("unresolved_issue_count") or 0),
+                "executive_summary": str(artifact["executive_summary"] or ""),
+                "evidence_highlights": [str(item or "") for item in artifact.get("evidence_highlights") or []],
+            }
+            for artifact in artifacts
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def _delivery_status_summary(
     status: str,
     artifact_count: int,
     recipient_count: int,
-    successful_recipient_count: int,
+    successful_recipient_count: int = 0,
 ) -> str:
     if status == "sent":
         return f"Delivered {artifact_count} artifact(s) to {recipient_count} recipient(s)."
@@ -386,6 +466,39 @@ async def _tracked_vendors(pool, account_id: Any) -> set[str]:
         for row in rows
         if str(row["vendor_name"] or "").strip()
     }
+
+
+async def _overridden_report_ids(pool, account_id: Any) -> set[str]:
+    rows = await pool.fetch(
+        """
+        SELECT report_id
+        FROM b2b_report_subscriptions
+        WHERE account_id = $1
+          AND scope_type = 'report'
+          AND enabled = TRUE
+          AND report_id IS NOT NULL
+        """,
+        account_id,
+    )
+    return {str(row["report_id"]) for row in rows if row["report_id"] is not None}
+
+
+async def _latest_delivery_content_hash(pool, subscription_id: Any) -> str | None:
+    value = await pool.fetchval(
+        """
+        SELECT content_hash
+        FROM b2b_report_subscription_delivery_log
+        WHERE subscription_id = $1
+          AND status = ANY($2::text[])
+          AND content_hash IS NOT NULL
+        ORDER BY delivered_at DESC
+        LIMIT 1
+        """,
+        subscription_id,
+        list(_DELIVERY_CONTENT_HASH_STATUSES),
+    )
+    text = str(value or "").strip()
+    return text or None
 
 
 async def _claim_delivery_attempt(pool, row) -> Any | None:
@@ -427,6 +540,7 @@ async def _claim_delivery_attempt(pool, row) -> Any | None:
             message_ids = '{}'::text[],
             freshness_state = 'none',
             status = 'processing',
+            content_hash = NULL,
             summary = '',
             error = NULL,
             delivered_at = NOW()
@@ -455,6 +569,7 @@ async def _finalize_delivery_attempt(
     freshness_state: str,
     delivered_report_ids: list[Any],
     message_ids: list[str],
+    content_hash: str | None,
     summary: str,
     error: str | None,
 ) -> None:
@@ -465,8 +580,9 @@ async def _finalize_delivery_attempt(
             freshness_state = $3,
             delivered_report_ids = $4::uuid[],
             message_ids = $5::text[],
-            summary = $6,
-            error = $7,
+            content_hash = $6,
+            summary = $7,
+            error = $8,
             delivered_at = NOW()
         WHERE id = $1
         """,
@@ -475,12 +591,18 @@ async def _finalize_delivery_attempt(
         freshness_state,
         delivered_report_ids,
         message_ids,
+        content_hash,
         summary[:1000],
         (error or "")[:2000] or None,
     )
 
 
-async def _advance_subscription(pool, subscription_id: Any, delivery_frequency: str) -> None:
+async def _advance_subscription(
+    pool,
+    subscription_id: Any,
+    delivery_frequency: str,
+    scheduled_for: datetime | None,
+) -> None:
     await pool.execute(
         """
         UPDATE b2b_report_subscriptions
@@ -488,7 +610,7 @@ async def _advance_subscription(pool, subscription_id: Any, delivery_frequency: 
         WHERE id = $1
         """,
         subscription_id,
-        _next_delivery_at(delivery_frequency),
+        _next_delivery_at(delivery_frequency, scheduled_for),
     )
 
 
@@ -497,12 +619,18 @@ async def _fetch_report_row(pool, report_id: Any) -> Any | None:
         """
         SELECT id, account_id, report_date, report_type, executive_summary,
                vendor_filter, category_filter, status, created_at,
+               blocker_count, warning_count,
+               (
+                 SELECT COUNT(*)
+                 FROM pipeline_visibility_reviews r
+                 JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+                 WHERE r.status = 'open'
+                   AND e.entity_type = 'churn_report'
+                   AND e.entity_id = b2b_intelligence.id::text
+               ) AS unresolved_issue_count,
                intelligence_data, data_density,
-               CASE
-                 WHEN report_type = 'battle_card'
-                 THEN COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
-                 ELSE NULL
-               END AS quality_status
+               COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
+                   AS quality_status
         FROM b2b_intelligence
         WHERE id = $1
         """,
@@ -517,12 +645,18 @@ async def _fetch_library_rows(pool, account_id: Any, tracked_vendors: set[str], 
         """
         SELECT id, account_id, report_date, report_type, executive_summary,
                vendor_filter, category_filter, status, created_at,
+               blocker_count, warning_count,
+               (
+                 SELECT COUNT(*)
+                 FROM pipeline_visibility_reviews r
+                 JOIN pipeline_visibility_events e ON e.id = r.latest_event_id
+                 WHERE r.status = 'open'
+                   AND e.entity_type = 'churn_report'
+                   AND e.entity_id = b2b_intelligence.id::text
+               ) AS unresolved_issue_count,
                intelligence_data, data_density,
-               CASE
-                 WHEN report_type = 'battle_card'
-                 THEN COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
-                 ELSE NULL
-               END AS quality_status
+               COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
+                   AS quality_status
         FROM b2b_intelligence
         WHERE status = 'completed'
           AND (
@@ -561,6 +695,9 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
         "title": _report_display_title(row),
         "type_label": _format_report_type_label(str(row["report_type"] or "")),
         "trust_label": _report_trust_label(row, intelligence_data),
+        "quality_status": _quality_status(row, intelligence_data),
+        "blocker_count": _row_int(row, "blocker_count"),
+        "unresolved_issue_count": _row_int(row, "unresolved_issue_count"),
         "freshness_state": freshness["state"],
         "freshness_label": freshness["label"],
         "freshness_detail": freshness["detail"],
@@ -582,6 +719,11 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
             return []
         if not _tracked_vendor_allowed(report_row, tracked_vendors, row["account_id"]):
             return []
+        intelligence_data = _safe_json(report_row["intelligence_data"])
+        if not isinstance(intelligence_data, dict):
+            intelligence_data = {}
+        if _delivery_eligibility_reason(report_row, intelligence_data):
+            return []
         artifact = _build_delivery_artifact(report_row)
         if not _freshness_allowed(freshness_policy, artifact["freshness_state"]):
             return []
@@ -593,10 +735,20 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
         tracked_vendors,
         str(row["deliverable_focus"] or "all"),
     )
+    overridden_report_ids: set[str] = set()
+    if settings.b2b_report_delivery.report_scope_overrides_library:
+        overridden_report_ids = await _overridden_report_ids(pool, row["account_id"])
     artifacts: list[dict[str, Any]] = []
     for report_row in rows:
         report_type = str(report_row["report_type"] or "")
         if not _focus_allowed(scope_type, str(row["deliverable_focus"] or "all"), report_type):
+            continue
+        if str(report_row["id"]) in overridden_report_ids:
+            continue
+        intelligence_data = _safe_json(report_row["intelligence_data"])
+        if not isinstance(intelligence_data, dict):
+            intelligence_data = {}
+        if _delivery_eligibility_reason(report_row, intelligence_data):
             continue
         artifact = _build_delivery_artifact(report_row)
         if not _freshness_allowed(freshness_policy, artifact["freshness_state"]):
@@ -605,6 +757,48 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
         if len(artifacts) >= settings.b2b_report_delivery.max_reports_per_delivery:
             break
     return artifacts
+
+
+async def _send_subscription_email(
+    pool,
+    sender,
+    *,
+    recipient: str,
+    from_addr: str,
+    subject: str,
+    html_body: str,
+    tags: list[dict[str, str]],
+) -> tuple[bool, str | None, str | None, bool]:
+    suppression = await is_suppressed(pool, email=recipient)
+    if suppression:
+        reason = str(suppression.get("reason") or "suppressed").strip() or "suppressed"
+        return False, None, f"{recipient}: suppressed ({reason})", True
+
+    headers = _unsub_headers(settings.campaign_sequence.unsubscribe_base_url, recipient)
+    body = _wrap_with_footer(html_body, recipient, settings.campaign_sequence)
+    delivery_cfg = settings.b2b_report_delivery
+    attempts = max(1, int(delivery_cfg.max_send_attempts_per_recipient))
+    backoff_seconds = max(0, int(delivery_cfg.retry_backoff_seconds))
+    last_error: str | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            result = await sender.send(
+                to=recipient,
+                from_email=from_addr,
+                subject=subject,
+                body=body,
+                headers=headers or None,
+                tags=tags,
+            )
+            message_id = str(result.get("id") or "").strip() or None
+            return True, message_id, None, False
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < attempts and backoff_seconds > 0:
+                await asyncio.sleep(backoff_seconds)
+
+    return False, None, f"{recipient}: {last_error or 'send failed'}", False
 
 
 async def run(task: ScheduledTask) -> dict[str, Any]:
@@ -669,6 +863,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         message_ids: list[str] = []
         delivered_report_ids: list[Any] = []
         freshness_state = "none"
+        content_hash: str | None = None
 
         try:
             tracked_vendors = await _tracked_vendors(pool, row["account_id"])
@@ -681,60 +876,85 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 status = "failed"
             elif not artifacts:
                 status = "skipped"
-                summary = _delivery_status_summary(status, 0, len(recipients))
+                summary = "Skipped delivery because no eligible persisted artifacts matched the saved policy."
             else:
-                subject = (
-                    f"{artifacts[0]['title']} | Recurring delivery"
-                    if row["scope_type"] == "report" and len(artifacts) == 1
-                    else f"{row['account_name']}: {len(artifacts)} report artifact(s) ready"
-                )
-                summary_line = _subscription_summary(str(row["scope_type"] or ""), artifacts)
-                manage_url = _scope_manage_url(str(row["scope_type"] or ""), str(row["scope_key"] or ""))
-                html_body = render_report_subscription_delivery_html(
-                    account_name=str(row["account_name"] or ""),
-                    scope_label=str(row["scope_label"] or "Recurring delivery"),
-                    summary_line=summary_line,
-                    frequency_label=_frequency_label(str(row["delivery_frequency"] or "")),
-                    manage_url=manage_url,
-                    delivery_note=str(row["delivery_note"] or ""),
-                    artifacts=artifacts,
-                )
-                send_failures: list[str] = []
-                sender_name = str(delivery_cfg.sender_name or "").strip()
-                from_addr = f"{sender_name} <{from_email}>" if sender_name else from_email
-                for recipient in recipients:
-                    try:
-                        result = await sender.send(
-                            to=recipient,
-                            from_email=from_addr,
-                            subject=subject,
-                            body=html_body,
-                            tags=[
-                                {"name": "task", "value": "b2b_report_subscription_delivery"},
-                                {"name": "subscription_id", "value": str(row["id"])},
-                                {"name": "scope_type", "value": str(row["scope_type"] or "")},
-                            ],
+                content_hash = _delivery_content_hash(row, artifacts)
+                if delivery_cfg.suppress_unchanged_deliveries:
+                    latest_content_hash = await _latest_delivery_content_hash(pool, row["id"])
+                    if latest_content_hash and latest_content_hash == content_hash:
+                        status = "skipped"
+                        summary = (
+                            "Skipped delivery because the eligible report package has not materially "
+                            "changed since the last completed delivery."
                         )
-                        if result.get("id"):
-                            message_ids.append(str(result["id"]))
-                    except Exception as exc:
-                        send_failures.append(f"{recipient}: {exc}")
 
-                if send_failures and len(send_failures) == len(recipients):
-                    status = "failed"
-                    error_message = "; ".join(send_failures)
-                elif send_failures:
-                    status = "partial"
-                    error_message = "; ".join(send_failures)
-                else:
-                    status = "sent"
+                if status != "skipped":
+                    tags = [
+                        {"name": "task", "value": "b2b_report_subscription_delivery"},
+                        {"name": "subscription_id", "value": str(row["id"])},
+                        {"name": "scope_type", "value": str(row["scope_type"] or "")},
+                    ]
+                    successful_recipient_count = 0
+                    suppressed_recipient_count = 0
+                    send_failures: list[str] = []
+                    sender_name = str(delivery_cfg.sender_name or "").strip()
+                    from_addr = f"{sender_name} <{from_email}>" if sender_name else from_email
+                    subject = (
+                        f"{artifacts[0]['title']} | Recurring delivery"
+                        if row["scope_type"] == "report" and len(artifacts) == 1
+                        else f"{row['account_name']}: {len(artifacts)} report artifact(s) ready"
+                    )
+                    summary_line = _subscription_summary(str(row["scope_type"] or ""), artifacts)
+                    manage_url = _scope_manage_url(str(row["scope_type"] or ""), str(row["scope_key"] or ""))
+                    html_body = render_report_subscription_delivery_html(
+                        account_name=str(row["account_name"] or ""),
+                        scope_label=str(row["scope_label"] or "Recurring delivery"),
+                        summary_line=summary_line,
+                        frequency_label=_frequency_label(str(row["delivery_frequency"] or "")),
+                        manage_url=manage_url,
+                        delivery_note=str(row["delivery_note"] or ""),
+                        artifacts=artifacts,
+                    )
 
-                summary = _delivery_status_summary(
-                    status,
-                    len(artifacts),
-                    len(recipients),
-                    len(message_ids),
-                )
+                    for recipient in recipients:
+                        sent, message_id, send_error, suppressed = await _send_subscription_email(
+                            pool,
+                            sender,
+                            recipient=recipient,
+                            from_addr=from_addr,
+                            subject=subject,
+                            html_body=html_body,
+                            tags=tags,
+                        )
+                        if sent:
+                            successful_recipient_count += 1
+                            if message_id:
+                                message_ids.append(message_id)
+                        elif send_error:
+                            if suppressed:
+                                suppressed_recipient_count += 1
+                            send_failures.append(send_error)
+
+                    if suppressed_recipient_count == len(recipients):
+                        status = "skipped"
+                        error_message = "; ".join(send_failures)
+                        summary = "Skipped delivery because every recipient on the subscription is currently suppressed."
+                    elif send_failures and successful_recipient_count == 0:
+                        status = "failed"
+                        error_message = "; ".join(send_failures)
+                    elif send_failures:
+                        status = "partial"
+                        error_message = "; ".join(send_failures)
+                    else:
+                        status = "sent"
+
+                    if status != "skipped":
+                        summary = _delivery_status_summary(
+                            status,
+                            len(artifacts),
+                            len(recipients),
+                            successful_recipient_count,
+                        )
 
             await _finalize_delivery_attempt(
                 pool,
@@ -743,12 +963,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 freshness_state=freshness_state,
                 delivered_report_ids=delivered_report_ids,
                 message_ids=message_ids,
+                content_hash=content_hash,
                 summary=summary,
                 error=error_message,
             )
 
             if status in {"sent", "partial", "skipped"}:
-                await _advance_subscription(pool, row["id"], str(row["delivery_frequency"] or "weekly"))
+                await _advance_subscription(
+                    pool,
+                    row["id"],
+                    str(row["delivery_frequency"] or "weekly"),
+                    row["next_delivery_at"],
+                )
 
             if status == "sent":
                 delivered += 1
@@ -767,6 +993,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 freshness_state=freshness_state,
                 delivered_report_ids=delivered_report_ids,
                 message_ids=message_ids,
+                content_hash=content_hash,
                 summary=summary,
                 error=str(exc),
             )
