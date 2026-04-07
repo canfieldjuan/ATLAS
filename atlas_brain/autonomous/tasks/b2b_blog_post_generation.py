@@ -22,7 +22,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field, asdict
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from ...config import settings
@@ -3792,15 +3792,81 @@ async def _batch_vendor_review_counts(
     return {r["vn"]: r["cnt"] for r in rows}
 
 
+def _blog_slug_block_reason(
+    row: dict[str, Any] | Any,
+    *,
+    now: datetime | None = None,
+) -> str | None:
+    """Return the reason a blog slug should be blocked from regeneration."""
+    if not row:
+        return None
+    status = str(row.get("status") or "").strip().lower()
+    slug = str(row.get("slug") or "").strip()
+    if not slug or not status:
+        return None
+    if status == "failed":
+        return None
+    if status != "rejected":
+        return f"status:{status}"
+
+    max_retries = int(settings.b2b_churn.blog_post_max_rejection_retries)
+    rejection_count = int(row.get("rejection_count") or 0)
+    if rejection_count >= max_retries:
+        return "retry_limit"
+
+    cooldown_hours = int(
+        getattr(settings.b2b_churn, "blog_post_rejection_cooldown_hours", 0) or 0
+    )
+    rejected_at = row.get("rejected_at")
+    if (
+        cooldown_hours > 0
+        and isinstance(rejected_at, datetime)
+        and rejected_at >= (now or datetime.now(rejected_at.tzinfo)) - timedelta(hours=cooldown_hours)
+    ):
+        return "rejection_cooldown"
+    return None
+
+
+async def _get_blog_slug_block_reason(pool, slug: str) -> str | None:
+    """Return the current block reason for a single blog slug, if any."""
+    row = await pool.fetchrow(
+        """
+        SELECT slug, status, COALESCE(rejection_count, 0) AS rejection_count, rejected_at
+        FROM blog_posts
+        WHERE slug = $1
+        """,
+        slug,
+    )
+    return _blog_slug_block_reason(row)
+
+
 async def _batch_slug_check(pool, slugs: list[str]) -> set[str]:
-    """Check which slugs already exist (all time). Single query."""
+    """Return slugs that should NOT be regenerated."""
     if not slugs:
         return set()
     rows = await pool.fetch(
-        "SELECT slug FROM blog_posts WHERE slug = ANY($1)",
+        """
+        SELECT slug, status, COALESCE(rejection_count, 0) AS rejection_count, rejected_at
+        FROM blog_posts
+        WHERE slug = ANY($1)
+        """,
         slugs,
     )
-    return {r["slug"] for r in rows}
+    blocked: set[str] = set()
+    for row in rows:
+        reason = _blog_slug_block_reason(row)
+        if not reason:
+            continue
+        blocked.add(str(row["slug"]))
+        if reason == "retry_limit":
+            logger.info(
+                "Permanently blocked slug %s after %d rejections",
+                row["slug"],
+                int(row.get("rejection_count") or 0),
+            )
+        elif reason == "rejection_cooldown":
+            logger.info("Cooling down rejected slug %s before another retry", row["slug"])
+    return blocked
 
 
 async def _recently_covered_vendors(pool, days: int = 90) -> set[str]:
@@ -7445,6 +7511,11 @@ async def _upsert_blog_post_state(
             warning_count = EXCLUDED.warning_count,
             rejected_at = EXCLUDED.rejected_at,
             rejection_reason = EXCLUDED.rejection_reason,
+            rejection_count = CASE
+                WHEN EXCLUDED.status = 'rejected'
+                THEN COALESCE(blog_posts.rejection_count, 0) + 1
+                ELSE 0
+            END,
             published_at = CASE
                 WHEN EXCLUDED.status = 'published' THEN COALESCE(blog_posts.published_at, NOW())
                 ELSE blog_posts.published_at

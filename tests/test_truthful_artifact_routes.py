@@ -665,6 +665,10 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
         _fake_enforce_blog_quality_async,
     )
     monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._get_blog_slug_block_reason",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_blog_post_generation._assemble_and_store",
         _fake_assemble_and_store,
     )
@@ -686,3 +690,140 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
     assert captured["data_context"]["reasoning_reference_ids"]["vendor_core_reasoning"] == ["review:1"]
     record_attempt.assert_awaited_once()
     assert record_attempt.await_args.kwargs["stage"] == "quality_gate_first_pass"
+
+
+def test_manual_blog_generate_blocks_recent_rejected_slug(monkeypatch):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **_kwargs: SimpleNamespace(model_name="anthropic/test"),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation.build_manual_topic_ctx",
+        AsyncMock(return_value={"vendor": "Jira", "category": "Project Management", "slug": "jira-deep-dive-2026-04"}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._gather_data",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._load_pool_layers_for_blog",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_data_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._build_blueprint",
+        lambda *_args, **_kwargs: PostBlueprint(
+            topic_type="vendor_deep_dive",
+            slug="jira-deep-dive-2026-04",
+            suggested_title="Jira Deep Dive",
+            tags=["jira"],
+            data_context={"vendor": "Jira"},
+            sections=[],
+            charts=[],
+        ),
+    )
+    generate_content = AsyncMock(return_value={"title": "ignored"})
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._generate_content_async",
+        generate_content,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._get_blog_slug_block_reason",
+        AsyncMock(return_value="rejection_cooldown"),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/blog/generate",
+            json={"vendor_name": "Jira", "topic_type": "vendor_deep_dive"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_reason"] == "rejection_cooldown"
+    generate_content.assert_not_awaited()
+
+
+def test_manual_blog_generate_persists_quality_rejection(monkeypatch):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **_kwargs: SimpleNamespace(model_name="anthropic/test"),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation.build_manual_topic_ctx",
+        AsyncMock(return_value={"vendor": "Jira", "category": "Project Management", "slug": "jira-deep-dive-2026-04"}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._gather_data",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._load_pool_layers_for_blog",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_data_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._build_blueprint",
+        lambda *_args, **_kwargs: PostBlueprint(
+            topic_type="vendor_deep_dive",
+            slug="jira-deep-dive-2026-04",
+            suggested_title="Jira Deep Dive",
+            tags=["jira"],
+            data_context={"vendor": "Jira"},
+            sections=[],
+            charts=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._get_blog_slug_block_reason",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._generate_content_async",
+        AsyncMock(return_value={"title": "Jira Deep Dive", "content": "body"}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._enforce_blog_quality_async",
+        AsyncMock(return_value=(None, {"_retry_requested": False})),
+    )
+    upsert = AsyncMock(return_value="row-1")
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._upsert_blog_post_state",
+        upsert,
+    )
+    monkeypatch.setattr(blog_admin_api, "record_attempt", AsyncMock())
+    monkeypatch.setattr(blog_admin_api, "emit_event", AsyncMock())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/blog/generate",
+            json={"vendor_name": "Jira", "topic_type": "vendor_deep_dive"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "Generated content failed quality gate"
+    assert upsert.await_args.kwargs["status"] == "rejected"
+    assert upsert.await_args.kwargs["failure_step"] == "quality_gate"
+    blog_admin_api.record_attempt.assert_awaited()
+    blog_admin_api.emit_event.assert_awaited()

@@ -1,6 +1,7 @@
 """Focused tests for evidence-vault overlays in B2B blog generation."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -54,6 +55,55 @@ def test_merge_blog_signals_with_evidence_vault_prefers_canonical_rows():
     assert merged[0]["avg_urgency"] == 7.1
     assert merged[0]["feature_gaps"] == ["Custom roles"]
     assert any(item["pain_category"] == "support" for item in merged)
+
+
+@pytest.mark.asyncio
+async def test_batch_slug_check_blocks_recent_rejected_slug(monkeypatch):
+    recent = datetime.now(timezone.utc) - timedelta(hours=2)
+
+    class Pool:
+        async def fetch(self, *_args):
+            return [{
+                "slug": "clickup-deep-dive-2026-04",
+                "status": "rejected",
+                "rejection_count": 1,
+                "rejected_at": recent,
+            }]
+
+    blocked = await blog_mod._batch_slug_check(Pool(), ["clickup-deep-dive-2026-04"])
+    assert blocked == {"clickup-deep-dive-2026-04"}
+
+
+@pytest.mark.asyncio
+async def test_batch_slug_check_allows_rejected_slug_after_cooldown(monkeypatch):
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+
+    class Pool:
+        async def fetch(self, *_args):
+            return [{
+                "slug": "clickup-deep-dive-2026-04",
+                "status": "rejected",
+                "rejection_count": 1,
+                "rejected_at": stale,
+            }]
+
+    blocked = await blog_mod._batch_slug_check(Pool(), ["clickup-deep-dive-2026-04"])
+    assert blocked == set()
+
+
+@pytest.mark.asyncio
+async def test_batch_slug_check_allows_failed_slug_retry(monkeypatch):
+    class Pool:
+        async def fetch(self, *_args):
+            return [{
+                "slug": "clickup-deep-dive-2026-04",
+                "status": "failed",
+                "rejection_count": 0,
+                "rejected_at": None,
+            }]
+
+    blocked = await blog_mod._batch_slug_check(Pool(), ["clickup-deep-dive-2026-04"])
+    assert blocked == set()
 
 
 def test_merge_blog_quotes_with_evidence_vault_prefers_canonical_quotes():

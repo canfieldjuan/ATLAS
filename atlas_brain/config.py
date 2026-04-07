@@ -2725,6 +2725,12 @@ class B2BChurnConfig(BaseSettings):
     # Regeneration mode -- re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
     blog_post_max_rejection_retries: int = Field(default=2, ge=0, le=10, description="Max times a rejected blog slug can be retried before permanent block")
+    blog_post_rejection_cooldown_hours: int = Field(
+        default=24,
+        ge=0,
+        le=720,
+        description="Minimum hours before an autonomously rejected blog slug can be attempted again",
+    )
 
     # Historical snapshots
     snapshot_enabled: bool = Field(default=True, description="Enable daily vendor health snapshots")

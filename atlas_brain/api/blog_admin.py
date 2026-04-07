@@ -120,6 +120,7 @@ class ManualGenerateRequest(BaseModel):
     vendor_b: Optional[str] = None
     category: Optional[str] = None
     skip_sufficiency_check: bool = False
+    force_retry_blocked_slug: bool = False
 
 
 # -- helpers ------------------------------------------------------
@@ -1010,7 +1011,9 @@ async def generate_post(
         _generate_content_async,
         _enforce_blog_quality_async,
         _assemble_and_store,
+        _get_blog_slug_block_reason,
         _persist_first_pass_blog_quality,
+        _upsert_blog_post_state,
         build_manual_topic_ctx,
     )
     from ..config import settings
@@ -1062,6 +1065,17 @@ async def generate_post(
         })
 
     blueprint = _build_blueprint(req.topic_type, topic_ctx, data)
+    if not req.force_retry_blocked_slug:
+        block_reason = await _get_blog_slug_block_reason(pool, blueprint.slug)
+        if block_reason:
+            raise HTTPException(
+                409,
+                {
+                    "error": "Blog slug is currently blocked from regeneration",
+                    "slug": blueprint.slug,
+                    "block_reason": block_reason,
+                },
+            )
     content = await _generate_content_async(
         llm,
         blueprint,
@@ -1069,6 +1083,41 @@ async def generate_post(
         run_id=run_id,
     )
     if content is None:
+        await _upsert_blog_post_state(
+            pool,
+            blueprint,
+            llm,
+            status="failed",
+            run_id=run_id,
+            attempt_no=1,
+            failure_step="llm_call",
+            error_code="llm_returned_none",
+            error_summary="LLM returned None",
+        )
+        await record_attempt(
+            pool,
+            artifact_type="blog_post",
+            artifact_id=blueprint.slug,
+            run_id=run_id,
+            attempt_no=1,
+            stage="generation",
+            status="failed",
+            failure_step="llm_call",
+            error_message="LLM returned None",
+        )
+        await emit_event(
+            pool,
+            stage="blog",
+            event_type="generation_failure",
+            entity_type="blog_post",
+            entity_id=blueprint.slug,
+            summary=f"LLM failed for {blueprint.slug} ({req.topic_type})",
+            severity="error",
+            actionable=True,
+            artifact_type="blog_post",
+            run_id=run_id,
+            reason_code="llm_returned_none",
+        )
         raise HTTPException(500, "LLM content generation failed")
 
     content, quality_report = await _enforce_blog_quality_async(
@@ -1104,6 +1153,59 @@ async def generate_post(
             boundary="manual_generate",
             report=quality_report,
         )["audit"]
+        await _upsert_blog_post_state(
+            pool,
+            blueprint,
+            llm,
+            status="rejected",
+            run_id=run_id,
+            attempt_no=1,
+            score=audit.get("score"),
+            threshold=audit.get("threshold"),
+            blocker_count=len(audit.get("blocking_issues", [])),
+            warning_count=len(audit.get("warnings", [])),
+            failure_step="quality_gate",
+            error_code="quality_gate_rejection",
+            error_summary=", ".join(audit.get("blocking_issues", [])[:3]),
+            rejection_reason=", ".join(audit.get("blocking_issues", [])[:3]),
+            content=content,
+        )
+        await record_attempt(
+            pool,
+            artifact_type="blog_post",
+            artifact_id=blueprint.slug,
+            run_id=run_id,
+            attempt_no=1,
+            stage="quality_gate",
+            status="rejected",
+            score=audit.get("score"),
+            threshold=audit.get("threshold"),
+            blocker_count=len(audit.get("blocking_issues", [])),
+            warning_count=len(audit.get("warnings", [])),
+            blocking_issues=audit.get("blocking_issues"),
+            warnings=audit.get("warnings"),
+            failure_step="quality_gate",
+            error_message=", ".join(audit.get("blocking_issues", [])[:3]) or None,
+        )
+        await emit_event(
+            pool,
+            stage="blog",
+            event_type="quality_gate_rejection",
+            entity_type="blog_post",
+            entity_id=blueprint.slug,
+            summary=f"Quality gate rejected {blueprint.slug} ({req.topic_type})",
+            severity="warning",
+            actionable=True,
+            artifact_type="blog_post",
+            run_id=run_id,
+            reason_code=(
+                audit.get("blocking_issues", ["unknown"])[0][:80]
+                if audit.get("blocking_issues")
+                else "unknown"
+            ),
+            decision="rejected",
+            detail=audit,
+        )
         raise HTTPException(
             422,
             {
