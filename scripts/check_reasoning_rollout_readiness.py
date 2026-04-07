@@ -35,6 +35,10 @@ def _reasoning_v2_schema_predicate(column_name: str = "schema_version") -> str:
     )
 
 
+def _legacy_reasoning_fallback_enabled() -> bool:
+    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", True))
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
@@ -165,6 +169,14 @@ async def _run(limit: int) -> dict[str, Any]:
             "scheduled_scope_strategy",
             strategy in {"competitive_sets", "full_universe"},
             detail={"configured": strategy or None},
+        ),
+    )
+    checks.append(
+        _status(
+            "legacy_reasoning_fallback_disabled",
+            not _legacy_reasoning_fallback_enabled(),
+            required=False,
+            detail={"configured": _legacy_reasoning_fallback_enabled()},
         ),
     )
 

@@ -1550,9 +1550,9 @@ function AuditTab() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-white">Legacy Compatibility</h3>
+            <h3 className="text-sm font-semibold text-white">Deprecated Legacy Compatibility</h3>
             <p className="text-xs text-slate-500">
-              Explicit legacy reasoning opt-ins seen in the last 30 days
+              Explicit legacy reasoning opt-ins seen in the last 30 days. This is deprecated compatibility mode, not normal delivery.
             </p>
           </div>
         </div>

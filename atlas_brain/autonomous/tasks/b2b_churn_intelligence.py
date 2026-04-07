@@ -196,7 +196,7 @@ def _should_use_cross_vendor_category(category: str) -> bool:
 
 
 def _legacy_reasoning_fallback_enabled() -> bool:
-    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", True))
+    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", False))
 
 
 async def _load_category_council_lookup(

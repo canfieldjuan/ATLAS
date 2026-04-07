@@ -25,7 +25,7 @@ logger = logging.getLogger("atlas.autonomous.tasks._b2b_cross_vendor_synthesis")
 
 
 def _legacy_reasoning_fallback_enabled() -> bool:
-    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", True))
+    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", False))
 
 
 async def _emit_legacy_cross_vendor_opt_in(

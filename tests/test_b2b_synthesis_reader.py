@@ -300,14 +300,18 @@ def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
     assert context["reasoning_delta"]["changed"] is True
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_legacy(self):
+    async def test_falls_back_to_legacy(self, monkeypatch):
         from atlas_brain.autonomous import visibility as visibility_mod
 
         legacy = _make_legacy_row()
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
         emit = AsyncMock()
-        monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(visibility_mod, "emit_event", emit)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            True,
+            raising=False,
+        )
 
         view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
 
@@ -318,7 +322,6 @@ def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
         assert cn["summary"] == "Churn pressure from pricing."
         emit.assert_awaited_once()
         assert emit.await_args.kwargs["reason_code"] == "legacy_reasoning_view_fallback"
-        monkeypatch.undo()
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_data(self):
@@ -401,10 +404,15 @@ def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
         assert view.witness_pack[0]["witness_id"] == "witness:1"
 
     @pytest.mark.asyncio
-    async def test_legacy_view_primary_wedge_resolves(self):
+    async def test_legacy_view_primary_wedge_resolves(self, monkeypatch):
         """Legacy pricing_shock should resolve to price_squeeze Wedge via validate_wedge."""
         legacy = _make_legacy_row()
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            True,
+            raising=False,
+        )
 
         view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
         assert view.primary_wedge is not None
@@ -412,18 +420,28 @@ def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
         assert view.wedge_label == "Price Squeeze"
 
     @pytest.mark.asyncio
-    async def test_legacy_view_has_materialized_contracts(self):
+    async def test_legacy_view_has_materialized_contracts(self, monkeypatch):
         legacy = _make_legacy_row()
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            True,
+            raising=False,
+        )
 
         view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
         contracts = view.materialized_contracts()
         assert "vendor_core_reasoning" in contracts
 
     @pytest.mark.asyncio
-    async def test_legacy_view_falsification_conditions(self):
+    async def test_legacy_view_falsification_conditions(self, monkeypatch):
         legacy = _make_legacy_row(falsification=["Price cut", "Market shift"])
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            True,
+            raising=False,
+        )
 
         view = await load_best_reasoning_view(pool, "Acme", allow_legacy_fallback=True)
         fcs = view.falsification_conditions()
@@ -457,7 +475,7 @@ def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
 
 class TestLoadBestReasoningViews:
     @pytest.mark.asyncio
-    async def test_batch_mixed_sources(self):
+    async def test_batch_mixed_sources(self, monkeypatch):
         """Vendor A from synthesis, Vendor B from legacy fallback."""
         from atlas_brain.autonomous import visibility as visibility_mod
 
@@ -465,8 +483,12 @@ class TestLoadBestReasoningViews:
         legacy_rows = [_make_legacy_row(vendor_name="VendorB")]
         pool = _mock_pool(synth_rows=synth_rows, legacy_rows=legacy_rows)
         emit = AsyncMock()
-        monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(visibility_mod, "emit_event", emit)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            True,
+            raising=False,
+        )
 
         views = await load_best_reasoning_views(pool, ["VendorA", "VendorB"], allow_legacy_fallback=True)
 
@@ -476,7 +498,6 @@ class TestLoadBestReasoningViews:
         assert views["VendorB"].schema_version == "legacy"
         emit.assert_awaited_once()
         assert emit.await_args.kwargs["reason_code"] == "legacy_reasoning_batch_fallback"
-        monkeypatch.undo()
 
     @pytest.mark.asyncio
     async def test_batch_empty(self):
@@ -546,6 +567,27 @@ async def test_discover_reasoning_vendor_names_respects_legacy_fallback_gate(mon
     )
 
     assert vendor_names == ["VendorA"]
+
+
+@pytest.mark.asyncio
+async def test_discover_reasoning_vendor_names_includes_legacy_when_gate_enabled(monkeypatch):
+    pool = _mock_pool(
+        synth_rows=[{"vendor_name": "VendorA"}],
+        legacy_rows=[{"vendor_name": "VendorB"}],
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+        True,
+        raising=False,
+    )
+
+    vendor_names = await discover_reasoning_vendor_names(
+        pool,
+        as_of=date(2026, 4, 7),
+        include_legacy=True,
+    )
+
+    assert set(vendor_names) == {"VendorA", "VendorB"}
 
 
 class TestLoadPriorReasoningSnapshots:
@@ -793,10 +835,15 @@ class TestSynthesisViewToReasoningEntry:
 
 class TestVendorBriefingAdoption:
     @pytest.mark.asyncio
-    async def test_briefing_gets_mapped_wedge_from_legacy(self):
+    async def test_briefing_gets_mapped_wedge_from_legacy(self, monkeypatch):
         """When only legacy exists, vendor briefing archetype should be a valid wedge."""
         legacy = _make_legacy_row(vendor_name="TestVendor", archetype="support_collapse")
         pool = _mock_pool(synth_row=None, legacy_row=legacy)
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks._b2b_synthesis_reader.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+            True,
+            raising=False,
+        )
 
         view = await load_best_reasoning_view(pool, "TestVendor", allow_legacy_fallback=True)
         assert view is not None

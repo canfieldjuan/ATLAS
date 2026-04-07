@@ -14,6 +14,7 @@ _SPEC.loader.exec_module(_MODULE)
 
 _as_dict = _MODULE._as_dict
 _exit_code = _MODULE._exit_code
+_legacy_reasoning_fallback_enabled = _MODULE._legacy_reasoning_fallback_enabled
 _reasoning_v2_schema_predicate = _MODULE._reasoning_v2_schema_predicate
 _status = _MODULE._status
 
@@ -45,6 +46,12 @@ def test_reasoning_v2_schema_predicate_accepts_canonical_versions():
     assert "IN ('v2', '2')" in predicate
     assert "LIKE 'v2.%'" in predicate
     assert "LIKE '2.%'" in predicate
+
+
+def test_legacy_reasoning_fallback_enabled_reads_runtime_config(monkeypatch):
+    monkeypatch.setattr(_MODULE.settings.b2b_churn, "legacy_reasoning_fallback_enabled", False, raising=False)
+
+    assert _legacy_reasoning_fallback_enabled() is False
 
 
 def test_exit_code_is_nonzero_when_required_check_fails():

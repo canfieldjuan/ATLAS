@@ -59,7 +59,7 @@ _SECTION_CONTRACT_PATHS = {
 
 
 def _legacy_reasoning_fallback_enabled() -> bool:
-    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", True))
+    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", False))
 
 _CONSUMER_REQUIRED_CONTRACTS = {
     "battle_card": (

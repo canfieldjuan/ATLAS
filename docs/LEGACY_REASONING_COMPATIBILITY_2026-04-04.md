@@ -14,6 +14,7 @@ path during burn-in.
 
 - Burn-in window ends: `2026-04-18`
 - Runtime kill switch: `ATLAS_B2B_CHURN_LEGACY_REASONING_FALLBACK_ENABLED`
+- Default state: disabled / fail-closed
 - If no production incidents require legacy reasoning before that date:
   - delete `reconstruct_reasoning_lookup()`
   - delete `reconstruct_cross_vendor_lookup()`
@@ -66,3 +67,10 @@ Delete the compatibility paths only after verifying:
 2. Synthesis coverage remains sufficient for active vendors/categories.
 3. Cross-vendor synthesis continues to populate the required battle/council outputs.
 4. No operator workflow depends on the old compatibility readers.
+
+## Rollout Visibility
+
+- `scripts/check_reasoning_rollout_readiness.py` now warns when
+  `ATLAS_B2B_CHURN_LEGACY_REASONING_FALLBACK_ENABLED=true`.
+- `Pipeline Review -> Deprecated Legacy Compatibility` should stay empty in a
+  synthesis-only environment.

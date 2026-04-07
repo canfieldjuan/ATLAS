@@ -237,6 +237,11 @@ async def test_load_best_cross_vendor_lookup_merges_legacy_when_opted_in(monkeyp
         "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_cross_vendor_lookup",
         _fake_reconstruct,
     )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.settings.b2b_churn.legacy_reasoning_fallback_enabled",
+        True,
+        raising=False,
+    )
     emit = AsyncMock()
     monkeypatch.setattr(visibility_mod, "emit_event", emit)
     pool = FakePool([

@@ -3201,10 +3201,11 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     legacy_reasoning_fallback_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "Allow explicit compatibility opt-ins to fall back to legacy reasoning "
-            "stored in b2b_churn_signals and b2b_cross_vendor_conclusions during burn-in"
+            "Allow deprecated compatibility opt-ins to fall back to legacy reasoning "
+            "stored in b2b_churn_signals and b2b_cross_vendor_conclusions. "
+            "Defaults fail-closed and should only be enabled for explicit burn-in recovery."
         ),
     )
     reasoning_synthesis_scheduled_scope_strategy: str = Field(
