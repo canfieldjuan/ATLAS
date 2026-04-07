@@ -3,6 +3,27 @@ export interface KeyInsightViewModel {
   evidence: string
 }
 
+export interface ReasoningWitnessViewModel {
+  witness_id?: string
+  _sid?: string
+  reviewer_company?: string
+  reviewer_title?: string
+  excerpt_text?: string
+  time_anchor?: string
+  competitor?: string
+  witness_type?: string
+  selection_reason?: string
+  salience_score?: number | null
+  numeric_literals?: Record<string, unknown>
+}
+
+export type ReasoningAnchorExamplesViewModel = Record<string, ReasoningWitnessViewModel[]>
+
+export interface ReasoningReferenceIdsViewModel {
+  metric_ids: string[]
+  witness_ids: string[]
+}
+
 export interface PainQuoteViewModel {
   quote: string
   text?: string
@@ -67,6 +88,7 @@ export interface CrossVendorBattleViewModel {
   conclusion?: string
   confidence?: number | null
   key_insights: KeyInsightViewModel[]
+  reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ChallengerBriefDisplacementViewModel {
@@ -89,6 +111,9 @@ export interface ChallengerIncumbentProfileViewModel {
   key_signals: string[]
   top_weaknesses: WeaknessAnalysisItemViewModel[]
   top_pain_quotes: PainQuoteViewModel[]
+  reasoning_anchor_examples?: ReasoningAnchorExamplesViewModel
+  reasoning_witness_highlights?: ReasoningWitnessViewModel[]
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ChallengerStrengthViewModel {
@@ -146,6 +171,10 @@ export interface ChallengerBriefViewModel {
   sales_playbook: ChallengerSalesPlaybookViewModel
   integration_comparison: IntegrationComparisonViewModel
   data_sources: Record<string, boolean>
+  reasoning_anchor_examples?: ReasoningAnchorExamplesViewModel
+  reasoning_witness_highlights?: ReasoningWitnessViewModel[]
+  reasoning_source?: string
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface PricingPressureViewModel {
@@ -189,6 +218,7 @@ export interface CategoryCouncilViewModel {
   loser?: string
   durability?: string
   key_insights: KeyInsightViewModel[]
+  reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ActiveEvaluationDeadlineViewModel {
@@ -279,6 +309,7 @@ export interface BattleCardViewModel {
   evidence_depth_warning?: string
   evidence_conclusions: string[]
   low_confidence_sections: string[]
+  reasoning_section_disclaimers?: Record<string, string>
   falsification_conditions: string[]
   uncertainty_sources: string[]
   // Operational signals
@@ -290,6 +321,10 @@ export interface BattleCardViewModel {
   llm_render_status?: string
   quality_status?: string
   quality_score?: number | null
+  quality_failed_checks: string[]
+  quality_warnings: string[]
+  reasoning_source?: string
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface ComparisonMetricSnapshotViewModel {
@@ -388,6 +423,8 @@ export interface WeeklyChurnFeedItemViewModel {
   account_pressure_summary?: string
   timing_summary?: string
   priority_timing_triggers: string[]
+  reasoning_source?: string
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }
 
 export interface DeepDivePainBreakdownViewModel {
@@ -500,4 +537,6 @@ export interface AccountsInMotionViewModel {
   priority_timing_triggers?: string[]
   segment_targeting_summary?: string
   category_council?: CategoryCouncilViewModel
+  reasoning_source?: string
+  reasoning_reference_ids?: ReasoningReferenceIdsViewModel
 }

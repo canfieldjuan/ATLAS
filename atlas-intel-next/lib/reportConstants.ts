@@ -9,5 +9,7 @@ export const REPORT_TYPE_COLORS: Record<string, string> = {
   account_deep_dive: 'bg-pink-500/20 text-pink-300',
   vendor_retention: 'bg-orange-500/20 text-orange-400',
   challenger_intel: 'bg-purple-500/20 text-purple-400',
+  challenger_brief: 'bg-purple-500/20 text-purple-400',
   battle_card: 'bg-red-500/20 text-red-400',
+  vendor_deep_dive: 'bg-sky-500/20 text-sky-400',
 }

@@ -94,6 +94,27 @@ export interface HighIntentCompany {
   lock_in_level: string | null
   contract_end: string | null
   buying_stage: string | null
+  reviewer_title?: string | null
+  company_size?: string | null
+  industry?: string | null
+  review_id?: string | null
+  source?: string | null
+  quotes?: string[] | null
+  intent_signals?: {
+    cancel?: boolean
+    migration?: boolean
+    evaluation?: boolean
+    completed_switch?: boolean
+  } | null
+  relevance_score?: number | null
+  author_churn_score?: number | null
+  resolution_confidence?: string | null
+  verified_employee_count?: number | null
+  company_domain?: string | null
+  company_country?: string | null
+  revenue_range?: string | null
+  founded_year?: number | null
+  company_description?: string | null
 }
 
 export interface VendorProfile {
@@ -431,6 +452,9 @@ export interface BlogQualityDiagnostics {
   top_n: number
   active_failure_count: number
   rejected_failure_count: number
+  current_blocked_slug_count: number
+  retry_limit_blocked_slug_count: number
+  cooldown_blocked_slug_count: number
   by_status: { status: string; count: number }[]
   by_boundary: { boundary: string; count: number }[]
   by_cause_type: { cause_type: string; count: number }[]
@@ -438,6 +462,7 @@ export interface BlogQualityDiagnostics {
   top_missing_inputs: { input: string; count: number }[]
   by_topic_type: { topic_type: string; count: number }[]
   top_subjects: { subject: string; count: number }[]
+  top_blocked_slugs: { slug: string; reason: string; rejection_count: number }[]
 }
 
 export interface BlogDraftSummaryRollup {

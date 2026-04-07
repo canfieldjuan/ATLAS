@@ -88,6 +88,8 @@ export default function BlogQualityDiagnosticsPanel({
   const diagnostics = data ?? null
   const activeFailureCount = diagnostics?.active_failure_count ?? 0
   const rejectedFailureCount = diagnostics?.rejected_failure_count ?? 0
+  const blockedSlugCount = diagnostics?.current_blocked_slug_count ?? 0
+  const retryLimitBlockedCount = diagnostics?.retry_limit_blocked_slug_count ?? 0
   const topCause = diagnostics?.by_cause_type?.[0] ?? null
   const topBlocker = diagnostics?.top_primary_blockers?.[0] ?? null
   const hasAnyData =
@@ -97,7 +99,8 @@ export default function BlogQualityDiagnosticsPanel({
     (diagnostics?.top_primary_blockers?.length ?? 0) > 0 ||
     (diagnostics?.top_missing_inputs?.length ?? 0) > 0 ||
     (diagnostics?.by_topic_type?.length ?? 0) > 0 ||
-    (diagnostics?.top_subjects?.length ?? 0) > 0
+    (diagnostics?.top_subjects?.length ?? 0) > 0 ||
+    (diagnostics?.top_blocked_slugs?.length ?? 0) > 0
 
   return (
     <section className="space-y-4">
@@ -121,7 +124,7 @@ export default function BlogQualityDiagnosticsPanel({
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
             <SummaryCard
               label="Active Draft Failures"
               value={String(activeFailureCount)}
@@ -149,6 +152,16 @@ export default function BlogQualityDiagnosticsPanel({
                   ? `${topBlocker.count} hits${activeFailureCount === 0 && rejectedFailureCount > 0 ? ' (rejected only)' : ''}`
                   : null
               }
+            />
+            <SummaryCard
+              label="Blocked Slugs"
+              value={String(blockedSlugCount)}
+              caption="Current rejected slugs blocked from regeneration"
+            />
+            <SummaryCard
+              label="Retry Cap Hit"
+              value={String(retryLimitBlockedCount)}
+              caption="Blocked until manually force-regenerated"
             />
           </div>
 
@@ -201,6 +214,13 @@ export default function BlogQualityDiagnosticsPanel({
               emptyLabel="No subject failures yet."
               labelKey="subject"
               valueKey="count"
+            />
+            <SectionList
+              title="Blocked Slugs"
+              items={diagnostics?.top_blocked_slugs ?? []}
+              emptyLabel="No blocked blog slugs right now."
+              labelKey="slug"
+              valueKey="reason"
             />
           </div>
         </>

@@ -13,6 +13,7 @@ const ReviewDetail = lazy(() => import('./pages/ReviewDetail'))
 const Reports = lazy(() => import('./pages/Reports'))
 const ReportDetail = lazy(() => import('./pages/ReportDetail'))
 const Leads = lazy(() => import('./pages/Leads'))
+const Opportunities = lazy(() => import('./pages/Opportunities'))
 const VendorTargets = lazy(() => import('./pages/VendorTargets'))
 const Challengers = lazy(() => import('./pages/Challengers'))
 const Affiliates = lazy(() => import('./pages/Affiliates'))
@@ -97,6 +98,7 @@ export default function App() {
             <Route path="/reports" element={renderLazyRoute(Reports)} />
             <Route path="/reports/:id" element={renderLazyRoute(ReportDetail)} />
             <Route path="/leads" element={renderLazyRoute(Leads)} />
+            <Route path="/opportunities" element={renderLazyRoute(Opportunities)} />
             <Route path="/vendor-targets" element={renderLazyRoute(VendorTargets)} />
             <Route path="/challengers" element={renderLazyRoute(Challengers)} />
             <Route path="/affiliates" element={renderLazyRoute(Affiliates)} />

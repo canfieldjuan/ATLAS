@@ -44,6 +44,7 @@ from ._b2b_shared import (
 )
 from ._b2b_specificity import (
     evaluate_specificity_support,
+    specificity_signal_terms,
     surface_specificity_context,
 )
 
@@ -302,6 +303,61 @@ def _remove_unsupported_claim_lines(body: str, report: dict[str, Any]) -> tuple[
             kept.append(segment)
         lines = "".join(kept).splitlines()
     return "\n".join(lines), removed
+
+
+def _strip_nonexistent_internal_links(
+    body: str,
+    *,
+    valid_slugs: set[str],
+    current_slug: str,
+) -> tuple[str, int]:
+    updated = str(body or "")
+    if not updated:
+        return updated, 0
+
+    removed = 0
+
+    markdown_pattern = re.compile(
+        r"\[([^\]]+)\]\(((?:https?://[^/)\s]+)?/blog/([a-z0-9\-]+))\)"
+    )
+
+    def _replace_markdown(match: re.Match[str]) -> str:
+        nonlocal removed
+        slug = str(match.group(3) or "")
+        if slug in valid_slugs or slug == current_slug:
+            return match.group(0)
+        removed += 1
+        return str(match.group(1) or "")
+
+    updated = markdown_pattern.sub(_replace_markdown, updated)
+
+    html_pattern = re.compile(
+        r"<a\s+[^>]*href=[\"']((?:https?://[^/\"']+)?/blog/([a-z0-9\-]+))[\"'][^>]*>(.*?)</a>",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def _replace_html(match: re.Match[str]) -> str:
+        nonlocal removed
+        slug = str(match.group(2) or "")
+        if slug in valid_slugs or slug == current_slug:
+            return match.group(0)
+        removed += 1
+        return str(match.group(3) or "")
+
+    updated = html_pattern.sub(_replace_html, updated)
+
+    path_pattern = re.compile(r"(?<![A-Za-z0-9_-])/blog/([a-z0-9\-]+)")
+
+    def _replace_path(match: re.Match[str]) -> str:
+        nonlocal removed
+        slug = str(match.group(1) or "")
+        if slug in valid_slugs or slug == current_slug:
+            return match.group(0)
+        removed += 1
+        return slug.replace("-", " ")
+
+    updated = path_pattern.sub(_replace_path, updated)
+    return updated, removed
 
 
 def _blog_source_allowlist() -> list[str]:
@@ -880,6 +936,37 @@ _CTA_CONFIG: dict[str, dict[str, str]] = {
 }
 
 
+def _blog_length_policy(topic_type: str) -> dict[str, int]:
+    cfg = settings.b2b_churn
+    normalized_topic = str(topic_type or "").strip().lower()
+    default_min = max(1, int(getattr(cfg, "blog_post_min_words_default", 1800) or 1800))
+    default_target = max(
+        default_min,
+        int(getattr(cfg, "blog_post_target_words_default", default_min) or default_min),
+    )
+    raw_min_by_topic = getattr(cfg, "blog_post_min_words_by_topic", {}) or {}
+    raw_target_by_topic = getattr(cfg, "blog_post_target_words_by_topic", {}) or {}
+    min_by_topic = {
+        str(key or "").strip().lower(): int(value)
+        for key, value in raw_min_by_topic.items()
+        if str(key or "").strip()
+    }
+    target_by_topic = {
+        str(key or "").strip().lower(): int(value)
+        for key, value in raw_target_by_topic.items()
+        if str(key or "").strip()
+    }
+    min_words = max(1, int(min_by_topic.get(normalized_topic, default_min) or default_min))
+    target_words = max(
+        min_words,
+        int(target_by_topic.get(normalized_topic, default_target) or default_target),
+    )
+    return {
+        "min_words": min_words,
+        "target_words": target_words,
+    }
+
+
 def _build_cta(topic_type: str, data_context: dict[str, Any]) -> dict[str, Any] | None:
     """Build structured CTA from topic type and data context."""
     cfg = _CTA_CONFIG.get(topic_type)
@@ -1125,11 +1212,14 @@ def _apply_blog_quality_gate(
     if removed_quotes > 0:
         fixes_applied.append(f"removed_unmatched_quotes:{removed_quotes}")
 
+    length_policy = _blog_length_policy(blueprint.topic_type)
+    min_words = int(length_policy["min_words"])
+    target_words = int(length_policy["target_words"])
     word_count = len(body.split())
-    if word_count < 2000:
-        blocking_issues.append(f"content_too_short:{word_count}_words_need_2000")
-    elif word_count < 2500:
-        warnings.append("content_below_seo_target_2500_words")
+    if word_count < min_words:
+        blocking_issues.append(f"content_too_short:{word_count}_words_need_{min_words}")
+    elif word_count < target_words:
+        warnings.append(f"content_below_seo_target_{target_words}_words")
 
     chart_ids = [c.chart_id for c in blueprint.charts]
     chart_mentions = re.findall(r"\{\{chart:([a-zA-Z0-9\-_]+)\}\}", body)
@@ -1190,6 +1280,7 @@ def _apply_blog_quality_gate(
                 settings.b2b_churn.blog_specificity_require_timing_or_numeric_when_available
             ),
             include_competitor_terms=True,
+            numeric_term_filter=_is_meaningful_numeric_anchor,
         )
         blocking_issues.extend(
             f"witness_specificity:{issue}"
@@ -1310,6 +1401,9 @@ def _apply_blog_quality_gate(
         "warnings": warnings,
         "fixes_applied": fixes_applied,
         "quote_count": len(quoted),
+        "word_count": word_count,
+        "min_words_required": min_words,
+        "target_words": target_words,
     }
     return cleaned, report
 
@@ -1384,6 +1478,522 @@ def _with_unresolved_critical_warnings(report: dict[str, Any]) -> dict[str, Any]
     return enriched
 
 
+def _insert_blog_note(body: str, note: str, *, marker: str) -> str:
+    text = str(body or "").strip()
+    note_text = str(note or "").strip()
+    if not text or not note_text:
+        return text
+
+    blocks = text.split("\n\n")
+    marker_prefix = marker.lower()
+    for idx, block in enumerate(blocks):
+        if block.strip().lower().startswith(marker_prefix):
+            if block.strip() == note_text:
+                return text
+            blocks[idx] = note_text
+            return "\n\n".join(blocks)
+    insert_at = 0
+    if blocks and blocks[0].lstrip().startswith("#"):
+        insert_at = 1
+        if len(blocks) > 1 and blocks[1].strip().lower().startswith("_methodology note:"):
+            insert_at = 2
+    blocks.insert(min(insert_at, len(blocks)), note_text)
+    return "\n\n".join(blocks)
+
+
+def _has_blog_note(body: str, *, marker: str) -> bool:
+    text = str(body or "").strip()
+    if not text:
+        return False
+    marker_prefix = str(marker or "").strip().lower()
+    if not marker_prefix:
+        return False
+    return any(
+        block.strip().lower().startswith(marker_prefix)
+        for block in text.split("\n\n")
+    )
+
+
+def _remove_blog_note(body: str, *, marker: str) -> str:
+    text = str(body or "").strip()
+    if not text:
+        return text
+    marker_prefix = str(marker or "").strip().lower()
+    if not marker_prefix:
+        return text
+    blocks = [
+        block
+        for block in text.split("\n\n")
+        if not block.strip().lower().startswith(marker_prefix)
+    ]
+    return "\n\n".join(blocks).strip()
+
+
+def _blog_specificity_context(blueprint: PostBlueprint) -> dict[str, Any]:
+    return surface_specificity_context(
+        blueprint.data_context if isinstance(blueprint.data_context, dict) else {},
+        surface="blog",
+    )
+
+
+def _specificity_rows(blueprint: PostBlueprint) -> list[dict[str, Any]]:
+    specificity = _blog_specificity_context(blueprint)
+    collected: list[dict[str, Any]] = []
+    anchors = specificity.get("anchor_examples")
+    preferred_labels = (
+        "outlier_or_named_account",
+        "common_pattern",
+        "counterevidence",
+    )
+    if isinstance(anchors, dict):
+        for label in preferred_labels:
+            group_rows = anchors.get(label) or []
+            if isinstance(group_rows, list):
+                for row in group_rows:
+                    if isinstance(row, dict):
+                        collected.append(row)
+        for group_rows in anchors.values():
+            if isinstance(group_rows, list):
+                for row in group_rows:
+                    if isinstance(row, dict):
+                        collected.append(row)
+    highlights = specificity.get("witness_highlights") or []
+    if isinstance(highlights, list):
+        for row in highlights:
+            if isinstance(row, dict):
+                collected.append(row)
+    return collected
+
+
+def _first_numeric_literal(witness: dict[str, Any]) -> str:
+    numeric_literals = witness.get("numeric_literals")
+    if not isinstance(numeric_literals, dict):
+        return ""
+    for values in numeric_literals.values():
+        if isinstance(values, list):
+            for value in values:
+                text = str(value or "").strip()
+                if _is_meaningful_numeric_anchor(text):
+                    return text
+            continue
+        text = str(values or "").strip()
+        if _is_meaningful_numeric_anchor(text):
+            return text
+    return ""
+
+
+def _first_term_from_rows(
+    rows: list[dict[str, Any]],
+    extractor,
+) -> str:
+    for row in rows:
+        value = str(extractor(row) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _preferred_signal_term(
+    values: set[str] | None,
+    *,
+    skip: set[str] | None = None,
+    predicate=None,
+) -> str:
+    candidates = [
+        str(value or "").strip()
+        for value in (values or set())
+        if str(value or "").strip()
+    ]
+    if skip:
+        lowered_skip = {str(value).strip().lower() for value in skip if str(value).strip()}
+        candidates = [value for value in candidates if value.lower() not in lowered_skip]
+    if predicate is not None:
+        candidates = [value for value in candidates if predicate(value)]
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda token: (-len(token), token.lower()))
+    return candidates[0]
+
+
+def _is_meaningful_numeric_anchor(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if "%" in text:
+        return True
+    if re.search(r"\b\d+(?:\.\d+)?\s*[kmbx]\b", text, re.IGNORECASE):
+        return True
+    if re.search(r"[$€£]\s*\d", text):
+        numeric_text = re.sub(r"[^0-9.]", "", text)
+        try:
+            return float(numeric_text) >= 1.0
+        except (TypeError, ValueError):
+            return False
+    numeric_groups = [
+        chunk.replace(",", "")
+        for chunk in re.findall(r"\d[\d,]*", text)
+    ]
+    return any(len(chunk) >= 3 for chunk in numeric_groups)
+
+
+def _blog_low_signal_anchor_labels() -> set[str]:
+    values = getattr(settings.b2b_churn, "blog_evidence_anchor_low_signal_labels", []) or []
+    labels: set[str] = set()
+    for value in values:
+        label = str(value or "").strip().lower().replace("_", " ")
+        if label:
+            labels.add(label)
+    return labels
+
+
+def _humanize_blog_anchor_label(value: Any) -> str:
+    return " ".join(str(value or "").strip().replace("_", " ").split())
+
+
+def _is_meaningful_blog_anchor_label(value: Any) -> bool:
+    label = _humanize_blog_anchor_label(value).lower()
+    if not label:
+        return False
+    if label in {"unknown", "none", "recommendation"}:
+        return False
+    if label in _blog_low_signal_anchor_labels():
+        return False
+    if any(pattern in label for pattern in (settings.b2b_churn.witness_specificity_generic_patterns or [])):
+        return False
+    condensed = re.sub(r"[^a-z0-9]", "", label)
+    if condensed.isalpha() and len(condensed) <= 2:
+        return False
+    return True
+
+
+def _meaningful_pain_label(witness: dict[str, Any]) -> str:
+    for key in ("pain_category", "signal_type", "org_pressure_type"):
+        value = _humanize_blog_anchor_label(witness.get(key))
+        if not _is_meaningful_blog_anchor_label(value):
+            continue
+        return value
+    return ""
+
+
+def _meaningful_workflow_label(witness: dict[str, Any]) -> str:
+    for key in ("replacement_mode", "operating_model_shift", "productivity_delta_claim"):
+        value = _humanize_blog_anchor_label(witness.get(key))
+        if not _is_meaningful_blog_anchor_label(value):
+            continue
+        return value
+    return ""
+
+
+def _needs_timing_or_numeric_anchor(report: dict[str, Any]) -> bool:
+    blockers = [str(issue) for issue in (report.get("blocking_issues") or [])]
+    return any(
+        issue.startswith("witness_specificity:")
+        and "timing or numeric anchor" in issue
+        for issue in blockers
+    )
+
+
+def _select_specificity_anchor_terms(
+    blueprint: PostBlueprint,
+    report: dict[str, Any],
+) -> dict[str, str]:
+    specificity = _blog_specificity_context(blueprint)
+    rows = _specificity_rows(blueprint)
+    if not rows:
+        return {}
+
+    needs_timing_numeric = _needs_timing_or_numeric_anchor(report)
+    timing_anchor = _first_term_from_rows(rows, lambda row: row.get("time_anchor"))
+    numeric_anchor = _first_term_from_rows(rows, _first_numeric_literal)
+    competitor = _first_term_from_rows(rows, lambda row: row.get("competitor"))
+    pain = _first_term_from_rows(rows, _meaningful_pain_label)
+    workflow = _first_term_from_rows(rows, _meaningful_workflow_label)
+
+    signal_terms = specificity_signal_terms(
+        anchor_examples=specificity.get("anchor_examples"),
+        witness_highlights=specificity.get("witness_highlights"),
+        allow_company_names=False,
+    )
+    if not timing_anchor:
+        timing_anchor = _preferred_signal_term(signal_terms.get("timing_terms"))
+    if not numeric_anchor:
+        numeric_anchor = _preferred_signal_term(
+            signal_terms.get("numeric_terms"),
+            predicate=_is_meaningful_numeric_anchor,
+        )
+    if not competitor:
+        competitor = _preferred_signal_term(signal_terms.get("competitor_terms"))
+    if not pain:
+        pain = _preferred_signal_term(
+            signal_terms.get("pain_terms"),
+            skip={
+                "recommendation",
+                "unknown",
+                "none",
+                *(_blog_low_signal_anchor_labels()),
+            },
+        )
+        if pain and not _is_meaningful_blog_anchor_label(pain):
+            pain = ""
+        else:
+            pain = _humanize_blog_anchor_label(pain)
+    if not workflow:
+        workflow = _preferred_signal_term(
+            signal_terms.get("workflow_terms"),
+            skip={"unknown", "none"},
+        )
+        if workflow and not _is_meaningful_blog_anchor_label(workflow):
+            workflow = ""
+        else:
+            workflow = _humanize_blog_anchor_label(workflow)
+
+    if needs_timing_numeric and not (timing_anchor or numeric_anchor):
+        return {}
+
+    return {
+        "time_anchor": timing_anchor,
+        "numeric_anchor": numeric_anchor,
+        "competitor": competitor,
+        "pain": pain,
+        "workflow": workflow,
+    }
+
+
+def _build_specificity_anchor_note(
+    blueprint: PostBlueprint,
+    report: dict[str, Any],
+) -> str:
+    terms = _select_specificity_anchor_terms(blueprint, report)
+    if not terms:
+        return ""
+
+    detail_bits: list[str] = []
+    time_anchor = terms["time_anchor"]
+    numeric_anchor = terms["numeric_anchor"]
+    competitor = terms["competitor"]
+    pain = terms["pain"]
+    workflow = terms["workflow"]
+
+    if time_anchor:
+        detail_bits.append(f"{time_anchor} is the live timing trigger")
+    if numeric_anchor:
+        detail_bits.append(f"{numeric_anchor} is the concrete spend anchor")
+    if competitor:
+        detail_bits.append(f"{competitor} is the competitive alternative in the witness-backed record")
+    if pain:
+        detail_bits.append(f"the core pressure showing up in the evidence is {pain}")
+    if workflow:
+        detail_bits.append(f"the workflow shift in play is {workflow}")
+
+    if not detail_bits:
+        return ""
+
+    note = "Evidence anchor: " + ", ".join(detail_bits[:-1])
+    if len(detail_bits) > 1:
+        note += f", and {detail_bits[-1]}."
+    else:
+        note += f"{detail_bits[-1]}."
+    if len(detail_bits) == 1:
+        note = "Evidence anchor: " + detail_bits[0] + "."
+    return note
+
+
+def _has_specificity_issues(report: dict[str, Any]) -> bool:
+    blockers = [str(issue) for issue in (report.get("blocking_issues") or [])]
+    warnings = [str(warning) for warning in (report.get("warnings") or [])]
+    return any(issue.startswith("witness_specificity:") for issue in blockers + warnings)
+
+
+def _apply_specificity_anchor_repair(
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+    report: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    updated = dict(content or {})
+    body = str(updated.get("content") or "")
+    has_existing_note = _has_blog_note(body, marker="Evidence anchor:")
+    if not _has_specificity_issues(report) and not has_existing_note:
+        return updated, report, False
+
+    note = _build_specificity_anchor_note(blueprint, report)
+    if not note:
+        if not has_existing_note:
+            return updated, report, False
+        repaired_body = _remove_blog_note(body, marker="Evidence anchor:")
+        if repaired_body == body:
+            return updated, report, False
+        updated["content"] = repaired_body
+        updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
+        repaired_report = dict(repaired_report)
+        fixes = list(repaired_report.get("fixes_applied", []) or [])
+        fixes.append("removed_low_signal_witness_anchor_note")
+        repaired_report["fixes_applied"] = fixes
+        return updated, repaired_report, True
+
+    repaired_body = _insert_blog_note(body, note, marker="Evidence anchor:")
+    if repaired_body == body:
+        return updated, report, False
+
+    updated["content"] = repaired_body
+    updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
+    repaired_report = dict(repaired_report)
+    fixes = list(repaired_report.get("fixes_applied", []) or [])
+    fixes.append("added_witness_anchor_note")
+    repaired_report["fixes_applied"] = fixes
+    return updated, repaired_report, True
+
+
+def _only_content_too_short_blockers(report: dict[str, Any]) -> bool:
+    blockers = [str(issue) for issue in (report.get("blocking_issues") or [])]
+    return bool(blockers) and all(issue.startswith("content_too_short:") for issue in blockers)
+
+
+def _shortfall_words(report: dict[str, Any]) -> int:
+    try:
+        min_words = int(report.get("min_words_required") or 0)
+        word_count = int(report.get("word_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min_words - word_count)
+
+
+def _top_source_summary(source_distribution: Any, *, limit: int = 3) -> str:
+    if not isinstance(source_distribution, dict):
+        return ""
+    ranked: list[tuple[str, int]] = []
+    for key, value in source_distribution.items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        try:
+            count = int(value or 0)
+        except (TypeError, ValueError):
+            continue
+        ranked.append((name, count))
+    if not ranked:
+        return ""
+    ranked.sort(key=lambda item: (-item[1], item[0].lower()))
+    parts = [f"{name} ({count})" for name, count in ranked[: max(1, int(limit))]]
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + f", and {parts[-1]}"
+
+
+def _build_coverage_snapshot_note(blueprint: PostBlueprint) -> str:
+    data_context = blueprint.data_context if isinstance(blueprint.data_context, dict) else {}
+    enriched_count = int(data_context.get("enriched_count") or 0)
+    churn_intent_count = int(data_context.get("churn_intent_count") or 0)
+    review_period = str(data_context.get("review_period") or "").strip()
+    source_summary = _top_source_summary(data_context.get("source_distribution"))
+    data_quality = data_context.get("data_quality")
+    confidence = ""
+    if isinstance(data_quality, dict):
+        confidence = str(data_quality.get("confidence") or "").strip()
+    scope_summary = data_context.get("reasoning_scope_summary")
+    witnesses_in_scope = 0
+    if isinstance(scope_summary, dict):
+        try:
+            witnesses_in_scope = int(scope_summary.get("witnesses_in_scope") or 0)
+        except (TypeError, ValueError):
+            witnesses_in_scope = 0
+
+    details: list[str] = []
+    if enriched_count > 0:
+        details.append(f"this piece draws from {enriched_count} enriched reviews")
+    if churn_intent_count > 0:
+        details.append(f"including {churn_intent_count} churn-intent signals")
+    if witnesses_in_scope > 0:
+        details.append(f"with {witnesses_in_scope} witness-backed examples in scope")
+    if review_period:
+        details.append(f"collected between {review_period}")
+    if source_summary:
+        details.append(f"with the visible source mix led by {source_summary}")
+    if confidence:
+        details.append(f"and a current data-quality posture of {confidence} confidence")
+
+    if not details:
+        return ""
+
+    note = "Coverage snapshot: " + ", ".join(details[:-1])
+    if len(details) > 1:
+        note += f", and {details[-1]}."
+    else:
+        note += f"{details[-1]}."
+    if len(details) == 1:
+        note = "Coverage snapshot: " + details[0] + "."
+    note += " Treat the analysis as directional evidence rather than a full market census."
+    return note
+
+
+def _apply_borderline_shortfall_repair(
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+    report: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    if not _only_content_too_short_blockers(report):
+        return dict(content or {}), report, False
+
+    shortfall = _shortfall_words(report)
+    threshold = int(getattr(settings.b2b_churn, "blog_post_borderline_shortfall_max_words", 0) or 0)
+    if shortfall <= 0 or shortfall > threshold:
+        return dict(content or {}), report, False
+
+    note = _build_coverage_snapshot_note(blueprint)
+    if not note:
+        return dict(content or {}), report, False
+
+    updated = dict(content or {})
+    body = str(updated.get("content") or "")
+    repaired_body = _insert_blog_note(body, note, marker="Coverage snapshot:")
+    if repaired_body == body:
+        return updated, report, False
+
+    updated["content"] = repaired_body
+    updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
+    repaired_report = dict(repaired_report)
+    fixes = list(repaired_report.get("fixes_applied", []) or [])
+    fixes.append("added_coverage_snapshot_note")
+    repaired_report["fixes_applied"] = fixes
+    return updated, repaired_report, True
+
+
+def _has_unsupported_category_outcome_issue(report: dict[str, Any]) -> bool:
+    return any(
+        str(issue) == "unsupported_category_outcome_assertion"
+        for issue in (report.get("blocking_issues") or [])
+    )
+
+
+def _line_contains_unsupported_category_outcome(line: str) -> bool:
+    return bool(re.search(r"\bcategory\s+(winner|loser)\b", str(line or ""), re.IGNORECASE))
+
+
+def _remove_unsupported_category_outcome_lines(body: str, report: dict[str, Any]) -> tuple[str, int]:
+    if not _has_unsupported_category_outcome_issue(report):
+        return str(body or ""), 0
+    lines = str(body or "").splitlines()
+    if not lines:
+        return str(body or ""), 0
+    removed = 0
+    next_lines: list[str] = []
+    for line in lines:
+        if _line_contains_unsupported_category_outcome(line):
+            removed += 1
+            continue
+        next_lines.append(line)
+    if removed > 0:
+        return "\n".join(next_lines), removed
+    text = "\n".join(lines)
+    sentences = re.split(r"(?<=[.!?])(\s+)", text)
+    kept: list[str] = []
+    for segment in sentences:
+        if _line_contains_unsupported_category_outcome(segment):
+            removed += 1
+            continue
+        kept.append(segment)
+    return "".join(kept), removed
+
+
 def _apply_blog_deterministic_repairs(
     blueprint: PostBlueprint,
     content: dict[str, Any],
@@ -1392,16 +2002,62 @@ def _apply_blog_deterministic_repairs(
     updated = dict(content or {})
     body = str(updated.get("content") or "")
     repaired_body, removed_claim_lines = _remove_unsupported_claim_lines(body, report)
-    if removed_claim_lines <= 0 or repaired_body == body:
-        return updated, report
+    repaired_body, removed_category_outcome_lines = _remove_unsupported_category_outcome_lines(
+        repaired_body,
+        report,
+    )
+    valid_slugs = {
+        str(slug).strip()
+        for slug in ((blueprint.data_context or {}).get("_valid_internal_slugs") or [])
+        if str(slug or "").strip()
+    }
+    repaired_body, removed_bad_links = _strip_nonexistent_internal_links(
+        repaired_body,
+        valid_slugs=valid_slugs,
+        current_slug=str(blueprint.slug or "").strip(),
+    )
+    repaired_report = dict(report or {})
+    if (
+        removed_claim_lines > 0
+        or removed_category_outcome_lines > 0
+        or removed_bad_links > 0
+    ) and repaired_body != body:
+        updated["content"] = repaired_body
+        updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
+        repaired_report = dict(repaired_report)
+        fixes = list(repaired_report.get("fixes_applied", []) or [])
+        if removed_claim_lines > 0:
+            fixes.append(f"removed_unsupported_claim_lines:{removed_claim_lines}")
+        if removed_category_outcome_lines > 0:
+            fixes.append(
+                f"removed_unsupported_category_outcome_lines:{removed_category_outcome_lines}"
+            )
+        if removed_bad_links > 0:
+            fixes.append(f"removed_nonexistent_internal_links:{removed_bad_links}")
+        repaired_report["fixes_applied"] = fixes
 
-    updated["content"] = repaired_body
-    updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
-    repaired_report = dict(repaired_report)
-    fixes = list(repaired_report.get("fixes_applied", []) or [])
-    fixes.append(f"removed_unsupported_claim_lines:{removed_claim_lines}")
-    repaired_report["fixes_applied"] = fixes
+    updated, repaired_report, _ = _apply_specificity_anchor_repair(
+        blueprint,
+        updated,
+        repaired_report,
+    )
+    updated, repaired_report, _ = _apply_borderline_shortfall_repair(
+        blueprint,
+        updated,
+        repaired_report,
+    )
     return updated, repaired_report
+
+
+def _run_blog_quality_pass(
+    blueprint: PostBlueprint,
+    content: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    current = _ensure_methodology_context(blueprint, dict(content or {}))
+    _inject_affiliate_links(blueprint, current)
+    current, report = _apply_blog_quality_gate(blueprint, current)
+    current, report = _apply_blog_deterministic_repairs(blueprint, current, report)
+    return current, report
 
 
 def _with_first_pass_quality_metadata(
@@ -1413,6 +2069,18 @@ def _with_first_pass_quality_metadata(
     enriched = dict(report)
     enriched["_first_pass_report"] = dict(first_pass_report)
     enriched["_retry_requested"] = retry_requested
+    return enriched
+
+
+def _with_rejected_content_snapshot(
+    report: dict[str, Any],
+    *,
+    content_obj: dict[str, Any] | None,
+) -> dict[str, Any]:
+    enriched = dict(report)
+    finalized = _finalize_blog_generation_content(content_obj)
+    if isinstance(finalized, dict):
+        enriched["_rejected_content"] = finalized
     return enriched
 
 
@@ -1514,10 +2182,7 @@ async def _enforce_blog_quality_async(
     pool: Any | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     """Apply quality gate and perform one retry with feedback when needed."""
-    current = _ensure_methodology_context(blueprint, dict(content or {}))
-    _inject_affiliate_links(blueprint, current)
-    current, report = _apply_blog_quality_gate(blueprint, current)
-    current, report = _apply_blog_deterministic_repairs(blueprint, current, report)
+    current, report = _run_blog_quality_pass(blueprint, content)
     initial_critical = _critical_quality_warnings(report)
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
     first_pass_report = dict(report)
@@ -1541,24 +2206,24 @@ async def _enforce_blog_quality_async(
     if retry is None:
         if initial_critical:
             return None, _with_first_pass_quality_metadata(
-                _with_unresolved_critical_warnings(report),
+                _with_rejected_content_snapshot(
+                    _with_unresolved_critical_warnings(report),
+                    content_obj=current,
+                ),
                 first_pass_report=first_pass_report,
                 retry_requested=True,
             )
         return None, _with_first_pass_quality_metadata(
-            report,
+            _with_rejected_content_snapshot(report, content_obj=current),
             first_pass_report=first_pass_report,
             retry_requested=True,
         )
 
-    retry = _ensure_methodology_context(blueprint, retry)
-    _inject_affiliate_links(blueprint, retry)
-    retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
-    retry, retry_report = _apply_blog_deterministic_repairs(blueprint, retry, retry_report)
+    retry, retry_report = _run_blog_quality_pass(blueprint, retry)
     retry_report = _with_unresolved_critical_warnings(retry_report)
     if retry_report.get("status") != "pass":
         return None, _with_first_pass_quality_metadata(
-            retry_report,
+            _with_rejected_content_snapshot(retry_report, content_obj=retry),
             first_pass_report=first_pass_report,
             retry_requested=True,
         )
@@ -1586,10 +2251,7 @@ def _enforce_blog_quality(
     else:
         raise RuntimeError("Use _enforce_blog_quality_async() from async contexts")
 
-    current = _ensure_methodology_context(blueprint, dict(content or {}))
-    _inject_affiliate_links(blueprint, current)
-    current, report = _apply_blog_quality_gate(blueprint, current)
-    current, report = _apply_blog_deterministic_repairs(blueprint, current, report)
+    current, report = _run_blog_quality_pass(blueprint, content)
     initial_critical = _critical_quality_warnings(report)
     needs_retry = report.get("status") != "pass" or bool(initial_critical)
     first_pass_report = dict(report)
@@ -1611,24 +2273,24 @@ def _enforce_blog_quality(
     if retry is None:
         if initial_critical:
             return None, _with_first_pass_quality_metadata(
-                _with_unresolved_critical_warnings(report),
+                _with_rejected_content_snapshot(
+                    _with_unresolved_critical_warnings(report),
+                    content_obj=current,
+                ),
                 first_pass_report=first_pass_report,
                 retry_requested=True,
             )
         return None, _with_first_pass_quality_metadata(
-            report,
+            _with_rejected_content_snapshot(report, content_obj=current),
             first_pass_report=first_pass_report,
             retry_requested=True,
         )
 
-    retry = _ensure_methodology_context(blueprint, retry)
-    _inject_affiliate_links(blueprint, retry)
-    retry, retry_report = _apply_blog_quality_gate(blueprint, retry)
-    retry, retry_report = _apply_blog_deterministic_repairs(blueprint, retry, retry_report)
+    retry, retry_report = _run_blog_quality_pass(blueprint, retry)
     retry_report = _with_unresolved_critical_warnings(retry_report)
     if retry_report.get("status") != "pass":
         return None, _with_first_pass_quality_metadata(
-            retry_report,
+            _with_rejected_content_snapshot(retry_report, content_obj=retry),
             first_pass_report=first_pass_report,
             retry_requested=True,
         )
@@ -2134,9 +2796,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     error_message=", ".join(first_pass_audit.get("blocking_issues", [])[:3]) or None,
                 )
             if content is None:
+                rejected_content = quality_report.get("_rejected_content") if isinstance(quality_report, dict) else None
                 quality_audit = _canonicalize_blog_quality(
                     blueprint,
-                    content=None,
+                    content=rejected_content if isinstance(rejected_content, dict) else None,
                     report=quality_report,
                     boundary="generation",
                 )
@@ -2162,7 +2825,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     error_code="quality_gate_rejection",
                     error_summary=", ".join(quality_audit.get("blocking_issues", [])[:3]),
                     rejection_reason=", ".join(quality_audit.get("blocking_issues", [])[:3]),
-                    content=content,
+                    content=rejected_content if isinstance(rejected_content, dict) else None,
                 )
                 await record_attempt(
                     pool, artifact_type="blog_post", artifact_id=blueprint.slug,
@@ -2385,9 +3048,10 @@ async def _regenerate_existing_posts(
             )
             _persist_first_pass_blog_quality(blueprint, quality_report)
             if content is None:
+                rejected_content = quality_report.get("_rejected_content") if isinstance(quality_report, dict) else None
                 quality_audit = _canonicalize_blog_quality(
                     blueprint,
-                    content=None,
+                    content=rejected_content if isinstance(rejected_content, dict) else None,
                     report=quality_report,
                     boundary="generation",
                 )
@@ -2411,6 +3075,7 @@ async def _regenerate_existing_posts(
                     error_code="quality_gate_rejection",
                     error_summary=", ".join(quality_audit.get("blocking_issues", [])[:3]),
                     rejection_reason=", ".join(quality_audit.get("blocking_issues", [])[:3]),
+                    content=rejected_content if isinstance(rejected_content, dict) else None,
                 )
                 continue
             _canonicalize_blog_quality(
@@ -3854,7 +4519,7 @@ def _blog_slug_block_reason(
 
     max_retries = int(settings.b2b_churn.blog_post_max_rejection_retries)
     rejection_count = int(row.get("rejection_count") or 0)
-    if rejection_count >= max_retries:
+    if rejection_count > max_retries:
         return "retry_limit"
 
     cooldown_hours = int(

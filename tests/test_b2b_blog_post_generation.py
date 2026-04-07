@@ -75,7 +75,7 @@ async def test_batch_slug_check_blocks_recent_rejected_slug(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_slug_check_allows_rejected_slug_after_cooldown(monkeypatch):
+async def test_batch_slug_check_allows_rejected_slug_after_cooldown_with_one_retry_limit(monkeypatch):
     stale = datetime.now(timezone.utc) - timedelta(hours=30)
 
     class Pool:
@@ -89,6 +89,23 @@ async def test_batch_slug_check_allows_rejected_slug_after_cooldown(monkeypatch)
 
     blocked = await blog_mod._batch_slug_check(Pool(), ["clickup-deep-dive-2026-04"])
     assert blocked == set()
+
+
+@pytest.mark.asyncio
+async def test_batch_slug_check_blocks_slug_after_retry_limit(monkeypatch):
+    stale = datetime.now(timezone.utc) - timedelta(days=2)
+
+    class Pool:
+        async def fetch(self, *_args):
+            return [{
+                "slug": "clickup-deep-dive-2026-04",
+                "status": "rejected",
+                "rejection_count": 2,
+                "rejected_at": stale,
+            }]
+
+    blocked = await blog_mod._batch_slug_check(Pool(), ["clickup-deep-dive-2026-04"])
+    assert blocked == {"clickup-deep-dive-2026-04"}
 
 
 @pytest.mark.asyncio
@@ -644,6 +661,10 @@ def _long_blog_body(core_sentence: str) -> str:
     return f"{intro}{repeated}"
 
 
+def _body_with_exact_words(word_count: int) -> str:
+    return "# Test Article\n\n" + " ".join(["alpha"] * word_count)
+
+
 def _section_by_id(blueprint, section_id: str):
     for section in blueprint.sections:
         if section.id == section_id:
@@ -825,6 +846,593 @@ def test_apply_blog_quality_gate_accepts_concrete_anchor_usage():
     _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
 
     assert not any("witness_specificity:" in issue for issue in report["blocking_issues"])
+
+
+def test_apply_blog_quality_gate_uses_topic_specific_min_words_for_migration_guides():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="migration_guide",
+        slug="switch-to-zendesk-2026-04",
+        suggested_title="Switch to Zendesk",
+        tags=["helpdesk"],
+        data_context={
+            "vendor": "Zendesk",
+            "review_period": "2025-06 to 2026-03",
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Switch to Zendesk",
+        "content": _body_with_exact_words(1550),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+
+    assert not any(issue.startswith("content_too_short:") for issue in report["blocking_issues"])
+    assert "content_below_seo_target_2100_words" in report["warnings"]
+    assert report["min_words_required"] == 1500
+    assert report["target_words"] == 2100
+
+
+def test_apply_blog_quality_gate_keeps_higher_floor_for_vendor_showdowns():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_showdown",
+        slug="zendesk-vs-freshdesk-2026-04",
+        suggested_title="Zendesk vs Freshdesk",
+        tags=["helpdesk"],
+        data_context={
+            "vendor_a": "Zendesk",
+            "vendor_b": "Freshdesk",
+            "review_period": "2025-06 to 2026-03",
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Zendesk vs Freshdesk",
+        "content": (
+            "# Zendesk vs Freshdesk\n\n"
+            "Zendesk Freshdesk "
+            + " ".join(["alpha"] * 1948)
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+
+    assert any(
+        issue.startswith("content_too_short:") and issue.endswith("_words_need_2000")
+        for issue in report["blocking_issues"]
+    )
+    assert "missing_vendor_mentions:Zendesk,Freshdesk" not in report["blocking_issues"]
+    assert report["min_words_required"] == 2000
+    assert report["target_words"] == 2600
+
+
+def test_apply_blog_deterministic_repairs_adds_witness_anchor_note():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_alternative",
+        slug="zendesk-alternatives-2026-03",
+        suggested_title="Zendesk Alternatives",
+        tags=["crm"],
+        data_context={
+            "vendor": "Zendesk",
+            "review_period": "2025-06 to 2026-03",
+            **_blog_anchor_context(),
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Zendesk Alternatives",
+        "content": _long_blog_body(
+            "Zendesk faces broad commercial pressure and teams describe general friction across the stack."
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert "Evidence anchor:" in repaired["content"]
+    assert "Q2 renewal" in repaired["content"]
+    assert "$200k/year" in repaired["content"]
+    assert "Freshdesk" in repaired["content"]
+    assert "added_witness_anchor_note" in repaired_report["fixes_applied"]
+    assert not any(
+        issue.startswith("witness_specificity:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_apply_blog_deterministic_repairs_prefers_timing_or_numeric_anchor_when_required():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="metabase-deep-dive-2026-04",
+        suggested_title="Metabase Deep Dive",
+        tags=["analytics"],
+        data_context={
+            "vendor": "Metabase",
+            "review_period": "2025-06 to 2026-03",
+            "reasoning_anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "A customer said the workflow changed.",
+                        "pain_category": "pricing",
+                        "replacement_mode": "workflow_substitution",
+                    }
+                ],
+                "counterevidence": [
+                    {
+                        "witness_id": "w2",
+                        "excerpt_text": "A customer hit a $10k jump after one year.",
+                        "time_anchor": "after one year",
+                        "numeric_literals": {"currency_mentions": ["$10k"]},
+                        "competitor": "Looker",
+                    }
+                ],
+            },
+            "reasoning_witness_highlights": [
+                {
+                    "witness_id": "w2",
+                    "excerpt_text": "A customer hit a $10k jump after one year.",
+                    "time_anchor": "after one year",
+                    "numeric_literals": {"currency_mentions": ["$10k"]},
+                    "competitor": "Looker",
+                }
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["w1", "w2"]},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Metabase Deep Dive",
+        "content": _long_blog_body(
+            "Metabase draws broad interest, but the copy stays generic and avoids the concrete timing details in the witness-backed record."
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert "after one year" in repaired["content"]
+    assert "$10k" in repaired["content"]
+    assert "Looker" in repaired["content"]
+    assert "added_witness_anchor_note" in repaired_report["fixes_applied"]
+    assert not any(
+        issue.startswith("witness_specificity:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_apply_blog_deterministic_repairs_replaces_stale_evidence_anchor_note():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="metabase-deep-dive-2026-04",
+        suggested_title="Metabase Deep Dive",
+        tags=["analytics"],
+        data_context={
+            "vendor": "Metabase",
+            "review_period": "2025-06 to 2026-03",
+            "reasoning_anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "A customer said the workflow changed.",
+                        "pain_category": "pricing",
+                    }
+                ],
+                "counterevidence": [
+                    {
+                        "witness_id": "w2",
+                        "excerpt_text": "A customer hit a $10k jump after one year.",
+                        "time_anchor": "after one year",
+                        "numeric_literals": {"currency_mentions": ["$10k"]},
+                    }
+                ],
+            },
+            "reasoning_reference_ids": {"witness_ids": ["w1", "w2"]},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Metabase Deep Dive",
+        "content": (
+            "# Metabase Deep Dive\n\n"
+            "Evidence anchor: the core pressure showing up in the evidence is pricing.\n\n"
+            + _long_blog_body(
+                "Metabase draws broad interest, but the copy stays generic and avoids the concrete timing details in the witness-backed record."
+            )
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert repaired["content"].count("Evidence anchor:") == 1
+    assert "after one year" in repaired["content"]
+    assert "$10k" in repaired["content"]
+    assert not any(
+        issue.startswith("witness_specificity:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_apply_blog_deterministic_repairs_refreshes_legacy_evidence_note_without_active_specificity_issue():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="metabase-deep-dive-2026-04",
+        suggested_title="Metabase Deep Dive",
+        tags=["analytics"],
+        data_context={
+            "vendor": "Metabase",
+            "review_period": "2025-06 to 2026-03",
+            "reasoning_anchor_examples": {
+                "counterevidence": [
+                    {
+                        "witness_id": "w2",
+                        "excerpt_text": "A customer hit a $10k jump after one year and evaluated Looker.",
+                        "time_anchor": "after one year",
+                        "numeric_literals": {"currency_mentions": ["$10k"]},
+                        "competitor": "Looker",
+                        "pain_category": "pricing",
+                    }
+                ],
+            },
+            "reasoning_reference_ids": {"witness_ids": ["w2"]},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Metabase Deep Dive",
+        "content": (
+            "# Metabase Deep Dive\n\n"
+            "Evidence anchor: 8.3 is the concrete spend anchor, and the core pressure showing up in the evidence is ux.\n\n"
+            + _long_blog_body(
+                "After one year the team hit a $10k jump, compared Looker, and documented pricing pressure in specific witness-backed terms."
+            )
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    assert not any(
+        issue.startswith("witness_specificity:")
+        for issue in report["blocking_issues"]
+    )
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert repaired["content"].count("Evidence anchor:") == 1
+    assert "8.3 is the concrete spend anchor" not in repaired["content"]
+    assert "$10k" in repaired["content"]
+    assert "Looker" in repaired["content"]
+    assert "added_witness_anchor_note" in repaired_report["fixes_applied"]
+
+
+def test_apply_blog_deterministic_repairs_uses_excerpt_derived_numeric_anchor():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="palo-alto-networks-deep-dive-2026-04",
+        suggested_title="Palo Alto Networks Deep Dive",
+        tags=["security"],
+        data_context={
+            "vendor": "Palo Alto Networks",
+            "review_period": "2025-06 to 2026-03",
+            "reasoning_anchor_examples": {
+                "counterevidence": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "A customer described a 10 B budget consolidation move and broader pricing backlash.",
+                        "pain_category": "pricing",
+                        "replacement_mode": "bundled_suite_consolidation",
+                    }
+                ],
+            },
+            "reasoning_reference_ids": {"witness_ids": ["w1"]},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Palo Alto Networks Deep Dive",
+        "content": _long_blog_body(
+            "Palo Alto Networks sits in a broader consolidation story, but the draft still avoids the concrete numeric anchor inside the witness-backed record."
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert "10 b" in repaired["content"].lower()
+    assert "pricing" in repaired["content"].lower()
+    assert "bundled suite consolidation" in repaired["content"]
+    assert not any(
+        issue.startswith("witness_specificity:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_apply_blog_deterministic_repairs_rejects_meaningless_numeric_anchor():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="metabase-deep-dive-2026-04",
+        suggested_title="Metabase Deep Dive",
+        tags=["analytics"],
+        data_context={
+            "vendor": "Metabase",
+            "review_period": "2025-06 to 2026-03",
+            "reasoning_anchor_examples": {
+                "common_pattern": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "Aggregate rating: 8.3/10 from 64 reviews.",
+                        "pain_category": "ux",
+                    }
+                ],
+            },
+            "reasoning_reference_ids": {"witness_ids": ["w1"]},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Metabase Deep Dive",
+        "content": _long_blog_body(
+            "Metabase draws broad interest, but the copy stays generic and avoids the concrete timing details in the witness-backed record."
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert "8.3" not in repaired["content"]
+    assert "Evidence anchor:" not in repaired["content"]
+    assert any(
+        issue.startswith("witness_specificity:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_apply_blog_deterministic_repairs_removes_low_signal_existing_evidence_note():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="metabase-deep-dive-2026-04",
+        suggested_title="Metabase Deep Dive",
+        tags=["analytics"],
+        data_context={
+            "vendor": "Metabase",
+            "review_period": "2025-06 to 2026-03",
+            "reasoning_anchor_examples": {
+                "common_pattern": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "Aggregate rating: 8.3/10 from 64 reviews.",
+                        "pain_category": "ux",
+                    }
+                ],
+            },
+            "reasoning_reference_ids": {"witness_ids": ["w1"]},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Metabase Deep Dive",
+        "content": (
+            "# Metabase Deep Dive\n\n"
+            "Evidence anchor: 8.3 is the concrete spend anchor, and the core pressure showing up in the evidence is ux.\n\n"
+            + _long_blog_body(
+                "Metabase draws broad interest, but the copy stays generic and avoids the concrete timing details in the witness-backed record."
+            )
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    assert not any(
+        issue.startswith("witness_specificity:")
+        for issue in report["blocking_issues"]
+    )
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert "Evidence anchor:" not in repaired["content"]
+    assert "removed_low_signal_witness_anchor_note" in repaired_report["fixes_applied"]
+    assert any(
+        issue.startswith("witness_specificity:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_apply_blog_quality_gate_ignores_meaningless_existing_numeric_anchor():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="metabase-deep-dive-2026-04",
+        suggested_title="Metabase Deep Dive",
+        tags=["analytics"],
+        data_context={
+            "vendor": "Metabase",
+            "review_period": "2025-06 to 2026-03",
+            "reasoning_anchor_examples": {
+                "common_pattern": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "Aggregate rating: 8.3/10 from 64 reviews.",
+                        "pain_category": "ux",
+                    }
+                ],
+            },
+            "reasoning_reference_ids": {"witness_ids": ["w1"]},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Metabase Deep Dive",
+        "content": (
+            "# Metabase Deep Dive\n\n"
+            "Evidence anchor: 8.3 is the concrete spend anchor.\n\n"
+            + _long_blog_body(
+                "Metabase draws broad interest, but the copy stays generic and avoids the concrete timing details in the witness-backed record."
+            )
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+
+    assert any(
+        issue.startswith("witness_specificity:")
+        for issue in report["blocking_issues"]
+    )
+
+
+def test_apply_blog_deterministic_repairs_strips_unsupported_category_outcome_lines():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_showdown",
+        slug="notion-vs-salesforce-2026-03",
+        suggested_title="Notion vs Salesforce",
+        tags=["crm"],
+        data_context={
+            "vendor_a": "Notion",
+            "vendor_b": "Salesforce",
+            "review_period": "2026-02-25 to 2026-03-29",
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Notion vs Salesforce",
+        "content": _long_blog_body(
+            "Notion and Salesforce occupy different workflow footprints, and the draft compares them across reviewer evidence."
+        )
+        + "\n\nThe category winner is Salesforce because it feels more complete for large teams.\n",
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    assert "unsupported_category_outcome_assertion" in report["blocking_issues"]
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert "category winner" not in repaired["content"].lower()
+    assert "removed_unsupported_category_outcome_lines:1" in repaired_report["fixes_applied"]
+    assert "unsupported_category_outcome_assertion" not in repaired_report["blocking_issues"]
+
+
+def test_apply_blog_deterministic_repairs_strips_absolute_nonexistent_internal_links():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="zoho-desk-deep-dive-2026-04",
+        suggested_title="Zoho Desk Deep Dive",
+        tags=["helpdesk"],
+        data_context={
+            "vendor": "Zoho Desk",
+            "review_period": "2025-06 to 2026-03",
+            "_valid_internal_slugs": ["zoho-desk-deep-dive-2026-04"],
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Zoho Desk Deep Dive",
+        "content": (
+            _long_blog_body(
+                "Zoho Desk draws broad interest, and the article includes stable product context."
+            )
+            + "\n\n- [Freshdesk](https://churnsignals.co/blog/freshdesk-deep-dive)\n"
+            + "- [Zendesk alternatives](https://churnsignals.co/blog/zendesk-alternatives)\n"
+        ),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    assert any(
+        issue.startswith("nonexistent_internal_links:")
+        for issue in report["blocking_issues"]
+    )
+
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert "https://churnsignals.co/blog/freshdesk-deep-dive" not in repaired["content"]
+    assert "https://churnsignals.co/blog/zendesk-alternatives" not in repaired["content"]
+    assert not any(
+        issue.startswith("nonexistent_internal_links:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_apply_blog_deterministic_repairs_adds_coverage_snapshot_for_borderline_shortfall():
+    blueprint = blog_mod.PostBlueprint(
+        topic_type="migration_guide",
+        slug="switch-to-shopify-2026-04",
+        suggested_title="Switch to Shopify",
+        tags=["shopify", "migration"],
+        data_context={
+            "review_period": "2025-06 to 2026-03",
+            "enriched_count": 148,
+            "churn_intent_count": 23,
+            "source_distribution": {"g2": 60, "capterra": 41, "reddit": 12},
+            "data_quality": {"confidence": "high"},
+            "reasoning_scope_summary": {"witnesses_in_scope": 8},
+        },
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "title": "Switch to Shopify",
+        "content": _body_with_exact_words(1470),
+    }
+
+    _, report = blog_mod._apply_blog_quality_gate(blueprint, content)
+    repaired, repaired_report = blog_mod._apply_blog_deterministic_repairs(
+        blueprint,
+        content,
+        report,
+    )
+
+    assert any(
+        issue.startswith("content_too_short:")
+        for issue in report["blocking_issues"]
+    )
+    assert "Coverage snapshot:" in repaired["content"]
+    assert "148 enriched reviews" in repaired["content"]
+    assert "added_coverage_snapshot_note" in repaired_report["fixes_applied"]
+    assert not any(
+        issue.startswith("content_too_short:")
+        for issue in repaired_report["blocking_issues"]
+    )
 
 
 @pytest.mark.asyncio

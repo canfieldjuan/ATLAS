@@ -2,9 +2,8 @@
 
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { createBillingCheckout, createBillingPortal } from '@/lib/api/client'
 import { CreditCard, AlertTriangle, LogOut, ExternalLink, AlertCircle } from 'lucide-react'
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || ''
 
 const PLAN_LABELS: Record<string, string> = {
   b2b_trial: 'Trial',
@@ -54,24 +53,11 @@ export default function Account() {
     setCheckoutLoading(planName)
     setError('')
     try {
-      const token = (typeof window !== 'undefined' ? localStorage.getItem('atlas_token') : null)
-      const res = await fetch(`${API_BASE}/api/v1/billing/checkout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          plan: planName,
-          success_url: `${window.location.origin}/account?upgraded=1`,
-          cancel_url: `${window.location.origin}/account`,
-        }),
+      const data = await createBillingCheckout({
+        plan: planName,
+        success_url: `${window.location.origin}/account?upgraded=1`,
+        cancel_url: `${window.location.origin}/account`,
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ detail: 'Failed to start checkout' }))
-        throw new Error(body.detail || `Error ${res.status}`)
-      }
-      const data = await res.json()
       window.location.href = data.checkout_url
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start checkout')
@@ -84,19 +70,9 @@ export default function Account() {
     setPortalLoading(true)
     setError('')
     try {
-      const token = (typeof window !== 'undefined' ? localStorage.getItem('atlas_token') : null)
-      const res = await fetch(`${API_BASE}/api/v1/billing/portal`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+      const data = await createBillingPortal({
+        return_url: `${window.location.origin}/account`,
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ detail: 'Failed to open billing portal' }))
-        throw new Error(body.detail || `Error ${res.status}`)
-      }
-      const data = await res.json()
       window.location.href = data.portal_url
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not open billing portal')

@@ -8,6 +8,11 @@ import type {
   VendorPeriodComparisonResponse,
   Report,
   ReportDetail,
+  ReportSubscription,
+  ReportSubscriptionDeliverableFocus,
+  ReportSubscriptionFreshnessPolicy,
+  ReportSubscriptionFrequency,
+  ReportSubscriptionScopeType,
   ReviewSummary,
   ReviewDetail,
   PipelineStatus,
@@ -26,7 +31,11 @@ import type {
   AuditEvent,
   BriefingDraft,
 } from '@/lib/types'
-import { normalizeReportDetail, normalizeVendorProfile } from '@/lib/reportNormalization'
+import {
+  normalizeReportDetail,
+  normalizeReportSubscription,
+  normalizeVendorProfile,
+} from '@/lib/reportNormalization'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || ''
 const TENANT_BASE = `${API_BASE}/api/v1/b2b/tenant`
@@ -36,6 +45,7 @@ const TARGETS_BASE = `${API_BASE}/api/v1/b2b/vendor-targets`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
+const BILLING_BASE = `${API_BASE}/api/v1/billing`
 const CACHE_BUSTER_PARAM = '_ts'
 
 function maybeFallbackApiPath(url: string): string | null {
@@ -64,9 +74,27 @@ function authHeaders(): Record<string, string> {
 }
 
 function forceLogout() {
-  typeof window !== 'undefined' && localStorage.removeItem('atlas_token')
-  typeof window !== 'undefined' && localStorage.removeItem('atlas_refresh_token')
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('atlas_token')
+    localStorage.removeItem('atlas_refresh_token')
+  }
   window.location.href = '/landing'
+}
+
+async function readErrorDetail(res: Response): Promise<string> {
+  const text = await res.text().catch(() => '')
+  if (!text) return res.statusText
+
+  try {
+    const body = JSON.parse(text) as { detail?: unknown }
+    if (typeof body.detail === 'string' && body.detail.trim()) {
+      return body.detail
+    }
+  } catch {
+    // Fall back to the raw response body below.
+  }
+
+  return text
 }
 
 async function handleResponse<T>(res: Response, retryFetch: () => Promise<Response>): Promise<T> {
@@ -82,8 +110,7 @@ async function handleResponse<T>(res: Response, retryFetch: () => Promise<Respon
       throw new Error('Session expired')
     }
     if (!retry.ok) {
-      const body = await retry.text().catch(() => '')
-      throw new Error(`API ${retry.status}: ${body || retry.statusText}`)
+      throw new Error(`API ${retry.status}: ${await readErrorDetail(retry)}`)
     }
     return retry.json()
   }
@@ -99,8 +126,7 @@ async function handleResponse<T>(res: Response, retryFetch: () => Promise<Respon
     throw new Error(body.detail || 'Forbidden')
   }
   if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`API ${res.status}: ${body}`)
+    throw new Error(`API ${res.status}: ${await readErrorDetail(res)}`)
   }
   return res.json()
 }
@@ -278,6 +304,58 @@ export async function generateAccountDeepDiveReport(body: {
 export async function fetchReport(reportId: string) {
   const report = await get<ReportDetail>(TENANT_BASE, `/reports/${reportId}`)
   return normalizeReportDetail(report)
+}
+
+export async function fetchReportSubscription(
+  scopeType: ReportSubscriptionScopeType,
+  scopeKey: string,
+) {
+  const result = await get<{ subscription: ReportSubscription | null }>(
+    TENANT_BASE,
+    `/report-subscriptions/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeKey)}`,
+  )
+  return {
+    subscription: result.subscription
+      ? normalizeReportSubscription(result.subscription)
+      : null,
+  }
+}
+
+export async function upsertReportSubscription(
+  scopeType: ReportSubscriptionScopeType,
+  scopeKey: string,
+  body: {
+    scope_label: string
+    delivery_frequency: ReportSubscriptionFrequency
+    deliverable_focus: ReportSubscriptionDeliverableFocus
+    freshness_policy: ReportSubscriptionFreshnessPolicy
+    recipients: string[]
+    delivery_note: string
+    enabled: boolean
+  },
+) {
+  const result = await put<{ subscription: ReportSubscription }>(
+    TENANT_BASE,
+    `/report-subscriptions/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeKey)}`,
+    body,
+  )
+  return {
+    subscription: normalizeReportSubscription(result.subscription),
+  }
+}
+
+export async function createBillingCheckout(body: {
+  plan: string
+  success_url: string
+  cancel_url: string
+}) {
+  return post<{ checkout_url: string }>(BILLING_BASE, '/checkout', body)
+}
+
+export async function createBillingPortal(body: {
+  return_url?: string
+} = {}) {
+  return post<{ portal_url: string }>(BILLING_BASE, '/portal', body)
 }
 
 export async function fetchReviews(params?: {

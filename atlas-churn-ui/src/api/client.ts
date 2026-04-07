@@ -243,6 +243,13 @@ export async function fetchHighIntent(params?: {
   return get<{ companies: HighIntentCompany[]; count: number }>(TENANT_BASE, '/high-intent', params)
 }
 
+export async function fetchLeadDetail(company: string) {
+  return get<{ company: string; reviews: ReviewSummary[]; count: number }>(
+    TENANT_BASE,
+    `/leads/${encodeURIComponent(company)}`,
+  )
+}
+
 export async function fetchVendorProfile(vendorName: string) {
   const profile = await get<VendorProfile>(TENANT_BASE, `/signals/${encodeURIComponent(vendorName)}`)
   return normalizeVendorProfile(profile)

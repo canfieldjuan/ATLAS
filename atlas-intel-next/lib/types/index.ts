@@ -145,6 +145,34 @@ export interface ReportDetail extends Report {
   llm_model: string | null
 }
 
+export type ReportSubscriptionScopeType = 'library' | 'report'
+export type ReportSubscriptionFrequency = 'weekly' | 'monthly' | 'quarterly'
+export type ReportSubscriptionDeliverableFocus = 'all' | 'battle_cards' | 'executive_reports' | 'comparison_packs'
+export type ReportSubscriptionFreshnessPolicy = 'fresh_only' | 'fresh_or_monitor' | 'any'
+export type ReportSubscriptionDeliveryStatus = 'sent' | 'partial' | 'skipped' | 'failed' | null
+
+export interface ReportSubscription {
+  id: string
+  scope_type: ReportSubscriptionScopeType
+  scope_key: string
+  scope_label: string
+  report_id: string | null
+  delivery_frequency: ReportSubscriptionFrequency
+  deliverable_focus: ReportSubscriptionDeliverableFocus
+  freshness_policy: ReportSubscriptionFreshnessPolicy
+  recipient_emails: string[]
+  delivery_note: string
+  enabled: boolean
+  next_delivery_at: string | null
+  last_delivery_status: ReportSubscriptionDeliveryStatus
+  last_delivery_at: string | null
+  last_delivery_summary: string
+  last_delivery_error: string
+  last_delivery_report_count: number
+  created_at: string | null
+  updated_at: string | null
+}
+
 export interface ReviewSummary {
   id: string
   vendor_name: string

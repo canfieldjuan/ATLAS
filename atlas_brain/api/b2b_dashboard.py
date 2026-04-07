@@ -689,6 +689,19 @@ async def list_high_intent(
             "reviewer_title": r.get("title"),
             "company_size": r.get("company_size"),
             "industry": r.get("industry"),
+            "review_id": r.get("review_id"),
+            "source": r.get("source"),
+            "quotes": _safe_json(r.get("quotes")),
+            "intent_signals": r.get("intent_signals"),
+            "relevance_score": _safe_float(r.get("relevance_score")),
+            "author_churn_score": _safe_float(r.get("author_churn_score")),
+            "resolution_confidence": r.get("resolution_confidence"),
+            "verified_employee_count": r.get("verified_employee_count"),
+            "company_domain": r.get("company_domain"),
+            "company_country": r.get("company_country"),
+            "revenue_range": r.get("revenue_range"),
+            "founded_year": r.get("founded_year"),
+            "company_description": r.get("company_description"),
         })
 
     return {"companies": companies, "count": len(companies)}

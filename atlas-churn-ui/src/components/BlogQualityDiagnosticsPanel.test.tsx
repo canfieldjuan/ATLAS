@@ -11,6 +11,9 @@ describe('BlogQualityDiagnosticsPanel', () => {
           top_n: 10,
           active_failure_count: 1,
           rejected_failure_count: 2,
+          current_blocked_slug_count: 2,
+          retry_limit_blocked_slug_count: 1,
+          cooldown_blocked_slug_count: 1,
           by_status: [
             { status: 'draft', count: 1 },
             { status: 'rejected', count: 2 },
@@ -21,6 +24,9 @@ describe('BlogQualityDiagnosticsPanel', () => {
           top_missing_inputs: [{ input: 'reasoning_anchor_examples', count: 1 }],
           by_topic_type: [{ topic_type: 'migration_guide', count: 2 }],
           top_subjects: [{ subject: 'Shopify', count: 2 }],
+          top_blocked_slugs: [
+            { slug: 'clickup-deep-dive-2026-04', reason: 'retry_limit', rejection_count: 3 },
+          ],
         }}
       />,
     )
@@ -36,6 +42,10 @@ describe('BlogQualityDiagnosticsPanel', () => {
     expect(screen.getAllByText('Shopify').length).toBeGreaterThan(0)
     expect(screen.getAllByText('draft').length).toBeGreaterThan(0)
     expect(screen.getAllByText('rejected').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Blocked Slugs').length).toBeGreaterThan(0)
+    expect(screen.getByText('Retry Cap Hit')).toBeInTheDocument()
+    expect(screen.getByText('clickup-deep-dive-2026-04')).toBeInTheDocument()
+    expect(screen.getAllByText('retry_limit').length).toBeGreaterThan(0)
   })
 
   it('renders an empty state when no diagnostics exist', () => {

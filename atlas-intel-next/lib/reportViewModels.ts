@@ -21,17 +21,17 @@ import type {
   FeatureGapViewModel,
   IntegrationComparisonViewModel,
   KeyInsightViewModel,
-  KeywordSpikesViewModel,
   ObjectionHandlerViewModel,
   PainQuoteViewModel,
   PricingPressureViewModel,
   RecommendedPlayViewModel,
+  ReasoningAnchorExamplesViewModel,
+  ReasoningReferenceIdsViewModel,
+  ReasoningWitnessViewModel,
   ResourceAsymmetryViewModel,
-  SegmentPlaybookItemViewModel,
   SwitchingTriggerViewModel,
   TalkTrackViewModel,
   TimingMetricsViewModel,
-  TimingTriggerViewModel,
   TrendAnalysisViewModel,
   VendorScorecardViewModel,
   VendorDeepDiveViewModel,
@@ -174,6 +174,7 @@ export function toCrossVendorBattles(value: unknown): CrossVendorBattleViewModel
     conclusion: asString(item.conclusion),
     confidence: asNumber(item.confidence) ?? null,
     key_insights: toKeyInsights(item.key_insights),
+    reference_ids: toReasoningReferenceIds(item.reference_ids),
   }))
 }
 
@@ -215,6 +216,7 @@ function toCategoryCouncil(value: unknown): CategoryCouncilViewModel | null {
     loser: asString(obj.loser),
     durability: asString(obj.durability),
     key_insights: toKeyInsights(obj.key_insights),
+    reference_ids: toReasoningReferenceIds(obj.reference_ids),
   }
 }
 
@@ -246,6 +248,46 @@ function toDisplacementSummary(value: unknown): ChallengerBriefDisplacementViewM
   }
 }
 
+function toReasoningWitness(value: unknown): ReasoningWitnessViewModel {
+  const obj = asRecord(value)
+  const numericLiterals = asRecord(obj.numeric_literals)
+  return {
+    witness_id: asString(obj.witness_id),
+    _sid: asString(obj._sid),
+    reviewer_company: asString(obj.reviewer_company),
+    reviewer_title: asString(obj.reviewer_title),
+    excerpt_text: asString(obj.excerpt_text),
+    time_anchor: asString(obj.time_anchor),
+    competitor: asString(obj.competitor),
+    witness_type: asString(obj.witness_type),
+    selection_reason: asString(obj.selection_reason),
+    salience_score: asNumber(obj.salience_score) ?? null,
+    numeric_literals: Object.keys(numericLiterals).length > 0 ? numericLiterals : undefined,
+  }
+}
+
+function toReasoningWitnesses(value: unknown): ReasoningWitnessViewModel[] {
+  return toRecordArray(value)
+    .map((item) => toReasoningWitness(item))
+    .filter((item) => Boolean(item.witness_id || item._sid || item.excerpt_text || item.reviewer_company))
+}
+
+function toReasoningAnchorExamples(value: unknown): ReasoningAnchorExamplesViewModel | undefined {
+  const obj = asRecord(value)
+  const entries = Object.entries(obj)
+    .map(([label, rows]) => [label, toReasoningWitnesses(rows)] as const)
+    .filter(([, rows]) => rows.length > 0)
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
+}
+
+function toReasoningReferenceIds(value: unknown): ReasoningReferenceIdsViewModel | undefined {
+  const obj = asRecord(value)
+  const metric_ids = toStringArray(obj.metric_ids)
+  const witness_ids = toStringArray(obj.witness_ids)
+  if (metric_ids.length === 0 && witness_ids.length === 0) return undefined
+  return { metric_ids, witness_ids }
+}
+
 function toIncumbentProfile(value: unknown): ChallengerIncumbentProfileViewModel {
   const obj = asRecord(value)
   return {
@@ -259,6 +301,9 @@ function toIncumbentProfile(value: unknown): ChallengerIncumbentProfileViewModel
     key_signals: toStringArray(obj.key_signals),
     top_weaknesses: toWeaknessAnalysis(obj.top_weaknesses),
     top_pain_quotes: toPainQuotes(obj.top_pain_quotes),
+    reasoning_anchor_examples: toReasoningAnchorExamples(obj.reasoning_anchor_examples),
+    reasoning_witness_highlights: toReasoningWitnesses(obj.reasoning_witness_highlights),
+    reasoning_reference_ids: toReasoningReferenceIds(obj.reasoning_reference_ids),
   }
 }
 
@@ -333,6 +378,10 @@ export function toChallengerBriefViewModel(value: UnknownRecord): ChallengerBrie
     data_sources: Object.fromEntries(
       Object.entries(asRecord(value.data_sources)).filter(([, flag]) => typeof flag === 'boolean'),
     ) as Record<string, boolean>,
+    reasoning_anchor_examples: toReasoningAnchorExamples(value.reasoning_anchor_examples),
+    reasoning_witness_highlights: toReasoningWitnesses(value.reasoning_witness_highlights),
+    reasoning_source: asString(value.reasoning_source),
+    reasoning_reference_ids: toReasoningReferenceIds(value.reasoning_reference_ids),
   }
 }
 
@@ -477,6 +526,8 @@ export function toWeeklyChurnFeedItems(value: unknown): WeeklyChurnFeedItemViewM
     account_pressure_summary: asString(item.account_pressure_summary),
     timing_summary: asString(item.timing_summary),
     priority_timing_triggers: toStringArray(item.priority_timing_triggers),
+    reasoning_source: asString(item.reasoning_source),
+    reasoning_reference_ids: toReasoningReferenceIds(item.reference_ids ?? item.reasoning_reference_ids),
   }))
 }
 
@@ -643,6 +694,13 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     evidence_depth_warning: asString(value.evidence_depth_warning),
     evidence_conclusions: toStringArray(value.evidence_conclusions),
     low_confidence_sections: toStringArray(value.low_confidence_sections),
+    reasoning_section_disclaimers: (() => {
+      const obj = asRecord(value.reasoning_section_disclaimers)
+      const entries = Object.entries(obj).filter(([, message]) => typeof message === 'string' && Boolean(asString(message)))
+      return entries.length > 0
+        ? Object.fromEntries(entries.map(([section, message]) => [section, asString(message)!]))
+        : undefined
+    })(),
     falsification_conditions: toStringArray(value.falsification_conditions),
     uncertainty_sources: toStringArray(value.uncertainty_sources),
     account_pressure_metrics: (() => {
@@ -671,6 +729,10 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     llm_render_status: asString(value.llm_render_status),
     quality_status: asString(value.quality_status ?? asRecord(value.battle_card_quality).status),
     quality_score: asNumber(asRecord(value.battle_card_quality).score) ?? null,
+    quality_failed_checks: toStringArray(asRecord(value.battle_card_quality).failed_checks),
+    quality_warnings: toStringArray(asRecord(value.battle_card_quality).warnings),
+    reasoning_source: asString(value.reasoning_source),
+    reasoning_reference_ids: toReasoningReferenceIds(value.reference_ids ?? value.reasoning_reference_ids),
   }
 }
 
@@ -733,5 +795,7 @@ export function toAccountsInMotionViewModel(value: UnknownRecord): AccountsInMot
     priority_timing_triggers: toStringArray(value.priority_timing_triggers),
     segment_targeting_summary: asString(value.segment_targeting_summary),
     category_council: toCategoryCouncil(value.category_council) ?? undefined,
+    reasoning_source: asString(value.reasoning_source),
+    reasoning_reference_ids: toReasoningReferenceIds(value.reference_ids ?? value.reasoning_reference_ids),
   }
 }

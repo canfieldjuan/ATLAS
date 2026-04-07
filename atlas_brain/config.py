@@ -2700,6 +2700,18 @@ class B2BChurnConfig(BaseSettings):
         default=True,
         description="Require blog drafts to mention a timing or numeric anchor when one is available in the reasoning packet",
     )
+    blog_evidence_anchor_low_signal_labels: list[str] = Field(
+        default_factory=lambda: [
+            "ux",
+            "ui",
+            "review_context",
+            "named_org",
+            "positive_anchor",
+            "complaint",
+            "overall_dissatisfaction",
+        ],
+        description="Low-signal witness labels that should not appear as customer-facing blog evidence anchors",
+    )
     blog_publish_revalidate_enabled: bool = Field(
         default=True,
         description="Re-run the deterministic blog quality and specificity gate before admin publish",
@@ -3437,6 +3449,24 @@ class B2BAlertConfig(BaseSettings):
     min_reviews_for_urgency: int = Field(default=10, ge=1, le=100, description="Min reviews in 7-day window before avg_urgency can trigger alerts")
     cooldown_hours: int = Field(default=24, description="Min hours between alerts for same vendor")
     interval_seconds: int = Field(default=3600, description="Alert check interval (1 hour)")
+
+
+class B2BReportDeliveryConfig(BaseSettings):
+    """Recurring report-subscription delivery configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_REPORT_DELIVERY_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable recurring report-subscription delivery")
+    sender_name: str = Field(default="Atlas Intelligence", description="Display name for recurring report emails")
+    dashboard_base_url: str = Field(default="", description="Optional frontend base URL used in report-delivery links")
+    interval_seconds: int = Field(default=3600, ge=60, le=86400, description="How often to check for due report subscriptions")
+    max_subscriptions_per_run: int = Field(default=25, ge=1, le=250, description="Max due subscriptions processed in a single task run")
+    max_reports_per_delivery: int = Field(default=6, ge=1, le=20, description="Max persisted artifacts included in one recurring library delivery")
+    stale_claim_seconds: int = Field(default=900, ge=60, le=86400, description="How long an in-flight delivery claim can sit before another worker may reclaim it")
+    fresh_hours: int = Field(default=72, ge=1, le=24 * 30, description="Artifacts newer than this are treated as fresh for delivery-policy checks")
+    monitor_hours: int = Field(default=24 * 7, ge=1, le=24 * 90, description="Artifacts newer than this but older than fresh_hours are treated as monitor state")
 
 
 class B2BWebhookConfig(BaseSettings):
@@ -4609,6 +4639,7 @@ class Settings(BaseSettings):
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
+    b2b_report_delivery: B2BReportDeliveryConfig = Field(default_factory=B2BReportDeliveryConfig)
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)

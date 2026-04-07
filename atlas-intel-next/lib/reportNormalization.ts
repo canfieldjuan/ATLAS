@@ -1,4 +1,4 @@
-import type { ReportDetail, VendorProfile } from '@/lib/types'
+import type { ReportDetail, ReportSubscription, VendorProfile } from '@/lib/types'
 
 const JSONISH_PATTERN = /^\s*[\[{].*[\]}]\s*$/s
 const LIST_STRING_KEYS = new Set([
@@ -124,6 +124,35 @@ export function normalizeReportDetail(report: ReportDetail): ReportDetail {
     ...report,
     intelligence_data: normalizeUnknown(report.intelligence_data, 'intelligence_data') as ReportDetail['intelligence_data'],
     data_density: normalizeUnknown(report.data_density, 'data_density') as ReportDetail['data_density'],
+  }
+}
+
+export function normalizeReportSubscription(
+  subscription: ReportSubscription,
+): ReportSubscription {
+  return {
+    ...subscription,
+    scope_label: typeof subscription.scope_label === 'string' ? subscription.scope_label : '',
+    recipient_emails: Array.isArray(subscription.recipient_emails)
+      ? subscription.recipient_emails
+          .map((value) => String(value).trim())
+          .filter(Boolean)
+      : [],
+    delivery_note: typeof subscription.delivery_note === 'string' ? subscription.delivery_note : '',
+    last_delivery_status: (
+      subscription.last_delivery_status === 'sent'
+      || subscription.last_delivery_status === 'partial'
+      || subscription.last_delivery_status === 'skipped'
+      || subscription.last_delivery_status === 'failed'
+    )
+      ? subscription.last_delivery_status
+      : null,
+    last_delivery_at: typeof subscription.last_delivery_at === 'string' ? subscription.last_delivery_at : null,
+    last_delivery_summary: typeof subscription.last_delivery_summary === 'string' ? subscription.last_delivery_summary : '',
+    last_delivery_error: typeof subscription.last_delivery_error === 'string' ? subscription.last_delivery_error : '',
+    last_delivery_report_count: typeof subscription.last_delivery_report_count === 'number'
+      ? subscription.last_delivery_report_count
+      : 0,
   }
 }
 

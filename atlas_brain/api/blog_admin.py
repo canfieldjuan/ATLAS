@@ -475,6 +475,8 @@ async def blog_quality_diagnostics(
     top_n: int = Query(10, ge=1, le=50),
     _user: AuthUser = Depends(require_auth),
 ):
+    from ..autonomous.tasks.b2b_blog_post_generation import _blog_slug_block_reason
+
     pool = get_db_pool()
     if not pool.is_initialized:
         raise HTTPException(503, "Database not ready")
@@ -598,6 +600,14 @@ async def blog_quality_diagnostics(
         days,
         top_n,
     )
+    blocked_slug_rows = await pool.fetch(
+        """
+        SELECT slug, status, COALESCE(rejection_count, 0) AS rejection_count, rejected_at
+        FROM blog_posts
+        WHERE status = 'rejected'
+        ORDER BY COALESCE(rejected_at, created_at) DESC, slug ASC
+        """
+    )
 
     by_status = [
         {"status": str(row["status_value"] or "missing"), "count": int(row["cnt"] or 0)}
@@ -605,12 +615,38 @@ async def blog_quality_diagnostics(
     ]
     active_failure_count = sum(item["count"] for item in by_status if item["status"] == "draft")
     rejected_failure_count = sum(item["count"] for item in by_status if item["status"] == "rejected")
+    blocked_slugs: list[dict[str, object]] = []
+    for row in blocked_slug_rows:
+        reason = _blog_slug_block_reason(row)
+        if reason not in {"retry_limit", "rejection_cooldown"}:
+            continue
+        blocked_slugs.append(
+            {
+                "slug": str(row["slug"] or ""),
+                "reason": str(reason),
+                "rejection_count": int(row["rejection_count"] or 0),
+            }
+        )
+    retry_limit_blocked_count = sum(1 for item in blocked_slugs if item["reason"] == "retry_limit")
+    cooldown_blocked_count = sum(
+        1 for item in blocked_slugs if item["reason"] == "rejection_cooldown"
+    )
+    blocked_slugs.sort(
+        key=lambda item: (
+            0 if item["reason"] == "retry_limit" else 1,
+            -int(item["rejection_count"] or 0),
+            str(item["slug"] or ""),
+        )
+    )
 
     return {
         "days": int(days),
         "top_n": int(top_n),
         "active_failure_count": int(active_failure_count),
         "rejected_failure_count": int(rejected_failure_count),
+        "current_blocked_slug_count": len(blocked_slugs),
+        "retry_limit_blocked_slug_count": int(retry_limit_blocked_count),
+        "cooldown_blocked_slug_count": int(cooldown_blocked_count),
         "by_status": by_status,
         "by_boundary": [
             {"boundary": str(row["boundary"] or "missing"), "count": int(row["cnt"] or 0)}
@@ -636,6 +672,7 @@ async def blog_quality_diagnostics(
             {"subject": str(row["subject"] or "unknown"), "count": int(row["cnt"] or 0)}
             for row in subject_rows
         ],
+        "top_blocked_slugs": blocked_slugs[:top_n],
     }
 
 
@@ -1074,6 +1111,15 @@ async def generate_post(
                     "error": "Blog slug is currently blocked from regeneration",
                     "slug": blueprint.slug,
                     "block_reason": block_reason,
+                    "requires_force_retry": True,
+                    "retry_limit_reached": block_reason == "retry_limit",
+                    "cooldown_active": block_reason == "rejection_cooldown",
+                    "max_rejection_retries": int(
+                        getattr(cfg, "blog_post_max_rejection_retries", 0) or 0
+                    ),
+                    "rejection_cooldown_hours": int(
+                        getattr(cfg, "blog_post_rejection_cooldown_hours", 0) or 0
+                    ),
                 },
             )
     content = await _generate_content_async(
@@ -1147,9 +1193,10 @@ async def generate_post(
             error_message=", ".join(first_pass_audit.get("blocking_issues", [])[:3]) or None,
         )
     if content is None:
+        rejected_content = quality_report.get("_rejected_content") if isinstance(quality_report, dict) else None
         audit = blog_quality_revalidation(
             blueprint=blueprint,
-            content=None,
+            content=rejected_content if isinstance(rejected_content, dict) else None,
             boundary="manual_generate",
             report=quality_report,
         )["audit"]
@@ -1168,7 +1215,7 @@ async def generate_post(
             error_code="quality_gate_rejection",
             error_summary=", ".join(audit.get("blocking_issues", [])[:3]),
             rejection_reason=", ".join(audit.get("blocking_issues", [])[:3]),
-            content=content,
+            content=rejected_content if isinstance(rejected_content, dict) else None,
         )
         await record_attempt(
             pool,

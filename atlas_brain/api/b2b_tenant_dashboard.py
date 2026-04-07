@@ -8,12 +8,12 @@ import asyncio
 import json
 import logging
 import uuid as _uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from ..auth.dependencies import AuthUser, require_auth, require_b2b_plan
 from ..autonomous.tasks.b2b_campaign_generation import (
@@ -52,6 +52,12 @@ logger = logging.getLogger("atlas.api.b2b_tenant")
 
 router = APIRouter(prefix="/b2b/tenant", tags=["b2b-tenant"])
 _LEGACY_ALIAS_REGISTRATION_DONE = False
+_REPORT_SUBSCRIPTION_SCOPE_TYPES = {"library", "report"}
+_REPORT_SUBSCRIPTION_FREQUENCIES = {
+    "weekly": 7,
+    "monthly": 30,
+    "quarterly": 90,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +91,15 @@ def _pool_or_503():
     return pool
 
 
+def _coerce_uuid(value: str | None) -> _uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return _uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _require_b2b_product(user: AuthUser):
     """Raise 403 if user is not on a B2B product."""
     if user.product not in ("b2b_retention", "b2b_challenger"):
@@ -97,6 +112,122 @@ def _is_admin_user(user: AuthUser | None) -> bool:
     if bool(getattr(user, "is_admin", False)):
         return True
     return str(getattr(user, "role", "")).lower() in {"owner", "admin"}
+
+
+def _normalize_report_subscription_scope(scope_type: str, scope_key: str) -> tuple[str, str]:
+    normalized_scope_type = scope_type.strip().lower()
+    if normalized_scope_type not in _REPORT_SUBSCRIPTION_SCOPE_TYPES:
+        raise HTTPException(status_code=400, detail="scope_type must be library or report")
+
+    normalized_scope_key = scope_key.strip()
+    if not normalized_scope_key:
+        raise HTTPException(status_code=400, detail="scope_key is required")
+
+    if normalized_scope_type == "library" and normalized_scope_key != "library":
+        raise HTTPException(status_code=400, detail="Library scope_key must be 'library'")
+
+    return normalized_scope_type, normalized_scope_key
+
+
+def _normalize_report_subscription_recipients(values: list[EmailStr]) -> list[str]:
+    seen: set[str] = set()
+    recipients: list[str] = []
+    for raw_value in values:
+        value = str(raw_value).strip().lower()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        recipients.append(value)
+    return recipients
+
+
+def _next_report_subscription_delivery_at(
+    delivery_frequency: str,
+    enabled: bool,
+) -> datetime | None:
+    if not enabled:
+        return None
+    days = _REPORT_SUBSCRIPTION_FREQUENCIES[delivery_frequency]
+    return datetime.now(timezone.utc) + timedelta(days=days)
+
+
+def _serialize_report_subscription(row) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "scope_type": row["scope_type"],
+        "scope_key": row["scope_key"],
+        "scope_label": row["scope_label"],
+        "report_id": str(row["report_id"]) if row["report_id"] else None,
+        "delivery_frequency": row["delivery_frequency"],
+        "deliverable_focus": row["deliverable_focus"],
+        "freshness_policy": row["freshness_policy"],
+        "recipient_emails": list(row["recipient_emails"] or []),
+        "delivery_note": row["delivery_note"] or "",
+        "enabled": bool(row["enabled"]),
+        "next_delivery_at": row["next_delivery_at"].isoformat() if row["next_delivery_at"] else None,
+        "last_delivery_status": row["last_delivery_status"] or None,
+        "last_delivery_at": row["last_delivery_at"].isoformat() if row["last_delivery_at"] else None,
+        "last_delivery_summary": row["last_delivery_summary"] or "",
+        "last_delivery_error": row["last_delivery_error"] or "",
+        "last_delivery_report_count": int(row["last_delivery_report_count"] or 0),
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+async def _fetch_report_subscription_row(
+    pool,
+    *,
+    account_id: _uuid.UUID | str,
+    scope_type: str,
+    scope_key: str,
+):
+    return await pool.fetchrow(
+        """
+        SELECT s.id, s.scope_type, s.scope_key, s.scope_label, s.report_id,
+               s.delivery_frequency, s.deliverable_focus, s.freshness_policy,
+               s.recipient_emails, s.delivery_note, s.enabled, s.next_delivery_at,
+               s.created_at, s.updated_at,
+               dl.status AS last_delivery_status,
+               dl.delivered_at AS last_delivery_at,
+               dl.summary AS last_delivery_summary,
+               dl.error AS last_delivery_error,
+               COALESCE(array_length(dl.delivered_report_ids, 1), 0) AS last_delivery_report_count
+        FROM b2b_report_subscriptions s
+        LEFT JOIN LATERAL (
+            SELECT status, delivered_at, summary, error, delivered_report_ids
+            FROM b2b_report_subscription_delivery_log
+            WHERE subscription_id = s.id
+              AND status <> 'processing'
+            ORDER BY delivered_at DESC
+            LIMIT 1
+        ) dl ON TRUE
+        WHERE s.account_id = $1::uuid
+          AND s.scope_type = $2
+          AND s.scope_key = $3
+        """,
+        account_id,
+        scope_type,
+        scope_key,
+    )
+
+
+async def _load_accessible_tenant_report(pool, report_id: _uuid.UUID, user: AuthUser):
+    row = await pool.fetchrow("SELECT * FROM b2b_intelligence WHERE id = $1", report_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    if settings.saas_auth.enabled and not _is_admin_user(user) and row["vendor_filter"]:
+        acct = _uuid.UUID(user.account_id)
+        tracked = await pool.fetchval(
+            "SELECT 1 FROM tracked_vendors WHERE account_id = $1 AND vendor_name = $2",
+            acct,
+            row["vendor_filter"],
+        )
+        if not tracked:
+            raise HTTPException(status_code=403, detail="Report vendor not in your tracked list")
+
+    return row
 
 
 async def _tracked_vendor_map(pool, account_id: _uuid.UUID) -> dict[str, dict]:
@@ -243,6 +374,22 @@ class AccountDeepDiveRequest(BaseModel):
     company_name: str = Field(..., min_length=1, max_length=200)
     window_days: int = Field(90, ge=1, le=3650)
     persist: bool = True
+
+
+class ReportSubscriptionUpsertRequest(BaseModel):
+    scope_label: str = Field(..., min_length=1, max_length=255)
+    delivery_frequency: str = Field("weekly", pattern="^(weekly|monthly|quarterly)$")
+    deliverable_focus: str = Field(
+        "all",
+        pattern="^(all|battle_cards|executive_reports|comparison_packs)$",
+    )
+    freshness_policy: str = Field(
+        "fresh_or_monitor",
+        pattern="^(fresh_only|fresh_or_monitor|any)$",
+    )
+    recipients: list[EmailStr] = Field(default_factory=list)
+    delivery_note: str = Field(default="", max_length=2000)
+    enabled: bool = True
 
 
 class CompetitiveSetRequest(BaseModel):
@@ -1594,6 +1741,7 @@ async def get_tenant_pipeline_status(user: AuthUser = Depends(require_auth)):
 
 @router.get("/leads")
 async def list_leads(
+    vendor_name: Optional[str] = Query(None),
     min_urgency: float = Query(7, ge=0, le=10),
     window_days: int = Query(30, ge=1, le=3650),
     limit: int = Query(20, ge=1, le=100),
@@ -1618,6 +1766,7 @@ async def list_leads(
         pool,
         min_urgency=min_urgency,
         window_days=window_days,
+        vendor_name=vendor_name,
         scoped_vendors=scoped_vendors,
         limit=capped,
     )
@@ -1637,6 +1786,22 @@ async def list_leads(
             "lock_in_level": item.get("lock_in_level"),
             "contract_end": item.get("contract_end"),
             "buying_stage": item.get("buying_stage"),
+            "reviewer_title": item.get("title"),
+            "company_size": item.get("company_size"),
+            "industry": item.get("industry"),
+            "review_id": item.get("review_id"),
+            "source": item.get("source"),
+            "quotes": _safe_json(item.get("quotes")),
+            "intent_signals": item.get("intent_signals"),
+            "relevance_score": _safe_float(item.get("relevance_score")),
+            "author_churn_score": _safe_float(item.get("author_churn_score")),
+            "resolution_confidence": item.get("resolution_confidence"),
+            "verified_employee_count": item.get("verified_employee_count"),
+            "company_domain": item.get("company_domain"),
+            "company_country": item.get("company_country"),
+            "revenue_range": item.get("revenue_range"),
+            "founded_year": item.get("founded_year"),
+            "company_description": item.get("company_description"),
         }
         for item in items
     ]
@@ -1655,15 +1820,13 @@ async def list_tenant_high_intent(
     """Compatibility alias for legacy high-intent payload shape."""
     _require_b2b_product(user)
     lead_payload = await list_leads(
+        vendor_name=vendor_name,
         min_urgency=min_urgency,
         window_days=window_days,
         limit=limit,
         user=user,
     )
     companies = lead_payload["leads"]
-    if vendor_name:
-        needle = vendor_name.lower().strip()
-        companies = [c for c in companies if needle in str(c.get("vendor") or "").lower()]
     return {"companies": companies, "count": len(companies)}
 
 
@@ -1933,20 +2096,7 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         raise HTTPException(status_code=400, detail="Invalid report_id (must be UUID)")
 
     pool = _pool_or_503()
-    row = await pool.fetchrow("SELECT * FROM b2b_intelligence WHERE id = $1", rid)
-    if not row:
-        raise HTTPException(status_code=404, detail="Report not found")
-
-    # Verify vendor is tracked
-    if settings.saas_auth.enabled and not _is_admin_user(user) and row["vendor_filter"]:
-        acct = _uuid.UUID(user.account_id)
-        tracked = await pool.fetchval(
-            "SELECT 1 FROM tracked_vendors WHERE account_id = $1 AND vendor_name = $2",
-            acct,
-            row["vendor_filter"],
-        )
-        if not tracked:
-            raise HTTPException(status_code=403, detail="Report vendor not in your tracked list")
+    row = await _load_accessible_tenant_report(pool, rid, user)
 
     intelligence_data = _safe_json(row["intelligence_data"])
     quality_status = None
@@ -1991,6 +2141,149 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         "llm_model": row["llm_model"],
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }
+
+
+@router.get("/report-subscriptions/{scope_type}/{scope_key}")
+async def get_report_subscription(
+    scope_type: str,
+    scope_key: str,
+    user: AuthUser = Depends(require_auth),
+):
+    """Load the saved recurring-delivery policy for the library or a specific report."""
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    normalized_scope_type, normalized_scope_key = _normalize_report_subscription_scope(
+        scope_type,
+        scope_key,
+    )
+
+    if normalized_scope_type == "report":
+        report_id = _coerce_uuid(normalized_scope_key)
+        if not report_id:
+            raise HTTPException(status_code=400, detail="scope_key must be a report UUID")
+        await _load_accessible_tenant_report(pool, report_id, user)
+
+    row = await _fetch_report_subscription_row(
+        pool,
+        account_id=user.account_id,
+        scope_type=normalized_scope_type,
+        scope_key=normalized_scope_key,
+    )
+
+    return {"subscription": _serialize_report_subscription(row) if row else None}
+
+
+@router.put("/report-subscriptions/{scope_type}/{scope_key}")
+async def upsert_report_subscription(
+    scope_type: str,
+    scope_key: str,
+    body: ReportSubscriptionUpsertRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    """Create or update the saved recurring-delivery policy for the library or a specific report."""
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    normalized_scope_type, normalized_scope_key = _normalize_report_subscription_scope(
+        scope_type,
+        scope_key,
+    )
+    account_id = _uuid.UUID(user.account_id)
+    user_id = _coerce_uuid(getattr(user, "user_id", None))
+
+    report_id: _uuid.UUID | None = None
+    if normalized_scope_type == "report":
+        report_id = _coerce_uuid(normalized_scope_key)
+        if not report_id:
+            raise HTTPException(status_code=400, detail="scope_key must be a report UUID")
+        await _load_accessible_tenant_report(pool, report_id, user)
+
+    normalized_recipients = _normalize_report_subscription_recipients(body.recipients)
+    if body.enabled and not normalized_recipients:
+        raise HTTPException(
+            status_code=400,
+            detail="Add at least one recipient before enabling recurring delivery",
+        )
+
+    scope_label = body.scope_label.strip()
+    if not scope_label:
+        raise HTTPException(status_code=400, detail="scope_label is required")
+
+    next_delivery_at = _next_report_subscription_delivery_at(
+        body.delivery_frequency,
+        body.enabled,
+    )
+
+    await pool.execute(
+        """
+        INSERT INTO b2b_report_subscriptions (
+            account_id,
+            report_id,
+            scope_type,
+            scope_key,
+            scope_label,
+            delivery_frequency,
+            deliverable_focus,
+            freshness_policy,
+            recipient_emails,
+            delivery_note,
+            enabled,
+            next_delivery_at,
+            created_by,
+            updated_by
+        )
+        VALUES (
+            $1::uuid,
+            $2::uuid,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9::text[],
+            $10,
+            $11,
+            $12,
+            $13::uuid,
+            $13::uuid
+        )
+        ON CONFLICT (account_id, scope_type, scope_key)
+        DO UPDATE
+        SET report_id = EXCLUDED.report_id,
+            scope_label = EXCLUDED.scope_label,
+            delivery_frequency = EXCLUDED.delivery_frequency,
+            deliverable_focus = EXCLUDED.deliverable_focus,
+            freshness_policy = EXCLUDED.freshness_policy,
+            recipient_emails = EXCLUDED.recipient_emails,
+            delivery_note = EXCLUDED.delivery_note,
+            enabled = EXCLUDED.enabled,
+            next_delivery_at = EXCLUDED.next_delivery_at,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = NOW()
+        """,
+        account_id,
+        report_id,
+        normalized_scope_type,
+        normalized_scope_key,
+        scope_label,
+        body.delivery_frequency,
+        body.deliverable_focus,
+        body.freshness_policy,
+        normalized_recipients,
+        body.delivery_note.strip(),
+        body.enabled,
+        next_delivery_at,
+        user_id,
+    )
+
+    row = await _fetch_report_subscription_row(
+        pool,
+        account_id=account_id,
+        scope_type=normalized_scope_type,
+        scope_key=normalized_scope_key,
+    )
+
+    return {"subscription": _serialize_report_subscription(row)}
 
 
 @router.get("/reviews")

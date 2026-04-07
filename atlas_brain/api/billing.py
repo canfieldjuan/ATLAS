@@ -88,6 +88,10 @@ class PortalResponse(BaseModel):
     portal_url: str
 
 
+class PortalRequest(BaseModel):
+    return_url: str = ""
+
+
 class BillingStatus(BaseModel):
     plan: str
     plan_status: str
@@ -176,7 +180,7 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
 
 
 @router.post("/portal", response_model=PortalResponse)
-async def create_portal(user: AuthUser = Depends(require_auth)):
+async def create_portal(req: PortalRequest, user: AuthUser = Depends(require_auth)):
     """Create a Stripe Customer Portal session."""
     if user.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="Only account owner/admin can manage billing")
@@ -193,6 +197,7 @@ async def create_portal(user: AuthUser = Depends(require_auth)):
 
     session = stripe.billing_portal.Session.create(
         customer=customer_id,
+        return_url=req.return_url or None,
         timeout=10,
     )
 

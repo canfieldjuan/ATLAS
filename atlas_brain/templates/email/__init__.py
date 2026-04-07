@@ -28,6 +28,10 @@ from .vendor_report_delivery import (
     render_report_delivery_html,
     render_report_delivery_text,
 )
+from .report_subscription_delivery import (
+    render_report_subscription_delivery_html,
+    render_report_subscription_delivery_text,
+)
 
 __all__ = [
     "BUSINESS_NAME",
@@ -45,4 +49,6 @@ __all__ = [
     "render_checkout_confirmation_text",
     "render_report_delivery_html",
     "render_report_delivery_text",
+    "render_report_subscription_delivery_html",
+    "render_report_subscription_delivery_text",
 ]

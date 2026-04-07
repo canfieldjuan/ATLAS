@@ -1,10 +1,9 @@
 import { clsx } from 'clsx'
 import { Clock, Crosshair, MessageSquareQuote, Shield, Swords, Target, TrendingDown, Users, Zap } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import ArchetypeBadge from '@/components/ArchetypeBadge'
 import { StructuredReportData } from '@/components/report-renderers/StructuredReportData'
 import { normalizeReportObject, normalizeUnknown } from '@/lib/reportNormalization'
-import { useState } from 'react'
 import {
   toBattleCardViewModel,
   toAccountsInMotionViewModel,
@@ -25,6 +24,9 @@ import type {
   FeatureGapViewModel,
   ObjectionHandlerViewModel,
   RecommendedPlayViewModel,
+  ReasoningAnchorExamplesViewModel,
+  ReasoningReferenceIdsViewModel,
+  ReasoningWitnessViewModel,
   TalkTrackViewModel,
   VendorDeepDiveViewModel,
   VendorScorecardViewModel,
@@ -71,6 +73,49 @@ function MetricRow({ label, value, color }: { label: string; value: string | num
   )
 }
 
+function reasoningSourceLabel(value: string | undefined): string {
+  if (!value) return 'Deterministic'
+  if (value === 'b2b_reasoning_synthesis') return 'Synthesis-backed'
+  return value.replace(/_/g, ' ')
+}
+
+function referenceIdCounts(referenceIds: ReasoningReferenceIdsViewModel | undefined): { metrics: number; witnesses: number; total: number } {
+  const metrics = referenceIds?.metric_ids.length ?? 0
+  const witnesses = referenceIds?.witness_ids.length ?? 0
+  return { metrics, witnesses, total: metrics + witnesses }
+}
+
+function ProvenanceStrip({
+  source,
+  referenceIds,
+  extraBadges = [],
+}: {
+  source?: string
+  referenceIds?: ReasoningReferenceIdsViewModel
+  extraBadges?: string[]
+}) {
+  const counts = referenceIdCounts(referenceIds)
+  const badges = [
+    `Source: ${reasoningSourceLabel(source)}`,
+    counts.total > 0 ? `${counts.total} refs` : 'No refs',
+    counts.metrics > 0 ? `${counts.metrics} metrics` : null,
+    counts.witnesses > 0 ? `${counts.witnesses} witnesses` : null,
+    ...extraBadges,
+  ].filter(Boolean) as string[]
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {badges.map((badge) => (
+        <span
+          key={badge}
+          className="px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300"
+        >
+          {badge}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== 'number') return '--'
   return `${(value * 100).toFixed(1)}%`
@@ -86,6 +131,70 @@ function riskColor(level: string | undefined): string {
   return colors[level ?? ''] ?? 'text-slate-300'
 }
 
+const REASONING_ANCHOR_PRIORITY = ['outlier_or_named_account', 'common_pattern', 'counterevidence'] as const
+
+const REASONING_ANCHOR_LABELS: Record<string, string> = {
+  outlier_or_named_account: 'Named Account / Outlier',
+  common_pattern: 'Common Pattern',
+  counterevidence: 'Counterevidence',
+}
+
+function reasoningWitnessKey(witness: ReasoningWitnessViewModel): string {
+  return witness.witness_id ?? witness._sid ?? `${witness.reviewer_company ?? ''}:${witness.excerpt_text ?? ''}`
+}
+
+function reasoningAnchorRows(
+  anchorExamples: ReasoningAnchorExamplesViewModel | undefined,
+  witnessHighlights: ReasoningWitnessViewModel[] | undefined,
+): Array<{ label?: string; witness: ReasoningWitnessViewModel }> {
+  const seen = new Set<string>()
+  const rows: Array<{ label?: string; witness: ReasoningWitnessViewModel }> = []
+
+  const addRow = (witness: ReasoningWitnessViewModel, label?: string) => {
+    const key = reasoningWitnessKey(witness)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    rows.push({ label, witness })
+  }
+
+  const anchors = anchorExamples ?? {}
+  const orderedLabels = [
+    ...REASONING_ANCHOR_PRIORITY,
+    ...Object.keys(anchors).filter((label) => !REASONING_ANCHOR_PRIORITY.includes(label as (typeof REASONING_ANCHOR_PRIORITY)[number])).sort(),
+  ]
+  for (const label of orderedLabels) {
+    const match = (anchors[label] ?? []).find((witness) => Boolean(reasoningWitnessKey(witness)))
+    if (match) addRow(match, label)
+  }
+  if (rows.length > 0) return rows
+
+  for (const witness of witnessHighlights ?? []) addRow(witness)
+  return rows
+}
+
+function reasoningNumericTokens(witness: ReasoningWitnessViewModel): string[] {
+  const numericLiterals = witness.numeric_literals
+  if (!numericLiterals || typeof numericLiterals !== 'object') return []
+  const tokens: string[] = []
+  for (const [key, value] of Object.entries(numericLiterals)) {
+    const values = Array.isArray(value) ? value : [value]
+    const formatted = values
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean)
+      .join(', ')
+    if (formatted) tokens.push(`${key.replace(/_/g, ' ')}: ${formatted}`)
+  }
+  return tokens
+}
+
+function reasoningWitnessDetails(witness: ReasoningWitnessViewModel): string[] {
+  const details: string[] = []
+  if (witness.reviewer_company) details.push(witness.reviewer_company)
+  if (witness.time_anchor) details.push(witness.time_anchor)
+  if (witness.competitor) details.push(`vs ${witness.competitor}`)
+  return details.concat(reasoningNumericTokens(witness))
+}
+
 function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
   const disp = data.displacement_summary
   const inc = data.incumbent_profile
@@ -95,9 +204,21 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
   const playbook = data.sales_playbook
   const integ = data.integration_comparison
   const sources = data.data_sources
+  const anchorExamples = Object.keys(inc.reasoning_anchor_examples ?? {}).length > 0
+    ? inc.reasoning_anchor_examples
+    : data.reasoning_anchor_examples
+  const witnessHighlights = (inc.reasoning_witness_highlights && inc.reasoning_witness_highlights.length > 0)
+    ? inc.reasoning_witness_highlights
+    : data.reasoning_witness_highlights
+  const anchorRows = reasoningAnchorRows(anchorExamples, witnessHighlights)
 
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
+      <ProvenanceStrip
+        source={data.reasoning_source}
+        referenceIds={data.reasoning_reference_ids}
+        extraBadges={h2h.reference_ids ? [`Head-to-head refs: ${referenceIdCounts(h2h.reference_ids).total}`] : []}
+      />
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(sources).map(([key, value]) => (
           <span
@@ -129,7 +250,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
         )}
         {disp.key_quote && (
           <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2 break-words whitespace-pre-wrap">
-            "{disp.key_quote}"
+            &quot;{disp.key_quote}&quot;
           </blockquote>
         )}
       </SectionCard>
@@ -194,12 +315,49 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
               <p className="text-xs font-medium text-slate-400 mb-1">Customer Pain</p>
               {inc.top_pain_quotes.slice(0, 5).map((quote, index: number) => (
                 <blockquote key={index} className="text-sm text-slate-300 italic border-l-2 border-red-500/50 pl-3">
-                  "{typeof quote === 'string' ? quote : quote?.quote ?? ''}"
+                  &quot;{typeof quote === 'string' ? quote : quote?.quote ?? ''}&quot;
                   {quote?.source_site && <span className="text-xs text-slate-500 not-italic ml-2">({quote.source_site})</span>}
                 </blockquote>
               ))}
             </div>
           )}
+        </SectionCard>
+      )}
+
+      {anchorRows.length > 0 && (
+        <SectionCard title="Reasoning Anchors" icon={<Crosshair className="h-4 w-4 text-cyan-400" />}>
+          <div className="space-y-3">
+            {anchorRows.map(({ label, witness }) => {
+              const details = reasoningWitnessDetails(witness)
+              const witnessKey = reasoningWitnessKey(witness)
+              return (
+                <div key={`${label ?? 'witness'}:${witnessKey}`} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3">
+                  {label && (
+                    <p className="text-[10px] uppercase tracking-wide text-cyan-300 mb-2">
+                      {REASONING_ANCHOR_LABELS[label] ?? label.replace(/_/g, ' ')}
+                    </p>
+                  )}
+                  {witness.excerpt_text && (
+                    <blockquote className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 break-words whitespace-pre-wrap">
+                      &quot;{witness.excerpt_text}&quot;
+                    </blockquote>
+                  )}
+                  {details.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {details.map((detail) => (
+                        <span
+                          key={`${witnessKey}:${detail}`}
+                          className="px-2 py-0.5 rounded text-xs font-medium bg-slate-900 text-slate-300"
+                        >
+                          {detail}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </SectionCard>
       )}
 
@@ -271,6 +429,12 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
 
       {(h2h.conclusion || h2h.winner) && (
         <SectionCard title="Head to Head" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
+          <div className="mb-3">
+            <ProvenanceStrip
+              source={h2h.synthesized ? 'displacement_fallback' : 'b2b_reasoning_synthesis'}
+              referenceIds={h2h.reference_ids}
+            />
+          </div>
           <div className="space-y-1">
             {h2h.winner && <MetricRow label="Winner" value={h2h.winner} color="text-cyan-400 font-bold" />}
             {h2h.confidence != null && <MetricRow label="Confidence" value={formatPercent(h2h.confidence)} />}
@@ -444,6 +608,11 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
 
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
+      <ProvenanceStrip
+        source={data.reasoning_source}
+        referenceIds={data.reasoning_reference_ids}
+        extraBadges={data.category_council?.reference_ids ? [`Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}`] : []}
+      />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-xs text-slate-400 mb-1">Total Accounts</p>
@@ -545,6 +714,12 @@ function AccountsInMotionDetail({ data }: { data: AccountsInMotionViewModel }) {
 
       {data.category_council && (data.category_council.conclusion || data.category_council.market_regime) && (
         <SectionCard title="Category Council" icon={<Users className="h-4 w-4 text-emerald-400" />}>
+          <div className="mb-3">
+            <ProvenanceStrip
+              source="b2b_reasoning_synthesis"
+              referenceIds={data.category_council.reference_ids}
+            />
+          </div>
           <div className="space-y-1">
             {data.category_council.market_regime && <MetricRow label="Market Regime" value={data.category_council.market_regime.replace(/_/g, ' ')} />}
             {data.category_council.winner && <MetricRow label="Category Winner" value={data.category_council.winner} color="text-green-400" />}
@@ -629,9 +804,6 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
   const qualityLabel = data.quality_status
     ? data.quality_status.replace(/_/g, ' ')
     : null
-  const hiCompanies = Array.isArray(rawData.high_intent_companies)
-    ? (rawData.high_intent_companies as Record<string, unknown>[])
-    : []
 
   const skipKeys = [
     // Explicitly rendered fields
@@ -658,12 +830,20 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
     'synthesis_wedge', 'synthesis_wedge_label', 'risk_level',
     'ecosystem_context',
     'evidence_window', 'evidence_window_days',
-    'reasoning_source', 'synthesis_schema_version', 'section_disclaimers',
+    'reasoning_source', 'reasoning_reference_ids', 'reference_ids', 'synthesis_schema_version', 'section_disclaimers', 'reasoning_section_disclaimers',
     'category_dynamics', 'timing_metrics',
   ]
 
   return (
     <div className="space-y-6 min-w-0 [overflow-wrap:anywhere]">
+      <ProvenanceStrip
+        source={data.reasoning_source}
+        referenceIds={data.reasoning_reference_ids}
+        extraBadges={[
+          data.cross_vendor_battles.length > 0 ? `${data.cross_vendor_battles.length} battles` : '',
+          data.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}` : '',
+        ].filter(Boolean)}
+      />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 text-center">
           <p className="text-xs text-slate-400 mb-1">Churn Pressure</p>
@@ -683,14 +863,36 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
         </div>
       </div>
       {(qualityLabel || data.quality_score != null) && (
-        <div className="flex flex-wrap items-center gap-2">
-          {qualityLabel && (
-            <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${qualityClass}`}>
-              {qualityLabel}
-            </span>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {qualityLabel && (
+              <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${qualityClass}`}>
+                {qualityLabel}
+              </span>
+            )}
+            {data.quality_score != null && (
+              <span className="text-xs text-slate-400">quality score: <span className="text-white font-medium">{Math.round(data.quality_score)}</span></span>
+            )}
+          </div>
+          {data.quality_failed_checks.length > 0 && (
+            <div className="bg-rose-500/10 border border-rose-500/20 rounded-lg p-3">
+              <p className="text-xs font-medium text-rose-300 mb-1">Quality blockers</p>
+              <ul className="space-y-0.5">
+                {data.quality_failed_checks.map((check, i) => (
+                  <li key={i} className="text-xs text-rose-300/80">{check}</li>
+                ))}
+              </ul>
+            </div>
           )}
-          {data.quality_score != null && (
-            <span className="text-xs text-slate-400">quality score: <span className="text-white font-medium">{Math.round(data.quality_score)}</span></span>
+          {data.quality_warnings.length > 0 && data.quality_failed_checks.length === 0 && (
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+              <p className="text-xs font-medium text-amber-300 mb-1">Quality warnings</p>
+              <ul className="space-y-0.5">
+                {data.quality_warnings.map((warning, i) => (
+                  <li key={i} className="text-xs text-amber-300/80">{warning}</li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       )}
@@ -711,7 +913,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
               <div key={index} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-1.5">
                 <p className="text-sm font-medium text-white">{weakness.weakness ?? weakness.area ?? weakness.name ?? ''}</p>
                 {weakness.evidence && <p className="text-xs text-slate-400">{weakness.evidence}</p>}
-                {weakness.customer_quote && <blockquote className="text-xs text-slate-300 italic border-l-2 border-cyan-500/50 pl-2 break-words">"{weakness.customer_quote}"</blockquote>}
+                {weakness.customer_quote && <blockquote className="text-xs text-slate-300 italic border-l-2 border-cyan-500/50 pl-2 break-words">&quot;{weakness.customer_quote}&quot;</blockquote>}
                 {weakness.winning_position && <p className="text-xs text-cyan-300">{weakness.winning_position}</p>}
               </div>
             ))}
@@ -786,7 +988,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {data.customer_pain_quotes.slice(0, 6).map((quote, index) => (
               <div key={index} className="bg-slate-800/50 border border-slate-700/40 rounded-lg p-3 space-y-1.5">
-                <blockquote className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-2 break-words">"{quote.quote}"</blockquote>
+                <blockquote className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-2 break-words">&quot;{quote.quote}&quot;</blockquote>
                 <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                   {quote.company && <span>{quote.company}</span>}
                   {quote.role && <span>{quote.role}</span>}
@@ -850,6 +1052,9 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
               <div className="space-y-2">
                 {data.cross_vendor_battles.slice(0, 4).map((battle, index) => (
                   <div key={index} className="bg-slate-800/50 rounded-lg p-3">
+                    <div className="mb-2">
+                      <ProvenanceStrip source="b2b_reasoning_synthesis" referenceIds={battle.reference_ids} />
+                    </div>
                     <div className="flex flex-wrap gap-2 text-xs mb-1.5">
                       {battle.opponent && <span className="text-white font-medium">vs {battle.opponent}</span>}
                       {battle.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {battle.winner}</span>}
@@ -879,13 +1084,18 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
               {data.resource_asymmetry?.conclusion && <p className="text-sm text-slate-300 mb-3">{data.resource_asymmetry.conclusion}</p>}
               {data.resource_asymmetry?.resource_advantage && <MetricRow label="Resource Advantage" value={data.resource_asymmetry.resource_advantage} />}
               {data.category_council && (
-                <div className="flex flex-wrap gap-2 text-xs mb-2 mt-3">
-                  {data.category_council.market_regime && <span className="px-2 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{data.category_council.market_regime}</span>}
-                  {data.category_council.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {data.category_council.winner}</span>}
-                  {data.category_council.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {data.category_council.loser}</span>}
-                  {data.category_council.confidence != null && data.category_council.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(data.category_council.confidence * 100)}% conf.</span>}
-                  {data.category_council.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{data.category_council.durability}</span>}
-                </div>
+                <>
+                  <div className="mt-3 mb-2">
+                    <ProvenanceStrip source="b2b_reasoning_synthesis" referenceIds={data.category_council.reference_ids} />
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs mb-2">
+                    {data.category_council.market_regime && <span className="px-2 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{data.category_council.market_regime}</span>}
+                    {data.category_council.winner && <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {data.category_council.winner}</span>}
+                    {data.category_council.loser && <span className="px-2 py-0.5 bg-red-500/15 text-red-300 rounded">loser: {data.category_council.loser}</span>}
+                    {data.category_council.confidence != null && data.category_council.confidence > 0 && <span className="px-2 py-0.5 bg-slate-700/50 text-slate-300 rounded">{Math.round(data.category_council.confidence * 100)}% conf.</span>}
+                    {data.category_council.durability && <span className="px-2 py-0.5 bg-amber-500/15 text-amber-300 rounded">{data.category_council.durability}</span>}
+                  </div>
+                </>
               )}
               {data.category_council?.conclusion && <p className="text-sm text-slate-300">{data.category_council.conclusion}</p>}
               {data.category_council?.key_insights.length ? (
@@ -942,7 +1152,7 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
       )}
 
       {/* Evidence Posture */}
-      {(data.evidence_depth_warning || data.low_confidence_sections.length > 0 || data.uncertainty_sources.length > 0 || data.falsification_conditions.length > 0 || data.evidence_conclusions.length > 0) && (
+      {(data.evidence_depth_warning || data.low_confidence_sections.length > 0 || Object.keys(data.reasoning_section_disclaimers ?? {}).length > 0 || data.uncertainty_sources.length > 0 || data.falsification_conditions.length > 0 || data.evidence_conclusions.length > 0) && (
         <SectionCard title="Evidence Posture" icon={<Shield className="h-4 w-4 text-amber-400" />}>
           {data.evidence_depth_warning && (
             <p className="text-xs text-amber-300 mb-3">{data.evidence_depth_warning}</p>
@@ -956,12 +1166,18 @@ function BattleCardDetail({ data, rawData }: { data: BattleCardViewModel; rawDat
                 ))}</ul>
               </div>
             )}
-            {(data.low_confidence_sections.length > 0 || data.uncertainty_sources.length > 0) && (
+            {(data.low_confidence_sections.length > 0 || Object.keys(data.reasoning_section_disclaimers ?? {}).length > 0 || data.uncertainty_sources.length > 0) && (
               <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3">
                 <p className="text-amber-400 font-medium mb-1.5">Use Carefully</p>
                 <ul className="space-y-1">
                   {data.low_confidence_sections.map((s, i) => (
                     <li key={`lc-${i}`} className="text-slate-400 flex gap-1.5"><span className="text-amber-400 shrink-0">!</span><span>{s}</span></li>
+                  ))}
+                  {Object.entries(data.reasoning_section_disclaimers ?? {}).map(([section, disclaimer]) => (
+                    <li key={`rsd-${section}`} className="text-slate-400 flex gap-1.5">
+                      <span className="text-amber-400 shrink-0">!</span>
+                      <span><span className="text-slate-300">{section.replace(/_/g, ' ')}:</span> {disclaimer}</span>
+                    </li>
                   ))}
                   {data.uncertainty_sources.map((s, i) => (
                     <li key={`us-${i}`} className="text-slate-400 flex gap-1.5"><span className="text-slate-500 shrink-0">?</span><span>{s}</span></li>
@@ -1249,14 +1465,14 @@ function ComparisonReportDetail({ data, rawData }: { data: ComparisonReportViewM
         <SectionCard title={`${data.primary_name ?? 'Primary'} Snapshot`}>
           {data.primary_top_pains.length > 0 && <MetricRow label="Top Pain" value={data.primary_top_pains[0]?.feature ?? data.primary_top_pains[0]?.category} />}
           {data.primary_quote_highlights.slice(0, 2).map((quote, index) => (
-            <blockquote key={index} className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2">"{quote}"</blockquote>
+            <blockquote key={index} className="text-sm text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 mt-2">&quot;{quote}&quot;</blockquote>
           ))}
         </SectionCard>
 
         <SectionCard title={`${data.comparison_name ?? 'Comparison'} Snapshot`}>
           {data.comparison_top_pains.length > 0 && <MetricRow label="Top Pain" value={data.comparison_top_pains[0]?.feature ?? data.comparison_top_pains[0]?.category} />}
           {data.comparison_quote_highlights.slice(0, 2).map((quote, index) => (
-            <blockquote key={index} className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-3 mt-2">"{quote}"</blockquote>
+            <blockquote key={index} className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-3 mt-2">&quot;{quote}&quot;</blockquote>
           ))}
         </SectionCard>
       </div>
@@ -1315,11 +1531,19 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
     <div className="space-y-3 min-w-0 [overflow-wrap:anywhere]">
       {items.map((item, index) => {
         const maxPain = Number(item.pain_breakdown[0]?.count ?? item.pain_breakdown[0]?.mentions ?? 1)
+        const hasProvenance = Boolean(item.reasoning_source || item.reasoning_reference_ids || item.category_council?.reference_ids)
         return (
           <div
             key={`${item.vendor ?? 'feed'}-${index}`}
             className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4 space-y-2.5"
           >
+            {hasProvenance && (
+              <ProvenanceStrip
+                source={item.reasoning_source}
+                referenceIds={item.reasoning_reference_ids}
+                extraBadges={item.category_council?.reference_ids ? [`Council refs: ${referenceIdCounts(item.category_council.reference_ids).total}`] : []}
+              />
+            )}
             {/* Header row */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
@@ -1385,7 +1609,7 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
             {/* Key quote */}
             {item.key_quote && (
               <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/30 pl-2 break-words">
-                "{item.key_quote}"
+                &quot;{item.key_quote}&quot;
               </blockquote>
             )}
 
@@ -1435,6 +1659,9 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
             {/* Category Council */}
             {item.category_council?.conclusion && (
               <div className="text-xs">
+                <div className="mb-2">
+                  <ProvenanceStrip source="b2b_reasoning_synthesis" referenceIds={item.category_council.reference_ids} />
+                </div>
                 <div className="flex flex-wrap gap-1.5 mb-1">
                   {item.category_council.market_regime && <span className="px-1.5 py-0.5 bg-indigo-500/15 text-indigo-300 rounded">{item.category_council.market_regime}</span>}
                   {item.category_council.winner && <span className="px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 rounded">winner: {item.category_council.winner}</span>}
@@ -1885,7 +2112,7 @@ function CategoryOverviewDetail({ items }: { items: CategoryOverviewItem[] }) {
 
               {study?.quote && (
                 <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/30 pl-2 line-clamp-3">
-                  "{study.quote}"
+                  &quot;{study.quote}&quot;
                   {study.company && <span className="not-italic text-slate-600"> — {study.company}</span>}
                 </blockquote>
               )}
@@ -1937,14 +2164,6 @@ interface DriverSummaryRow {
   mentions?: number | null
   pct?: number | null
   flow_count?: number | null
-}
-
-interface DisplacementReportData {
-  meta?: DisplacementMeta | null
-  market_losers?: DisplacementVendorRow[] | null
-  market_winners?: DisplacementVendorRow[] | null
-  top_battles?: DisplacementBattle[] | null
-  driver_summary?: DriverSummaryRow[] | null
 }
 
 function signalColor(strength: string | null | undefined): string {
@@ -2146,7 +2365,7 @@ function DisplacementReportDetail({ data }: { data: Record<string, unknown> }) {
                 {/* Quote */}
                 {b.key_quote && (
                   <blockquote className="text-xs text-slate-400 italic border-l-2 border-cyan-500/40 pl-2 break-words whitespace-pre-wrap">
-                    "{b.key_quote}"
+                    &quot;{b.key_quote}&quot;
                   </blockquote>
                 )}
                 {/* Conclusion */}

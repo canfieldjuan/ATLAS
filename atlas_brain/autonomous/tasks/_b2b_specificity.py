@@ -1,5 +1,6 @@
 import copy
 import re
+from collections.abc import Callable
 from typing import Any
 
 
@@ -360,6 +361,7 @@ def evaluate_specificity_support(
     require_anchor_support: bool = True,
     require_timing_or_numeric_when_available: bool = False,
     include_competitor_terms: bool = True,
+    numeric_term_filter: Callable[[str], bool] | None = None,
 ) -> dict[str, Any]:
     normalized_text = _normalize_text(text)
     blocking_issues: list[str] = []
@@ -379,6 +381,10 @@ def evaluate_specificity_support(
         witness_highlights=witness_highlights,
         allow_company_names=allow_company_names,
     )
+    if numeric_term_filter is not None:
+        terms["numeric_terms"] = {
+            term for term in terms["numeric_terms"] if numeric_term_filter(term)
+        }
     active_groups = {
         "timing_terms": terms["timing_terms"],
         "numeric_terms": terms["numeric_terms"],

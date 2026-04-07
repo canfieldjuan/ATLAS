@@ -161,7 +161,10 @@ Do not quote anchor context directly unless it also appears in `quotable_phrases
 
 ## Content rules
 
-- Write 2500-3500 words.
+- Aim for a length that fits the topic:
+  - `vendor_showdown`, `market_landscape`, `best_fit_guide`: 2600-3400 words
+  - `vendor_deep_dive`, `vendor_alternative`, `churn_report`, `pain_point_roundup`: 2200-3200 words
+  - `pricing_reality_check`, `migration_guide`, `switching_story`: 1800-2600 words
 - Use concise paragraphs.
 - Use markdown headings, bullets, blockquotes, and HTML tables when useful.
 - After a question-like H2, start with a direct 40-60 word answer before expanding.

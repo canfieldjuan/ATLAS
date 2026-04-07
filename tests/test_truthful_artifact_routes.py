@@ -1,6 +1,6 @@
 """Route-level tests for truthful blog/report artifact fields."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -245,6 +245,21 @@ def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
                 return [{"topic_type": "migration_guide", "cnt": 2}]
             if "AS subject" in query:
                 return [{"subject": "Shopify", "cnt": 2}]
+            if "COALESCE(rejection_count, 0) AS rejection_count" in query:
+                return [
+                    {
+                        "slug": "clickup-deep-dive-2026-04",
+                        "status": "rejected",
+                        "rejection_count": 3,
+                        "rejected_at": datetime.now(timezone.utc) - timedelta(days=2),
+                    },
+                    {
+                        "slug": "asana-deep-dive-2026-04",
+                        "status": "rejected",
+                        "rejection_count": 1,
+                        "rejected_at": datetime.now(timezone.utc) - timedelta(hours=2),
+                    },
+                ]
             return []
 
     monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
@@ -256,12 +271,18 @@ def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
     body = response.json()
     assert body["active_failure_count"] == 1
     assert body["rejected_failure_count"] == 2
+    assert body["current_blocked_slug_count"] == 2
+    assert body["retry_limit_blocked_slug_count"] == 1
+    assert body["cooldown_blocked_slug_count"] == 1
     assert body["by_status"][0]["status"] == "draft"
     assert body["by_boundary"][0]["boundary"] == "publish"
     assert body["by_cause_type"][0]["cause_type"] == "unsupported_claim"
     assert body["top_primary_blockers"][0]["reason"] == "unsupported_data_claim:Magento"
     assert body["by_topic_type"][0]["topic_type"] == "migration_guide"
     assert body["top_subjects"][0]["subject"] == "Shopify"
+    assert body["top_blocked_slugs"][0]["slug"] == "clickup-deep-dive-2026-04"
+    assert body["top_blocked_slugs"][0]["reason"] == "retry_limit"
+    assert body["top_blocked_slugs"][1]["reason"] == "rejection_cooldown"
 
 
 def test_blog_quality_diagnostics_status_counts_ignore_top_n_limit(monkeypatch):
@@ -290,6 +311,21 @@ def test_blog_quality_diagnostics_status_counts_ignore_top_n_limit(monkeypatch):
                 return [{"topic_type": "migration_guide", "cnt": 2}]
             if "AS subject" in query:
                 return [{"subject": "Shopify", "cnt": 2}]
+            if "COALESCE(rejection_count, 0) AS rejection_count" in query:
+                return [
+                    {
+                        "slug": "clickup-deep-dive-2026-04",
+                        "status": "rejected",
+                        "rejection_count": 3,
+                        "rejected_at": datetime.now(timezone.utc) - timedelta(days=2),
+                    },
+                    {
+                        "slug": "asana-deep-dive-2026-04",
+                        "status": "rejected",
+                        "rejection_count": 1,
+                        "rejected_at": datetime.now(timezone.utc) - timedelta(hours=2),
+                    },
+                ]
             return []
 
     monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
@@ -301,7 +337,9 @@ def test_blog_quality_diagnostics_status_counts_ignore_top_n_limit(monkeypatch):
     body = response.json()
     assert body["active_failure_count"] == 1
     assert body["rejected_failure_count"] == 2
+    assert body["current_blocked_slug_count"] == 2
     assert len(body["by_status"]) == 2
+    assert len(body["top_blocked_slugs"]) == 1
 
 
 def test_blog_publish_route_blocks_failed_revalidation(monkeypatch):
@@ -751,6 +789,8 @@ def test_manual_blog_generate_blocks_recent_rejected_slug(monkeypatch):
 
     assert response.status_code == 409
     assert response.json()["detail"]["block_reason"] == "rejection_cooldown"
+    assert response.json()["detail"]["requires_force_retry"] is True
+    assert response.json()["detail"]["cooldown_active"] is True
     generate_content.assert_not_awaited()
 
 
@@ -805,7 +845,7 @@ def test_manual_blog_generate_persists_quality_rejection(monkeypatch):
     )
     monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_blog_post_generation._enforce_blog_quality_async",
-        AsyncMock(return_value=(None, {"_retry_requested": False})),
+        AsyncMock(return_value=(None, {"_retry_requested": False, "_rejected_content": {"title": "Jira Deep Dive", "content": "rejected draft body"}})),
     )
     upsert = AsyncMock(return_value="row-1")
     monkeypatch.setattr(
@@ -825,5 +865,6 @@ def test_manual_blog_generate_persists_quality_rejection(monkeypatch):
     assert response.json()["detail"]["error"] == "Generated content failed quality gate"
     assert upsert.await_args.kwargs["status"] == "rejected"
     assert upsert.await_args.kwargs["failure_step"] == "quality_gate"
+    assert upsert.await_args.kwargs["content"]["content"] == "rejected draft body"
     blog_admin_api.record_attempt.assert_awaited()
     blog_admin_api.emit_event.assert_awaited()
