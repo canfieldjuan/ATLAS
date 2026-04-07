@@ -460,6 +460,15 @@ def _attach_synthesis_contracts_to_report_entry(
         reference_ids = getattr(view, "reference_ids", None)
     if isinstance(reference_ids, dict) and reference_ids:
         entry["reference_ids"] = reference_ids
+    scope_manifest = context.get("scope_manifest")
+    if isinstance(scope_manifest, dict) and scope_manifest:
+        entry["scope_manifest"] = scope_manifest
+    atoms = context.get("reasoning_atoms")
+    if isinstance(atoms, dict) and atoms:
+        entry["reasoning_atoms"] = atoms
+    delta = context.get("reasoning_delta")
+    if isinstance(delta, dict) and delta:
+        entry["reasoning_delta"] = delta
 
     if view.primary_wedge:
         entry["synthesis_wedge"] = view.primary_wedge.value

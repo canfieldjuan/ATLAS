@@ -218,6 +218,63 @@ class TestGovernanceFieldsInReportEntries:
         )
         assert entry["reasoning_source"] == "b2b_reasoning_synthesis"
 
+    def test_scope_manifest_atoms_and_delta_attached(self):
+        entry: dict[str, Any] = {"vendor": "TestVendor"}
+        view = SynthesisView(
+            "TestVendor",
+            {
+                "scope_manifest": {
+                    "selection_strategy": "vendor_facet_packet_v1",
+                    "reviews_in_scope": 12,
+                    "witnesses_in_scope": 9,
+                },
+                "reasoning_atoms": {
+                    "theses": [
+                        {
+                            "thesis_id": "t1",
+                            "wedge": "price_squeeze",
+                            "summary": "Pricing pressure is rising in mid-market accounts.",
+                        },
+                    ],
+                    "timing_windows": [
+                        {
+                            "window_type": "renewal",
+                            "start_or_anchor": "Q2 renewal cycle",
+                            "urgency": "high",
+                        },
+                    ],
+                },
+                "reasoning_delta": {
+                    "changed": True,
+                    "wedge_changed": True,
+                    "theses_added": ["price_squeeze"],
+                },
+                "reasoning_contracts": {
+                    "schema_version": "v1",
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                        },
+                    },
+                },
+            },
+            schema_version="v2",
+            as_of_date=date(2026, 3, 28),
+        )
+
+        _attach_synthesis_contracts_to_report_entry(
+            entry,
+            view,
+            consumer_name="vendor_scorecard",
+            requested_as_of=date(2026, 3, 28),
+            include_displacement=True,
+        )
+
+        assert entry["scope_manifest"]["selection_strategy"] == "vendor_facet_packet_v1"
+        assert entry["reasoning_atoms"]["theses"][0]["thesis_id"] == "t1"
+        assert entry["reasoning_delta"]["changed"] is True
+
 
 # ---------------------------------------------------------------------------
 # Tests: scorecard narrative payload includes Phase 3 context
