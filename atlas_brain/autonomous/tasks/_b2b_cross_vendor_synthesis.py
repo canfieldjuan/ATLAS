@@ -19,43 +19,7 @@ import re
 from datetime import date
 from typing import Any
 
-from ...config import settings
-
 logger = logging.getLogger("atlas.autonomous.tasks._b2b_cross_vendor_synthesis")
-
-
-def _legacy_reasoning_fallback_enabled() -> bool:
-    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", False))
-
-
-async def _emit_legacy_cross_vendor_opt_in(
-    pool,
-    *,
-    reason_code: str,
-    entity_id: str,
-    summary: str,
-    detail: dict[str, Any],
-) -> None:
-    try:
-        from ..visibility import emit_event
-
-        await emit_event(
-            pool,
-            stage="compatibility",
-            event_type="legacy_reasoning_opt_in",
-            entity_type="cross_vendor_lookup",
-            entity_id=entity_id,
-            summary=summary,
-            severity="warning",
-            actionable=False,
-            artifact_type="reasoning_compatibility",
-            reason_code=reason_code,
-            detail=detail,
-            source_table="b2b_cross_vendor_conclusions",
-            source_id=entity_id,
-        )
-    except Exception:
-        logger.debug("Failed to emit legacy cross-vendor opt-in event", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -857,8 +821,8 @@ async def load_cross_vendor_synthesis_lookup(
 ) -> dict[str, dict]:
     """Read cross-vendor synthesis from the canonical table.
 
-    Returns the same shape as ``reconstruct_cross_vendor_lookup`` so
-    consumers can swap transparently:
+    Returns the shared cross-vendor lookup shape used by downstream
+    consumers:
 
         {"battles": {...}, "councils": {...}, "asymmetries": {...}}
 
@@ -972,40 +936,13 @@ async def load_cross_vendor_synthesis_lookup(
     return {"battles": battles, "councils": councils, "asymmetries": asymmetries}
 
 
-def merge_cross_vendor_lookups(
-    *,
-    primary: dict[str, dict] | None,
-    fallback: dict[str, dict] | None,
-) -> tuple[dict[str, dict], int]:
-    """Merge two cross-vendor lookups with primary entries winning per key."""
-    merged = empty_cross_vendor_lookup()
-    overrides = 0
-    primary = primary or empty_cross_vendor_lookup()
-    fallback = fallback or empty_cross_vendor_lookup()
-
-    for bucket in ("battles", "councils", "asymmetries"):
-        merged_bucket = dict(fallback.get(bucket, {}))
-        for key, value in (primary.get(bucket, {}) or {}).items():
-            if key in merged_bucket:
-                overrides += 1
-            merged_bucket[key] = value
-        merged[bucket] = merged_bucket
-
-    return merged, overrides
-
-
 async def load_best_cross_vendor_lookup(
     pool,
     *,
     as_of: date | None = None,
     analysis_window_days: int = 90,
-    allow_legacy_fallback: bool = False,
 ) -> dict[str, dict]:
-    """Load canonical cross-vendor synthesis, optionally filling gaps from legacy.
-
-    ``allow_legacy_fallback=True`` is deprecated compatibility behavior.
-    Burn-in removal target: 2026-04-18.
-    """
+    """Load canonical cross-vendor synthesis."""
     try:
         synthesis_lookup = await load_cross_vendor_synthesis_lookup(
             pool,
@@ -1016,41 +953,6 @@ async def load_best_cross_vendor_lookup(
         logger.debug("Cross-vendor synthesis lookup failed", exc_info=True)
         synthesis_lookup = empty_cross_vendor_lookup()
 
-    if allow_legacy_fallback and _legacy_reasoning_fallback_enabled():
-        try:
-            from .b2b_churn_intelligence import reconstruct_cross_vendor_lookup
-
-            legacy_lookup = await reconstruct_cross_vendor_lookup(pool, as_of=as_of)
-        except Exception:
-            logger.debug("Legacy cross-vendor lookup failed", exc_info=True)
-            legacy_lookup = empty_cross_vendor_lookup()
-    else:
-        legacy_lookup = empty_cross_vendor_lookup()
-
-    merged, _ = merge_cross_vendor_lookups(
-        primary=synthesis_lookup,
-        fallback=legacy_lookup,
-    )
-    if allow_legacy_fallback and _legacy_reasoning_fallback_enabled():
-        battle_count = len((legacy_lookup or {}).get("battles", {}) or {})
-        council_count = len((legacy_lookup or {}).get("councils", {}) or {})
-        asymmetry_count = len((legacy_lookup or {}).get("asymmetries", {}) or {})
-        fallback_count = battle_count + council_count + asymmetry_count
-        if fallback_count > 0:
-            await _emit_legacy_cross_vendor_opt_in(
-                pool,
-                reason_code="legacy_cross_vendor_fallback",
-                entity_id=f"{as_of.isoformat() if as_of is not None else 'latest'}:{analysis_window_days}",
-                summary=f"Legacy cross-vendor fallback used for {fallback_count} entries",
-                detail={
-                    "as_of": as_of.isoformat() if as_of is not None else None,
-                    "analysis_window_days": analysis_window_days,
-                    "fallback_entry_count": fallback_count,
-                    "battle_count": battle_count,
-                    "council_count": council_count,
-                    "asymmetry_count": asymmetry_count,
-                },
-            )
     try:
         pairwise_reference_fallbacks = await _fetch_pairwise_reference_fallbacks(
             pool,
@@ -1061,7 +963,7 @@ async def load_best_cross_vendor_lookup(
         pairwise_reference_fallbacks = {}
         logger.debug("Merged pairwise reference fallback load failed", exc_info=True)
     if pairwise_reference_fallbacks:
-        for key, entry in (merged.get("battles") or {}).items():
+        for key, entry in (synthesis_lookup.get("battles") or {}).items():
             if not isinstance(entry, dict):
                 continue
             if isinstance(entry.get("reference_ids"), dict) and entry.get("reference_ids"):
@@ -1069,7 +971,7 @@ async def load_best_cross_vendor_lookup(
             fallback_refs = pairwise_reference_fallbacks.get(tuple(sorted(key)))
             if fallback_refs:
                 entry["reference_ids"] = _copy_reference_ids(fallback_refs)
-    return merged
+    return synthesis_lookup
 
 
 def build_cross_vendor_conclusions_for_vendor(

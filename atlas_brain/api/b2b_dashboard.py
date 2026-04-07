@@ -137,7 +137,6 @@ async def _load_reasoning_views_for_vendors(pool, vendor_names: list[str]) -> di
             requested,
             as_of=date.today(),
             analysis_window_days=settings.b2b_churn.intelligence_window_days,
-            allow_legacy_fallback=False,
         )
     except Exception:
         logger.debug("Dashboard reasoning view load failed", exc_info=True)
@@ -992,7 +991,6 @@ async def reason_vendor(
     view = await load_best_reasoning_view(
         pool,
         vendor_name,
-        allow_legacy_fallback=False,
     )
     if view is None:
         raise HTTPException(status_code=404, detail=f"No reasoning data for vendor: {vendor_name}")
@@ -1042,7 +1040,6 @@ async def compare_vendor_reasoning(
     views = await load_best_reasoning_views(
         pool,
         vendors,
-        allow_legacy_fallback=False,
     )
     results = []
     for requested_name in vendors:

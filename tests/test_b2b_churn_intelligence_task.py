@@ -66,7 +66,6 @@ async def test_load_category_council_lookup_uses_synthesis_first_loader(monkeypa
     )
 
     loader.assert_awaited_once()
-    assert loader.await_args.kwargs["allow_legacy_fallback"] is False
     assert result[("Salesforce", "crm")]["winner"] == "HubSpot"
     assert result[("Salesforce", "crm")]["confidence"] == 0.82
     assert result[("Salesforce", "crm")]["key_insights"] == ["signal-1", "signal-2", "signal-3"]
@@ -87,27 +86,3 @@ async def test_load_category_council_lookup_skips_generic_categories(monkeypatch
     )
 
     assert result == {}
-
-
-@pytest.mark.asyncio
-async def test_reconstruct_reasoning_lookup_returns_empty_when_legacy_gate_disabled(monkeypatch):
-    pool = AsyncMock()
-    monkeypatch.setattr(mod.settings.b2b_churn, "legacy_reasoning_fallback_enabled", False, raising=False)
-
-    result = await mod.reconstruct_reasoning_lookup(pool)
-
-    assert result == {}
-    pool.fetchval.assert_not_awaited()
-    pool.fetch.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_reconstruct_cross_vendor_lookup_returns_empty_when_legacy_gate_disabled(monkeypatch):
-    pool = AsyncMock()
-    monkeypatch.setattr(mod.settings.b2b_churn, "legacy_reasoning_fallback_enabled", False, raising=False)
-
-    result = await mod.reconstruct_cross_vendor_lookup(pool)
-
-    assert result == {"battles": {}, "councils": {}, "asymmetries": {}}
-    pool.fetchval.assert_not_awaited()
-    pool.fetch.assert_not_awaited()

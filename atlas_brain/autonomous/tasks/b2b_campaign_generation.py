@@ -2513,7 +2513,6 @@ async def _generate_vendor_campaigns(
         vendor_reasoning = await load_best_reasoning_view(
             pool,
             vendor_name,
-            allow_legacy_fallback=False,
         )
         if vendor_reasoning is not None:
             _inject_reasoning_campaign_context(
@@ -3267,7 +3266,6 @@ async def _generate_challenger_campaigns(
             inc_views = await load_best_reasoning_views(
                 pool,
                 incumbent_names,
-                allow_legacy_fallback=False,
             )
             if inc_views:
                 by_archetype: dict[str, list[str]] = {}

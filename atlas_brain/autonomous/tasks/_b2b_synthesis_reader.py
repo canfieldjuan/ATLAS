@@ -9,7 +9,6 @@ Handles both v1 and v2 schemas transparently.
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -56,10 +55,6 @@ _SECTION_CONTRACT_PATHS = {
     "competitive_reframes": ("displacement_reasoning", "competitive_reframes"),
     "migration_proof": ("displacement_reasoning", "migration_proof"),
 }
-
-
-def _legacy_reasoning_fallback_enabled() -> bool:
-    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", False))
 
 _CONSUMER_REQUIRED_CONTRACTS = {
     "battle_card": (
@@ -1285,9 +1280,8 @@ def synthesis_view_to_reasoning_entry(view: SynthesisView) -> dict[str, Any]:
     """Convert a SynthesisView into the dict shape that shared report builders expect.
 
     This produces the same ``{archetype, confidence, executive_summary,
-    key_signals, ...}`` structure as ``reconstruct_reasoning_lookup()`` from
-    ``b2b_churn_intelligence.py``, so it can be dropped into the same
-    ``reasoning_lookup[vendor]`` slot.
+    key_signals, ...}`` structure used by shared deterministic builders, so it
+    can be dropped into the same ``reasoning_lookup[vendor]`` slot.
     """
     cn = view.section("causal_narrative")
     wedge = view.primary_wedge
@@ -1346,9 +1340,8 @@ def build_reasoning_lookup_from_views(
 ) -> dict[str, dict[str, Any]]:
     """Build a reasoning_lookup dict from synthesis views.
 
-    Returns ``{vendor_name: reasoning_entry}`` in the same shape as
-    ``reconstruct_reasoning_lookup()`` so shared deterministic builders can
-    remain synthesis-only without depending on legacy reasoning rows.
+    Returns ``{vendor_name: reasoning_entry}`` in the shared deterministic
+    builder shape, while staying synthesis-only.
     """
     lookup: dict[str, dict[str, Any]] = {}
     for vendor_name, view in synthesis_views.items():
@@ -1357,125 +1350,8 @@ def build_reasoning_lookup_from_views(
 
 
 # ---------------------------------------------------------------------------
-# Legacy reasoning-to-contracts conversion
+# Shared DB loader: synthesis only
 # ---------------------------------------------------------------------------
-
-def legacy_reasoning_to_contracts(
-    legacy: dict[str, Any],
-    *,
-    vendor_name: str = "",
-) -> dict[str, Any]:
-    """Convert a legacy b2b_churn_signals row into minimal reasoning contracts.
-
-    The legacy schema stores ``archetype``, ``executive_summary``,
-    ``key_signals``, ``falsification_conditions``, and
-    ``uncertainty_sources`` as flat fields.  This normalizes them into the
-    same contract shape that ``b2b_reasoning_synthesis`` produces, so
-    downstream consumers can treat both sources identically.
-
-    Returns a dict suitable for wrapping in a ``SynthesisView``.
-    """
-    archetype = legacy.get("archetype") or ""
-    confidence_raw = legacy.get("archetype_confidence") or legacy.get("confidence")
-    try:
-        confidence_val = float(confidence_raw) if confidence_raw is not None else 0.0
-    except (TypeError, ValueError):
-        confidence_val = 0.0
-
-    if confidence_val >= 0.7:
-        confidence_label = "high"
-    elif confidence_val >= 0.4:
-        confidence_label = "medium"
-    else:
-        confidence_label = "low"
-
-    executive_summary = (
-        legacy.get("reasoning_executive_summary")
-        or legacy.get("executive_summary")
-        or ""
-    )
-    key_signals = legacy.get("reasoning_key_signals") or legacy.get("key_signals") or []
-    if isinstance(key_signals, str):
-        import json as _json
-        try:
-            key_signals = _json.loads(key_signals)
-        except (ValueError, TypeError):
-            key_signals = [key_signals]
-
-    falsification = legacy.get("falsification_conditions") or []
-    if isinstance(falsification, str):
-        import json as _json
-        try:
-            falsification = _json.loads(falsification)
-        except (ValueError, TypeError):
-            falsification = [falsification]
-
-    uncertainty = (
-        legacy.get("reasoning_uncertainty_sources")
-        or legacy.get("uncertainty_sources")
-        or []
-    )
-    if isinstance(uncertainty, str):
-        import json as _json
-        try:
-            uncertainty = _json.loads(uncertainty)
-        except (ValueError, TypeError):
-            uncertainty = [uncertainty]
-
-    # Build minimal causal_narrative from legacy fields
-    causal_narrative: dict[str, Any] = {
-        "confidence": confidence_label,
-        "data_gaps": list(uncertainty) if uncertainty else [],
-    }
-    if archetype:
-        from ...reasoning.wedge_registry import wedge_from_archetype
-        mapped_wedge = wedge_from_archetype(archetype)
-        causal_narrative["primary_wedge"] = mapped_wedge.value
-        causal_narrative["_legacy_archetype"] = archetype
-    if executive_summary:
-        causal_narrative["summary"] = executive_summary
-    if key_signals:
-        causal_narrative["key_signals"] = key_signals
-    if falsification:
-        causal_narrative["what_would_weaken_thesis"] = [
-            {"condition": f, "signal_source": "", "monitorable": False}
-            if isinstance(f, str) else f
-            for f in falsification
-        ]
-
-    vendor_core: dict[str, Any] = {
-        "schema_version": "legacy",
-        "causal_narrative": causal_narrative,
-    }
-
-    contracts: dict[str, Any] = {
-        "schema_version": "legacy",
-        "vendor_core_reasoning": vendor_core,
-    }
-
-    return {
-        "reasoning_contracts": contracts,
-        "schema_version": "legacy",
-        "_legacy_source": "b2b_churn_signals",
-        "_legacy_coverage": {
-            "available": ["causal_narrative"],
-            "unavailable": [
-                "segment_playbook",
-                "timing_intelligence",
-                "competitive_reframes",
-                "migration_proof",
-                "category_reasoning",
-                "account_reasoning",
-            ],
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# Shared DB loader: prefer synthesis, fall back to legacy
-# ---------------------------------------------------------------------------
-
-_logger = logging.getLogger("atlas.b2b.synthesis_reader")
 
 
 def _confidence_label_to_numeric(confidence_label: str) -> float:
@@ -1487,56 +1363,14 @@ def _confidence_label_to_numeric(confidence_label: str) -> float:
     }.get(str(confidence_label or "").strip().lower(), 0.0)
 
 
-async def _emit_legacy_reasoning_opt_in(
-    pool,
-    *,
-    reason_code: str,
-    entity_type: str,
-    entity_id: str,
-    summary: str,
-    detail: dict[str, Any],
-) -> None:
-    try:
-        from ..visibility import emit_event
-
-        await emit_event(
-            pool,
-            stage="compatibility",
-            event_type="legacy_reasoning_opt_in",
-            entity_type=entity_type,
-            entity_id=entity_id,
-            summary=summary,
-            severity="warning",
-            actionable=False,
-            artifact_type="reasoning_compatibility",
-            reason_code=reason_code,
-            detail=detail,
-            source_table="b2b_churn_signals",
-            source_id=entity_id,
-        )
-    except Exception:
-        _logger.debug("Failed to emit legacy reasoning opt-in event", exc_info=True)
-
-
 async def load_best_reasoning_view(
     pool,
     vendor_name: str,
     *,
     as_of: date | None = None,
     analysis_window_days: int = 30,
-    allow_legacy_fallback: bool = False,
 ) -> SynthesisView | None:
-    """Load the best available reasoning for a vendor.
-
-    Preference order:
-    1. Latest ``b2b_reasoning_synthesis`` row (contracts-first).
-    2. Latest ``b2b_churn_signals`` row with an archetype, converted to
-       minimal contracts via ``legacy_reasoning_to_contracts()``.
-    3. ``None`` if neither source has data.
-
-    This is the canonical entry point for any downstream consumer that
-    needs vendor reasoning context.
-    """
+    """Load the best available synthesis reasoning for a vendor."""
     # --- Try synthesis first -----------------------------------------------
     if as_of is not None:
         synth_row = await pool.fetchrow(
@@ -1585,75 +1419,7 @@ async def load_best_reasoning_view(
                 schema_version=str(synth_row.get("schema_version") or ""),
                 as_of_date=synth_row["as_of_date"],
             )
-
-    if not allow_legacy_fallback or not _legacy_reasoning_fallback_enabled():
-        return None
-
-    # --- Fall back to legacy churn signals ---------------------------------
-    # Deprecated compatibility path. Burn-in removal target: 2026-04-18.
-    if as_of is not None:
-        legacy_row = await pool.fetchrow(
-            """
-            SELECT archetype, archetype_confidence, falsification_conditions,
-                   reasoning_executive_summary, reasoning_key_signals,
-                   reasoning_uncertainty_sources, last_computed_at
-            FROM b2b_churn_signals
-            WHERE LOWER(vendor_name) = LOWER($1)
-              AND archetype IS NOT NULL
-              AND last_computed_at::date <= $2
-            ORDER BY last_computed_at DESC
-            LIMIT 1
-            """,
-            vendor_name,
-            as_of,
-        )
-    else:
-        legacy_row = await pool.fetchrow(
-            """
-            SELECT archetype, archetype_confidence, falsification_conditions,
-                   reasoning_executive_summary, reasoning_key_signals,
-                   reasoning_uncertainty_sources, last_computed_at
-            FROM b2b_churn_signals
-            WHERE LOWER(vendor_name) = LOWER($1)
-              AND archetype IS NOT NULL
-            ORDER BY last_computed_at DESC
-            LIMIT 1
-            """,
-            vendor_name,
-        )
-    if not legacy_row or not legacy_row["archetype"]:
-        return None
-
-    legacy_dict = dict(legacy_row)
-    raw = legacy_reasoning_to_contracts(legacy_dict, vendor_name=vendor_name)
-    await _emit_legacy_reasoning_opt_in(
-        pool,
-        reason_code="legacy_reasoning_view_fallback",
-        entity_type="vendor",
-        entity_id=vendor_name,
-        summary=f"Legacy reasoning fallback used for {vendor_name}",
-        detail={
-            "vendor_name": vendor_name,
-            "compatibility_target": "load_best_reasoning_view",
-            "as_of": as_of.isoformat() if as_of is not None else None,
-            "analysis_window_days": analysis_window_days,
-        },
-    )
-
-    as_of_date = None
-    lca = legacy_row.get("last_computed_at")
-    if lca is not None:
-        if hasattr(lca, "date"):
-            as_of_date = lca.date()
-        else:
-            as_of_date = _coerce_iso_date(lca)
-
-    return load_synthesis_view(
-        raw,
-        vendor_name=vendor_name,
-        schema_version="legacy",
-        as_of_date=as_of_date,
-    )
+    return None
 
 
 async def discover_reasoning_vendor_names(
@@ -1661,52 +1427,15 @@ async def discover_reasoning_vendor_names(
     *,
     as_of: date,
     analysis_window_days: int = 90,
-    include_legacy: bool = False,
 ) -> list[str]:
-    """Return vendor names with synthesis rows, optionally including legacy rows.
-
-    ``include_legacy=True`` is deprecated compatibility behavior. Burn-in
-    removal target: 2026-04-18.
-    """
+    """Return vendor names with synthesis rows."""
     synth_names = await pool.fetch(
         "SELECT DISTINCT vendor_name FROM b2b_reasoning_synthesis "
         "WHERE as_of_date <= $1 AND analysis_window_days = $2",
         as_of, analysis_window_days,
     )
-    if not include_legacy or not _legacy_reasoning_fallback_enabled():
-        return list({
-            r["vendor_name"] for r in synth_names
-            if r.get("vendor_name")
-        })
-    legacy_names = await pool.fetch(
-        "SELECT DISTINCT vendor_name FROM b2b_churn_signals "
-        "WHERE archetype IS NOT NULL",
-    )
-    legacy_only = {
-        str(r["vendor_name"])
-        for r in legacy_names
-        if r.get("vendor_name")
-    } - {
-        str(r["vendor_name"])
-        for r in synth_names
-        if r.get("vendor_name")
-    }
-    if legacy_only:
-        await _emit_legacy_reasoning_opt_in(
-            pool,
-            reason_code="legacy_reasoning_vendor_discovery",
-            entity_type="reasoning_vendor_discovery",
-            entity_id=f"{as_of.isoformat()}:{analysis_window_days}",
-            summary=f"Legacy vendor discovery included {len(legacy_only)} vendor names",
-            detail={
-                "as_of": as_of.isoformat(),
-                "analysis_window_days": analysis_window_days,
-                "legacy_vendor_count": len(legacy_only),
-                "sample_vendors": sorted(legacy_only)[:10],
-            },
-        )
     return list({
-        r["vendor_name"] for r in (*synth_names, *legacy_names)
+        r["vendor_name"] for r in synth_names
         if r.get("vendor_name")
     })
 
@@ -1717,7 +1446,6 @@ async def load_best_reasoning_views(
     *,
     as_of: date | None = None,
     analysis_window_days: int = 30,
-    allow_legacy_fallback: bool = False,
 ) -> dict[str, SynthesisView]:
     """Batch-load best reasoning for multiple vendors.
 
@@ -1784,91 +1512,6 @@ async def load_best_reasoning_views(
             as_of_date=row["as_of_date"],
         )
         covered.add(vname.lower())
-
-    if not allow_legacy_fallback or not _legacy_reasoning_fallback_enabled():
-        return views
-
-    # --- Bulk legacy fallback for remaining vendors ------------------------
-    # Deprecated compatibility path. Burn-in removal target: 2026-04-18.
-    remaining = [v for v in vendor_names if v.lower() not in covered]
-    if not remaining:
-        return views
-
-    remaining_lower = [v.lower() for v in remaining]
-    if as_of is not None:
-        legacy_rows = await pool.fetch(
-            """
-            SELECT DISTINCT ON (LOWER(vendor_name))
-                   vendor_name, archetype, archetype_confidence,
-                   falsification_conditions, reasoning_executive_summary,
-                   reasoning_key_signals, reasoning_uncertainty_sources,
-                   last_computed_at
-            FROM b2b_churn_signals
-            WHERE LOWER(vendor_name) = ANY($1)
-              AND archetype IS NOT NULL
-              AND last_computed_at::date <= $2
-            ORDER BY LOWER(vendor_name), last_computed_at DESC
-            """,
-            remaining_lower,
-            as_of,
-        )
-    else:
-        legacy_rows = await pool.fetch(
-            """
-            SELECT DISTINCT ON (LOWER(vendor_name))
-                   vendor_name, archetype, archetype_confidence,
-                   falsification_conditions, reasoning_executive_summary,
-                   reasoning_key_signals, reasoning_uncertainty_sources,
-                   last_computed_at
-            FROM b2b_churn_signals
-            WHERE LOWER(vendor_name) = ANY($1)
-              AND archetype IS NOT NULL
-            ORDER BY LOWER(vendor_name), last_computed_at DESC
-            """,
-            remaining_lower,
-        )
-    for row in legacy_rows:
-        if not row["archetype"]:
-            continue
-        vname = row["vendor_name"]
-        legacy_dict = dict(row)
-        raw = legacy_reasoning_to_contracts(legacy_dict, vendor_name=vname)
-
-        as_of_date = None
-        lca = row.get("last_computed_at")
-        if lca is not None:
-            if hasattr(lca, "date"):
-                as_of_date = lca.date()
-            else:
-                as_of_date = _coerce_iso_date(lca)
-
-        views[vname] = load_synthesis_view(
-            raw,
-            vendor_name=vname,
-            schema_version="legacy",
-            as_of_date=as_of_date,
-        )
-    legacy_vendor_names = [
-        str(row["vendor_name"])
-        for row in legacy_rows
-        if row.get("vendor_name") and row.get("archetype")
-    ]
-    if legacy_vendor_names:
-        await _emit_legacy_reasoning_opt_in(
-            pool,
-            reason_code="legacy_reasoning_batch_fallback",
-            entity_type="reasoning_vendor_batch",
-            entity_id=f"{as_of.isoformat() if as_of is not None else 'latest'}:{analysis_window_days}",
-            summary=f"Legacy reasoning fallback used for {len(legacy_vendor_names)} vendors in batch load",
-            detail={
-                "vendor_count": len(legacy_vendor_names),
-                "vendors": legacy_vendor_names[:25],
-                "as_of": as_of.isoformat() if as_of is not None else None,
-                "analysis_window_days": analysis_window_days,
-                "compatibility_target": "load_best_reasoning_views",
-            },
-        )
-
     return views
 
 
@@ -1913,7 +1556,6 @@ async def load_prior_reasoning_snapshots(
         cutoff,
         analysis_window_days,
     )
-    unresolved = set(lower_names)
     for row in synth_rows:
         lowered = str(row.get("vendor_name") or "").strip().lower()
         requested_name = requested_by_lower.get(lowered)
@@ -1942,36 +1584,5 @@ async def load_prior_reasoning_snapshots(
             "confidence": _confidence_label_to_numeric(view.confidence("causal_narrative")),
             "snapshot_date": view.as_of_date_iso,
         }
-        unresolved.discard(lowered)
-
-    if unresolved:
-        legacy_rows = await pool.fetch(
-            """
-            SELECT DISTINCT ON (LOWER(vendor_name))
-                   vendor_name, archetype, archetype_confidence, last_computed_at
-            FROM b2b_churn_signals
-            WHERE LOWER(vendor_name) = ANY($1)
-              AND last_computed_at::date < $2
-              AND archetype IS NOT NULL
-            ORDER BY LOWER(vendor_name), last_computed_at DESC
-            """,
-            list(unresolved),
-            cutoff,
-        )
-        for row in legacy_rows:
-            lowered = str(row.get("vendor_name") or "").strip().lower()
-            requested_name = requested_by_lower.get(lowered)
-            if not requested_name:
-                continue
-            last_computed_at = row.get("last_computed_at")
-            if last_computed_at is not None and hasattr(last_computed_at, "date"):
-                snapshot_date = last_computed_at.date().isoformat()
-            else:
-                snapshot_date = str(last_computed_at or "")
-            snapshots[requested_name] = {
-                "archetype": row.get("archetype") or "",
-                "confidence": float(row["archetype_confidence"]) if row.get("archetype_confidence") is not None else None,
-                "snapshot_date": snapshot_date,
-            }
 
     return snapshots

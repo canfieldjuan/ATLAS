@@ -2451,7 +2451,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             pool, vendor_names_for_views,
             as_of=today,
             analysis_window_days=window_days,
-            allow_legacy_fallback=False,
         )
         logger.info(
             "Loaded reasoning views for %d vendors (%d synthesis, %d legacy)",
@@ -2476,7 +2475,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         pool,
         as_of=today,
         analysis_window_days=window_days,
-        allow_legacy_fallback=False,
     )
     synth_count = sum(
         1 for bucket in ("battles", "councils", "asymmetries")

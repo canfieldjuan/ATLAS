@@ -1175,7 +1175,6 @@ class TestAccountsInMotionRunProgress:
         monkeypatch.setattr(accounts_mod, "_merge_company_profiles", lambda *args, **kwargs: {})
         monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
         monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
-        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
 
         task = type("Task", (), {"metadata": {"_execution_id": str(uuid4()), "test_vendors": ["Zendesk"]}})()
         result = await accounts_mod.run(task, as_of=date(2026, 3, 18))
@@ -1206,7 +1205,6 @@ class TestAccountsInMotionRunProgress:
         monkeypatch.setattr(accounts_mod, "_merge_company_profiles", lambda *args, **kwargs: {})
         monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
         monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
-        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
 
         task = type(
             "Task",
@@ -1241,12 +1239,6 @@ class TestAccountsInMotionRunProgress:
         monkeypatch.setattr(accounts_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
         monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
         monkeypatch.setattr(accounts_mod, "_merge_company_profiles", lambda *args, **kwargs: {})
-        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
-        monkeypatch.setattr(
-            churn_mod,
-            "reconstruct_cross_vendor_lookup",
-            AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
-        )
 
         task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
         result = await accounts_mod.run(task)
@@ -1299,12 +1291,6 @@ class TestAccountsInMotionRunProgress:
         monkeypatch.setattr(accounts_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
         monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
         monkeypatch.setattr(accounts_mod, "_merge_company_profiles", fake_merge)
-        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
-        monkeypatch.setattr(
-            churn_mod,
-            "reconstruct_cross_vendor_lookup",
-            AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
-        )
         monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
         monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
 
@@ -1342,12 +1328,6 @@ class TestAccountsInMotionRunProgress:
         monkeypatch.setattr(accounts_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
         monkeypatch.setattr(accounts_mod.asyncio, "gather", fake_gather)
         monkeypatch.setattr(accounts_mod, "_merge_company_profiles", fake_merge)
-        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
-        monkeypatch.setattr(
-            churn_mod,
-            "reconstruct_cross_vendor_lookup",
-            AsyncMock(return_value={"battles": {}, "councils": {}, "asymmetries": {}}),
-        )
         monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
         monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
 
@@ -1393,7 +1373,6 @@ class TestAccountsInMotionRunProgress:
         monkeypatch.setattr(accounts_mod, "_build_vendor_aggregate", fake_build_vendor_aggregate)
         monkeypatch.setattr(accounts_mod, "_fetch_latest_synthesis_views", AsyncMock(return_value={}))
         monkeypatch.setattr(accounts_mod, "_update_execution_progress", AsyncMock())
-        monkeypatch.setattr(churn_mod, "reconstruct_reasoning_lookup", AsyncMock(return_value={}))
 
         task = type("Task", (), {"metadata": {"_execution_id": str(uuid4()), "test_vendors": ["Zendesk"]}})()
         result = await accounts_mod.run(task)

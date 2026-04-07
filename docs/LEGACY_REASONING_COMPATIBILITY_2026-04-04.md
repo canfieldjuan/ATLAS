@@ -1,4 +1,4 @@
-# Legacy Reasoning Compatibility
+# Legacy Reasoning Compatibility Removal
 
 Date: 2026-04-04
 
@@ -7,19 +7,15 @@ Date: 2026-04-04
 Legacy reasoning from `b2b_churn_signals` is no longer part of the active
 delivery path for vendor or cross-vendor reasoning.
 
-The remaining compatibility code exists only as an explicit opt-in safety
-path during burn-in.
+The legacy compatibility code has been removed. Vendor and cross-vendor
+reasoning are now synthesis-only.
 
-## Burn-In Removal Target
+## Status
 
-- Burn-in window ends: `2026-04-18`
-- Runtime kill switch: `ATLAS_B2B_CHURN_LEGACY_REASONING_FALLBACK_ENABLED`
-- Default state: disabled / fail-closed
-- If no production incidents require legacy reasoning before that date:
-  - delete `reconstruct_reasoning_lookup()`
-  - delete `reconstruct_cross_vendor_lookup()`
-  - delete legacy fallback branches in `_b2b_synthesis_reader.py`
-  - delete legacy fallback branch in `_b2b_cross_vendor_synthesis.py`
+- Removed on: `2026-04-07`
+- Runtime kill switch: deleted
+- Legacy fallback branches: deleted
+- Legacy reconstructors: deleted
 
 ## Remaining `b2b_churn_signals` Usage
 
@@ -36,18 +32,16 @@ These are deterministic metric reads and should remain:
 - `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py`
 - `atlas_brain/autonomous/tasks/b2b_keyword_signal.py`
 
-### Compatibility Only
-
-These should be deleted after burn-in:
+### Removed Compatibility Paths
 
 - `atlas_brain/autonomous/tasks/b2b_churn_intelligence.py`
   - `reconstruct_reasoning_lookup()`
   - `reconstruct_cross_vendor_lookup()`
 - `atlas_brain/autonomous/tasks/_b2b_synthesis_reader.py`
-  - `allow_legacy_fallback=True` path
-  - `include_legacy=True` discovery path
+  - legacy vendor fallback path
+  - legacy discovery path
 - `atlas_brain/autonomous/tasks/_b2b_cross_vendor_synthesis.py`
-  - `allow_legacy_fallback=True` path
+  - legacy cross-vendor fallback path
 
 ### Already Removed As Active Fallbacks
 
@@ -59,18 +53,11 @@ These should be deleted after burn-in:
 - `mcp/b2b/write_intelligence`
 - cross-vendor battle-card merge path
 
-## Removal Gate
+## Verification
 
-Delete the compatibility paths only after verifying:
+Removal was completed only after verifying:
 
-1. No user-facing consumer calls legacy fallback code in production logs.
-2. Synthesis coverage remains sufficient for active vendors/categories.
-3. Cross-vendor synthesis continues to populate the required battle/council outputs.
-4. No operator workflow depends on the old compatibility readers.
-
-## Rollout Visibility
-
-- `scripts/check_reasoning_rollout_readiness.py` now warns when
-  `ATLAS_B2B_CHURN_LEGACY_REASONING_FALLBACK_ENABLED=true`.
-- `Pipeline Review -> Deprecated Legacy Compatibility` should stay empty in a
-  synthesis-only environment.
+1. No active runtime callers still requested legacy fallback.
+2. Readiness remained green with fresh `v2` synthesis rows.
+3. Competitive-set scoped synthesis still hash-reused and reran correctly.
+4. User-facing consumers were already synthesis-only.

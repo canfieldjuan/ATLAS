@@ -150,7 +150,6 @@ async def campaign_specificity_context_resolution_with_fallback(
     view = await load_best_reasoning_view(
         pool,
         vendor_name,
-        allow_legacy_fallback=False,
     )
     if view is None:
         return {

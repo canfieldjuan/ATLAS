@@ -390,7 +390,6 @@ async def _fetch_latest_synthesis_views(
         pool,
         as_of=as_of,
         analysis_window_days=analysis_window_days,
-        include_legacy=False,
     )
     if not all_names:
         return {}
@@ -399,7 +398,6 @@ async def _fetch_latest_synthesis_views(
         all_names,
         as_of=as_of,
         analysis_window_days=analysis_window_days,
-        allow_legacy_fallback=False,
     )
 
 

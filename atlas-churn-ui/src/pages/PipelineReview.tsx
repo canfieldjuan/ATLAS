@@ -1425,61 +1425,6 @@ function AuditTab() {
     [stageFilter, severityFilter],
   )
 
-  const {
-    data: legacyData,
-    loading: legacyLoading,
-    error: legacyError,
-  } = useApiData(
-    () =>
-      fetchVisibilityEvents({
-        limit: 100,
-        hours: 720,
-        event_type: 'legacy_reasoning_opt_in',
-      }),
-    [],
-  )
-
-  const legacyEvents = legacyData?.events ?? []
-  const legacyViewFallbacks = legacyEvents.filter((event) => event.reason_code === 'legacy_reasoning_view_fallback')
-  const legacyBatchFallbacks = legacyEvents.filter((event) => event.reason_code === 'legacy_reasoning_batch_fallback')
-  const legacyDiscoveryEvents = legacyEvents.filter((event) => event.reason_code === 'legacy_reasoning_vendor_discovery')
-  const legacyCrossVendorFallbacks = legacyEvents.filter((event) => event.reason_code === 'legacy_cross_vendor_fallback')
-
-  const legacyColumns: Column<VisibilityEvent>[] = [
-    {
-      key: 'reason_code',
-      header: 'Reason',
-      render: (r) => (
-        <span className="text-xs text-slate-300">{formatVisibilityCode(r.reason_code)}</span>
-      ),
-    },
-    {
-      key: 'summary',
-      header: 'Summary',
-      render: (r) => (
-        <div className="max-w-sm">
-          <span className="text-xs text-slate-400 line-clamp-1">{r.summary}</span>
-        </div>
-      ),
-    },
-    {
-      key: 'entity',
-      header: 'Entity',
-      render: (r) => (
-        <span className="text-xs text-slate-400">{r.entity_type}: {truncateLabel(r.entity_id, 36)}</span>
-      ),
-    },
-    {
-      key: 'occurred_at',
-      header: 'Time',
-      render: (r) => (
-        <span className="text-xs text-slate-400">{formatTs(r.occurred_at)}</span>
-      ),
-      sortable: true,
-      sortValue: (r) => r.occurred_at,
-    },
-  ]
-
   const columns: Column<VisibilityEvent>[] = [
     {
       key: 'severity',
@@ -1547,63 +1492,6 @@ function AuditTab() {
 
   return (
     <div className="space-y-4">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-white">Deprecated Legacy Compatibility</h3>
-            <p className="text-xs text-slate-500">
-              Explicit legacy reasoning opt-ins seen in the last 30 days. This is deprecated compatibility mode, not normal delivery.
-            </p>
-          </div>
-        </div>
-        {legacyError && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
-            {legacyError.message}
-          </div>
-        )}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-          <StatCard
-            label="Single-Vendor Fallbacks"
-            value={legacyLoading ? '--' : formatNumber(legacyViewFallbacks.length)}
-            icon={<AlertTriangle className="h-5 w-5" />}
-            sub="load_best_reasoning_view"
-            skeleton={legacyLoading}
-          />
-          <StatCard
-            label="Batch Fallbacks"
-            value={legacyLoading ? '--' : formatNumber(legacyBatchFallbacks.length)}
-            icon={<Database className="h-5 w-5" />}
-            sub="load_best_reasoning_views"
-            skeleton={legacyLoading}
-          />
-          <StatCard
-            label="Discovery Opt-Ins"
-            value={legacyLoading ? '--' : formatNumber(legacyDiscoveryEvents.length)}
-            icon={<Building2 className="h-5 w-5" />}
-            sub="include_legacy vendor discovery"
-            skeleton={legacyLoading}
-          />
-          <StatCard
-            label="Cross-Vendor Fallbacks"
-            value={legacyLoading ? '--' : formatNumber(legacyCrossVendorFallbacks.length)}
-            icon={<GitCompareArrows className="h-5 w-5" />}
-            sub="allow_legacy_fallback"
-            skeleton={legacyLoading}
-          />
-        </div>
-        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
-          {legacyLoading ? (
-            <DataTable columns={legacyColumns} data={[]} skeletonRows={4} />
-          ) : (
-            <DataTable
-              columns={legacyColumns}
-              data={legacyEvents.slice(0, 10)}
-              emptyMessage="No explicit legacy opt-ins recorded"
-            />
-          )}
-        </div>
-      </div>
-
       <div className="flex items-center gap-4">
         <Filter className="h-4 w-4 text-slate-500" />
         <FilterSelect
@@ -1617,7 +1505,6 @@ function AuditTab() {
             { value: 'battle_cards', label: 'Battle Cards' },
             { value: 'blog', label: 'Blog' },
             { value: 'reports', label: 'Reports' },
-            { value: 'compatibility', label: 'Compatibility' },
             { value: 'task_execution', label: 'Task Execution' },
           ]}
         />

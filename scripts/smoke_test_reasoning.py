@@ -88,7 +88,6 @@ async def run_smoke_test(vendor_name: str | None = None) -> dict:
     view = await load_best_reasoning_view(
         pool,
         vendor_name,
-        allow_legacy_fallback=False,
     )
     if view is None:
         fail("load_best_reasoning_view returned None (no synthesis row found)")

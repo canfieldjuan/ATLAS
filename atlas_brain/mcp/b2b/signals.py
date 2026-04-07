@@ -30,7 +30,6 @@ async def _load_reasoning_views_for_vendors(pool, vendor_names: list[str]) -> di
         views = await load_best_reasoning_views(
             pool,
             requested,
-            allow_legacy_fallback=False,
         )
     except Exception:
         logger.debug("MCP reasoning view load failed", exc_info=True)
@@ -523,7 +522,6 @@ async def reason_vendor(
         view = await load_best_reasoning_view(
             pool,
             vendor_name,
-            allow_legacy_fallback=False,
         )
         if view is None:
             return json.dumps({"success": False, "error": f"No reasoning data for vendor: {vendor_name}"})
@@ -570,7 +568,6 @@ async def compare_vendors(
         views = await load_best_reasoning_views(
             pool,
             vendors,
-            allow_legacy_fallback=False,
         )
         results = []
         for requested_name in vendors:

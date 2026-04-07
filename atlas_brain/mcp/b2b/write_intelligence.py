@@ -490,14 +490,12 @@ async def build_accounts_in_motion(
             pool,
             as_of=today,
             analysis_window_days=window,
-            allow_legacy_fallback=False,
         )
         try:
             view = await load_best_reasoning_view(
                 pool,
                 vendor,
                 as_of=today,
-                allow_legacy_fallback=False,
             )
             if view:
                 synth_lookup = build_reasoning_lookup_from_views({vendor: view})
@@ -718,7 +716,6 @@ async def draft_campaign(
             reasoning_view = await load_best_reasoning_view(
                 pool,
                 vendor_name.strip(),
-                allow_legacy_fallback=False,
             )
             if reasoning_view is not None:
                 wedge = reasoning_view.primary_wedge

@@ -497,7 +497,6 @@ async def _fetch_synthesis_view(
         vendor,
         as_of=today,
         analysis_window_days=analysis_window_days,
-        allow_legacy_fallback=False,
     )
 
 

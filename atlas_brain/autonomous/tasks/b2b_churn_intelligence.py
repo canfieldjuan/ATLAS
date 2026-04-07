@@ -195,10 +195,6 @@ def _should_use_cross_vendor_category(category: str) -> bool:
     return bool(text) and not _is_generic_product_category(text)
 
 
-def _legacy_reasoning_fallback_enabled() -> bool:
-    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", False))
-
-
 async def _load_category_council_lookup(
     pool,
     vendor_scores: list[dict[str, Any]],
@@ -215,7 +211,6 @@ async def _load_category_council_lookup(
             pool,
             as_of=as_of,
             analysis_window_days=analysis_window_days,
-            allow_legacy_fallback=False,
         )
     except Exception:
         logger.debug("Cross-vendor council lookup failed", exc_info=True)
@@ -885,92 +880,6 @@ async def _persist_vendor_snapshots(
     return persisted
 
 
-async def reconstruct_reasoning_lookup(
-    pool,
-    as_of: date | None = None,
-) -> dict[str, dict]:
-    """Rebuild reasoning_lookup from persisted b2b_churn_signals.
-
-    Returns the legacy archetype-style dict shape expected by downstream
-    compatibility readers, rebuilt from persisted churn-signal fields.
-
-    Deprecated compatibility path. Burn-in removal target: 2026-04-18.
-
-    When *as_of* is None, uses the most recent last_computed_at watermark.
-    """
-    if not _legacy_reasoning_fallback_enabled():
-        return {}
-
-    if as_of is None:
-        watermark = await pool.fetchval(
-            "SELECT MAX(last_computed_at)::date FROM b2b_churn_signals"
-        )
-        if not watermark:
-            return {}
-        as_of = watermark
-
-    rows = await pool.fetch(
-        """
-        SELECT DISTINCT ON (vendor_name)
-               vendor_name,
-               archetype, archetype_confidence, reasoning_mode,
-               falsification_conditions,
-               reasoning_risk_level, reasoning_executive_summary,
-               reasoning_key_signals, reasoning_uncertainty_sources
-        FROM b2b_churn_signals
-        WHERE last_computed_at::date >= $1
-          AND archetype IS NOT NULL
-        ORDER BY vendor_name, archetype_confidence DESC NULLS LAST, last_computed_at DESC
-        """,
-        as_of,
-    )
-    lookup: dict[str, dict] = {}
-    for r in rows:
-        lookup[r["vendor_name"]] = {
-            "archetype": r["archetype"],
-            "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else 0,
-            "mode": r["reasoning_mode"] or "",
-            "risk_level": r["reasoning_risk_level"] or "",
-            "executive_summary": r["reasoning_executive_summary"] or "",
-            "key_signals": _json_list_or_default(r["reasoning_key_signals"]),
-            "falsification_conditions": _json_list_or_default(r["falsification_conditions"]),
-            "uncertainty_sources": _json_list_or_default(r["reasoning_uncertainty_sources"]),
-        }
-
-    # Fallback: for vendors absent from churn_signals (or missing archetype),
-    # pull synthesis_wedge from b2b_reasoning_synthesis (schema v2.2+).
-    # This keeps the two tasks in sync even when synthesis runs before intelligence.
-    synth_rows = await pool.fetch(
-        """
-        SELECT DISTINCT ON (vendor_name)
-               vendor_name,
-               synthesis->>'synthesis_wedge'       AS synthesis_wedge,
-               synthesis->>'synthesis_wedge_label' AS synthesis_wedge_label
-        FROM b2b_reasoning_synthesis
-        WHERE as_of_date >= $1
-          AND synthesis->>'synthesis_wedge' IS NOT NULL
-          AND synthesis->>'synthesis_wedge' != ''
-        ORDER BY vendor_name, as_of_date DESC
-        """,
-        as_of,
-    )
-    for r in synth_rows:
-        vname = r["vendor_name"]
-        if vname not in lookup:
-            lookup[vname] = {
-                "archetype": r["synthesis_wedge"],
-                "confidence": 0.0,
-                "mode": "synthesis_fallback",
-                "risk_level": "",
-                "executive_summary": "",
-                "key_signals": [],
-                "falsification_conditions": [],
-                "uncertainty_sources": [],
-            }
-
-    return lookup
-
-
 async def reconstruct_evidence_volatility(
     pool,
     days: int = 14,
@@ -1015,105 +924,6 @@ async def reconstruct_evidence_volatility(
         }
         for r in rows
     }
-
-
-async def reconstruct_cross_vendor_lookup(
-    pool,
-    as_of: date | None = None,
-) -> dict[str, dict]:
-    """Rebuild cross-vendor conclusions from b2b_cross_vendor_conclusions.
-
-    Returns a dict with three keys:
-      - ``battles``:     {(vendor_a, vendor_b): conclusion_dict, ...}
-      - ``councils``:    {category: conclusion_dict, ...}
-      - ``asymmetries``: {(vendor_a, vendor_b): conclusion_dict, ...}
-
-    Keyed by sorted vendor tuple (battles/asymmetries) or category name
-    (councils). Deprecated compatibility path. Burn-in removal target:
-    2026-04-18. When *as_of* is None the most recent computed_date is used.
-    """
-    if not _legacy_reasoning_fallback_enabled():
-        return {"battles": {}, "councils": {}, "asymmetries": {}}
-
-    if as_of is None:
-        watermark = await pool.fetchval(
-            "SELECT MAX(computed_date) FROM b2b_cross_vendor_conclusions"
-        )
-        if not watermark:
-            return {"battles": {}, "councils": {}, "asymmetries": {}}
-        as_of = watermark
-
-    rows = await pool.fetch(
-        """
-        SELECT analysis_type, vendors, category, conclusion, confidence, computed_date
-        FROM b2b_cross_vendor_conclusions
-        WHERE computed_date <= $1
-        ORDER BY computed_date DESC, confidence DESC
-        """,
-        as_of,
-    )
-
-    battles: dict[tuple[str, ...], dict] = {}
-    councils: dict[str, dict] = {}
-    asymmetries: dict[tuple[str, ...], dict] = {}
-
-    for r in rows:
-        vendors = _normalized_vendor_refs(list(r["vendors"]) if r["vendors"] else [])
-        atype = r["analysis_type"]
-        if atype in {"pairwise_battle", "resource_asymmetry"} and len(vendors) < 2:
-            continue
-        conclusion = _normalize_cross_vendor_conclusion(
-            r["conclusion"],
-            analysis_type=atype,
-            vendors=vendors,
-        )
-        if atype == "resource_asymmetry" and not (
-            conclusion.get("conclusion") or conclusion.get("resource_advantage")
-        ):
-            continue
-        entry = {
-            "conclusion": conclusion,
-            "confidence": float(r["confidence"]) if r["confidence"] is not None else 0,
-            "vendors": vendors,
-            "category": r["category"],
-            "computed_date": r.get("computed_date") if hasattr(r, "get") else r["computed_date"],
-        }
-        key = tuple(sorted(vendors))
-        if atype == "pairwise_battle":
-            existing = battles.get(key)
-            if existing is None:
-                battles[key] = entry
-            elif (
-                existing.get("computed_date") == entry.get("computed_date")
-                and _cross_vendor_entry_quality(atype, entry)
-                > _cross_vendor_entry_quality(atype, existing)
-            ):
-                battles[key] = entry
-        elif atype == "category_council":
-            cat = r["category"] or ""
-            if cat and not _should_use_cross_vendor_category(cat):
-                continue
-            existing = councils.get(cat)
-            if existing is None:
-                councils[cat] = entry
-            elif (
-                existing.get("computed_date") == entry.get("computed_date")
-                and _cross_vendor_entry_quality(atype, entry)
-                > _cross_vendor_entry_quality(atype, existing)
-            ):
-                councils[cat] = entry
-        elif atype == "resource_asymmetry":
-            existing = asymmetries.get(key)
-            if existing is None:
-                asymmetries[key] = entry
-            elif (
-                existing.get("computed_date") == entry.get("computed_date")
-                and _cross_vendor_entry_quality(atype, entry)
-                > _cross_vendor_entry_quality(atype, existing)
-            ):
-                asymmetries[key] = entry
-
-    return {"battles": battles, "councils": councils, "asymmetries": asymmetries}
 
 
 async def _detect_change_events(
@@ -4538,7 +4348,7 @@ async def generate_vendor_comparison_report(
         _switching_triggers_from_dynamics(pool, comparison_name, window_days),
     )
 
-    # Current/prior reasoning context (synthesis-first, legacy fallback)
+    # Current/prior reasoning context (synthesis-only)
     from ._b2b_synthesis_reader import (
         load_best_reasoning_views,
         load_prior_reasoning_snapshots,
@@ -4550,7 +4360,6 @@ async def generate_vendor_comparison_report(
         [primary_name, comparison_name],
         as_of=today,
         analysis_window_days=window_days,
-        allow_legacy_fallback=False,
     )
     _prior_archs = await load_prior_reasoning_snapshots(
         pool,

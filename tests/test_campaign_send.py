@@ -155,9 +155,8 @@ async def test_campaign_send_uses_synthesis_fallback_and_records_success(monkeyp
     async def _not_suppressed(pool, email):
         return None
 
-    async def _fake_reasoning_view(pool, vendor_name, allow_legacy_fallback=False):
+    async def _fake_reasoning_view(pool, vendor_name):
         assert vendor_name == "Slack"
-        assert allow_legacy_fallback is False
         return _FallbackReasoningView()
 
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)

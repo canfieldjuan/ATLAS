@@ -1851,7 +1851,6 @@ async def build_vendor_briefing(
         reasoning_view = await load_best_reasoning_view(
             pool,
             vendor_name,
-            allow_legacy_fallback=False,
         )
         if reasoning_view is not None:
             if _apply_synthesis_view_to_briefing(briefing, reasoning_view):
@@ -2005,7 +2004,6 @@ async def build_vendor_briefing(
             reasoning_view = await load_best_reasoning_view(
                 pool,
                 vendor_name,
-                allow_legacy_fallback=False,
             )
         if reasoning_view is not None:
             wedge = reasoning_view.primary_wedge
@@ -2130,7 +2128,6 @@ async def _fetch_reasoning_synthesis(pool: Any, vendor_name: str) -> dict[str, A
     view = await load_best_reasoning_view(
         pool,
         vendor_name,
-        allow_legacy_fallback=False,
     )
     if view is None:
         return None

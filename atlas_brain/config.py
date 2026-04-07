@@ -2778,6 +2778,12 @@ class B2BChurnConfig(BaseSettings):
         le=720,
         description="Minimum hours before an autonomously rejected blog slug can be attempted again",
     )
+    blog_post_borderline_shortfall_max_words: int = Field(
+        default=60,
+        ge=0,
+        le=500,
+        description="Maximum word-count shortfall eligible for deterministic coverage-snapshot repair during blog quality cleanup",
+    )
 
     # Historical snapshots
     snapshot_enabled: bool = Field(default=True, description="Enable daily vendor health snapshots")
@@ -3198,14 +3204,6 @@ class B2BChurnConfig(BaseSettings):
         description=(
             "Default changed-vendors-only policy for scoped competitive-set runs "
             "when the caller does not explicitly choose full refresh behavior"
-        ),
-    )
-    legacy_reasoning_fallback_enabled: bool = Field(
-        default=False,
-        description=(
-            "Allow deprecated compatibility opt-ins to fall back to legacy reasoning "
-            "stored in b2b_churn_signals and b2b_cross_vendor_conclusions. "
-            "Defaults fail-closed and should only be enabled for explicit burn-in recovery."
         ),
     )
     reasoning_synthesis_scheduled_scope_strategy: str = Field(

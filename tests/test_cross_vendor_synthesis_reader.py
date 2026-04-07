@@ -11,7 +11,6 @@ from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
     build_cross_vendor_conclusions_for_vendor,
     load_cross_vendor_synthesis_lookup,
     load_best_cross_vendor_lookup,
-    merge_cross_vendor_lookups,
 )
 
 
@@ -157,47 +156,8 @@ async def test_synthesis_reader_higher_confidence_wins():
     assert entry["confidence"] == 0.9
 
 
-def test_merge_cross_vendor_lookups_prefers_primary_and_fills_gaps():
-    merged, overrides = merge_cross_vendor_lookups(
-        primary={
-            "battles": {
-                ("A", "B"): {"source": "synthesis", "conclusion": {"conclusion": "Primary"}},
-            },
-            "councils": {},
-            "asymmetries": {},
-        },
-        fallback={
-            "battles": {
-                ("A", "B"): {"source": "legacy", "conclusion": {"conclusion": "Fallback"}},
-                ("A", "C"): {"source": "legacy", "conclusion": {"conclusion": "Gap fill"}},
-            },
-            "councils": {},
-            "asymmetries": {},
-        },
-    )
-
-    assert overrides == 1
-    assert merged["battles"][("A", "B")]["source"] == "synthesis"
-    assert merged["battles"][("A", "C")]["source"] == "legacy"
-
-
 @pytest.mark.asyncio
-async def test_load_best_cross_vendor_lookup_is_synthesis_only_by_default(monkeypatch):
-    async def _fake_reconstruct(pool, as_of=None):
-        return {
-            "battles": {
-                ("A", "B"): {"source": "legacy", "conclusion": {"conclusion": "Legacy battle"}},
-            },
-            "councils": {
-                "CRM": {"source": "legacy", "conclusion": {"conclusion": "Legacy council"}},
-            },
-            "asymmetries": {},
-        }
-
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_cross_vendor_lookup",
-        _fake_reconstruct,
-    )
+async def test_load_best_cross_vendor_lookup_is_synthesis_only():
     pool = FakePool([
         _make_row(
             "pairwise_battle",
@@ -216,58 +176,6 @@ async def test_load_best_cross_vendor_lookup_is_synthesis_only_by_default(monkey
 
     assert lookup["battles"][("A", "B")]["conclusion"]["conclusion"] == "Synthesis battle"
     assert lookup["councils"] == {}
-
-
-@pytest.mark.asyncio
-async def test_load_best_cross_vendor_lookup_merges_legacy_when_opted_in(monkeypatch):
-    from atlas_brain.autonomous import visibility as visibility_mod
-
-    async def _fake_reconstruct(pool, as_of=None):
-        return {
-            "battles": {
-                ("A", "B"): {"source": "legacy", "conclusion": {"conclusion": "Legacy battle"}},
-            },
-            "councils": {
-                "CRM": {"source": "legacy", "conclusion": {"conclusion": "Legacy council"}},
-            },
-            "asymmetries": {},
-        }
-
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_cross_vendor_lookup",
-        _fake_reconstruct,
-    )
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis.settings.b2b_churn.legacy_reasoning_fallback_enabled",
-        True,
-        raising=False,
-    )
-    emit = AsyncMock()
-    monkeypatch.setattr(visibility_mod, "emit_event", emit)
-    pool = FakePool([
-        _make_row(
-            "pairwise_battle",
-            ["A", "B"],
-            None,
-            {
-                "conclusion": {
-                    "conclusion": "Synthesis battle",
-                    "confidence": 0.8,
-                },
-            },
-        ),
-    ])
-
-    lookup = await load_best_cross_vendor_lookup(
-        pool,
-        as_of=date(2026, 3, 29),
-        allow_legacy_fallback=True,
-    )
-
-    assert lookup["battles"][("A", "B")]["conclusion"]["conclusion"] == "Synthesis battle"
-    assert lookup["councils"]["CRM"]["conclusion"]["conclusion"] == "Legacy council"
-    emit.assert_awaited_once()
-    assert emit.await_args.kwargs["reason_code"] == "legacy_cross_vendor_fallback"
 
 
 def test_build_cross_vendor_conclusions_for_vendor_includes_council_refs():

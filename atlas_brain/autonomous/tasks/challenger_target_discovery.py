@@ -105,7 +105,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     pool,
                     losing_vendors,
                     as_of=today,
-                    allow_legacy_fallback=False,
                 )
             except Exception:
                 views = {}

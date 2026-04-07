@@ -835,23 +835,9 @@ async def test_build_deterministic_tenant_report_from_raw_uses_shared_builders(m
     async def _fake_fetch_latest_evidence_vault(pool, *, as_of, analysis_window_days):
         return {}
 
-    async def _fake_reconstruct_reasoning_lookup(pool, as_of=None):
-        return {}
-
-    async def _fake_reconstruct_cross_vendor_lookup(pool, as_of=None):
-        return {"battles": {}, "councils": {}, "asymmetries": {}}
-
     monkeypatch.setattr(
         "atlas_brain.autonomous.tasks._b2b_shared._fetch_latest_evidence_vault",
         _fake_fetch_latest_evidence_vault,
-    )
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_reasoning_lookup",
-        _fake_reconstruct_reasoning_lookup,
-    )
-    monkeypatch.setattr(
-        "atlas_brain.autonomous.tasks.b2b_churn_intelligence.reconstruct_cross_vendor_lookup",
-        _fake_reconstruct_cross_vendor_lookup,
     )
 
     payload = {
