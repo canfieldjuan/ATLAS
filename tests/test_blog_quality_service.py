@@ -144,3 +144,48 @@ def test_merge_blog_first_pass_quality_data_context():
     assert merged["latest_first_pass_quality_audit"]["warnings"] == ["unsupported_data_claim:Magento"]
     assert mod.latest_blog_first_pass_quality_audit(merged)["score"] == 82
     assert mod.blog_first_pass_failure_explanation(merged)["primary_blocker"] == "unsupported_data_claim:Magento"
+
+
+def test_blog_quality_revalidation_marks_reasoning_view_found_when_specificity_exists():
+    blueprint = _blueprint(
+        {
+            "reasoning_anchor_examples": {
+                "outlier_or_named_account": [
+                    {
+                        "witness_id": "w1",
+                        "excerpt_text": "A named account hit a Q2 pricing wall against BigCommerce.",
+                    }
+                ]
+            },
+            "reasoning_witness_highlights": [
+                {
+                    "witness_id": "w1",
+                    "excerpt_text": "A named account hit a Q2 pricing wall against BigCommerce.",
+                }
+            ],
+            "reasoning_reference_ids": {"witness_ids": ["w1"]},
+        }
+    )
+
+    result = mod.blog_quality_revalidation(
+        blueprint=blueprint,
+        content={
+            "title": blueprint.suggested_title,
+            "description": "desc",
+            "content": "<p>Generic draft body.</p>",
+        },
+        boundary="publish",
+        report={
+            "status": "pass",
+            "score": 82,
+            "threshold": 70,
+            "blocking_issues": [],
+            "warnings": [],
+        },
+    )
+
+    explanation = result["audit"]["failure_explanation"]
+    assert explanation["reasoning_view_found"] is True
+    assert explanation["context_has_anchor_examples"] is True
+    assert explanation["context_has_witness_highlights"] is True
+    assert explanation["context_has_reference_ids"] is True

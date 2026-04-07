@@ -143,6 +143,11 @@ def build_blog_failure_explanation(
 ) -> dict[str, Any]:
     resolved_context = specificity_context if isinstance(specificity_context, dict) else {}
     snapshot = specificity_snapshot if isinstance(specificity_snapshot, dict) else {}
+    reasoning_view_found = bool(
+        resolved_context.get("anchor_examples")
+        or resolved_context.get("witness_highlights")
+        or resolved_context.get("reference_ids")
+    )
     blocking_issues = [
         str(issue).strip()
         for issue in (audit.get("blocking_issues") or [])
@@ -274,7 +279,7 @@ def build_blog_failure_explanation(
         "missing_primary_inputs": list(missing_inputs),
         "context_sources": list(context_sources),
         "fallback_used": False,
-        "reasoning_view_found": False,
+        "reasoning_view_found": reasoning_view_found,
         "anchor_count": anchor_count,
         "highlight_count": highlight_count,
         "reference_id_counts": reference_id_counts,
