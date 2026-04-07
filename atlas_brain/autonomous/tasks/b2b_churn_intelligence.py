@@ -195,6 +195,10 @@ def _should_use_cross_vendor_category(category: str) -> bool:
     return bool(text) and not _is_generic_product_category(text)
 
 
+def _legacy_reasoning_fallback_enabled() -> bool:
+    return bool(getattr(settings.b2b_churn, "legacy_reasoning_fallback_enabled", True))
+
+
 async def _load_category_council_lookup(
     pool,
     vendor_scores: list[dict[str, Any]],
@@ -894,6 +898,9 @@ async def reconstruct_reasoning_lookup(
 
     When *as_of* is None, uses the most recent last_computed_at watermark.
     """
+    if not _legacy_reasoning_fallback_enabled():
+        return {}
+
     if as_of is None:
         watermark = await pool.fetchval(
             "SELECT MAX(last_computed_at)::date FROM b2b_churn_signals"
@@ -1025,6 +1032,9 @@ async def reconstruct_cross_vendor_lookup(
     (councils). Deprecated compatibility path. Burn-in removal target:
     2026-04-18. When *as_of* is None the most recent computed_date is used.
     """
+    if not _legacy_reasoning_fallback_enabled():
+        return {"battles": {}, "councils": {}, "asymmetries": {}}
+
     if as_of is None:
         watermark = await pool.fetchval(
             "SELECT MAX(computed_date) FROM b2b_cross_vendor_conclusions"
