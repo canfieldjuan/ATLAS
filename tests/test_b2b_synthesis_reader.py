@@ -258,6 +258,46 @@ class TestLoadBestReasoningView:
         assert view.primary_wedge is not None
         assert view.primary_wedge.value == "price_squeeze"
 
+
+def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
+    raw = {
+        "reasoning_contracts": {
+            "schema_version": "v1",
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "high",
+                },
+            },
+        },
+        "scope_manifest": {
+            "selection_strategy": "vendor_facet_packet_v1",
+            "witnesses_in_scope": 8,
+        },
+        "reasoning_atoms": {
+            "schema_version": "v1",
+            "theses": [{"thesis_id": "primary_wedge"}],
+            "timing_windows": [{"window_id": "trigger_1"}],
+            "proof_points": [{"label": "switch_volume"}],
+            "account_signals": [{"company": "Acme"}],
+            "counterevidence": [{"counterevidence_id": "counterevidence_1"}],
+            "coverage_limits": [{"coverage_limit_id": "limit_1"}],
+        },
+        "reasoning_delta": {
+            "schema_version": "v1",
+            "changed": True,
+        },
+    }
+    view = load_synthesis_view(raw, "Acme")
+
+    context = view.consumer_context("vendor_scorecard")
+
+    assert context["scope_manifest"]["selection_strategy"] == "vendor_facet_packet_v1"
+    assert context["reasoning_atoms"]["schema_version"] == "v1"
+    assert context["theses"][0]["thesis_id"] == "primary_wedge"
+    assert context["timing_windows"][0]["window_id"] == "trigger_1"
+    assert context["reasoning_delta"]["changed"] is True
+
     @pytest.mark.asyncio
     async def test_falls_back_to_legacy(self):
         from atlas_brain.autonomous import visibility as visibility_mod

@@ -593,6 +593,21 @@ class SynthesisView:
         return resolved
 
     @property
+    def scope_manifest(self) -> dict[str, Any]:
+        raw = self.raw.get("scope_manifest")
+        return raw if isinstance(raw, dict) else {}
+
+    @property
+    def reasoning_atoms(self) -> dict[str, Any]:
+        raw = self.raw.get("reasoning_atoms")
+        return raw if isinstance(raw, dict) else {}
+
+    @property
+    def reasoning_delta(self) -> dict[str, Any]:
+        raw = self.raw.get("reasoning_delta")
+        return raw if isinstance(raw, dict) else {}
+
+    @property
     def packet_artifacts(self) -> dict[str, Any]:
         raw = self.raw.get("packet_artifacts")
         return raw if isinstance(raw, dict) else {}
@@ -674,6 +689,36 @@ class SynthesisView:
                 break
         return highlights
 
+    @property
+    def theses(self) -> list[dict[str, Any]]:
+        rows = self.reasoning_atoms.get("theses")
+        return [dict(item) for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+
+    @property
+    def timing_windows(self) -> list[dict[str, Any]]:
+        rows = self.reasoning_atoms.get("timing_windows")
+        return [dict(item) for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+
+    @property
+    def proof_points(self) -> list[dict[str, Any]]:
+        rows = self.reasoning_atoms.get("proof_points")
+        return [dict(item) for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+
+    @property
+    def account_signals(self) -> list[dict[str, Any]]:
+        rows = self.reasoning_atoms.get("account_signals")
+        return [dict(item) for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+
+    @property
+    def counterevidence(self) -> list[dict[str, Any]]:
+        rows = self.reasoning_atoms.get("counterevidence")
+        return [dict(item) for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+
+    @property
+    def coverage_limits(self) -> list[dict[str, Any]]:
+        rows = self.reasoning_atoms.get("coverage_limits")
+        return [dict(item) for item in rows if isinstance(item, dict)] if isinstance(rows, list) else []
+
     def consumer_context(self, consumer: str) -> dict[str, Any]:
         contracts = self.materialized_contracts()
         context: dict[str, Any] = {
@@ -693,6 +738,27 @@ class SynthesisView:
         refs = self.reference_ids
         if refs:
             context["reference_ids"] = refs
+        scope_manifest = self.scope_manifest
+        if scope_manifest:
+            context["scope_manifest"] = scope_manifest
+        atoms = self.reasoning_atoms
+        if atoms:
+            context["reasoning_atoms"] = atoms
+            if self.theses:
+                context["theses"] = self.theses
+            if self.timing_windows:
+                context["timing_windows"] = self.timing_windows
+            if self.proof_points:
+                context["proof_points"] = self.proof_points
+            if self.account_signals:
+                context["account_signals"] = self.account_signals
+            if self.counterevidence:
+                context["counterevidence"] = self.counterevidence
+            if self.coverage_limits:
+                context["coverage_limits"] = self.coverage_limits
+        reasoning_delta = self.reasoning_delta
+        if reasoning_delta:
+            context["reasoning_delta"] = reasoning_delta
         if self.packet_artifacts:
             context["packet_artifacts"] = self.packet_artifacts
         return context
@@ -986,6 +1052,15 @@ def inject_synthesis_into_card(
     reference_ids = context.get("reference_ids")
     if isinstance(reference_ids, dict) and reference_ids:
         card_entry["reference_ids"] = reference_ids
+    scope_manifest = context.get("scope_manifest")
+    if isinstance(scope_manifest, dict) and scope_manifest:
+        card_entry["scope_manifest"] = scope_manifest
+    reasoning_atoms = context.get("reasoning_atoms")
+    if isinstance(reasoning_atoms, dict) and reasoning_atoms:
+        card_entry["reasoning_atoms"] = reasoning_atoms
+    reasoning_delta = context.get("reasoning_delta")
+    if isinstance(reasoning_delta, dict) and reasoning_delta:
+        card_entry["reasoning_delta"] = reasoning_delta
     inject_synthesis_freshness(
         card_entry,
         view,

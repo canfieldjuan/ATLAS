@@ -160,6 +160,18 @@ def _apply_synthesis_view_to_briefing(
     if isinstance(reference_ids, dict) and reference_ids:
         briefing["reasoning_reference_ids"] = reference_ids
         used = True
+    scope_manifest = context.get("scope_manifest")
+    if isinstance(scope_manifest, dict) and scope_manifest:
+        briefing["scope_manifest"] = scope_manifest
+        used = True
+    atoms = context.get("reasoning_atoms")
+    if isinstance(atoms, dict) and atoms:
+        briefing["reasoning_atoms"] = atoms
+        used = True
+    delta = context.get("reasoning_delta")
+    if isinstance(delta, dict) and delta:
+        briefing["reasoning_delta"] = delta
+        used = True
 
     contract_gaps = context.get("reasoning_contract_gaps") or []
     if contract_gaps:

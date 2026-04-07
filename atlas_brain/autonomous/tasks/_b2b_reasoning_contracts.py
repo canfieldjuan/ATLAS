@@ -1691,6 +1691,11 @@ def build_persistable_synthesis(
     treated as transient prompt/validation intermediates and are not stored at the
     top level anymore.
     """
+    from ._b2b_reasoning_atoms import (
+        build_reasoning_atoms,
+        build_scope_manifest,
+    )
+
     contracts = build_reasoning_contracts(synthesis, packet)
     raw_schema = str(synthesis.get("schema_version") or "2.1")
     meta = _copy_dict(synthesis.get("meta"))
@@ -1732,6 +1737,8 @@ def build_persistable_synthesis(
             "witness_pack": list(getattr(packet, "witness_pack", []) or []),
             "section_packets": dict(getattr(packet, "section_packets", {}) or {}),
         }
+    persisted["scope_manifest"] = build_scope_manifest(packet)
+    persisted["reasoning_atoms"] = build_reasoning_atoms(contracts, packet)
 
     vendor_core = contracts.get("vendor_core_reasoning") or {}
     causal = vendor_core.get("causal_narrative") or {}

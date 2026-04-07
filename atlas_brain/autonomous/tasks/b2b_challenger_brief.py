@@ -1392,6 +1392,9 @@ def _build_challenger_brief(
     reasoning_anchor_examples: dict[str, list[dict[str, Any]]] = {}
     reasoning_witness_highlights: list[dict[str, Any]] = []
     reasoning_reference_ids: dict[str, Any] = {}
+    reasoning_scope_manifest: dict[str, Any] = {}
+    reasoning_atoms: dict[str, Any] = {}
+    reasoning_delta: dict[str, Any] = {}
     if incumbent_synthesis_view is not None:
         from ._b2b_synthesis_reader import (
             inject_synthesis_freshness,
@@ -1436,6 +1439,21 @@ def _build_challenger_brief(
         reasoning_reference_ids = (
             consumer_context.get("reference_ids")
             if isinstance(consumer_context.get("reference_ids"), dict)
+            else {}
+        )
+        reasoning_scope_manifest = (
+            consumer_context.get("scope_manifest")
+            if isinstance(consumer_context.get("scope_manifest"), dict)
+            else {}
+        )
+        reasoning_atoms = (
+            consumer_context.get("reasoning_atoms")
+            if isinstance(consumer_context.get("reasoning_atoms"), dict)
+            else {}
+        )
+        reasoning_delta = (
+            consumer_context.get("reasoning_delta")
+            if isinstance(consumer_context.get("reasoning_delta"), dict)
             else {}
         )
         if isinstance(vendor_core_reasoning, dict):
@@ -1510,6 +1528,12 @@ def _build_challenger_brief(
             incumbent_section["reasoning_witness_highlights"] = reasoning_witness_highlights
         if reasoning_reference_ids:
             incumbent_section["reasoning_reference_ids"] = reasoning_reference_ids
+        if reasoning_scope_manifest:
+            incumbent_section["reasoning_scope_manifest"] = reasoning_scope_manifest
+        if reasoning_atoms:
+            incumbent_section["reasoning_atoms"] = reasoning_atoms
+        if reasoning_delta:
+            incumbent_section["reasoning_delta"] = reasoning_delta
 
         # Phase 3 governance fields
         wts = incumbent_synthesis_view.why_they_stay
@@ -1760,6 +1784,12 @@ def _build_challenger_brief(
         result["reasoning_witness_highlights"] = reasoning_witness_highlights
     if reasoning_reference_ids:
         result["reasoning_reference_ids"] = reasoning_reference_ids
+    if reasoning_scope_manifest:
+        result["reasoning_scope_manifest"] = reasoning_scope_manifest
+    if reasoning_atoms:
+        result["reasoning_atoms"] = reasoning_atoms
+    if reasoning_delta:
+        result["reasoning_delta"] = reasoning_delta
     if account_reasoning:
         result["account_reasoning"] = account_reasoning
     if timing_summary or timing_metrics or priority_timing_triggers:

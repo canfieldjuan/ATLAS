@@ -1019,6 +1019,49 @@ class TestBuildVendorAggregate:
         assert agg["total_accounts_in_motion"] == 0
         assert agg["accounts"] == []
 
+    def test_empty_accounts_suppresses_stale_account_reasoning_contract(self):
+        class _View:
+            schema_version = "v1"
+            wedge_label = "Pricing shock"
+            primary_wedge = type("W", (), {"value": "pricing_shock"})()
+            meta = {}
+            reference_ids = {}
+
+            def contract(self, name):
+                if name == "account_reasoning":
+                    return {
+                        "market_summary": "Stale named-account pressure from a prior run.",
+                        "top_accounts": [
+                            {"name": "Infohob", "intent_score": 0.7},
+                        ],
+                    }
+                return {}
+
+            def materialized_contracts(self):
+                return {
+                    "schema_version": "v1",
+                    "account_reasoning": self.contract("account_reasoning"),
+                }
+
+        agg = _build_vendor_aggregate(
+            "Trello",
+            [],
+            category="Project Management",
+            reasoning_lookup={},
+            xv_lookup={"battles": {}, "councils": {}, "asymmetries": {}},
+            feature_gap_lookup={},
+            price_lookup={},
+            budget_lookup={},
+            competitor_lookup={},
+            synthesis_views={"Trello": _View()},
+        )
+
+        assert agg["total_accounts_in_motion"] == 0
+        assert "account_reasoning" not in agg.get("reasoning_contracts", {})
+        assert "account_reasoning" not in agg
+        assert "priority_account_names" not in agg
+        assert "account_reasoning:empty_accounts" in agg["reasoning_contract_gaps"]
+
     def test_synthesis_account_metrics_are_normalized_to_emitted_accounts(self):
         class _View:
             schema_version = "v1"

@@ -1021,6 +1021,7 @@ def _build_vendor_aggregate(
             contracts_getter = getattr(view, "consumer_context", None)
             context = contracts_getter("accounts_in_motion") if callable(contracts_getter) else {}
 
+        contract_gaps = list(context.get("reasoning_contract_gaps") or [])
         reasoning_contracts = context.get("reasoning_contracts") or {}
         if not reasoning_contracts:
             materialized_contracts = getattr(view, "materialized_contracts", None)
@@ -1038,6 +1039,14 @@ def _build_vendor_aggregate(
                         reasoning_contracts[name] = contract
                 if reasoning_contracts:
                     reasoning_contracts["schema_version"] = "v1"
+        if (
+            not accounts
+            and isinstance(reasoning_contracts, dict)
+            and reasoning_contracts.get("account_reasoning")
+        ):
+            reasoning_contracts = dict(reasoning_contracts)
+            reasoning_contracts.pop("account_reasoning", None)
+            contract_gaps.append("account_reasoning:empty_accounts")
         if reasoning_contracts:
             result["reasoning_contracts"] = reasoning_contracts
             reference_ids = context.get("reference_ids")
@@ -1045,6 +1054,15 @@ def _build_vendor_aggregate(
                 reference_ids = getattr(view, "reference_ids", None)
             if isinstance(reference_ids, dict) and reference_ids:
                 result["reference_ids"] = reference_ids
+            scope_manifest = context.get("scope_manifest")
+            if isinstance(scope_manifest, dict) and scope_manifest:
+                result["scope_manifest"] = scope_manifest
+            atoms = context.get("reasoning_atoms")
+            if isinstance(atoms, dict) and atoms:
+                result["reasoning_atoms"] = atoms
+            delta = context.get("reasoning_delta")
+            if isinstance(delta, dict) and delta:
+                result["reasoning_delta"] = delta
             vendor_core = reasoning_contracts.get("vendor_core_reasoning") or {}
             account_reasoning = reasoning_contracts.get("account_reasoning") or {}
             if isinstance(account_reasoning, dict) and account_reasoning:
@@ -1092,7 +1110,6 @@ def _build_vendor_aggregate(
             view,
             requested_as_of=requested_as_of,
         )
-        contract_gaps = context.get("reasoning_contract_gaps") or []
         if contract_gaps:
             result["reasoning_contract_gaps"] = contract_gaps
         section_disclaimers = context.get("reasoning_section_disclaimers")
