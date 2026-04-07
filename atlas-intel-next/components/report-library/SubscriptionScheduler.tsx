@@ -124,6 +124,7 @@ function deliveryStatusLabel(status: ReportSubscription['last_delivery_status'])
   if (status === 'sent') return 'Delivered'
   if (status === 'partial') return 'Partial delivery'
   if (status === 'skipped') return 'Skipped'
+  if (status === 'dry_run') return 'Dry run'
   if (status === 'failed') return 'Failed'
   return 'No deliveries yet'
 }
@@ -132,6 +133,7 @@ function deliveryStatusTone(status: ReportSubscription['last_delivery_status']):
   if (status === 'sent') return 'bg-emerald-500/15 text-emerald-300'
   if (status === 'partial') return 'bg-amber-500/15 text-amber-300'
   if (status === 'skipped') return 'bg-slate-500/15 text-slate-300'
+  if (status === 'dry_run') return 'bg-cyan-500/15 text-cyan-300'
   if (status === 'failed') return 'bg-rose-500/15 text-rose-300'
   return 'bg-slate-500/15 text-slate-300'
 }

@@ -25,6 +25,7 @@ _REQUIRED_MIGRATIONS = (
     "263_b2b_competitive_set_run_constraints",
     "265_b2b_report_subscriptions",
     "266_b2b_report_subscription_delivery_log",
+    "268_b2b_report_subscription_delivery_dry_run_status",
 )
 
 _REQUIRED_TABLES = (

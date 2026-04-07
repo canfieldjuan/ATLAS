@@ -143,6 +143,7 @@ export function normalizeReportSubscription(
       subscription.last_delivery_status === 'sent'
       || subscription.last_delivery_status === 'partial'
       || subscription.last_delivery_status === 'skipped'
+      || subscription.last_delivery_status === 'dry_run'
       || subscription.last_delivery_status === 'failed'
     )
       ? subscription.last_delivery_status

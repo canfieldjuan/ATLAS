@@ -58,6 +58,8 @@ _REPORT_FREQUENCY_DAYS = {
 }
 _QUALITY_GATED_REPORT_TYPES = {"battle_card", "challenger_brief"}
 _DELIVERY_CONTENT_HASH_STATUSES = ("sent",)
+_DELIVERY_LOG_CLAIMABLE_STALE_STATUSES = ("failed", "processing")
+_DELIVERY_LOG_RECLAIMABLE_IMMEDIATE_STATUSES = ("dry_run",)
 
 
 def _safe_json(value: Any) -> Any:
@@ -73,6 +75,36 @@ def _safe_json(value: Any) -> Any:
     return value
 
 
+def _task_metadata(task: ScheduledTask | Any) -> dict[str, Any]:
+    metadata = getattr(task, "metadata", None)
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _normalize_runtime_scope(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return set()
+        parsed = _safe_json(text)
+        if parsed is not text:
+            return _normalize_runtime_scope(parsed)
+        return {
+            item.strip()
+            for item in text.split(",")
+            if item and item.strip()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return {
+            str(item).strip()
+            for item in value
+            if str(item).strip()
+        }
+    text = str(value).strip()
+    return {text} if text else set()
+
+
 def _campaign_from_email() -> str:
     campaign_cfg = settings.campaign_sequence
     if campaign_cfg.sender_type == "ses":
@@ -85,6 +117,22 @@ def _frontend_base_url() -> str:
     if configured:
         return configured.rstrip("/")
     return str(settings.saas_auth.frontend_base_url or "").strip().rstrip("/")
+
+
+def _dry_run_enabled(task: ScheduledTask | Any) -> bool:
+    metadata = _task_metadata(task)
+    if "dry_run" in metadata:
+        return bool(metadata.get("dry_run"))
+    return bool(settings.b2b_report_delivery.dry_run)
+
+
+def _canary_account_ids(task: ScheduledTask | Any) -> set[str]:
+    metadata = _task_metadata(task)
+    if "canary_account_ids" in metadata:
+        return _normalize_runtime_scope(metadata.get("canary_account_ids"))
+    if "live_account_ids" in metadata:
+        return _normalize_runtime_scope(metadata.get("live_account_ids"))
+    return _normalize_runtime_scope(settings.b2b_report_delivery.canary_account_ids)
 
 
 def _scope_manage_url(scope_type: str, scope_key: str) -> str | None:
@@ -544,8 +592,11 @@ async def _claim_delivery_attempt(pool, row) -> Any | None:
             summary = '',
             error = NULL,
             delivered_at = NOW()
-        WHERE b2b_report_subscription_delivery_log.status IN ('failed', 'processing')
-          AND b2b_report_subscription_delivery_log.delivered_at < NOW() - ($10 || ' seconds')::interval
+        WHERE (
+                b2b_report_subscription_delivery_log.status = ANY($10::text[])
+                AND b2b_report_subscription_delivery_log.delivered_at < NOW() - ($12 || ' seconds')::interval
+              )
+           OR b2b_report_subscription_delivery_log.status = ANY($11::text[])
         RETURNING id
         """,
         row["id"],
@@ -557,7 +608,71 @@ async def _claim_delivery_attempt(pool, row) -> Any | None:
         row["delivery_frequency"],
         row["deliverable_focus"],
         row["freshness_policy"],
+        list(_DELIVERY_LOG_CLAIMABLE_STALE_STATUSES),
+        list(_DELIVERY_LOG_RECLAIMABLE_IMMEDIATE_STATUSES),
         str(stale_claim_seconds),
+    )
+
+
+async def _count_due_non_canary_subscriptions(pool, canary_account_ids: set[str]) -> int:
+    if not canary_account_ids:
+        return 0
+    value = await pool.fetchval(
+        """
+        SELECT COUNT(*)::int
+        FROM b2b_report_subscriptions s
+        JOIN saas_accounts sa ON sa.id = s.account_id
+        WHERE s.enabled = TRUE
+          AND s.next_delivery_at IS NOT NULL
+          AND s.next_delivery_at <= NOW()
+          AND sa.product IN ('b2b_retention', 'b2b_challenger')
+          AND sa.plan_status IN ('trialing', 'active', 'past_due')
+          AND NOT (s.account_id::text = ANY($1::text[]))
+        """,
+        list(canary_account_ids),
+    )
+    return int(value or 0)
+
+
+async def _fetch_due_rows(pool, limit: int, canary_account_ids: set[str]) -> list[Any]:
+    if canary_account_ids:
+        return await pool.fetch(
+            """
+            SELECT s.id, s.account_id, sa.name AS account_name,
+                   s.report_id, s.scope_type, s.scope_key, s.scope_label,
+                   s.delivery_frequency, s.deliverable_focus, s.freshness_policy,
+                   s.recipient_emails, s.delivery_note, s.next_delivery_at
+            FROM b2b_report_subscriptions s
+            JOIN saas_accounts sa ON sa.id = s.account_id
+            WHERE s.enabled = TRUE
+              AND s.next_delivery_at IS NOT NULL
+              AND s.next_delivery_at <= NOW()
+              AND sa.product IN ('b2b_retention', 'b2b_challenger')
+              AND sa.plan_status IN ('trialing', 'active', 'past_due')
+              AND s.account_id::text = ANY($2::text[])
+            ORDER BY s.next_delivery_at ASC, s.created_at ASC
+            LIMIT $1
+            """,
+            limit,
+            list(canary_account_ids),
+        )
+    return await pool.fetch(
+        """
+        SELECT s.id, s.account_id, sa.name AS account_name,
+               s.report_id, s.scope_type, s.scope_key, s.scope_label,
+               s.delivery_frequency, s.deliverable_focus, s.freshness_policy,
+               s.recipient_emails, s.delivery_note, s.next_delivery_at
+        FROM b2b_report_subscriptions s
+        JOIN saas_accounts sa ON sa.id = s.account_id
+        WHERE s.enabled = TRUE
+          AND s.next_delivery_at IS NOT NULL
+          AND s.next_delivery_at <= NOW()
+          AND sa.product IN ('b2b_retention', 'b2b_challenger')
+          AND sa.plan_status IN ('trialing', 'active', 'past_due')
+        ORDER BY s.next_delivery_at ASC, s.created_at ASC
+        LIMIT $1
+        """,
+        limit,
     )
 
 
@@ -807,45 +922,48 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not delivery_cfg.enabled:
         return {"_skip_synthesis": "Recurring report delivery disabled"}
 
+    dry_run = _dry_run_enabled(task)
+    canary_account_ids = _canary_account_ids(task)
+
     pool = get_db_pool()
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    from_email = _campaign_from_email()
-    if not from_email:
-        return {"_skip_synthesis": "Campaign sender not configured"}
-
-    try:
-        sender = get_campaign_sender()
-    except Exception as exc:
-        logger.warning("Recurring report delivery sender unavailable: %s", exc)
-        return {"_skip_synthesis": "Campaign sender unavailable"}
-
-    due_rows = await pool.fetch(
-        """
-        SELECT s.id, s.account_id, sa.name AS account_name,
-               s.report_id, s.scope_type, s.scope_key, s.scope_label,
-               s.delivery_frequency, s.deliverable_focus, s.freshness_policy,
-               s.recipient_emails, s.delivery_note, s.next_delivery_at
-        FROM b2b_report_subscriptions s
-        JOIN saas_accounts sa ON sa.id = s.account_id
-        WHERE s.enabled = TRUE
-          AND s.next_delivery_at IS NOT NULL
-          AND s.next_delivery_at <= NOW()
-          AND sa.product IN ('b2b_retention', 'b2b_challenger')
-          AND sa.plan_status IN ('trialing', 'active', 'past_due')
-        ORDER BY s.next_delivery_at ASC, s.created_at ASC
-        LIMIT $1
-        """,
-        delivery_cfg.max_subscriptions_per_run,
+    deferred_non_canary = await _count_due_non_canary_subscriptions(pool, canary_account_ids)
+    due_rows = await _fetch_due_rows(
+        pool,
+        int(delivery_cfg.max_subscriptions_per_run),
+        canary_account_ids,
     )
 
     if not due_rows:
-        return {"_skip_synthesis": "No due report subscriptions"}
+        return {
+            "_skip_synthesis": (
+                "No due report subscriptions in canary scope"
+                if canary_account_ids
+                else "No due report subscriptions"
+            ),
+            "dry_run": dry_run,
+            "deferred_non_canary": deferred_non_canary,
+        }
+
+    sender = None
+    from_email = ""
+    if not dry_run:
+        from_email = _campaign_from_email()
+        if not from_email:
+            return {"_skip_synthesis": "Campaign sender not configured"}
+
+        try:
+            sender = get_campaign_sender()
+        except Exception as exc:
+            logger.warning("Recurring report delivery sender unavailable: %s", exc)
+            return {"_skip_synthesis": "Campaign sender unavailable"}
 
     attempts_claimed = 0
     delivered = 0
     partially_delivered = 0
+    dry_run_deliveries = 0
     skipped = 0
     failed = 0
 
@@ -888,7 +1006,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "changed since the last completed delivery."
                         )
 
-                if status != "skipped":
+                if dry_run and status != "skipped":
+                    status = "dry_run"
+                    summary = (
+                        f"Dry run: would deliver {len(artifacts)} artifact(s) "
+                        f"to {len(recipients)} recipient(s)."
+                    )
+
+                if status not in {"skipped", "dry_run"}:
                     tags = [
                         {"name": "task", "value": "b2b_report_subscription_delivery"},
                         {"name": "subscription_id", "value": str(row["id"])},
@@ -968,7 +1093,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 error=error_message,
             )
 
-            if status in {"sent", "partial", "skipped"}:
+            if not dry_run and status in {"sent", "partial", "skipped"}:
                 await _advance_subscription(
                     pool,
                     row["id"],
@@ -980,6 +1105,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 delivered += 1
             elif status == "partial":
                 partially_delivered += 1
+            elif status == "dry_run":
+                dry_run_deliveries += 1
             elif status == "skipped":
                 skipped += 1
             else:
@@ -1008,6 +1135,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "attempts_claimed": attempts_claimed,
         "delivered": delivered,
         "partially_delivered": partially_delivered,
+        "dry_run_deliveries": dry_run_deliveries,
         "skipped": skipped,
         "failed": failed,
+        "dry_run": dry_run,
+        "deferred_non_canary": deferred_non_canary,
     }

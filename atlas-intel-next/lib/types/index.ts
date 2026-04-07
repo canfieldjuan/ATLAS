@@ -149,7 +149,7 @@ export type ReportSubscriptionScopeType = 'library' | 'report'
 export type ReportSubscriptionFrequency = 'weekly' | 'monthly' | 'quarterly'
 export type ReportSubscriptionDeliverableFocus = 'all' | 'battle_cards' | 'executive_reports' | 'comparison_packs'
 export type ReportSubscriptionFreshnessPolicy = 'fresh_only' | 'fresh_or_monitor' | 'any'
-export type ReportSubscriptionDeliveryStatus = 'sent' | 'partial' | 'skipped' | 'failed' | null
+export type ReportSubscriptionDeliveryStatus = 'sent' | 'partial' | 'skipped' | 'failed' | 'dry_run' | null
 
 export interface ReportSubscription {
   id: string

@@ -3514,6 +3514,14 @@ class B2BReportDeliveryConfig(BaseSettings):
         default=True,
         description="Exclude artifacts from library deliveries when an enabled report-scoped subscription exists for the same artifact",
     )
+    dry_run: bool = Field(
+        default=False,
+        description="Resolve due subscriptions and record delivery outcomes without sending email or advancing schedules",
+    )
+    canary_account_ids: str = Field(
+        default="",
+        description="Comma-separated or JSON list of account IDs allowed for live recurring delivery sends",
+    )
     suppress_unchanged_deliveries: bool = Field(
         default=True,
         description="Skip recurring sends when the eligible artifact package has not materially changed since the last completed delivery",

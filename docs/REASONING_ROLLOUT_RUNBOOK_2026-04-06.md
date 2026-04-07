@@ -19,6 +19,7 @@ Apply these migrations before enabling the new scheduled/operator paths:
 - `263_b2b_competitive_set_run_constraints`
 - `265_b2b_report_subscriptions`
 - `266_b2b_report_subscription_delivery_log`
+- `268_b2b_report_subscription_delivery_dry_run_status`
 
 Why they matter:
 - `245` enables the canonical cross-vendor synthesis table
@@ -28,6 +29,7 @@ Why they matter:
 - `263` hardens `262` with FK and enum-like constraints
 - `265` persists saved report subscriptions in the report library
 - `266` records report delivery attempts and status history
+- `268` allows dry-run delivery attempts to be logged without poisoning future live claims
 
 ## Backfill Requirements
 No blocking DB backfill is required to deploy the new additive reasoning contract.
