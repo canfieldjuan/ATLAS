@@ -5,9 +5,8 @@ councils, and resource asymmetry analyses.  Each packet is a plain dict
 suitable for JSON serialization and LLM prompting.
 
 The ``to_legacy_cross_vendor_conclusion`` converter mirrors synthesis
-output into the legacy ``b2b_cross_vendor_conclusions`` shape so existing
-consumers (battle cards, blogs, challenger briefs) continue working
-during migration.
+output into the persisted ``b2b_cross_vendor_conclusions`` shape used by
+downstream deterministic/reporting consumers.
 """
 
 from __future__ import annotations

@@ -1326,7 +1326,7 @@ def synthesis_view_to_reasoning_entry(view: SynthesisView) -> dict[str, Any]:
     return {
         "archetype": archetype,
         "confidence": confidence_num,
-        "mode": "synthesis" if view.schema_version != "legacy" else "synthesis_fallback",
+        "mode": "synthesis",
         "risk_level": risk_level,
         "executive_summary": executive_summary,
         "key_signals": key_signals,

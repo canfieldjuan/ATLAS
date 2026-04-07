@@ -167,11 +167,7 @@ def _overlay_reasoning_summary_from_view(target: dict[str, Any], view: Any) -> N
     reasoning_delta = getattr(view, "reasoning_delta", None)
     if isinstance(reasoning_delta, dict) and reasoning_delta:
         target["reasoning_delta"] = reasoning_delta
-    target["reasoning_source"] = (
-        "b2b_reasoning_synthesis"
-        if getattr(view, "schema_version", "") != "legacy"
-        else "b2b_churn_signals_legacy_fallback"
-    )
+    target["reasoning_source"] = "b2b_reasoning_synthesis"
 
 
 def _overlay_reasoning_detail_from_view(
@@ -226,11 +222,7 @@ def _overlay_reasoning_detail_from_view(
     if primary_wedge:
         target["synthesis_wedge"] = primary_wedge.value
         target["synthesis_wedge_label"] = view.wedge_label
-    target["reasoning_source"] = (
-        "b2b_reasoning_synthesis"
-        if getattr(view, "schema_version", "") != "legacy"
-        else "b2b_churn_signals_legacy_fallback"
-    )
+    target["reasoning_source"] = "b2b_reasoning_synthesis"
     inject_synthesis_freshness(
         target,
         view,
