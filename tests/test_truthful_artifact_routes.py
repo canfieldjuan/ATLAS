@@ -1,6 +1,6 @@
 """Route-level tests for truthful blog/report artifact fields."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -292,6 +292,55 @@ def test_b2b_evidence_router_rejects_invalid_as_of_date(monkeypatch):
     assert response.json()["detail"] == "Invalid as_of_date; expected YYYY-MM-DD"
 
 
+def test_b2b_evidence_trace_bounds_diff_lookup_to_target_date(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            if "FROM b2b_reasoning_synthesis" in query:
+                return None
+            if "FROM b2b_vendor_reasoning_packets" in query:
+                return None
+            if "FROM reasoning_evidence_diffs" in query:
+                assert args == ("Salesforce", date(2026, 3, 31))
+                return {
+                    "computed_date": date(2026, 3, 30),
+                    "confirmed_count": 4,
+                    "contradicted_count": 1,
+                    "novel_count": 2,
+                    "missing_count": 0,
+                    "diff_ratio": 0.25,
+                    "decision": "stable",
+                    "has_core_contradiction": False,
+                }
+            return None
+
+        async def fetch(self, query, *_args):
+            if "FROM b2b_vendor_witnesses" in query:
+                return []
+            return []
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/evidence/trace?vendor_name=Salesforce&as_of_date=2026-03-31")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stats"]["has_diff"] is True
+    assert body["trace"]["evidence_diff"]["decision"] == "stable"
+    assert body["trace"]["evidence_diff"]["computed_date"] == "2026-03-30"
+
+
 def test_push_to_crm_routes_high_intent_payload(monkeypatch):
     app = FastAPI()
     app.include_router(tenant_dashboard_api.router)
@@ -313,8 +362,11 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
             ]
 
     captured: dict[str, object] = {}
-    deliver = AsyncMock(return_value=True)
     log_push = AsyncMock()
+    
+    async def fake_deliver(pool, sub, event_type, envelope, payload_bytes, cfg):
+        await log_push(pool, sub["id"], event_type, envelope)
+        return True
 
     def fake_format_for_channel(channel, envelope):
         captured["channel"] = channel
@@ -328,7 +380,7 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
     )
     monkeypatch.setattr(
         "atlas_brain.services.b2b.webhook_dispatcher._deliver_single",
-        deliver,
+        fake_deliver,
     )
     monkeypatch.setattr(
         "atlas_brain.services.b2b.webhook_dispatcher._log_crm_push",
@@ -360,8 +412,71 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
     assert envelope["vendor"] == "Salesforce"
     assert envelope["data"]["company_name"] == "Acme"
     assert "company" not in envelope["data"]
-    deliver.assert_awaited()
-    log_push.assert_awaited()
+    assert log_push.await_count == 1
+
+
+def test_push_to_crm_skips_payloads_above_size_limit(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, *_args):
+            return [
+                {
+                    "id": "sub-1",
+                    "url": "https://example.com/webhook",
+                    "secret": "secret",
+                    "account_id": _auth_user().account_id,
+                    "channel": "crm_hubspot",
+                    "auth_header": None,
+                }
+            ]
+
+    deliver = AsyncMock(return_value=True)
+    log_push = AsyncMock()
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        tenant_dashboard_api.settings.b2b_webhook,
+        "max_payload_bytes",
+        4,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._format_for_channel",
+        lambda *_args, **_kwargs: b"oversized-payload",
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._deliver_single",
+        deliver,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._log_crm_push",
+        log_push,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/tenant/push-to-crm",
+            json={
+                "opportunities": [
+                    {
+                        "company": "Acme",
+                        "vendor": "Salesforce",
+                        "urgency": 8.5,
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["pushed"] == 0
+    assert response.json()["failed"] == [{"company": "Acme", "reason": "payload_too_large"}]
+    deliver.assert_not_awaited()
+    log_push.assert_not_awaited()
 
 
 def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):

@@ -1637,7 +1637,7 @@ def _is_meaningful_numeric_anchor(value: Any) -> bool:
         return True
     if re.search(r"\b\d+(?:\.\d+)?\s*[kmbx]\b", text, re.IGNORECASE):
         return True
-    if re.search(r"[$€£]\s*\d", text):
+    if re.search(r"[$\u20ac\u00a3]\s*\d", text):
         numeric_text = re.sub(r"[^0-9.]", "", text)
         try:
             return float(numeric_text) >= 1.0

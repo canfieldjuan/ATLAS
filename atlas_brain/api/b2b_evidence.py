@@ -13,17 +13,23 @@ Endpoints:
 """
 
 import json
-import logging
 from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 
-from ..auth.dependencies import AuthUser, require_auth, require_b2b_plan
+from ..auth.dependencies import AuthUser, require_b2b_plan
+from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
-logger = logging.getLogger("atlas.api.b2b_evidence")
+# -- Pagination and query defaults --------------------------------------------
+
+DEFAULT_WITNESS_LIMIT = 50
+MAX_WITNESS_LIMIT = 200
+DEFAULT_ANALYSIS_WINDOW_DAYS = 90
+MIN_ANALYSIS_WINDOW_DAYS = 7
+MAX_ANALYSIS_WINDOW_DAYS = 365
+TRACE_WITNESS_SAMPLE_SIZE = 20
 
 router = APIRouter(
     prefix="/b2b/evidence",
@@ -83,14 +89,14 @@ async def list_witnesses(
     competitor: Optional[str] = None,
     witness_type: Optional[str] = None,
     min_salience: Optional[float] = None,
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=DEFAULT_WITNESS_LIMIT, le=MAX_WITNESS_LIMIT),
     offset: int = Query(default=0, ge=0),
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """List witness records for a vendor with optional filters."""
     pool = _pool_or_503()
 
-    from ..services.vendor_registry import resolve_vendor_name
+
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
@@ -195,7 +201,7 @@ async def get_witness(
     """Get a single witness record with full review text and evidence spans."""
     pool = _pool_or_503()
 
-    from ..services.vendor_registry import resolve_vendor_name
+
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
@@ -251,13 +257,13 @@ async def get_witness(
 async def get_vault(
     vendor_name: str,
     as_of_date: Optional[str] = None,
-    window_days: int = Query(default=90, ge=7, le=365),
+    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get the evidence vault for a vendor -- weakness/strength claims with provenance."""
     pool = _pool_or_503()
 
-    from ..services.vendor_registry import resolve_vendor_name
+
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
@@ -322,7 +328,7 @@ async def get_vault(
 async def get_trace(
     vendor_name: str,
     as_of_date: Optional[str] = None,
-    window_days: int = Query(default=90, ge=7, le=365),
+    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get the full claim-to-review reasoning trace for a vendor.
@@ -332,7 +338,7 @@ async def get_trace(
     """
     pool = _pool_or_503()
 
-    from ..services.vendor_registry import resolve_vendor_name
+
     resolved = await resolve_vendor_name(vendor_name)
     if resolved:
         vendor_name = resolved
@@ -394,7 +400,7 @@ async def get_trace(
 
     # Layer 3: Witnesses (sample, not all)
     witness_rows = await pool.fetch(
-        """
+        f"""
         SELECT witness_id, review_id, witness_type, excerpt_text, source,
                reviewer_company, reviewer_title, pain_category, competitor,
                salience_score, specificity_score, signal_tags, reviewed_at
@@ -403,7 +409,7 @@ async def get_trace(
           AND analysis_window_days = $2
           AND as_of_date <= $3
         ORDER BY salience_score DESC NULLS LAST
-        LIMIT 20
+        LIMIT {TRACE_WITNESS_SAMPLE_SIZE}
         """,
         vendor_name, window_days, target_date,
     )
@@ -436,10 +442,12 @@ async def get_trace(
                has_core_contradiction
         FROM reasoning_evidence_diffs
         WHERE vendor_name = $1
+          AND computed_date <= $2
         ORDER BY computed_date DESC
         LIMIT 1
         """,
         vendor_name,
+        target_date,
     )
 
     evidence_diff = _row_to_dict(diff_row) if diff_row else None

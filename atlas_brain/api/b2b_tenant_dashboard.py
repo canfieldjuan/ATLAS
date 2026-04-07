@@ -707,7 +707,6 @@ async def push_to_crm(
         _build_envelope,
         _format_for_channel,
         _deliver_single,
-        _log_crm_push,
     )
 
     cfg = settings.b2b_webhook
@@ -720,21 +719,31 @@ async def push_to_crm(
         envelope = _build_envelope("high_intent_push", opp.vendor, opp_data)
 
         opp_ok = False
+        failure_reason = "delivery_failed"
         for sub in subs:
             payload_bytes = _format_for_channel(sub["channel"], envelope)
+            if len(payload_bytes) > cfg.max_payload_bytes:
+                logger.warning(
+                    "CRM push payload too large (%d bytes, max %d) for account=%s vendor=%s company=%s channel=%s",
+                    len(payload_bytes),
+                    cfg.max_payload_bytes,
+                    user.account_id,
+                    opp.vendor,
+                    opp.company,
+                    sub["channel"],
+                )
+                failure_reason = "payload_too_large"
+                continue
             ok = await _deliver_single(
                 pool, sub, "high_intent_push", envelope, payload_bytes, cfg,
             )
             if ok:
-                await _log_crm_push(
-                    pool, sub["id"], "high_intent_push", envelope,
-                )
                 opp_ok = True
 
         if opp_ok:
             pushed += 1
         else:
-            failed.append({"company": opp.company, "reason": "delivery_failed"})
+            failed.append({"company": opp.company, "reason": failure_reason})
 
     return {"pushed": pushed, "failed": failed}
 
