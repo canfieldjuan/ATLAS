@@ -26,6 +26,15 @@ _REQUIRED_MIGRATIONS = (
 )
 
 
+def _reasoning_v2_schema_predicate(column_name: str = "schema_version") -> str:
+    """SQL predicate matching canonical reasoning v2 schema version formats."""
+    return (
+        f"(LOWER(COALESCE({column_name}, '')) IN ('v2', '2') "
+        f"OR LOWER(COALESCE({column_name}, '')) LIKE 'v2.%' "
+        f"OR COALESCE({column_name}, '') LIKE '2.%')"
+    )
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
@@ -160,13 +169,13 @@ async def _run(limit: int) -> dict[str, Any]:
     )
 
     latest_rows = await pool.fetch(
-        """
+        f"""
         SELECT vendor_name, schema_version, synthesis
         FROM (
             SELECT DISTINCT ON (vendor_name)
                    vendor_name, schema_version, synthesis, created_at
             FROM b2b_reasoning_synthesis
-            WHERE schema_version LIKE '2.%'
+            WHERE {_reasoning_v2_schema_predicate()}
             ORDER BY vendor_name, created_at DESC
         ) latest
         ORDER BY vendor_name

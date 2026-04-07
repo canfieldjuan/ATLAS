@@ -14,6 +14,7 @@ _SPEC.loader.exec_module(_MODULE)
 
 _as_dict = _MODULE._as_dict
 _exit_code = _MODULE._exit_code
+_reasoning_v2_schema_predicate = _MODULE._reasoning_v2_schema_predicate
 _status = _MODULE._status
 
 
@@ -36,6 +37,14 @@ def test_status_marks_optional_failures_as_warn():
 
     assert result["status"] == "warn"
     assert result["required"] is False
+
+
+def test_reasoning_v2_schema_predicate_accepts_canonical_versions():
+    predicate = _reasoning_v2_schema_predicate("schema_version")
+
+    assert "IN ('v2', '2')" in predicate
+    assert "LIKE 'v2.%'" in predicate
+    assert "LIKE '2.%'" in predicate
 
 
 def test_exit_code_is_nonzero_when_required_check_fails():
