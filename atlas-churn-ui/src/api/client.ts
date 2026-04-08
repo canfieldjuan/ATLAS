@@ -825,6 +825,12 @@ export interface WatchlistView {
   vendor_alert_threshold: number | null
   account_alert_threshold: number | null
   stale_days_threshold: number | null
+  alert_email_enabled: boolean
+  alert_delivery_frequency: 'daily' | 'weekly'
+  next_alert_delivery_at: string | null
+  last_alert_delivery_at: string | null
+  last_alert_delivery_status: string | null
+  last_alert_delivery_summary: string | null
   created_at: string | null
   updated_at: string | null
 }
@@ -856,12 +862,15 @@ export interface WatchlistAlertEmailDelivery {
   recipient_emails: string[]
   message_ids: string[]
   event_count: number
-  status: 'sent' | 'partial' | 'failed' | 'no_events'
+  status: 'processing' | 'sent' | 'partial' | 'failed' | 'no_events' | 'skipped'
   summary: string
   error: string | null
   delivered_at: string | null
   created_at: string | null
   updated_at: string | null
+  scheduled_for?: string | null
+  delivery_frequency?: 'daily' | 'weekly' | null
+  delivery_mode?: 'live' | 'scheduled' | null
 }
 
 export async function searchAvailableVendors(q: string) {
@@ -896,6 +905,8 @@ export async function createWatchlistView(body: {
   vendor_alert_threshold?: number
   account_alert_threshold?: number
   stale_days_threshold?: number
+  alert_email_enabled?: boolean
+  alert_delivery_frequency?: 'daily' | 'weekly'
 }) {
   return post<WatchlistView>(TENANT_BASE, '/watchlist-views', body)
 }
@@ -914,6 +925,8 @@ export async function updateWatchlistView(
     vendor_alert_threshold?: number
     account_alert_threshold?: number
     stale_days_threshold?: number
+    alert_email_enabled?: boolean
+    alert_delivery_frequency?: 'daily' | 'weekly'
   },
 ) {
   return put<WatchlistView>(TENANT_BASE, `/watchlist-views/${encodeURIComponent(watchlistViewId)}`, body)

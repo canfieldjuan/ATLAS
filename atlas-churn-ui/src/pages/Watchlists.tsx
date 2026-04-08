@@ -247,6 +247,8 @@ function watchlistViewMatchesState(
     vendor_alert_threshold: string
     account_alert_threshold: string
     stale_days_threshold: string
+    alert_email_enabled: boolean
+    alert_delivery_frequency: 'daily' | 'weekly'
   },
 ) {
   return (view.vendor_name || '') === filters.vendor_name
@@ -259,6 +261,8 @@ function watchlistViewMatchesState(
     && String(view.vendor_alert_threshold ?? '') === filters.vendor_alert_threshold
     && String(view.account_alert_threshold ?? '') === filters.account_alert_threshold
     && String(view.stale_days_threshold ?? '') === filters.stale_days_threshold
+    && view.alert_email_enabled === filters.alert_email_enabled
+    && view.alert_delivery_frequency === filters.alert_delivery_frequency
 }
 
 function summarizeWatchlistView(view: WatchlistView) {
@@ -273,6 +277,7 @@ function summarizeWatchlistView(view: WatchlistView) {
   if (view.vendor_alert_threshold != null) parts.push(`vendor alert ${view.vendor_alert_threshold}+`)
   if (view.account_alert_threshold != null) parts.push(`account alert ${view.account_alert_threshold}+`)
   if (view.stale_days_threshold != null) parts.push(`stale after ${view.stale_days_threshold}d`)
+  if (view.alert_email_enabled) parts.push(`email ${view.alert_delivery_frequency}`)
   return parts.length > 0 ? parts.join(' - ') : 'All signals'
 }
 
@@ -307,6 +312,8 @@ export default function Watchlists() {
   const [vendorAlertThreshold, setVendorAlertThreshold] = useState('')
   const [accountAlertThreshold, setAccountAlertThreshold] = useState('')
   const [staleDaysThreshold, setStaleDaysThreshold] = useState('')
+  const [alertEmailEnabled, setAlertEmailEnabled] = useState(false)
+  const [alertDeliveryFrequency, setAlertDeliveryFrequency] = useState<'daily' | 'weekly'>('daily')
   const [trackMode, setTrackMode] = useState<'own' | 'competitor'>('competitor')
   const [label, setLabel] = useState('')
   const [submittingVendor, setSubmittingVendor] = useState<string | null>(null)
@@ -474,6 +481,8 @@ export default function Watchlists() {
       vendor_alert_threshold: vendorAlertThreshold,
       account_alert_threshold: accountAlertThreshold,
       stale_days_threshold: staleDaysThreshold,
+      alert_email_enabled: alertEmailEnabled,
+      alert_delivery_frequency: alertDeliveryFrequency,
     }),
     [
       selectedVendorFilter,
@@ -486,6 +495,8 @@ export default function Watchlists() {
       vendorAlertThreshold,
       accountAlertThreshold,
       staleDaysThreshold,
+      alertEmailEnabled,
+      alertDeliveryFrequency,
     ],
   )
   const activeVendorAlertThreshold = parseOptionalNumber(vendorAlertThreshold)
@@ -668,6 +679,8 @@ export default function Watchlists() {
     setVendorAlertThreshold(view.vendor_alert_threshold != null ? String(view.vendor_alert_threshold) : '')
     setAccountAlertThreshold(view.account_alert_threshold != null ? String(view.account_alert_threshold) : '')
     setStaleDaysThreshold(view.stale_days_threshold != null ? String(view.stale_days_threshold) : '')
+    setAlertEmailEnabled(view.alert_email_enabled)
+    setAlertDeliveryFrequency(view.alert_delivery_frequency || 'daily')
     setSavedViewName(view.name)
   }
 
@@ -693,6 +706,8 @@ export default function Watchlists() {
       vendor_alert_threshold: vendorAlertThreshold ? Number(vendorAlertThreshold) : undefined,
       account_alert_threshold: accountAlertThreshold ? Number(accountAlertThreshold) : undefined,
       stale_days_threshold: staleDaysThreshold ? Number(staleDaysThreshold) : undefined,
+      alert_email_enabled: alertEmailEnabled,
+      alert_delivery_frequency: alertDeliveryFrequency,
     }
     try {
       if (activeWatchlistView) {
@@ -1355,8 +1370,33 @@ export default function Watchlists() {
           </label>
         </div>
         <p className="mt-2 text-[11px] text-slate-500">
-          These values are persisted with the saved view and evaluated in this monitoring surface now. Delivery and notification automation will use the same stored policy in the next alerting slice.
+          These values are persisted with the saved view and evaluated in this monitoring surface now. Scheduled email delivery uses the same stored policy.
         </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-950/40 px-3 py-2 text-sm text-slate-200">
+            <input
+              aria-label="Enable alert email delivery"
+              type="checkbox"
+              checked={alertEmailEnabled}
+              onChange={(event) => setAlertEmailEnabled(event.target.checked)}
+              className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-500 focus:ring-cyan-500/40"
+            />
+            <span>Enable scheduled alert emails</span>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Email cadence</span>
+            <select
+              aria-label="Alert delivery frequency"
+              value={alertDeliveryFrequency}
+              onChange={(event) => setAlertDeliveryFrequency(event.target.value as 'daily' | 'weekly')}
+              disabled={!alertEmailEnabled}
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </label>
+        </div>
         {hasActiveAlertPolicy ? (
           <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
             {activeVendorAlertThreshold != null ? (
@@ -1403,6 +1443,11 @@ export default function Watchlists() {
                   <div className="mt-0.5 text-[11px] text-slate-400">
                     {summarizeWatchlistView(view)}
                   </div>
+                  {view.alert_email_enabled ? (
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      Next email {formatTs(view.next_alert_delivery_at)} · Last {view.last_alert_delivery_status || '--'}
+                    </div>
+                  ) : null}
                 </button>
                 <button
                   aria-label={`Delete saved view ${view.name}`}
@@ -1423,7 +1468,7 @@ export default function Watchlists() {
           <div>
             <h2 className="text-sm font-medium text-white">Saved View Alert Events</h2>
             <p className="mt-1 text-xs text-slate-500">
-              Persisted alert hits are tied to saved views so the same policy can drive UI review now and scheduled delivery later.
+              Persisted alert hits are tied to saved views so the same policy drives UI review and scheduled delivery.
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -1456,6 +1501,11 @@ export default function Watchlists() {
               <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-300">
                 {activeAlertEvents.length} open event{activeAlertEvents.length === 1 ? '' : 's'}
               </span>
+              {activeWatchlistView.alert_email_enabled ? (
+                <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
+                  email {activeWatchlistView.alert_delivery_frequency} · next {formatTs(activeWatchlistView.next_alert_delivery_at)}
+                </span>
+              ) : null}
               {refreshingAlertEvents ? (
                 <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-400">
                   refreshing

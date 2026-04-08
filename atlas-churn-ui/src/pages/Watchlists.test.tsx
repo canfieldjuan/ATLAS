@@ -459,6 +459,12 @@ describe('Watchlists', () => {
       vendor_alert_threshold: 7.5,
       account_alert_threshold: 8.5,
       stale_days_threshold: 3,
+      alert_email_enabled: false,
+      alert_delivery_frequency: 'daily',
+      next_alert_delivery_at: null,
+      last_alert_delivery_at: null,
+      last_alert_delivery_status: null,
+      last_alert_delivery_summary: null,
       created_at: null,
       updated_at: null,
     })
@@ -476,6 +482,8 @@ describe('Watchlists', () => {
         vendor_alert_threshold: 7.5,
         account_alert_threshold: 8.5,
         stale_days_threshold: 3,
+        alert_email_enabled: false,
+        alert_delivery_frequency: 'daily',
       })
     })
   })
@@ -497,6 +505,12 @@ describe('Watchlists', () => {
           vendor_alert_threshold: 7.5,
           account_alert_threshold: 8.5,
           stale_days_threshold: 1,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: '2026-04-08T18:00:00Z',
+          last_alert_delivery_at: '2026-04-07T18:30:00Z',
+          last_alert_delivery_status: 'sent',
+          last_alert_delivery_summary: 'Delivered watchlist alert email to 1 of 1 recipient',
           created_at: null,
           updated_at: null,
         },
@@ -614,6 +628,12 @@ describe('Watchlists', () => {
           vendor_alert_threshold: 7.5,
           account_alert_threshold: 8.5,
           stale_days_threshold: 1,
+          alert_email_enabled: false,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
           created_at: null,
           updated_at: null,
         },
@@ -663,6 +683,12 @@ describe('Watchlists', () => {
           vendor_alert_threshold: 7.5,
           account_alert_threshold: 8.5,
           stale_days_threshold: 1,
+          alert_email_enabled: false,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
           created_at: null,
           updated_at: null,
         },
@@ -715,6 +741,12 @@ describe('Watchlists', () => {
           vendor_alert_threshold: 7.5,
           account_alert_threshold: 8.5,
           stale_days_threshold: 1,
+          alert_email_enabled: false,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
           created_at: null,
           updated_at: null,
         },
@@ -734,6 +766,12 @@ describe('Watchlists', () => {
       vendor_alert_threshold: 7.5,
       account_alert_threshold: 8.5,
       stale_days_threshold: 1,
+      alert_email_enabled: false,
+      alert_delivery_frequency: 'daily',
+      next_alert_delivery_at: null,
+      last_alert_delivery_at: null,
+      last_alert_delivery_status: null,
+      last_alert_delivery_summary: null,
       created_at: null,
       updated_at: null,
     })
@@ -769,9 +807,103 @@ describe('Watchlists', () => {
         vendor_alert_threshold: 7.5,
         account_alert_threshold: 8.5,
         stale_days_threshold: 1,
+        alert_email_enabled: false,
+        alert_delivery_frequency: 'daily',
       })
     })
     expect(api.createWatchlistView).not.toHaveBeenCalled()
+  })
+
+  it('matches the active saved view using alert delivery settings too', async () => {
+    const user = userEvent.setup()
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Intercom no email',
+          vendor_name: 'Intercom',
+          category: '',
+          source: '',
+          min_urgency: null,
+          include_stale: true,
+          named_accounts_only: false,
+          changed_wedges_only: false,
+          vendor_alert_threshold: null,
+          account_alert_threshold: null,
+          stale_days_threshold: null,
+          alert_email_enabled: false,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
+          created_at: null,
+          updated_at: null,
+        },
+        {
+          id: 'view-2',
+          name: 'Intercom weekly email',
+          vendor_name: 'Intercom',
+          category: '',
+          source: '',
+          min_urgency: null,
+          include_stale: true,
+          named_accounts_only: false,
+          changed_wedges_only: false,
+          vendor_alert_threshold: null,
+          account_alert_threshold: null,
+          stale_days_threshold: null,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'weekly',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 2,
+    })
+    api.updateWatchlistView.mockResolvedValue({
+      id: 'view-2',
+      name: 'Intercom weekly email',
+      vendor_name: 'Intercom',
+      category: '',
+      source: '',
+      min_urgency: null,
+      include_stale: true,
+      named_accounts_only: false,
+      changed_wedges_only: false,
+      vendor_alert_threshold: null,
+      account_alert_threshold: null,
+      stale_days_threshold: null,
+      alert_email_enabled: true,
+      alert_delivery_frequency: 'weekly',
+      next_alert_delivery_at: null,
+      last_alert_delivery_at: null,
+      last_alert_delivery_status: null,
+      last_alert_delivery_summary: null,
+      created_at: null,
+      updated_at: null,
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Watchlists' })
+    await user.click(screen.getAllByRole('button', { name: /Intercom weekly email/i })[0])
+    await user.click(screen.getByRole('button', { name: 'Update active view' }))
+
+    await waitFor(() => {
+      expect(api.updateWatchlistView).toHaveBeenCalledWith('view-2', expect.objectContaining({
+        alert_email_enabled: true,
+        alert_delivery_frequency: 'weekly',
+      }))
+    })
   })
 
   it('keeps the account drawer aligned with the refreshed row payload', async () => {

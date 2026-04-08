@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useMemo, useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   MailSearch,
   RefreshCw,
@@ -10,6 +10,10 @@ import {
   Clock,
   Loader2,
   AlertTriangle,
+  Pencil,
+  Save,
+  X,
+  ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -25,6 +29,7 @@ import {
   fetchCampaignAuditLog,
   bulkApproveCampaigns,
   bulkRejectCampaigns,
+  updateCampaign,
 } from '../api/client'
 
 type StatusTab = 'draft' | 'approved' | 'sent' | 'all'
@@ -138,11 +143,18 @@ function AuditTimeline({ campaignId }: { campaignId: string }) {
 }
 
 export default function CampaignReview() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const companyFilter = searchParams.get('company') || ''
+
   const [statusTab, setStatusTab] = useState<StatusTab>('draft')
   const [expandedCompany, setExpandedCompany] = useState<string | null>(null)
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editFields, setEditFields] = useState({ subject: '', body: '', cta: '' })
+  const [editSaving, setEditSaving] = useState(false)
+  const [editedIds, setEditedIds] = useState<Set<string>>(new Set())
 
   const {
     data: summaryData,
@@ -182,10 +194,23 @@ export default function CampaignReview() {
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(d)
     }
-    return Array.from(map.entries())
+    let result = Array.from(map.entries())
       .map(([company, items]) => ({ company, drafts: items }))
       .sort((a, b) => b.drafts.length - a.drafts.length)
-  }, [queueData])
+    if (companyFilter) {
+      result = result.filter(
+        (g) => g.company.toLowerCase() === companyFilter.toLowerCase(),
+      )
+    }
+    return result
+  }, [queueData, companyFilter])
+
+  // Auto-expand when filtered to a single company (E3 cross-page link)
+  useEffect(() => {
+    if (companyFilter && groups.length === 1) {
+      setExpandedCompany(groups[0].company)
+    }
+  }, [companyFilter, groups])
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
@@ -214,6 +239,39 @@ export default function CampaignReview() {
     }
   }
 
+  function startEditing(draft: ReviewQueueDraft) {
+    setEditingId(draft.id)
+    setEditFields({
+      subject: draft.subject || '',
+      body: draft.body || '',
+      cta: draft.cta || '',
+    })
+  }
+
+  function cancelEditing() {
+    setEditingId(null)
+    setEditFields({ subject: '', body: '', cta: '' })
+  }
+
+  async function saveEditing() {
+    if (!editingId) return
+    setEditSaving(true)
+    try {
+      await updateCampaign(editingId, {
+        subject: editFields.subject,
+        body: editFields.body,
+        cta: editFields.cta,
+      })
+      setEditedIds((prev) => new Set(prev).add(editingId))
+      cancelEditing()
+      refreshQueue()
+    } catch {
+      // Keep the editor open so the operator can retry.
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -221,6 +279,17 @@ export default function CampaignReview() {
         <div className="flex items-center gap-3">
           <MailSearch className="h-6 w-6 text-cyan-400" />
           <h1 className="text-2xl font-bold text-white">Campaign Review</h1>
+          {companyFilter && (
+            <div className="flex items-center gap-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg px-3 py-1.5">
+              <span>Filtered: {companyFilter}</span>
+              <button
+                onClick={() => setSearchParams({}, { replace: true })}
+                className="text-slate-500 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Link
@@ -448,6 +517,11 @@ export default function CampaignReview() {
                               <PersonaBadge persona={draft.target_persona} />
                               <CampaignStatusBadge status={draft.status} />
                               <CampaignQualityBadge status={draft.quality_status} />
+                              {editedIds.has(draft.id) && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">
+                                  edited
+                                </span>
+                              )}
                               {draft.is_suppressed > 0 && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">
                                   suppressed
@@ -458,56 +532,135 @@ export default function CampaignReview() {
                                   Step {draft.step_number}{draft.max_steps ? `/${draft.max_steps}` : ''}
                                 </span>
                               )}
+                              {draft.status === 'draft' && editingId !== draft.id && (
+                                <button
+                                  onClick={() => startEditing(draft)}
+                                  className="p-0.5 text-slate-500 hover:text-white transition-colors"
+                                  title="Edit content"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
 
-                            {/* Prospect info */}
-                            {(draft.prospect_first_name || draft.recipient_email || draft.seq_recipient) && (
-                              <div className="flex items-center gap-2 mb-2 text-xs">
-                                <User className="h-3 w-3 text-slate-500" />
-                                <span className="text-slate-300">
-                                  {[draft.prospect_first_name, draft.prospect_last_name].filter(Boolean).join(' ') || 'Unknown'}
-                                </span>
-                                {draft.prospect_title && (
-                                  <span className="text-slate-500">{draft.prospect_title}</span>
-                                )}
-                                {draft.prospect_seniority && (
-                                  <span className="px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
-                                    {draft.prospect_seniority}
+                            {/* Prospect info + source opportunity link */}
+                            <div className="flex items-center gap-2 mb-2 text-xs flex-wrap">
+                              {(draft.prospect_first_name || draft.recipient_email || draft.seq_recipient) && (
+                                <>
+                                  <User className="h-3 w-3 text-slate-500" />
+                                  <span className="text-slate-300">
+                                    {[draft.prospect_first_name, draft.prospect_last_name].filter(Boolean).join(' ') || 'Unknown'}
                                   </span>
-                                )}
-                                <span className="text-slate-500">
-                                  {draft.recipient_email || draft.seq_recipient || '--'}
-                                </span>
-                              </div>
-                            )}
+                                  {draft.prospect_title && (
+                                    <span className="text-slate-500">{draft.prospect_title}</span>
+                                  )}
+                                  {draft.prospect_seniority && (
+                                    <span className="px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
+                                      {draft.prospect_seniority}
+                                    </span>
+                                  )}
+                                  <span className="text-slate-500">
+                                    {draft.recipient_email || draft.seq_recipient || '--'}
+                                  </span>
+                                </>
+                              )}
+                              {draft.vendor_name && (
+                                <Link
+                                  to={`/opportunities?vendor=${encodeURIComponent(draft.vendor_name)}`}
+                                  className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 ml-auto"
+                                >
+                                  Source opportunity <ExternalLink className="h-3 w-3" />
+                                </Link>
+                              )}
+                            </div>
 
-                            {/* Email preview */}
+                            {/* Email preview / inline edit */}
                             <CampaignReasoningSummary item={draft} />
 
-                            <div className="bg-slate-800/50 border border-slate-700/30 rounded-lg p-3 mb-2">
-                              <p className="text-sm font-medium text-white mb-1">
-                                {draft.subject || '(no subject)'}
-                              </p>
-                              {draft.body && (
-                                <div
-                                  className="text-xs text-slate-300 line-clamp-4 prose prose-invert prose-xs max-w-none"
-                                  dangerouslySetInnerHTML={{ __html: draft.body }}
+                            {editingId === draft.id ? (
+                              <div className="bg-slate-800/50 border border-slate-700/30 rounded-lg p-3 mb-2 space-y-2">
+                                <div>
+                                  <label className="text-[10px] text-slate-500 uppercase tracking-wider">Subject</label>
+                                  <input
+                                    type="text"
+                                    value={editFields.subject}
+                                    onChange={(e) => setEditFields((f) => ({ ...f, subject: e.target.value }))}
+                                    className="w-full bg-slate-900/50 border border-slate-600/50 rounded px-2 py-1 text-sm text-white mt-0.5"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-500 uppercase tracking-wider">Body</label>
+                                  <textarea
+                                    value={editFields.body}
+                                    onChange={(e) => setEditFields((f) => ({ ...f, body: e.target.value }))}
+                                    rows={6}
+                                    className="w-full bg-slate-900/50 border border-slate-600/50 rounded px-2 py-1 text-xs text-white font-mono mt-0.5"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-500 uppercase tracking-wider">CTA</label>
+                                  <input
+                                    type="text"
+                                    value={editFields.cta}
+                                    onChange={(e) => setEditFields((f) => ({ ...f, cta: e.target.value }))}
+                                    className="w-full bg-slate-900/50 border border-slate-600/50 rounded px-2 py-1 text-sm text-white mt-0.5"
+                                  />
+                                </div>
+                                <CampaignQualitySummary
+                                  blockerCount={draft.blocker_count}
+                                  warningCount={draft.warning_count}
+                                  latestErrorSummary={draft.latest_error_summary}
                                 />
-                              )}
-                              {draft.cta && (
-                                <p className="text-xs text-cyan-400 mt-2">{draft.cta}</p>
-                              )}
-                              <CampaignQualitySummary
-                                blockerCount={draft.blocker_count}
-                                warningCount={draft.warning_count}
-                                latestErrorSummary={draft.latest_error_summary}
-                              />
-                              <div className="mt-2">
-                                <CampaignFailureExplanation
-                                  explanation={draft.failure_explanation}
-                                />
+                                <div className="mt-1">
+                                  <CampaignFailureExplanation
+                                    explanation={draft.failure_explanation}
+                                  />
+                                </div>
+                                <div className="flex items-center gap-2 pt-1">
+                                  <button
+                                    onClick={saveEditing}
+                                    disabled={editSaving}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 text-white rounded-lg disabled:opacity-50"
+                                  >
+                                    {editSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                    {editSaving ? 'Saving...' : 'Save'}
+                                  </button>
+                                  <button
+                                    onClick={cancelEditing}
+                                    disabled={editSaving}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg disabled:opacity-50"
+                                  >
+                                    <X className="h-3 w-3" />
+                                    Cancel
+                                  </button>
+                                </div>
                               </div>
-                            </div>
+                            ) : (
+                              <div className="bg-slate-800/50 border border-slate-700/30 rounded-lg p-3 mb-2">
+                                <p className="text-sm font-medium text-white mb-1">
+                                  {draft.subject || '(no subject)'}
+                                </p>
+                                {draft.body && (
+                                  <div
+                                    className="text-xs text-slate-300 line-clamp-4 prose prose-invert prose-xs max-w-none"
+                                    dangerouslySetInnerHTML={{ __html: draft.body }}
+                                  />
+                                )}
+                                {draft.cta && (
+                                  <p className="text-xs text-cyan-400 mt-2">{draft.cta}</p>
+                                )}
+                                <CampaignQualitySummary
+                                  blockerCount={draft.blocker_count}
+                                  warningCount={draft.warning_count}
+                                  latestErrorSummary={draft.latest_error_summary}
+                                />
+                                <div className="mt-2">
+                                  <CampaignFailureExplanation
+                                    explanation={draft.failure_explanation}
+                                  />
+                                </div>
+                              </div>
+                            )}
 
                             {/* Audit timeline toggle */}
                             <button

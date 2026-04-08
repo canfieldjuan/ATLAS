@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Telescope,
   Target,
@@ -19,6 +19,9 @@ import {
   XCircle,
   Mail,
   Loader2,
+  Bookmark,
+  EyeOff,
+  Clock,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -36,8 +39,13 @@ import {
   updateCampaign,
   pushToCrm,
   downloadCsv,
+  fetchDispositions,
+  setDisposition,
+  bulkSetDisposition,
+  removeDispositions,
 } from '../api/client'
 import type { Campaign, HighIntentCompany } from '../types'
+import type { OpportunityDisposition } from '../api/client'
 
 function rowKey(r: HighIntentCompany): string {
   return r.review_id ?? `${r.company}::${r.vendor}`
@@ -75,12 +83,18 @@ const WINDOW_OPTIONS = [
   { label: 'All time', value: 3650 },
 ] as const
 
+const DISPOSITION_TABS = ['active', 'saved', 'snoozed', 'dismissed', 'all'] as const
+type DispositionTab = (typeof DISPOSITION_TABS)[number]
+
 export default function Opportunities() {
+  const [searchParams] = useSearchParams()
+  const initialVendor = searchParams.get('vendor') || ''
+
   const { canAccessCampaigns } = usePlanGate()
 
   // -- Filters --
-  const [vendorSearch, setVendorSearch] = useState('')
-  const [debouncedVendor, setDebouncedVendor] = useState('')
+  const [vendorSearch, setVendorSearch] = useState(initialVendor)
+  const [debouncedVendor, setDebouncedVendor] = useState(initialVendor)
   const [minUrgency, setMinUrgency] = useState(5)
   const [windowDays, setWindowDays] = useState(90)
   const [stageFilter, setStageFilter] = useState<string>('all')
@@ -92,8 +106,19 @@ export default function Opportunities() {
   // -- Bulk selection --
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
-  // -- Local hide --
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
+  // -- Disposition (persistent save/snooze/dismiss) --
+  const [dispositionTab, setDispositionTab] = useState<DispositionTab>('active')
+  const { data: dispData, refresh: refreshDispositions } = useApiData(
+    () => fetchDispositions(),
+    [],
+  )
+  const dispositionMap = useMemo(() => {
+    const map = new Map<string, OpportunityDisposition>()
+    for (const d of dispData?.dispositions ?? []) {
+      map.set(d.opportunity_key, d)
+    }
+    return map
+  }, [dispData])
 
   // -- Campaign refresh signal: increment to trigger CampaignQueue refetch --
   const [campaignRefreshKey, setCampaignRefreshKey] = useState(0)
@@ -108,6 +133,13 @@ export default function Opportunities() {
     const t = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
     return () => clearTimeout(t)
   }, [vendorSearch])
+
+  useEffect(() => {
+    setVendorSearch(initialVendor)
+    setDebouncedVendor(initialVendor)
+    setExpandedId(null)
+    setSelectedIds(new Set())
+  }, [initialVendor])
 
   // Clear selection when server-side filters change (data will change)
   useEffect(() => {
@@ -153,7 +185,7 @@ export default function Opportunities() {
   // Clear selection when client-side filters change
   useEffect(() => {
     setSelectedIds(new Set())
-  }, [stageFilter, intentFilter])
+  }, [stageFilter, intentFilter, dispositionTab])
 
   // -- Client-side filters --
   const filtered = useMemo(() => {
@@ -170,11 +202,14 @@ export default function Opportunities() {
         )
       })
     }
-    if (hiddenIds.size > 0) {
-      rows = rows.filter((r) => !hiddenIds.has(rowKey(r)))
+    // Disposition filter
+    if (dispositionTab === 'active') {
+      rows = rows.filter((r) => !dispositionMap.has(rowKey(r)))
+    } else if (dispositionTab !== 'all') {
+      rows = rows.filter((r) => dispositionMap.get(rowKey(r))?.disposition === dispositionTab)
     }
     return rows
-  }, [opportunities, stageFilter, intentFilter, hiddenIds])
+  }, [opportunities, stageFilter, intentFilter, dispositionMap, dispositionTab])
 
   // -- Stats --
   const stats = useMemo(() => {
@@ -318,17 +353,61 @@ export default function Opportunities() {
     }
   }
 
-  function handleHide(row: HighIntentCompany) {
-    setHiddenIds((prev) => new Set(prev).add(rowKey(row)))
-    setExpandedId(null)
+  async function handleDisposition(row: HighIntentCompany, disposition: 'snoozed' | 'dismissed' | 'saved') {
+    const key = rowKey(row)
+    setGenResult(null)
+    const snoozedUntil = disposition === 'snoozed'
+      ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+      : undefined
+    try {
+      await setDisposition({
+        opportunity_key: key,
+        company: row.company,
+        vendor: row.vendor,
+        review_id: row.review_id ?? undefined,
+        disposition,
+        snoozed_until: snoozedUntil,
+      })
+      refreshDispositions()
+      setExpandedId(null)
+    } catch (err) {
+      setGenResult(err instanceof Error ? err.message : 'Disposition update failed')
+    }
   }
-  function handleBulkHide() {
-    setHiddenIds((prev) => {
-      const next = new Set(prev)
-      selectedIds.forEach((id) => next.add(id))
-      return next
-    })
-    setSelectedIds(new Set())
+
+  async function handleBulkDisposition(disposition: 'snoozed' | 'dismissed' | 'saved') {
+    if (selectedIds.size === 0) return
+    setGenResult(null)
+    const selected = filtered.filter((r) => selectedIds.has(rowKey(r)))
+    const snoozedUntil = disposition === 'snoozed'
+      ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+      : undefined
+    try {
+      await bulkSetDisposition({
+        items: selected.map((r) => ({
+          opportunity_key: rowKey(r),
+          company: r.company,
+          vendor: r.vendor,
+          review_id: r.review_id ?? undefined,
+        })),
+        disposition,
+        snoozed_until: snoozedUntil,
+      })
+      refreshDispositions()
+      setSelectedIds(new Set())
+    } catch (err) {
+      setGenResult(err instanceof Error ? err.message : 'Bulk disposition update failed')
+    }
+  }
+
+  async function handleRemoveDisposition(key: string) {
+    setGenResult(null)
+    try {
+      await removeDispositions({ opportunity_keys: [key] })
+      refreshDispositions()
+    } catch (err) {
+      setGenResult(err instanceof Error ? err.message : 'Failed to restore opportunity')
+    }
   }
 
   // -- Table columns --
@@ -357,11 +436,11 @@ export default function Opportunities() {
             <span className="text-white font-medium">{r.company || '--'}</span>
             {cs && (
               cs.sent > 0
-                ? <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-medium bg-cyan-500/15 text-cyan-400">{cs.sent} sent</span>
+                ? <Link to={`/campaign-review?company=${encodeURIComponent(r.company)}`} onClick={(e) => e.stopPropagation()} className="shrink-0"><span className="px-1 py-0.5 rounded text-[9px] font-medium bg-cyan-500/15 text-cyan-400 hover:ring-1 hover:ring-cyan-400/50">{cs.sent} sent</span></Link>
                 : cs.approved > 0
-                  ? <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-medium bg-green-500/15 text-green-300">{cs.approved} approved</span>
+                  ? <Link to={`/campaign-review?company=${encodeURIComponent(r.company)}`} onClick={(e) => e.stopPropagation()} className="shrink-0"><span className="px-1 py-0.5 rounded text-[9px] font-medium bg-green-500/15 text-green-300 hover:ring-1 hover:ring-green-400/50">{cs.approved} approved</span></Link>
                   : cs.drafts > 0
-                    ? <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-medium bg-amber-500/15 text-amber-400">{cs.drafts} draft{cs.drafts > 1 ? 's' : ''}</span>
+                    ? <Link to={`/campaign-review?company=${encodeURIComponent(r.company)}`} onClick={(e) => e.stopPropagation()} className="shrink-0"><span className="px-1 py-0.5 rounded text-[9px] font-medium bg-amber-500/15 text-amber-400 hover:ring-1 hover:ring-amber-400/50">{cs.drafts} draft{cs.drafts > 1 ? 's' : ''}</span></Link>
                     : null
             )}
           </div>
@@ -485,21 +564,57 @@ export default function Opportunities() {
       key: 'actions',
       header: '',
       render: (r) => {
-        if (!canAccessCampaigns) return null
         const key = rowKey(r)
+        const disp = dispositionMap.get(key)
+        if (disp) {
+          return (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleRemoveDisposition(key) }}
+              className="p-1 text-green-400 hover:text-green-300 transition-colors"
+              title="Restore to Active"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          )
+        }
         return (
-          <button
-            onClick={(e) => { e.stopPropagation(); handleGenerate(r) }}
-            disabled={generating === key}
-            className="p-1 text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
-            title="Generate Campaign"
-          >
-            <Zap className={clsx('h-3.5 w-3.5', generating === key && 'animate-pulse')} />
-          </button>
+          <div className="flex items-center gap-0.5">
+            {canAccessCampaigns && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleGenerate(r) }}
+                disabled={generating === key}
+                className="p-1 text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
+                title="Generate Campaign"
+              >
+                <Zap className={clsx('h-3.5 w-3.5', generating === key && 'animate-pulse')} />
+              </button>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDisposition(r, 'saved') }}
+              className="p-1 text-amber-400 hover:text-amber-300 transition-colors"
+              title="Save"
+            >
+              <Bookmark className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDisposition(r, 'snoozed') }}
+              className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors"
+              title="Snooze 7 days"
+            >
+              <Clock className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDisposition(r, 'dismissed') }}
+              className="p-1 text-slate-400 hover:text-slate-300 transition-colors"
+              title="Dismiss"
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+            </button>
+          </div>
         )
       },
     },
-  ], [selectedIds, toggleSelect, canAccessCampaigns, generating, campaignMap])
+  ], [selectedIds, toggleSelect, canAccessCampaigns, generating, campaignMap, dispositionMap])
 
   // -- Expanded row --
   const expandedRow = useMemo(
@@ -515,15 +630,6 @@ export default function Opportunities() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-bold text-white">Opportunity Workbench</h1>
-          {hiddenIds.size > 0 && (
-            <button
-              onClick={() => setHiddenIds(new Set())}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs bg-slate-800/50 text-slate-400 hover:text-white transition-colors"
-            >
-              {hiddenIds.size} hidden
-              <X className="h-3 w-3" />
-            </button>
-          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -574,6 +680,32 @@ export default function Opportunities() {
         <StatCard label="Decision Makers" value={`${stats.dmPct}%`} icon={<Users className="h-4 w-4 text-amber-400" />} skeleton={loading} />
         <StatCard label="Avg Urgency" value={stats.avgUrg} icon={<TrendingUp className="h-4 w-4 text-amber-400" />} skeleton={loading} />
         <StatCard label="Contract Known" value={stats.withContract} icon={<Target className="h-4 w-4 text-red-400" />} skeleton={loading} />
+      </div>
+
+      {/* Disposition tabs */}
+      <div className="flex items-center gap-1 border-b border-slate-700/40 pb-1">
+        {DISPOSITION_TABS.map((tab) => {
+          const count = tab === 'active'
+            ? opportunities.filter((r) => !dispositionMap.has(rowKey(r))).length
+            : tab === 'all'
+              ? opportunities.length
+              : opportunities.filter((r) => dispositionMap.get(rowKey(r))?.disposition === tab).length
+          return (
+            <button
+              key={tab}
+              onClick={() => { setDispositionTab(tab); setSelectedIds(new Set()) }}
+              className={clsx(
+                'px-3 py-1.5 text-sm rounded-t-lg transition-colors',
+                dispositionTab === tab
+                  ? 'text-white bg-slate-800/50 border-b-2 border-cyan-500'
+                  : 'text-slate-400 hover:text-white',
+              )}
+            >
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              <span className="ml-1.5 text-xs text-slate-500">({count})</span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Filters + bulk actions */}
@@ -659,12 +791,44 @@ export default function Opportunities() {
             >
               {pushing ? 'Pushing...' : 'Push to CRM'}
             </button>
-            <button
-              onClick={handleBulkHide}
-              className="px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg"
-            >
-              Hide
-            </button>
+            {dispositionTab === 'active' || dispositionTab === 'all' ? (
+              <>
+                <button
+                  onClick={() => handleBulkDisposition('saved')}
+                  className="px-3 py-1.5 text-xs font-medium bg-amber-600 hover:bg-amber-500 text-white rounded-lg"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => handleBulkDisposition('snoozed')}
+                  className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg"
+                >
+                  Snooze 7d
+                </button>
+                <button
+                  onClick={() => handleBulkDisposition('dismissed')}
+                  className="px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg"
+                >
+                  Dismiss
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={async () => {
+                  const keys = Array.from(selectedIds)
+                  try {
+                    await removeDispositions({ opportunity_keys: keys })
+                    refreshDispositions()
+                    setSelectedIds(new Set())
+                  } catch (err) {
+                    setGenResult(err instanceof Error ? err.message : 'Bulk restore failed')
+                  }
+                }}
+                className="px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 text-white rounded-lg"
+              >
+                Restore to Active
+              </button>
+            )}
             <button
               onClick={() => setSelectedIds(new Set())}
               className="px-2 py-1.5 text-xs text-slate-400 hover:text-white"
@@ -706,9 +870,11 @@ export default function Opportunities() {
       {expandedRow && (
         <EvidencePanel
           row={expandedRow}
+          disposition={dispositionMap.get(rowKey(expandedRow)) ?? null}
           onClose={() => setExpandedId(null)}
           onGenerate={canAccessCampaigns ? handleGenerate : undefined}
-          onHide={handleHide}
+          onDisposition={handleDisposition}
+          onRestore={handleRemoveDisposition}
           generating={generating === rowKey(expandedRow)}
           campaignRefreshKey={campaignRefreshKey}
           onCampaignAction={refreshCampaigns}
@@ -871,17 +1037,21 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
 
 function EvidencePanel({
   row,
+  disposition,
   onClose,
   onGenerate,
-  onHide,
+  onDisposition,
+  onRestore,
   generating,
   campaignRefreshKey,
   onCampaignAction,
 }: {
   row: HighIntentCompany
+  disposition: OpportunityDisposition | null
   onClose: () => void
   onGenerate?: (row: HighIntentCompany) => void
-  onHide?: (row: HighIntentCompany) => void
+  onDisposition?: (row: HighIntentCompany, disposition: 'snoozed' | 'dismissed' | 'saved') => void
+  onRestore?: (opportunityKey: string) => void
   generating: boolean
   campaignRefreshKey?: number
   onCampaignAction?: () => void
@@ -1085,13 +1255,38 @@ function EvidencePanel({
             {generating ? 'Generating...' : 'Generate Campaign'}
           </button>
         )}
-        {onHide && (
+        {onDisposition && !disposition && (
+          <>
+            <button
+              onClick={() => onDisposition(row, 'saved')}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-amber-600 hover:bg-amber-500 text-white transition-colors"
+            >
+              <Bookmark className="h-4 w-4" />
+              Save
+            </button>
+            <button
+              onClick={() => onDisposition(row, 'snoozed')}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+            >
+              <Clock className="h-4 w-4" />
+              Snooze 7d
+            </button>
+            <button
+              onClick={() => onDisposition(row, 'dismissed')}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+            >
+              <EyeOff className="h-4 w-4" />
+              Dismiss
+            </button>
+          </>
+        )}
+        {onRestore && disposition && (
           <button
-            onClick={() => onHide(row)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+            onClick={() => onRestore(rowKey(row))}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm bg-green-600 hover:bg-green-500 text-white transition-colors"
           >
-            <X className="h-4 w-4" />
-            Hide
+            <RefreshCw className="h-4 w-4" />
+            Restore
           </button>
         )}
         <Link
