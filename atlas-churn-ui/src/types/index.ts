@@ -330,6 +330,65 @@ export interface CampaignFailureExplanation {
   context_has_reference_ids?: boolean
 }
 
+export interface CampaignReasoningScopeSummary {
+  selection_strategy?: string
+  reviews_considered_total?: number
+  reviews_in_scope?: number
+  witnesses_in_scope?: number
+  witness_mix?: Record<string, number>
+}
+
+export interface CampaignReasoningThesis {
+  wedge: string
+  summary: string
+  why_now: string
+  confidence: string
+}
+
+export interface CampaignReasoningTimingWindow {
+  window_type: string
+  anchor: string
+  urgency: string
+  recommended_action: string
+}
+
+export interface CampaignReasoningProofPoint {
+  label: string
+  value: unknown
+  interpretation: string
+}
+
+export interface CampaignReasoningAccountSignal {
+  company: string
+  role_type?: string
+  buying_stage: string
+  urgency?: string | number | null
+  competitor_context: string
+  contract_end?: string
+  decision_timeline?: string
+  primary_pain: string
+  quote?: string
+  trust_tier?: string
+}
+
+export interface CampaignReasoningAtomContext {
+  top_theses?: CampaignReasoningThesis[]
+  timing_windows?: CampaignReasoningTimingWindow[]
+  proof_points?: CampaignReasoningProofPoint[]
+  account_signals?: CampaignReasoningAccountSignal[]
+  coverage_limits?: string[]
+}
+
+export interface CampaignReasoningDeltaSummary {
+  changed: boolean
+  wedge_changed?: boolean
+  confidence_changed?: boolean
+  top_destination_changed?: boolean
+  theses_added?: string[]
+  new_timing_windows?: string[]
+  new_account_signals?: string[]
+}
+
 export interface Campaign {
   id: string
   company_name: string
@@ -352,6 +411,10 @@ export interface Campaign {
   warning_count?: number
   latest_error_summary?: string | null
   failure_explanation?: CampaignFailureExplanation | null
+  target_persona?: string | null
+  reasoning_scope_summary?: CampaignReasoningScopeSummary
+  reasoning_atom_context?: CampaignReasoningAtomContext
+  reasoning_delta_summary?: CampaignReasoningDeltaSummary
 }
 
 export interface CampaignStats {
@@ -558,6 +621,9 @@ export interface ReviewQueueDraft {
   warning_count?: number
   latest_error_summary?: string | null
   failure_explanation?: CampaignFailureExplanation | null
+  reasoning_scope_summary?: CampaignReasoningScopeSummary
+  reasoning_atom_context?: CampaignReasoningAtomContext
+  reasoning_delta_summary?: CampaignReasoningDeltaSummary
 }
 
 export interface AuditEvent {

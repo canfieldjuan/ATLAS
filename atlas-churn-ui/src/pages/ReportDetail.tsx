@@ -63,8 +63,8 @@ export default function ReportDetail() {
   const [subModalOpen, setSubModalOpen] = useState(false)
   const [hasSubscription, setHasSubscription] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(null)
-  const [drawerVendor, setDrawerVendor] = useState('')
+  const drawerWitnessId = null
+  const drawerVendor = ''
 
   const { data: report, loading, error, refresh, refreshing } = useApiData<ReportDetailType>(
     () => {
@@ -114,8 +114,6 @@ export default function ReportDetail() {
         <div className="flex items-center gap-2">
           <ReportActionBar
             reportId={report.id}
-            reportType={report.report_type}
-            vendorName={report.vendor_filter ?? null}
             onSubscribe={() => setSubModalOpen(true)}
             hasSubscription={hasSubscription}
           />
