@@ -1,3 +1,4 @@
+import switchToClickup202604 from './switch-to-clickup-2026-04'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -71,7 +72,8 @@ const postCache = new Map<string, Promise<BlogPost | null>>()
 let allPostsPromise: Promise<BlogPost[]> | null = null
 
 function sortPosts(posts: BlogPost[]): BlogPost[] {
-  return [...posts].sort((left, right) => {
+  return [...posts  switchToClickup202604,
+].sort((left, right) => {
     if (left.date === right.date) return left.slug.localeCompare(right.slug)
     return right.date.localeCompare(left.date)
   })
