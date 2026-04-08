@@ -544,7 +544,9 @@ def test_push_to_crm_skips_payloads_above_size_limit(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["pushed"] == 0
-    assert response.json()["failed"] == [{"company": "Acme", "reason": "payload_too_large"}]
+    assert response.json()["failed"] == [
+        {"company": "Acme", "vendor": "Salesforce", "reason": "payload_too_large"}
+    ]
     deliver.assert_not_awaited()
     log_push.assert_not_awaited()
 
@@ -959,7 +961,11 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
         )
 
     async def _fake_generate_content_async(_llm, _blueprint, _max_tokens, **_kwargs):
-        return {"title": "Jira", "body": "Body"}
+        return {
+            "title": "Jira",
+            "description": "Jira deep dive",
+            "content": "# Jira\n\n" + " ".join(["Jira"] * 2200),
+        }
 
     async def _fake_enforce_blog_quality_async(_llm, _blueprint, content, _max_tokens, **_kwargs):
         return content, {
@@ -1059,6 +1065,165 @@ def test_blog_manual_generate_persists_first_pass_audit(monkeypatch):
     assert captured["data_context"]["reasoning_reference_ids"]["vendor_core_reasoning"] == ["review:1"]
     record_attempt.assert_awaited_once()
     assert record_attempt.await_args.kwargs["stage"] == "quality_gate_first_pass"
+
+
+def test_blog_manual_generate_backfills_missing_length_fields(monkeypatch):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+    llm = object()
+    captured = {}
+    article_body = "# SentinelOne\n\n" + " ".join(["SentinelOne"] * 1700)
+
+    async def _fake_build_manual_topic_ctx(_pool, vendor_name, topic_type, vendor_b=None, category=None):
+        assert vendor_name == "SentinelOne"
+        assert topic_type == "migration_guide"
+        assert vendor_b is None
+        assert category == "Security"
+        return {
+            "vendor": vendor_name,
+            "category": category,
+            "slug": "switch-to-sentinelone-2026-04",
+        }
+
+    async def _fake_gather_data(_pool, _topic_type, _topic_ctx):
+        return {"data_context": {"vendor": "SentinelOne", "category": "Security"}}
+
+    async def _fake_load_pool_layers_for_blog(_pool, _topic_type, _topic_ctx, data):
+        data["data_context"]["reasoning_anchor_examples"] = {
+            "counterevidence": [{"excerpt_text": "Pricing concern surfaced before renewal"}]
+        }
+        data["data_context"]["reasoning_witness_highlights"] = [
+            {"excerpt_text": "Teams switched after contract review"}
+        ]
+        data["data_context"]["reasoning_reference_ids"] = {
+            "vendor_core_reasoning": ["review:sentinelone:1"]
+        }
+
+    def _fake_check_data_sufficiency(_topic_type, _data):
+        return {"sufficient": True}
+
+    def _fake_build_blueprint(_topic_type, topic_ctx, data):
+        return PostBlueprint(
+            topic_type="migration_guide",
+            slug=topic_ctx["slug"],
+            suggested_title="Switch to SentinelOne",
+            tags=["sentinelone", "migration"],
+            data_context={"topic_ctx": dict(topic_ctx), **dict(data.get("data_context") or {})},
+            sections=[],
+            charts=[],
+        )
+
+    async def _fake_generate_content_async(_llm, _blueprint, _max_tokens, **_kwargs):
+        return {
+            "title": "Switch to SentinelOne",
+            "description": "Migration guide",
+            "content": article_body,
+        }
+
+    async def _fake_enforce_blog_quality_async(_llm, _blueprint, content, _max_tokens, **_kwargs):
+        return content, {
+            "status": "pass",
+            "score": 94,
+            "threshold": 70,
+            "blocking_issues": [],
+            "warnings": ["content_below_seo_target_2500_words"],
+            "fixes_applied": ["removed_unsupported_claim_lines:2"],
+            "_retry_requested": True,
+            "_first_pass_report": {
+                "status": "fail",
+                "score": 63,
+                "threshold": 70,
+                "blocking_issues": ["content_too_short:1340_words_need_2000"],
+                "warnings": [],
+            },
+        }
+
+    async def _fake_assemble_and_store(_pool, blueprint, _content, _llm, *, run_id=None, attempt_no=None):
+        captured["data_context"] = dict(blueprint.data_context)
+        captured["run_id"] = run_id
+        captured["attempt_no"] = attempt_no
+        return "post-456"
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda **_kwargs: llm,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.api.blog_admin.settings",
+        SimpleNamespace(
+            b2b_churn=SimpleNamespace(blog_post_max_tokens=4096, blog_post_openrouter_model="test-model")
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation.build_manual_topic_ctx",
+        _fake_build_manual_topic_ctx,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._gather_data",
+        _fake_gather_data,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_data_sufficiency",
+        _fake_check_data_sufficiency,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._load_pool_layers_for_blog",
+        _fake_load_pool_layers_for_blog,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._build_blueprint",
+        _fake_build_blueprint,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._check_blueprint_sufficiency",
+        lambda *_args, **_kwargs: {"sufficient": True},
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._generate_content_async",
+        _fake_generate_content_async,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._enforce_blog_quality_async",
+        _fake_enforce_blog_quality_async,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._get_blog_slug_block_reason",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_blog_post_generation._assemble_and_store",
+        _fake_assemble_and_store,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/blog/generate",
+            json={
+                "vendor_name": "SentinelOne",
+                "topic_type": "migration_guide",
+                "category": "Security",
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured["attempt_no"] == 1
+    assert captured["run_id"]
+    assert captured["data_context"]["generation_length_policy"]["min_words"] == 1500
+    assert captured["data_context"]["generation_length_policy"]["target_words"] == 2100
+    audit = captured["data_context"]["latest_quality_audit"]
+    assert audit["boundary"] == "manual_generate"
+    assert audit["word_count"] == len(article_body.split())
+    assert audit["min_words_required"] == 1500
+    assert audit["target_words"] == 2100
+    assert "content_below_seo_target_2100_words" in audit["warnings"]
+    assert "content_below_seo_target_2500_words" not in audit["warnings"]
 
 
 def test_manual_blog_generate_blocks_recent_rejected_slug(monkeypatch):

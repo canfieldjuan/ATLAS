@@ -38,6 +38,12 @@ _BLOG_QUALITY_CONTRACT_PREFIXES = (
     "nonexistent_internal_links:",
 )
 
+_BLOG_QUALITY_LENGTH_KEYS = (
+    "word_count",
+    "min_words_required",
+    "target_words",
+)
+
 
 def _safe_json(value: Any) -> Any:
     if isinstance(value, (dict, list)):
@@ -104,6 +110,40 @@ def blog_quality_context_details(data_context: Any) -> dict[str, Any]:
         "context_sources": ["data_context"] if context else [],
         "missing_inputs": _missing_context_inputs(context),
     }
+
+
+def _report_missing_length_contract(report: dict[str, Any] | None) -> bool:
+    if not isinstance(report, dict):
+        return True
+    return any(key not in report for key in _BLOG_QUALITY_LENGTH_KEYS)
+
+
+def _merge_canonical_blog_quality_report(
+    *,
+    canonical_report: dict[str, Any],
+    provided_report: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = dict(canonical_report)
+    if not isinstance(provided_report, dict):
+        return merged
+
+    fixes_applied: list[str] = []
+    for source in (
+        canonical_report.get("fixes_applied") or [],
+        provided_report.get("fixes_applied") or [],
+    ):
+        for item in source:
+            value = str(item or "").strip()
+            if value and value not in fixes_applied:
+                fixes_applied.append(value)
+    if fixes_applied:
+        merged["fixes_applied"] = fixes_applied
+
+    for key in ("_first_pass_report", "_retry_requested", "_rejected_content"):
+        if key in provided_report:
+            merged[key] = provided_report[key]
+
+    return merged
 
 
 def _ordered_required_terms(signal_terms: dict[str, Any] | None) -> list[str]:
@@ -422,12 +462,20 @@ def blog_quality_revalidation(
 ) -> dict[str, Any]:
     from ..autonomous.tasks.b2b_blog_post_generation import (
         _apply_blog_quality_gate,
+        _attach_blog_blueprint_runtime_metadata,
         _with_unresolved_critical_warnings,
     )
 
     resolved_content = dict(content or {})
+    _attach_blog_blueprint_runtime_metadata(blueprint)
     if report is None:
         _, resolved_report = _apply_blog_quality_gate(blueprint, resolved_content)
+    elif resolved_content and _report_missing_length_contract(report):
+        _, canonical_report = _apply_blog_quality_gate(blueprint, resolved_content)
+        resolved_report = _merge_canonical_blog_quality_report(
+            canonical_report=canonical_report,
+            provided_report=report,
+        )
     else:
         resolved_report = dict(report)
     resolved_report = _with_unresolved_critical_warnings(resolved_report)
