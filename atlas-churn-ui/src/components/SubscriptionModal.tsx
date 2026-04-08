@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Bell, Loader2, Check, AlertTriangle } from 'lucide-react'
+import { X, Bell, Loader2, Check, AlertTriangle, Calendar, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { fetchReportSubscription, upsertReportSubscription } from '../api/client'
 import type { ReportSubscription, ReportSubscriptionUpsert } from '../api/client'
@@ -16,6 +16,7 @@ interface SubscriptionModalProps {
 export default function SubscriptionModal({
   open, onClose, scopeType, scopeKey, scopeLabel, onSaved,
 }: SubscriptionModalProps) {
+  const idPrefix = `subscription-${scopeType}-${scopeKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -52,7 +53,12 @@ export default function SubscriptionModal({
         } else {
           setExisting(null)
           setLabel(scopeLabel)
+          setFrequency('weekly')
+          setFocus('all')
+          setFreshness('fresh_or_monitor')
           setRecipients('')
+          setNote('')
+          setEnabled(true)
         }
       })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load subscription'))
@@ -134,8 +140,9 @@ export default function SubscriptionModal({
           <div className="p-6 space-y-4">
             {/* Label */}
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Subscription Label</label>
+              <label htmlFor={`${idPrefix}-label`} className="block text-xs text-slate-400 mb-1">Subscription Label</label>
               <input
+                id={`${idPrefix}-label`}
                 type="text"
                 value={label}
                 onChange={e => setLabel(e.target.value)}
@@ -147,8 +154,9 @@ export default function SubscriptionModal({
             {/* Frequency + Focus */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Frequency</label>
+                <label htmlFor={`${idPrefix}-frequency`} className="block text-xs text-slate-400 mb-1">Frequency</label>
                 <select
+                  id={`${idPrefix}-frequency`}
                   value={frequency}
                   onChange={e => setFrequency(e.target.value as typeof frequency)}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
@@ -159,8 +167,9 @@ export default function SubscriptionModal({
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Deliverable Focus</label>
+                <label htmlFor={`${idPrefix}-focus`} className="block text-xs text-slate-400 mb-1">Deliverable Focus</label>
                 <select
+                  id={`${idPrefix}-focus`}
                   value={focus}
                   onChange={e => setFocus(e.target.value as typeof focus)}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
@@ -175,8 +184,9 @@ export default function SubscriptionModal({
 
             {/* Freshness */}
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Freshness Policy</label>
+              <label htmlFor={`${idPrefix}-freshness`} className="block text-xs text-slate-400 mb-1">Freshness Policy</label>
               <select
+                id={`${idPrefix}-freshness`}
                 value={freshness}
                 onChange={e => setFreshness(e.target.value as typeof freshness)}
                 className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none"
@@ -189,8 +199,9 @@ export default function SubscriptionModal({
 
             {/* Recipients */}
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Recipient Emails</label>
+              <label htmlFor={`${idPrefix}-recipients`} className="block text-xs text-slate-400 mb-1">Recipient Emails</label>
               <textarea
+                id={`${idPrefix}-recipients`}
                 value={recipients}
                 onChange={e => setRecipients(e.target.value)}
                 rows={2}
@@ -202,8 +213,9 @@ export default function SubscriptionModal({
 
             {/* Note */}
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Delivery Note (optional)</label>
+              <label htmlFor={`${idPrefix}-note`} className="block text-xs text-slate-400 mb-1">Delivery Note (optional)</label>
               <input
+                id={`${idPrefix}-note`}
                 type="text"
                 value={note}
                 onChange={e => setNote(e.target.value)}
@@ -229,22 +241,44 @@ export default function SubscriptionModal({
               <span className="text-sm text-slate-300">{enabled ? 'Active' : 'Paused'}</span>
             </label>
 
-            {/* Last delivery status */}
-            {existing?.last_delivery_at && (
-              <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/30 text-xs text-slate-400">
-                Last delivery: {new Date(existing.last_delivery_at).toLocaleDateString()}
-                {existing.last_delivery_status && (
-                  <span className={clsx(
-                    'ml-2 px-1.5 py-0.5 rounded',
-                    existing.last_delivery_status === 'sent' ? 'bg-green-900/40 text-green-300' :
-                    existing.last_delivery_status === 'failed' ? 'bg-red-900/40 text-red-300' :
-                    'bg-slate-700 text-slate-300',
-                  )}>
-                    {existing.last_delivery_status}
-                  </span>
+            {/* Delivery schedule & history */}
+            {existing && (existing.next_delivery_at || existing.last_delivery_at) && (
+              <div className="bg-slate-800/50 rounded-lg p-3 border border-slate-700/30 space-y-2">
+                {existing.next_delivery_at && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Calendar className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <span className="text-slate-400">Next delivery:</span>
+                    <span className="text-white font-medium">
+                      {new Date(existing.next_delivery_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
                 )}
-                {existing.last_delivery_report_count != null && (
-                  <span className="ml-1">({existing.last_delivery_report_count} reports)</span>
+                {existing.last_delivery_at && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span className="text-slate-400">Last delivery:</span>
+                    <span className="text-slate-300">
+                      {new Date(existing.last_delivery_at).toLocaleDateString()}
+                    </span>
+                    {existing.last_delivery_status && (
+                      <span className={clsx(
+                        'px-1.5 py-0.5 rounded',
+                        existing.last_delivery_status === 'sent' ? 'bg-green-900/40 text-green-300' :
+                        existing.last_delivery_status === 'partial' ? 'bg-amber-900/40 text-amber-300' :
+                        existing.last_delivery_status === 'failed' ? 'bg-red-900/40 text-red-300' :
+                        existing.last_delivery_status === 'skipped' ? 'bg-slate-700 text-slate-400' :
+                        'bg-slate-700 text-slate-300',
+                      )}>
+                        {existing.last_delivery_status}
+                      </span>
+                    )}
+                    {existing.last_delivery_report_count != null && (
+                      <span className="text-slate-500">({existing.last_delivery_report_count} report{existing.last_delivery_report_count === 1 ? '' : 's'})</span>
+                    )}
+                  </div>
+                )}
+                {existing.last_delivery_summary && (
+                  <p className="text-xs text-slate-500 pl-[1.375rem]">{existing.last_delivery_summary}</p>
                 )}
               </div>
             )}

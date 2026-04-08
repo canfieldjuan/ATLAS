@@ -4950,7 +4950,8 @@ async def _fetch_latest_accounts_in_motion_report(
     where = " AND ".join(conditions)
     return await pool.fetchrow(
         f"""
-        SELECT report_date, vendor_filter, intelligence_data
+        SELECT report_date, vendor_filter, intelligence_data,
+               status, latest_failure_step, latest_error_summary, created_at
         FROM b2b_intelligence
         WHERE {where}
         ORDER BY CASE WHEN LOWER(vendor_filter) = LOWER($1) THEN 0 ELSE 1 END,
@@ -5115,6 +5116,104 @@ def _shape_persisted_accounts_in_motion_account(account: dict[str, Any], vendor_
     }
 
 
+def _accounts_in_motion_confidence_band(account: dict[str, Any]) -> str:
+    company = str(account.get("company") or "").strip()
+    confidence = _safe_float(account.get("confidence"))
+    quality_flags = account.get("quality_flags")
+    if not company:
+        return "review"
+    if isinstance(quality_flags, list) and quality_flags:
+        return "review"
+    if confidence is not None and confidence >= 7:
+        return "high"
+    if confidence is not None and confidence >= 4:
+        return "medium"
+    return "review"
+
+
+def _build_accounts_in_motion_evidence_items(
+    account: dict[str, Any],
+    source_reviews: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    seen_quotes: set[str] = set()
+    match_type = str(account.get("quote_match_type") or "").strip() or None
+    reference_ids = account.get("reasoning_reference_ids")
+    witness_ids = []
+    if isinstance(reference_ids, dict):
+        witness_ids = [
+            str(item).strip()
+            for item in (reference_ids.get("witness_ids") or [])
+            if str(item or "").strip()
+        ]
+
+    for review in source_reviews:
+        quote = str(review.get("review_excerpt") or review.get("summary") or "").strip()
+        if not quote:
+            continue
+        dedupe_key = quote.lower()
+        if dedupe_key in seen_quotes:
+            continue
+        seen_quotes.add(dedupe_key)
+        items.append(
+            {
+                "quote": quote,
+                "review_id": str(review.get("id") or "").strip() or None,
+                "source": review.get("source"),
+                "source_url": review.get("source_url"),
+                "reviewed_at": review.get("reviewed_at"),
+                "reviewer_company": review.get("reviewer_company"),
+                "reviewer_title": review.get("reviewer_title"),
+                "match_type": match_type,
+                "witness_ids": witness_ids or None,
+            }
+        )
+
+    for quote in account.get("evidence") or []:
+        cleaned = str(quote or "").strip()
+        if not cleaned:
+            continue
+        dedupe_key = cleaned.lower()
+        if dedupe_key in seen_quotes:
+            continue
+        seen_quotes.add(dedupe_key)
+        items.append(
+            {
+                "quote": cleaned,
+                "review_id": None,
+                "source": None,
+                "source_url": None,
+                "reviewed_at": None,
+                "reviewer_company": account.get("company"),
+                "reviewer_title": account.get("reviewer_title"),
+                "match_type": match_type,
+                "witness_ids": witness_ids or None,
+            }
+        )
+    return items
+
+
+def _accounts_in_motion_report_freshness(
+    row,
+    *,
+    report_date: str | None,
+    stale_days: int | None,
+) -> tuple[str, str | None, str | None]:
+    report_status = str(row.get("status") or "").strip().lower()
+    failure_step = str(row.get("latest_failure_step") or "").strip() or None
+    error_summary = str(row.get("latest_error_summary") or "").strip() or None
+    created_at = row.get("created_at")
+    created_at_text = str(created_at) if created_at else None
+    if report_status and report_status not in {"completed", "succeeded", "published", "sales_ready"}:
+        reason = error_summary or failure_step or f"Latest report status is {report_status}"
+        return "failed", reason, created_at_text or report_date
+    if not report_date:
+        return "artifact_missing", "Persisted accounts-in-motion report is missing a report date", created_at_text
+    if stale_days and stale_days > 0:
+        return "stale", f"Persisted accounts-in-motion report is {stale_days} day(s) old", report_date
+    return "fresh", None, report_date
+
+
 async def _enrich_accounts_in_motion_accounts(
     pool,
     accounts: list[dict[str, Any]],
@@ -5149,6 +5248,7 @@ async def _enrich_accounts_in_motion_accounts(
             for review_id in (account.get("source_review_ids") or [])
             if review_id in review_lookup
         ]
+        evidence_items = _build_accounts_in_motion_evidence_items(account, source_reviews)
         enriched.append(
             {
                 **account,
@@ -5157,6 +5257,13 @@ async def _enrich_accounts_in_motion_accounts(
                 "annual_revenue": org.get("annual_revenue_range"),
                 "domain": org.get("domain") or account.get("domain"),
                 "source_reviews": source_reviews,
+                "evidence_items": evidence_items,
+                "evidence": [
+                    item["quote"]
+                    for item in evidence_items
+                    if isinstance(item, dict) and item.get("quote")
+                ],
+                "confidence_band": _accounts_in_motion_confidence_band(account),
                 "contacts": contacts,
                 "contact_count": len(contacts),
             }
@@ -5203,6 +5310,11 @@ async def _list_accounts_in_motion_from_report(
             stale_days = max(0, (date.today() - date.fromisoformat(report_date[:10])).days)
         except (TypeError, ValueError):
             stale_days = None
+    freshness_status, freshness_reason, freshness_timestamp = _accounts_in_motion_report_freshness(
+        row,
+        report_date=report_date,
+        stale_days=stale_days,
+    )
     return {
         "vendor": vendor,
         "accounts": accounts,
@@ -5213,6 +5325,9 @@ async def _list_accounts_in_motion_from_report(
         "stale_days": stale_days,
         "is_stale": bool(stale_days and stale_days > 0),
         "data_source": "persisted_report",
+        "freshness_status": freshness_status,
+        "freshness_reason": freshness_reason,
+        "freshness_timestamp": freshness_timestamp,
     }
 
 

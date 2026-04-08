@@ -227,7 +227,10 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
     account = result["accounts"][0]
     assert account["company"] == "Acme Corp"
     assert account["pain_categories"] == [{"category": "pricing", "severity": ""}]
-    assert account["evidence"] == ["We need to move fast."]
+    assert account["evidence"] == [
+        "We need to move fast before renewal.",
+        "We need to move fast.",
+    ]
     assert account["alternatives_considering"] == [{"name": "Freshdesk", "reason": ""}]
     assert account["domain"] == "acme.com"
     assert account["industry"] == "SaaS"
@@ -238,6 +241,23 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
     assert account["source_reviews"][0]["source"] == "reddit"
     assert account["source_reviews"][0]["review_excerpt"] == "We need to move fast before renewal."
     assert account["reasoning_reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
+
+
+def test_accounts_in_motion_report_freshness_treats_published_as_healthy():
+    status, reason, timestamp = b2b_dashboard._accounts_in_motion_report_freshness(
+        {
+            "status": "published",
+            "latest_failure_step": None,
+            "latest_error_summary": None,
+            "created_at": "2026-04-07T10:00:00Z",
+        },
+        report_date="2026-04-07",
+        stale_days=0,
+    )
+
+    assert status == "fresh"
+    assert reason is None
+    assert timestamp == "2026-04-07"
 
 
 @pytest.mark.asyncio
