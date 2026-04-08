@@ -234,7 +234,7 @@ export default function Leads() {
           vendor_name: debouncedVendor || undefined,
           limit: 100,
         }),
-        fetchCampaigns({ limit: 200 }),
+        fetchCampaigns({ limit: 100 }),
         fetchCampaignStats(),
         fetchCampaignQualityTrends({ days: 14, top_n: 5 }),
       ])
