@@ -870,7 +870,11 @@ export interface AccountsInMotionFeedItem {
 }
 
 export async function fetchAccountsInMotionFeed(params?: {
+  vendor_name?: string
+  category?: string
+  source?: string
   min_urgency?: number
+  include_stale?: boolean
   per_vendor_limit?: number
   limit?: number
 }) {

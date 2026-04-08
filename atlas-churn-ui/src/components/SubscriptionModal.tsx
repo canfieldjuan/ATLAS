@@ -87,8 +87,10 @@ export default function SubscriptionModal({
       const res = await upsertReportSubscription(scopeType, scopeKey, body)
       setExisting(res.subscription)
       setSuccess(true)
-      onSaved?.(res.subscription)
-      setTimeout(() => onClose(), 1200)
+      setTimeout(() => {
+        onSaved?.(res.subscription)
+        onClose()
+      }, 1200)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save subscription')
     } finally {

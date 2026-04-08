@@ -212,6 +212,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
         source={data.reasoning_source}
         referenceIds={data.reasoning_reference_ids}
         extraBadges={h2h.reference_ids ? [`Head-to-head refs: ${referenceIdCounts(h2h.reference_ids).total}`] : []}
+        vendorName={data.incumbent}
       />
       <div className="flex flex-wrap gap-1.5">
         {Object.entries(sources).map(([key, value]) => (
@@ -427,6 +428,7 @@ function ChallengerBriefDetail({ data }: { data: ChallengerBriefViewModel }) {
             <ProvenanceStrip
               source={h2h.synthesized ? 'displacement_fallback' : 'b2b_reasoning_synthesis'}
               referenceIds={h2h.reference_ids}
+              vendorName={data.incumbent}
             />
           </div>
           <div className="space-y-1">
@@ -811,6 +813,7 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel }) {
       <ProvenanceStrip
         source={data.reasoning_source}
         referenceIds={data.reasoning_reference_ids}
+        vendorName={data.vendor}
         extraBadges={[
           data.cross_vendor_battles.length > 0 ? `${data.cross_vendor_battles.length} battle refs` : '',
           data.category_council?.reference_ids ? `Council refs: ${referenceIdCounts(data.category_council.reference_ids).total}` : '',
@@ -962,22 +965,6 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel }) {
                 </ul>
               </div>
             )}
-          </div>
-        </SectionCard>
-      )}
-
-      {data.cross_vendor_battles.length > 0 && (
-        <SectionCard title="Cross-vendor Battles" icon={<Swords className="h-4 w-4 text-cyan-400" />}>
-          <div className="space-y-3">
-            {data.cross_vendor_battles.slice(0, 4).map((battle, index) => (
-              <div key={`${battle.opponent ?? 'battle'}-${index}`} className="bg-slate-800/50 rounded-lg p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-white">{battle.opponent ?? battle.loser ?? battle.winner ?? 'Cross-vendor battle'}</p>
-                  <ProvenanceStrip source="b2b_reasoning_synthesis" referenceIds={battle.reference_ids} />
-                </div>
-                {battle.conclusion && <p className="text-sm text-slate-300 mt-2">{battle.conclusion}</p>}
-              </div>
-            ))}
           </div>
         </SectionCard>
       )}
@@ -1534,6 +1521,7 @@ function WeeklyChurnFeedDetail({ items }: { items: WeeklyChurnFeedItemViewModel[
               source={item.reasoning_source}
               referenceIds={item.reasoning_reference_ids}
               extraBadges={item.category_council?.reference_ids ? [`Council refs: ${referenceIdCounts(item.category_council.reference_ids).total}`] : []}
+              vendorName={item.vendor}
             />
             {/* Header row */}
             <div className="flex items-center justify-between gap-3 flex-wrap">

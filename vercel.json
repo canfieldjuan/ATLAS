@@ -1,0 +1,7 @@
+{
+  "framework": "vite",
+  "installCommand": "cd atlas-churn-ui && npm install",
+  "buildCommand": "cd atlas-churn-ui && npm run build",
+  "outputDirectory": "atlas-churn-ui/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}

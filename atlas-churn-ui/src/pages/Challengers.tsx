@@ -43,7 +43,7 @@ export default function Challengers() {
   const { data, loading, error, refresh, refreshing } = useApiData(
     async () => {
       const [targetsRes, hiRes] = await Promise.all([
-        fetchVendorTargets({ target_mode: 'challenger_intel', limit: 200 }),
+        fetchVendorTargets({ target_mode: 'challenger_intel', limit: 100 }),
         fetchHighIntent({ min_urgency: 3, limit: 100 }),
       ])
       return {

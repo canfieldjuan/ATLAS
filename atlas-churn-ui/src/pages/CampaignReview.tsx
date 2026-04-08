@@ -170,7 +170,7 @@ export default function CampaignReview() {
     refresh: refreshQueue,
     refreshing,
   } = useApiData(
-    () => fetchReviewQueue({ status: statusTab, include_prospects: true, limit: 200 }),
+    () => fetchReviewQueue({ status: statusTab, include_prospects: true, limit: 100 }),
     [statusTab],
   )
 

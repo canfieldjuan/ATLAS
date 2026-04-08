@@ -71,7 +71,7 @@ export default function Reports() {
   }, [vendorSearch])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchReports({ report_type: typeFilter || undefined, vendor_filter: debouncedVendor || undefined, limit: 200 }),
+    () => fetchReports({ report_type: typeFilter || undefined, vendor_filter: debouncedVendor || undefined, limit: 100 }),
     [typeFilter, debouncedVendor],
   )
 

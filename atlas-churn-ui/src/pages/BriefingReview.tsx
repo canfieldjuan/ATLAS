@@ -96,7 +96,7 @@ export default function BriefingReview() {
   )
 
   const { data: queueData, loading, error, refresh, refreshing } = useApiData(
-    () => fetchBriefingReviewQueue({ status: statusTab, limit: 200 }),
+    () => fetchBriefingReviewQueue({ status: statusTab, limit: 100 }),
     [statusTab],
   )
 

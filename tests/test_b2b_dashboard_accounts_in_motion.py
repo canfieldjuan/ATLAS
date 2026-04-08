@@ -2,6 +2,7 @@
 
 import importlib
 import sys
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -144,6 +145,10 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
             "vendor_filter": "Zendesk",
             "intelligence_data": {
                 "vendor": "Zendesk",
+                "reference_ids": {
+                    "metric_ids": ["metric:zendesk:1"],
+                    "witness_ids": ["witness:zendesk:1"],
+                },
                 "accounts": [
                     {
                         "company": "Acme Corp",
@@ -165,6 +170,8 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
                         "source_distribution": {"reddit": 2},
                         "last_seen": "2026-03-17T10:00:00",
                         "alternatives_considering": ["Freshdesk"],
+                        "source_reviews": ["c6581fe1-32a9-4dbc-96cb-f7ef55707001"],
+                        "evidence_count": 2,
                     }
                 ],
             },
@@ -191,6 +198,21 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
                     "linkedin_url": "https://linkedin.com/in/taylor",
                 }
             ],
+            [
+                {
+                    "id": "c6581fe1-32a9-4dbc-96cb-f7ef55707001",
+                    "source": "reddit",
+                    "source_url": "https://reddit.example/acme",
+                    "vendor_name": "Zendesk",
+                    "rating": 2.0,
+                    "summary": "Support is slipping",
+                    "review_excerpt": "We need to move fast before renewal.",
+                    "reviewer_name": "Taylor",
+                    "reviewer_title": "VP Support",
+                    "reviewer_company": "Acme Corp",
+                    "reviewed_at": datetime(2026, 3, 16, 0, 0, 0),
+                }
+            ],
         ]
     )
 
@@ -211,6 +233,11 @@ async def test_list_accounts_in_motion_from_report_shapes_and_enriches():
     assert account["industry"] == "SaaS"
     assert account["contact_count"] == 1
     assert account["contacts"][0]["email"] == "taylor@acme.com"
+    assert account["source_review_ids"] == ["c6581fe1-32a9-4dbc-96cb-f7ef55707001"]
+    assert account["evidence_count"] == 2
+    assert account["source_reviews"][0]["source"] == "reddit"
+    assert account["source_reviews"][0]["review_excerpt"] == "We need to move fast before renewal."
+    assert account["reasoning_reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
 
 
 @pytest.mark.asyncio

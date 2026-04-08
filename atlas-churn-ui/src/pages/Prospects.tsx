@@ -101,7 +101,7 @@ export default function ProspectsPage() {
         company: debouncedSearch || undefined,
         status: statusFilter || undefined,
         seniority: seniorityFilter || undefined,
-        limit: 200,
+        limit: 100,
       }),
     [debouncedSearch, statusFilter, seniorityFilter],
   )

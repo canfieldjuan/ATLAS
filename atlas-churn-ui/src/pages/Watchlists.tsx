@@ -15,6 +15,7 @@ import StatCard from '../components/StatCard'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import ArchetypeBadge from '../components/ArchetypeBadge'
+import AccountMovementDrawer from '../components/AccountMovementDrawer'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import {
@@ -54,6 +55,9 @@ const SEARCH_DEBOUNCE_MS = 250
 const MIN_VENDOR_SEARCH_CHARS = 2
 const SEARCH_RESULTS_PREVIEW_LIMIT = 8
 const STALE_AFTER_HOURS = 24
+const ACCOUNT_URGENCY_FILTER_OPTIONS = [7, 8, 9] as const
+
+type AccountPresentationTier = 'named_high' | 'named_medium' | 'review'
 
 function formatTs(value: string | null | undefined) {
   if (!value) return '--'
@@ -119,10 +123,52 @@ function summarizeReasoningDelta(signal: ChurnSignal): string[] {
   return items
 }
 
+function confidenceBand(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return {
+      label: 'unscored',
+      tone: 'bg-slate-700/50 text-slate-300 border-slate-600/50',
+    }
+  }
+  if (value >= 7) {
+    return {
+      label: 'higher confidence',
+      tone: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+    }
+  }
+  if (value >= 4) {
+    return {
+      label: 'moderate confidence',
+      tone: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+    }
+  }
+  return {
+    label: 'low confidence',
+    tone: 'bg-rose-500/10 text-rose-300 border-rose-500/30',
+  }
+}
+
+function accountPresentationTier(row: AccountsInMotionFeedItem): AccountPresentationTier {
+  const hasNamedAccount = asString(row.company).length > 0
+  const confidence = typeof row.confidence === 'number' && !Number.isNaN(row.confidence)
+    ? row.confidence
+    : null
+  if (!hasNamedAccount) return 'review'
+  if (row.quality_flags.length > 0) return 'review'
+  if (confidence != null && confidence >= 7) return 'named_high'
+  if (confidence != null && confidence >= 4) return 'named_medium'
+  return 'review'
+}
+
 export default function Watchlists() {
   const navigate = useNavigate()
   const [searchInput, setSearchInput] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [selectedVendorFilter, setSelectedVendorFilter] = useState('')
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('')
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState('')
+  const [selectedMinUrgency, setSelectedMinUrgency] = useState('')
+  const [freshOnly, setFreshOnly] = useState(false)
   const [trackMode, setTrackMode] = useState<'own' | 'competitor'>('competitor')
   const [label, setLabel] = useState('')
   const [submittingVendor, setSubmittingVendor] = useState<string | null>(null)
@@ -138,6 +184,8 @@ export default function Watchlists() {
   const [competitiveSetChangedOnly, setCompetitiveSetChangedOnly] = useState<Record<string, boolean>>({})
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [selectedAccount, setSelectedAccount] = useState<AccountsInMotionFeedItem | null>(null)
+  const [showReviewAccounts, setShowReviewAccounts] = useState(false)
   const [competitiveSetName, setCompetitiveSetName] = useState('')
   const [competitiveSetFocal, setCompetitiveSetFocal] = useState('')
   const [competitiveSetCompetitors, setCompetitiveSetCompetitors] = useState<string[]>([])
@@ -158,11 +206,30 @@ export default function Watchlists() {
 
   const { data, loading, error, refresh, refreshing } = useApiData<WatchlistsData>(
     async () => {
+      const slowBurnParams = {
+        vendor_name: selectedVendorFilter || undefined,
+        category: selectedCategoryFilter || undefined,
+      }
+      const accountsParams = {
+        vendor_name: selectedVendorFilter || undefined,
+        category: selectedCategoryFilter || undefined,
+        source: selectedSourceFilter || undefined,
+        min_urgency: selectedMinUrgency ? Number(selectedMinUrgency) : undefined,
+        include_stale: freshOnly ? false : undefined,
+      }
       const [tracked, trackedSets, feed, accounts] = await Promise.all([
         listTrackedVendors(),
         listCompetitiveSets(true),
-        fetchSlowBurnWatchlist(),
-        fetchAccountsInMotionFeed(),
+        fetchSlowBurnWatchlist(
+          slowBurnParams.vendor_name || slowBurnParams.category
+            ? slowBurnParams
+            : undefined,
+        ),
+        fetchAccountsInMotionFeed(
+          Object.values(accountsParams).some((value) => value !== undefined)
+            ? accountsParams
+            : undefined,
+        ),
       ])
       return {
         vendors: tracked.vendors,
@@ -174,7 +241,13 @@ export default function Watchlists() {
         freshestAccountsReportDate: accounts.freshest_report_date,
       }
     },
-    [],
+    [
+      selectedVendorFilter,
+      selectedCategoryFilter,
+      selectedSourceFilter,
+      selectedMinUrgency,
+      freshOnly,
+    ],
   )
 
   const {
@@ -207,6 +280,69 @@ export default function Watchlists() {
   const competitorOptions = trackedVendors.filter(
     (vendor) => vendor.vendor_name !== competitiveSetFocal,
   )
+  const vendorFilterOptions = useMemo(
+    () => Array.from(new Set([
+      ...trackedVendors.map((vendor) => vendor.vendor_name),
+      selectedVendorFilter,
+    ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [selectedVendorFilter, trackedVendors],
+  )
+  const categoryFilterOptions = useMemo(
+    () => Array.from(new Set([
+      ...feed.map((row) => row.product_category || ''),
+      ...accounts.map((row) => row.category || ''),
+      selectedCategoryFilter,
+    ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [accounts, feed, selectedCategoryFilter],
+  )
+  const sourceFilterOptions = useMemo(
+    () => Array.from(new Set([
+      ...accounts.flatMap((row) => Object.keys(row.source_distribution || {})),
+      selectedSourceFilter,
+    ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [accounts, selectedSourceFilter],
+  )
+  const accountBuckets = useMemo(() => {
+    const high: AccountsInMotionFeedItem[] = []
+    const medium: AccountsInMotionFeedItem[] = []
+    const review: AccountsInMotionFeedItem[] = []
+    for (const account of accounts) {
+      const tier = accountPresentationTier(account)
+      if (tier === 'named_high') {
+        high.push(account)
+      } else if (tier === 'named_medium') {
+        medium.push(account)
+      } else {
+        review.push(account)
+      }
+    }
+    return {
+      high,
+      medium,
+      review,
+      primary: [...high, ...medium],
+    }
+  }, [accounts])
+  const hasActiveFeedFilters = Boolean(
+    selectedVendorFilter
+    || selectedCategoryFilter
+    || selectedSourceFilter
+    || selectedMinUrgency
+    || freshOnly,
+  )
+
+  useEffect(() => {
+    if (!selectedAccount) return
+    const stillVisible = accounts.some((account) => (
+      account.vendor === selectedAccount.vendor
+      && (account.company || '') === (selectedAccount.company || '')
+      && (account.report_date || '') === (selectedAccount.report_date || '')
+      && (account.watch_vendor || '') === (selectedAccount.watch_vendor || '')
+    ))
+    if (!stillVisible) {
+      setSelectedAccount(null)
+    }
+  }, [accounts, selectedAccount])
 
   useEffect(() => {
     if (editingCompetitiveSetId) return
@@ -552,12 +688,21 @@ export default function Watchlists() {
     {
       key: 'company',
       header: 'Account Movement',
-      render: (row) => (
-        <div>
-          <div className="font-medium text-white">{row.company || 'Unknown account'}</div>
-          <div className="text-xs text-slate-500">{row.vendor}</div>
-        </div>
-      ),
+      render: (row) => {
+        const confidence = confidenceBand(row.confidence)
+        const label = row.company || 'Anonymous signal cluster'
+        return (
+          <div>
+            <div className="font-medium text-white">{label}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-slate-500">{row.vendor}</span>
+              <span className={clsx('rounded-full border px-2 py-0.5', confidence.tone)}>
+                {confidence.label}
+              </span>
+            </div>
+          </div>
+        )
+      },
       sortable: true,
       sortValue: (row) => row.company || '',
     },
@@ -586,9 +731,12 @@ export default function Watchlists() {
       key: 'quote',
       header: 'Evidence',
       render: (row) => (
-        <span className="max-w-[320px] truncate text-slate-400">
-          {row.evidence[0] || '--'}
-        </span>
+        <div className="max-w-[320px]">
+          <div className="truncate text-slate-300">{row.evidence[0] || '--'}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            {row.evidence_count} span{row.evidence_count === 1 ? '' : 's'} - {row.source_reviews.length} review{row.source_reviews.length === 1 ? '' : 's'}
+          </div>
+        </div>
       ),
     },
     {
@@ -602,6 +750,21 @@ export default function Watchlists() {
       ),
       sortable: true,
       sortValue: (row) => toTimestamp(row.report_date) ?? 0,
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (row) => (
+        <button
+          className="rounded-md bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
+          onClick={(event) => {
+            event.stopPropagation()
+            navigate(`/vendors/${encodeURIComponent(row.vendor)}`)
+          }}
+        >
+          View vendor
+        </button>
+      ),
     },
   ]
 
@@ -647,11 +810,113 @@ export default function Watchlists() {
         />
         <StatCard
           label="Accounts In Motion"
-          value={accounts.length}
-          sub={vendorsWithAccounts > 0 ? `${vendorsWithAccounts} vendors with active account movement` : 'No persisted account movement yet'}
+          value={accountBuckets.primary.length}
+          sub={vendorsWithAccounts > 0
+            ? `${accountBuckets.review.length} review-needed cluster${accountBuckets.review.length === 1 ? '' : 's'} across ${vendorsWithAccounts} vendors`
+            : 'No persisted account movement yet'}
           icon={<RefreshCw className="h-5 w-5" />}
           skeleton={loading}
         />
+      </div>
+
+      <div
+        className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-4"
+        role="group"
+        aria-label="Feed controls"
+      >
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <h2 className="text-sm font-medium text-white">Feed Controls</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Vendor and category apply to both feeds. Source, urgency, and fresh-only apply to Accounts In Motion.
+            </p>
+          </div>
+          {hasActiveFeedFilters ? (
+            <button
+              className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+              onClick={() => {
+                setSelectedVendorFilter('')
+                setSelectedCategoryFilter('')
+                setSelectedSourceFilter('')
+                setSelectedMinUrgency('')
+                setFreshOnly(false)
+              }}
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Vendor</span>
+            <select
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              value={selectedVendorFilter}
+              onChange={(event) => setSelectedVendorFilter(event.target.value)}
+            >
+              <option value="">All tracked vendors</option>
+              {vendorFilterOptions.map((vendorName) => (
+                <option key={vendorName} value={vendorName}>
+                  {vendorName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Category</span>
+            <select
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              value={selectedCategoryFilter}
+              onChange={(event) => setSelectedCategoryFilter(event.target.value)}
+            >
+              <option value="">All categories</option>
+              {categoryFilterOptions.map((categoryName) => (
+                <option key={categoryName} value={categoryName}>
+                  {categoryName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Source</span>
+            <select
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              value={selectedSourceFilter}
+              onChange={(event) => setSelectedSourceFilter(event.target.value)}
+            >
+              <option value="">All sources</option>
+              {sourceFilterOptions.map((sourceName) => (
+                <option key={sourceName} value={sourceName}>
+                  {sourceName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Min Urgency</span>
+            <select
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
+              value={selectedMinUrgency}
+              onChange={(event) => setSelectedMinUrgency(event.target.value)}
+            >
+              <option value="">Default threshold</option>
+              {ACCOUNT_URGENCY_FILTER_OPTIONS.map((score) => (
+                <option key={score} value={String(score)}>
+                  {score}+
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2 text-sm text-slate-300 xl:mt-6">
+            <input
+              checked={freshOnly}
+              className="rounded border-slate-600 bg-slate-900 text-cyan-400 focus:ring-cyan-500"
+              onChange={(event) => setFreshOnly(event.target.checked)}
+              type="checkbox"
+            />
+            Fresh only
+          </label>
+        </div>
       </div>
 
       {(actionMessage || actionError) && (
@@ -689,7 +954,9 @@ export default function Watchlists() {
               columns={feedColumns}
               data={feed}
               onRowClick={(row) => navigate(`/vendors/${encodeURIComponent(row.vendor_name)}`)}
-              emptyMessage="No watchlist movement yet. Add tracked vendors to start monitoring."
+              emptyMessage={hasActiveFeedFilters
+                ? 'No vendor movement matches the current filters.'
+                : 'No watchlist movement yet. Add tracked vendors to start monitoring.'}
               skeletonRows={loading ? 6 : undefined}
             />
           </div>
@@ -715,8 +982,21 @@ export default function Watchlists() {
             <div className="border-b border-slate-700/50 px-4 py-3">
               <h2 className="text-sm font-medium text-white">Accounts In Motion</h2>
               <p className="text-xs text-slate-500">
-                Tenant-wide account movement aggregated from persisted accounts-in-motion reports across your tracked vendors.
+                Tenant-wide account movement aggregated from persisted accounts-in-motion reports across your tracked vendors. Click a row to inspect source-review lineage and reasoning references.
               </p>
+              <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-300">
+                  {accountBuckets.high.length} named high confidence
+                </span>
+                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-300">
+                  {accountBuckets.medium.length} named moderate confidence
+                </span>
+                {accountBuckets.review.length > 0 ? (
+                  <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-rose-300">
+                    {accountBuckets.review.length} review-needed cluster{accountBuckets.review.length === 1 ? '' : 's'}
+                  </span>
+                ) : null}
+              </div>
               {freshestAccountsReportDate ? (
                 <p className={clsx('mt-1 text-[11px]', freshnessTone(freshestAccountsReportDate))}>
                   Freshest report {formatTs(freshestAccountsReportDate)}
@@ -725,12 +1005,45 @@ export default function Watchlists() {
             </div>
             <DataTable
               columns={accountColumns}
-              data={accounts}
-              onRowClick={(row) => navigate(`/vendors/${encodeURIComponent(row.vendor)}`)}
-              emptyMessage="No persisted accounts-in-motion rows yet for your tracked vendors."
+              data={accountBuckets.primary}
+              onRowClick={(row) => setSelectedAccount(row)}
+              emptyMessage={accountBuckets.review.length > 0
+                ? 'No named higher-confidence account rows yet. Review the lower-confidence cluster section below.'
+                : hasActiveFeedFilters
+                  ? 'No accounts-in-motion rows match the current filters.'
+                  : 'No persisted accounts-in-motion rows yet for your tracked vendors.'}
               skeletonRows={loading ? 5 : undefined}
             />
           </div>
+
+          {accountBuckets.review.length > 0 && (
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 overflow-hidden">
+              <div className="border-b border-amber-500/20 px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-medium text-amber-100">Review-Needed Signal Clusters</h2>
+                    <p className="mt-1 text-xs text-amber-200/80">
+                      These rows are still evidence-backed, but account identity or confidence is weaker. Treat them as signal clusters until the evidence drawer supports the account claim.
+                    </p>
+                  </div>
+                  <button
+                    className="rounded-md bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-200 hover:bg-amber-500/20"
+                    onClick={() => setShowReviewAccounts((current) => !current)}
+                  >
+                    {showReviewAccounts ? 'Hide clusters' : `Show ${accountBuckets.review.length} cluster${accountBuckets.review.length === 1 ? '' : 's'}`}
+                  </button>
+                </div>
+              </div>
+              {showReviewAccounts ? (
+                <DataTable
+                  columns={accountColumns}
+                  data={accountBuckets.review}
+                  onRowClick={(row) => setSelectedAccount(row)}
+                  emptyMessage="No review-needed signal clusters."
+                />
+              ) : null}
+            </div>
+          )}
         </div>
 
         <div className="space-y-6">
@@ -867,7 +1180,7 @@ export default function Watchlists() {
                     <option value="">Select tracked vendor</option>
                     {focalOptions.map((vendor) => (
                       <option key={vendor.id} value={vendor.vendor_name}>
-                        {vendor.vendor_name} · {vendor.track_mode}
+                        {vendor.vendor_name} - {vendor.track_mode}
                       </option>
                     ))}
                   </select>
@@ -985,7 +1298,7 @@ export default function Watchlists() {
                       <div>
                         <div className="font-medium text-white">{item.name}</div>
                         <div className="mt-1 text-xs text-slate-500">
-                          Focal: {item.focal_vendor_name} · {competitorCount} competitors · {item.refresh_mode}
+                          Focal: {item.focal_vendor_name} - {competitorCount} competitors - {item.refresh_mode}
                           {item.refresh_mode === 'scheduled' && item.refresh_interval_hours
                             ? ` every ${item.refresh_interval_hours}h`
                             : ''}
@@ -1060,30 +1373,30 @@ export default function Watchlists() {
                             <div className="text-[11px] uppercase tracking-wide text-slate-500">Planned Jobs</div>
                             <div className="mt-1 text-sm font-medium text-white">{formatWholeNumber(preview.estimated_total_jobs)}</div>
                             <div className="mt-1 text-[11px] text-slate-400">
-                              {formatWholeNumber(preview.vendor_job_count)} vendor · {formatWholeNumber(preview.pairwise_job_count + preview.category_job_count + preview.asymmetry_job_count)} cross-vendor
+                              {formatWholeNumber(preview.vendor_job_count)} vendor - {formatWholeNumber(preview.pairwise_job_count + preview.category_job_count + preview.asymmetry_job_count)} cross-vendor
                             </div>
                           </div>
                           <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
                             <div className="text-[11px] uppercase tracking-wide text-slate-500">Token Estimate</div>
                             <div className="mt-1 text-sm font-medium text-white">{formatWholeNumber(estimate?.estimated_total_tokens)}</div>
                             <div className="mt-1 text-[11px] text-slate-400">
-                              {formatWholeNumber(estimate?.estimated_vendor_tokens)} vendor · {formatWholeNumber(estimate?.estimated_cross_vendor_tokens)} cross-vendor
+                              {formatWholeNumber(estimate?.estimated_vendor_tokens)} vendor - {formatWholeNumber(estimate?.estimated_cross_vendor_tokens)} cross-vendor
                             </div>
                           </div>
                           <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
                             <div className="text-[11px] uppercase tracking-wide text-slate-500">Cost Upper Bound</div>
                             <div className="mt-1 text-sm font-medium text-white">{formatCostUsd(estimate?.estimated_total_cost_usd)}</div>
                             <div className="mt-1 text-[11px] text-slate-400">
-                              {formatCostUsd(estimate?.estimated_vendor_cost_usd)} vendor · {formatCostUsd(estimate?.estimated_cross_vendor_cost_usd)} cross-vendor
+                              {formatCostUsd(estimate?.estimated_vendor_cost_usd)} vendor - {formatCostUsd(estimate?.estimated_cross_vendor_cost_usd)} cross-vendor
                             </div>
                           </div>
                           <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
                             <div className="text-[11px] uppercase tracking-wide text-slate-500">History Coverage</div>
                             <div className="mt-1 text-sm font-medium text-white">
-                              {formatWholeNumber(estimate?.vendor_jobs_with_history)} vendor · {formatWholeNumber(estimate?.cross_vendor_jobs_with_history)} cross-vendor
+                              {formatWholeNumber(estimate?.vendor_jobs_with_history)} vendor - {formatWholeNumber(estimate?.cross_vendor_jobs_with_history)} cross-vendor
                             </div>
                             <div className="mt-1 text-[11px] text-slate-400">
-                              {formatWholeNumber(estimate?.vendor_jobs_using_fallback)} vendor fallback · {formatWholeNumber(estimate?.cross_vendor_jobs_using_fallback)} cross fallback
+                              {formatWholeNumber(estimate?.vendor_jobs_using_fallback)} vendor fallback - {formatWholeNumber(estimate?.cross_vendor_jobs_using_fallback)} cross fallback
                             </div>
                           </div>
                         </div>
@@ -1091,10 +1404,10 @@ export default function Watchlists() {
                           <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
                             <div className="text-[11px] uppercase tracking-wide text-slate-500">Likely Vendor Outcome</div>
                             <div className="mt-1 text-sm font-medium text-white">
-                              {formatWholeNumber(estimate?.vendor_jobs_likely_to_reason)} rerun · {formatWholeNumber(estimate?.vendor_jobs_likely_hash_reuse)} reuse
+                              {formatWholeNumber(estimate?.vendor_jobs_likely_to_reason)} rerun - {formatWholeNumber(estimate?.vendor_jobs_likely_hash_reuse)} reuse
                             </div>
                             <div className="mt-1 text-[11px] text-slate-400">
-                              {formatWholeNumber(estimate?.vendor_jobs_missing_pools)} no pool · {formatWholeNumber(estimate?.vendor_jobs_likely_stale_reuse)} stale reuse
+                              {formatWholeNumber(estimate?.vendor_jobs_missing_pools)} no pool - {formatWholeNumber(estimate?.vendor_jobs_likely_stale_reuse)} stale reuse
                             </div>
                           </div>
                           <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
@@ -1107,10 +1420,10 @@ export default function Watchlists() {
                           <div className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
                             <div className="text-[11px] uppercase tracking-wide text-slate-500">Rerun Reasons</div>
                             <div className="mt-1 text-sm font-medium text-white">
-                              {formatWholeNumber(estimate?.vendor_jobs_likely_hash_changed)} changed · {formatWholeNumber(estimate?.vendor_jobs_likely_prior_quality_weak)} weak
+                              {formatWholeNumber(estimate?.vendor_jobs_likely_hash_changed)} changed - {formatWholeNumber(estimate?.vendor_jobs_likely_prior_quality_weak)} weak
                             </div>
                             <div className="mt-1 text-[11px] text-slate-400">
-                              {formatWholeNumber(estimate?.vendor_jobs_likely_missing_prior)} missing prior · {formatWholeNumber(estimate?.vendor_jobs_likely_missing_reference_ids)} missing refs
+                              {formatWholeNumber(estimate?.vendor_jobs_likely_missing_prior)} missing prior - {formatWholeNumber(estimate?.vendor_jobs_likely_missing_reference_ids)} missing refs
                             </div>
                           </div>
                         </div>
@@ -1123,7 +1436,7 @@ export default function Watchlists() {
                             <div className="mt-2 flex flex-wrap gap-1">
                               {likelyRerunVendors.map((entry) => (
                                 <span key={entry} className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-300">
-                                  {entry.replace(':', ' · ')}
+                                  {entry.replace(':', ' - ')}
                                 </span>
                               ))}
                             </div>
@@ -1135,7 +1448,7 @@ export default function Watchlists() {
                             <div className="mt-2 flex flex-wrap gap-1">
                               {likelyReuseVendors.map((entry) => (
                                 <span key={entry} className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-300">
-                                  {entry.replace(':', ' · ')}
+                                  {entry.replace(':', ' - ')}
                                 </span>
                               ))}
                             </div>
@@ -1232,11 +1545,17 @@ export default function Watchlists() {
           <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-4">
             <h2 className="text-sm font-medium text-white">Phase 1 Boundary</h2>
             <p className="mt-2 text-sm text-slate-400">
-              This slice now includes tenant-wide persisted accounts-in-motion aggregation. The next major trust layer is the embedded evidence drawer so every vendor and account row can answer why it exists.
+              This slice now includes tenant-wide persisted accounts-in-motion aggregation plus an inline account evidence drawer. The next major trust layer is saved views, thresholding, and confidence-tiered suppression for weaker rows.
             </p>
           </div>
         </div>
       </div>
+      <AccountMovementDrawer
+        item={selectedAccount}
+        open={selectedAccount != null}
+        onClose={() => setSelectedAccount(null)}
+        onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
+      />
     </div>
   )
 }

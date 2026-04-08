@@ -129,7 +129,7 @@ export default function VendorTargets() {
       const res = await fetchVendorTargets({
         target_mode: modeFilter || undefined,
         search: debouncedSearch || undefined,
-        limit: 200,
+        limit: 100,
       })
       return res
     },

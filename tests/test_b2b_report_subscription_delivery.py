@@ -528,8 +528,10 @@ async def test_claim_delivery_attempt_reclaims_dry_run_immediately():
     class Pool:
         async def fetchrow(self, query, *args):
             seen_args.append(args)
-            assert "status = ANY($10::text[])" in query
+            assert "delivery_mode" in query
+            assert "ON CONFLICT (subscription_id, scheduled_for, delivery_mode)" in query
             assert "status = ANY($11::text[])" in query
+            assert "status = ANY($12::text[])" in query
             return {"id": "log-claim"}
 
     row = {
@@ -544,12 +546,42 @@ async def test_claim_delivery_attempt_reclaims_dry_run_immediately():
         "freshness_policy": "any",
     }
 
-    result = await mod._claim_delivery_attempt(Pool(), row)
+    result = await mod._claim_delivery_attempt(Pool(), row, dry_run=True)
 
     assert result == {"id": "log-claim"}
     assert seen_args
-    assert seen_args[0][9] == ["failed", "processing"]
-    assert seen_args[0][10] == ["dry_run"]
+    assert seen_args[0][3] == "dry_run"
+    assert seen_args[0][10] == ["failed", "processing"]
+    assert seen_args[0][11] == ["dry_run"]
+
+
+@pytest.mark.asyncio
+async def test_claim_delivery_attempt_uses_live_mode_for_live_runs():
+    seen_args: list[tuple[object, ...]] = []
+
+    class Pool:
+        async def fetchrow(self, query, *args):
+            seen_args.append(args)
+            assert "ON CONFLICT (subscription_id, scheduled_for, delivery_mode)" in query
+            return {"id": "log-live"}
+
+    row = {
+        "id": "sub-live",
+        "account_id": "acct-live",
+        "next_delivery_at": datetime.now(timezone.utc),
+        "scope_type": "report",
+        "scope_key": "report-live",
+        "recipient_emails": ["buyer@example.com"],
+        "delivery_frequency": "weekly",
+        "deliverable_focus": "all",
+        "freshness_policy": "any",
+    }
+
+    result = await mod._claim_delivery_attempt(Pool(), row, dry_run=False)
+
+    assert result == {"id": "log-live"}
+    assert seen_args
+    assert seen_args[0][3] == "live"
 
 
 @pytest.mark.asyncio

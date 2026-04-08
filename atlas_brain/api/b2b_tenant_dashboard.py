@@ -84,6 +84,35 @@ def _safe_float(val, default=None):
         return default
 
 
+def _matches_text_filter(candidate: Any, needle: str | None) -> bool:
+    if not needle:
+        return True
+    candidate_text = str(candidate or "").strip().lower()
+    needle_text = str(needle).strip().lower()
+    if not candidate_text or not needle_text:
+        return False
+    return needle_text in candidate_text
+
+
+def _matches_source_filter(account: dict[str, Any], source: str | None) -> bool:
+    if not source:
+        return True
+    source_name = str(source).strip().lower()
+    if not source_name:
+        return True
+    distribution = account.get("source_distribution")
+    if isinstance(distribution, dict):
+        for key, count in distribution.items():
+            if str(key).strip().lower() == source_name and int(count or 0) > 0:
+                return True
+    for review in account.get("source_reviews") or []:
+        if not isinstance(review, dict):
+            continue
+        if str(review.get("source") or "").strip().lower() == source_name:
+            return True
+    return False
+
+
 def _pool_or_503():
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -1478,7 +1507,11 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
 
 @router.get("/accounts-in-motion-feed")
 async def list_tenant_accounts_in_motion_feed(
+    vendor_name: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
+    include_stale: bool = Query(True),
     per_vendor_limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_feed_max_total, ge=1, le=200),
     user: AuthUser = Depends(require_auth),
@@ -1487,6 +1520,10 @@ async def list_tenant_accounts_in_motion_feed(
     _require_b2b_product(user)
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
+    vendor_name = vendor_name if isinstance(vendor_name, str) else None
+    category = category if isinstance(category, str) else None
+    source = source if isinstance(source, str) else None
+    include_stale = include_stale if isinstance(include_stale, bool) else True
 
     tracked_rows = await pool.fetch(
         """
@@ -1525,19 +1562,23 @@ async def list_tenant_accounts_in_motion_feed(
     freshest_report_date: str | None = None
     vendors_with_accounts = 0
     for tracked, report in zip(tracked_rows, vendor_reports):
+        if vendor_name and not _matches_text_filter(tracked["vendor_name"], vendor_name):
+            continue
         if not report:
             continue
         report_date = report.get("report_date")
-        if report.get("accounts"):
-            vendors_with_accounts += 1
-        if isinstance(report_date, str) and (
-            freshest_report_date is None or report_date > freshest_report_date
-        ):
-            freshest_report_date = report_date
+        report_is_stale = bool(report.get("is_stale"))
+        if report_is_stale and not include_stale:
+            continue
+        filtered_accounts: list[dict] = []
         for account in report.get("accounts") or []:
             if not isinstance(account, dict):
                 continue
-            accounts.append(
+            if category and not _matches_text_filter(account.get("category"), category):
+                continue
+            if source and not _matches_source_filter(account, source):
+                continue
+            filtered_accounts.append(
                 {
                     **account,
                     "watch_vendor": tracked["vendor_name"],
@@ -1549,6 +1590,14 @@ async def list_tenant_accounts_in_motion_feed(
                     "data_source": report.get("data_source"),
                 }
             )
+        if not filtered_accounts:
+            continue
+        vendors_with_accounts += 1
+        if isinstance(report_date, str) and (
+            freshest_report_date is None or report_date > freshest_report_date
+        ):
+            freshest_report_date = report_date
+        accounts.extend(filtered_accounts)
 
     accounts.sort(
         key=lambda account: (

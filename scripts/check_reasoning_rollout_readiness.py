@@ -26,6 +26,7 @@ _REQUIRED_MIGRATIONS = (
     "265_b2b_report_subscriptions",
     "266_b2b_report_subscription_delivery_log",
     "268_b2b_report_subscription_delivery_dry_run_status",
+    "269_b2b_report_subscription_delivery_mode",
 )
 
 _REQUIRED_TABLES = (

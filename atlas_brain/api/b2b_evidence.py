@@ -26,7 +26,7 @@ from ..storage.database import get_db_pool
 # -- Pagination and query defaults --------------------------------------------
 
 DEFAULT_WITNESS_LIMIT = 50
-MAX_WITNESS_LIMIT = 200
+MAX_WITNESS_LIMIT = 100
 DEFAULT_ANALYSIS_WINDOW_DAYS = 90
 MIN_ANALYSIS_WINDOW_DAYS = 7
 MAX_ANALYSIS_WINDOW_DAYS = 365

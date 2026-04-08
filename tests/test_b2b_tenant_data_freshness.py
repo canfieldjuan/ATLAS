@@ -352,6 +352,24 @@ async def test_accounts_in_motion_feed_aggregates_tracked_vendor_reports(monkeyp
                         "opportunity_score": 82,
                         "pain_categories": [{"category": "pricing", "severity": ""}],
                         "evidence": ["We need to move fast."],
+                        "evidence_count": 2,
+                        "source_review_ids": ["review-1"],
+                        "source_reviews": [
+                            {
+                                "id": "review-1",
+                                "source": "reddit",
+                                "source_url": "https://reddit.example/review-1",
+                                "vendor_name": "Zendesk",
+                                "rating": 2.0,
+                                "summary": "Support is slipping",
+                                "review_excerpt": "We need to move fast.",
+                                "reviewer_name": "Taylor",
+                                "reviewer_title": "VP Support",
+                                "reviewer_company": "Acme Corp",
+                                "reviewed_at": "2026-04-03T00:00:00",
+                            }
+                        ],
+                        "reasoning_reference_ids": {"witness_ids": ["witness:zendesk:1"]},
                     }
                 ],
                 "report_date": "2026-04-04",
@@ -395,6 +413,9 @@ async def test_accounts_in_motion_feed_aggregates_tracked_vendor_reports(monkeyp
     assert result["accounts"][0]["watch_vendor"] == "Zendesk"
     assert result["accounts"][0]["watchlist_label"] == "Support"
     assert result["accounts"][0]["is_stale"] is False
+    assert result["accounts"][0]["evidence_count"] == 2
+    assert result["accounts"][0]["source_reviews"][0]["id"] == "review-1"
+    assert result["accounts"][0]["reasoning_reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
     assert result["accounts"][1]["company"] == "Bravo Ltd"
     helper.assert_awaited()
 
@@ -501,3 +522,93 @@ async def test_accounts_in_motion_feed_sorts_and_applies_total_limit(monkeypatch
     assert result["count"] == 2
     assert [row["company"] for row in result["accounts"]] == ["Acme Corp", "Bravo Ltd"]
     assert all(row["is_stale"] is False for row in result["accounts"])
+
+
+@pytest.mark.asyncio
+async def test_accounts_in_motion_feed_filters_by_vendor_category_source_and_stale(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Zendesk", "track_mode": "competitor", "label": "Support", "added_at": None},
+                {"vendor_name": "Intercom", "track_mode": "competitor", "label": "Chat", "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        side_effect=[
+            {
+                "accounts": [
+                    {
+                        "company": "Acme Corp",
+                        "vendor": "Zendesk",
+                        "category": "Helpdesk",
+                        "urgency": 8.5,
+                        "opportunity_score": 82,
+                        "pain_categories": [{"category": "pricing", "severity": ""}],
+                        "evidence": ["We need to move fast."],
+                        "source_distribution": {"reddit": 2},
+                        "source_reviews": [{"id": "review-1", "source": "reddit"}],
+                    },
+                    {
+                        "company": "Bravo Ltd",
+                        "vendor": "Zendesk",
+                        "category": "CRM",
+                        "urgency": 7.2,
+                        "opportunity_score": 61,
+                        "pain_categories": [{"category": "support", "severity": ""}],
+                        "evidence": ["Not a helpdesk issue."],
+                        "source_distribution": {"g2": 1},
+                        "source_reviews": [{"id": "review-2", "source": "g2"}],
+                    },
+                ],
+                "report_date": "2026-04-04",
+                "stale_days": 0,
+                "is_stale": False,
+                "data_source": "persisted_report",
+            },
+            {
+                "accounts": [
+                    {
+                        "company": "Charlie Inc",
+                        "vendor": "Intercom",
+                        "category": "Messaging",
+                        "urgency": 9.4,
+                        "opportunity_score": 90,
+                        "pain_categories": [{"category": "reliability", "severity": ""}],
+                        "evidence": ["Still stale."],
+                        "source_distribution": {"reddit": 1},
+                        "source_reviews": [{"id": "review-3", "source": "reddit"}],
+                    }
+                ],
+                "report_date": "2026-04-03",
+                "stale_days": 2,
+                "is_stale": True,
+                "data_source": "persisted_report",
+            },
+        ]
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        vendor_name="Zendesk",
+        category="Helpdesk",
+        source="reddit",
+        min_urgency=7,
+        include_stale=False,
+        per_vendor_limit=5,
+        limit=10,
+        user=user,
+    )
+
+    assert result["count"] == 1
+    assert result["vendors_with_accounts"] == 1
+    assert result["freshest_report_date"] == "2026-04-04"
+    assert result["accounts"][0]["company"] == "Acme Corp"
+    assert result["accounts"][0]["watch_vendor"] == "Zendesk"
+    helper.assert_awaited()

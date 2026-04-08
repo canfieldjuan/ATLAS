@@ -5026,6 +5026,54 @@ async def _fetch_accounts_in_motion_contacts_lookup(
     return contacts_lookup
 
 
+async def _fetch_accounts_in_motion_review_lookup(
+    pool,
+    review_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not review_ids:
+        return {}
+    parsed_ids: list[_uuid.UUID] = []
+    seen: set[str] = set()
+    for review_id in review_ids:
+        raw = str(review_id or "").strip()
+        if not raw or raw in seen:
+            continue
+        try:
+            parsed_ids.append(_uuid.UUID(raw))
+            seen.add(raw)
+        except (TypeError, ValueError, AttributeError):
+            continue
+    if not parsed_ids:
+        return {}
+    rows = await pool.fetch(
+        """
+        SELECT id, source, source_url, vendor_name, rating, summary,
+               LEFT(review_text, 500) AS review_excerpt,
+               reviewer_name, reviewer_title, reviewer_company, reviewed_at
+        FROM b2b_reviews
+        WHERE id = ANY($1::uuid[])
+        ORDER BY reviewed_at DESC NULLS LAST
+        """,
+        parsed_ids,
+    )
+    return {
+        str(row["id"]): {
+            "id": str(row["id"]),
+            "source": row["source"],
+            "source_url": row["source_url"],
+            "vendor_name": row["vendor_name"],
+            "rating": _safe_float(row["rating"]),
+            "summary": row["summary"],
+            "review_excerpt": row["review_excerpt"],
+            "reviewer_name": row["reviewer_name"],
+            "reviewer_title": row["reviewer_title"],
+            "reviewer_company": row["reviewer_company"],
+            "reviewed_at": row["reviewed_at"].isoformat() if row["reviewed_at"] else None,
+        }
+        for row in rows
+    }
+
+
 def _shape_persisted_accounts_in_motion_account(account: dict[str, Any], vendor_name: str) -> dict[str, Any]:
     alternatives = [
         {"name": name, "reason": ""}
@@ -5036,6 +5084,11 @@ def _shape_persisted_accounts_in_motion_account(account: dict[str, Any], vendor_
     if account.get("pain_category"):
         pain_categories.append({"category": account["pain_category"], "severity": ""})
     evidence = [account["top_quote"]] if account.get("top_quote") else []
+    source_review_ids = [
+        str(review_id).strip()
+        for review_id in (account.get("source_reviews") or [])
+        if str(review_id or "").strip()
+    ]
     return {
         "company": account.get("company"),
         "vendor": account.get("vendor") or vendor_name,
@@ -5055,6 +5108,9 @@ def _shape_persisted_accounts_in_motion_account(account: dict[str, Any], vendor_
         "quote_match_type": account.get("quote_match_type"),
         "confidence": account.get("confidence"),
         "source_distribution": account.get("source_distribution") or {},
+        "source_review_ids": source_review_ids,
+        "source_reviews": [],
+        "evidence_count": int(account.get("evidence_count") or 0),
         "enriched_at": account.get("last_seen"),
     }
 
@@ -5070,15 +5126,29 @@ async def _enrich_accounts_in_motion_accounts(
             if _company_lookup_key(account.get("company"))
         }
     )
-    org_lookup, contacts_lookup = await asyncio.gather(
+    review_ids = sorted(
+        {
+            str(review_id).strip()
+            for account in accounts
+            for review_id in (account.get("source_review_ids") or [])
+            if str(review_id or "").strip()
+        }
+    )
+    org_lookup, contacts_lookup, review_lookup = await asyncio.gather(
         _fetch_accounts_in_motion_org_lookup(pool, company_keys),
         _fetch_accounts_in_motion_contacts_lookup(pool, company_keys),
+        _fetch_accounts_in_motion_review_lookup(pool, review_ids),
     )
     enriched: list[dict[str, Any]] = []
     for account in accounts:
         company_key = _company_lookup_key(account.get("company"))
         org = org_lookup.get(company_key) or {}
         contacts = contacts_lookup.get(company_key) or []
+        source_reviews = [
+            review_lookup[review_id]
+            for review_id in (account.get("source_review_ids") or [])
+            if review_id in review_lookup
+        ]
         enriched.append(
             {
                 **account,
@@ -5086,6 +5156,7 @@ async def _enrich_accounts_in_motion_accounts(
                 "industry": org.get("industry") or account.get("industry"),
                 "annual_revenue": org.get("annual_revenue_range"),
                 "domain": org.get("domain") or account.get("domain"),
+                "source_reviews": source_reviews,
                 "contacts": contacts,
                 "contact_count": len(contacts),
             }
@@ -5107,8 +5178,14 @@ async def _list_accounts_in_motion_from_report(
     if not isinstance(report, dict):
         return None
     vendor = report.get("vendor") or row["vendor_filter"] or vendor_name.strip()
+    reasoning_reference_ids = report.get("reference_ids")
+    if not isinstance(reasoning_reference_ids, dict):
+        reasoning_reference_ids = None
     shaped = [
-        _shape_persisted_accounts_in_motion_account(account, vendor)
+        {
+            **_shape_persisted_accounts_in_motion_account(account, vendor),
+            "reasoning_reference_ids": reasoning_reference_ids,
+        }
         for account in (report.get("accounts") or [])
         if isinstance(account, dict) and _safe_float(account.get("urgency"), 0) >= min_urgency
     ]

@@ -122,7 +122,7 @@ export default function Opportunities() {
         min_urgency: minUrgency,
         vendor_name: debouncedVendor || undefined,
         window_days: windowDays,
-        limit: 200,
+        limit: 100,
       })
       return res.companies
     },

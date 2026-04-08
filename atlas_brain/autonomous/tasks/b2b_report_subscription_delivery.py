@@ -127,6 +127,10 @@ def _dry_run_enabled(task: ScheduledTask | Any) -> bool:
     return bool(settings.b2b_report_delivery.dry_run)
 
 
+def _delivery_mode(dry_run: bool) -> str:
+    return "dry_run" if dry_run else "live"
+
+
 def _canary_account_ids(task: ScheduledTask | Any) -> set[str]:
     metadata = _task_metadata(task)
     if "canary_account_ids" in metadata:
@@ -560,14 +564,16 @@ async def _latest_delivery_content_hash(pool, subscription_id: Any) -> str | Non
     return text or None
 
 
-async def _claim_delivery_attempt(pool, row) -> Any | None:
+async def _claim_delivery_attempt(pool, row, *, dry_run: bool) -> Any | None:
     stale_claim_seconds = settings.b2b_report_delivery.stale_claim_seconds
+    delivery_mode = _delivery_mode(dry_run)
     return await pool.fetchrow(
         """
         INSERT INTO b2b_report_subscription_delivery_log (
             subscription_id,
             account_id,
             scheduled_for,
+            delivery_mode,
             scope_type,
             scope_key,
             recipient_emails,
@@ -583,14 +589,15 @@ async def _claim_delivery_attempt(pool, row) -> Any | None:
             $3,
             $4,
             $5,
-            $6::text[],
-            $7,
+            $6,
+            $7::text[],
             $8,
             $9,
+            $10,
             'processing',
             NOW()
         )
-        ON CONFLICT (subscription_id, scheduled_for) DO UPDATE
+        ON CONFLICT (subscription_id, scheduled_for, delivery_mode) DO UPDATE
         SET recipient_emails = EXCLUDED.recipient_emails,
             delivery_frequency = EXCLUDED.delivery_frequency,
             deliverable_focus = EXCLUDED.deliverable_focus,
@@ -604,15 +611,16 @@ async def _claim_delivery_attempt(pool, row) -> Any | None:
             error = NULL,
             delivered_at = NOW()
         WHERE (
-                b2b_report_subscription_delivery_log.status = ANY($10::text[])
-                AND b2b_report_subscription_delivery_log.delivered_at < NOW() - ($12 || ' seconds')::interval
+                b2b_report_subscription_delivery_log.status = ANY($11::text[])
+                AND b2b_report_subscription_delivery_log.delivered_at < NOW() - ($13 || ' seconds')::interval
               )
-           OR b2b_report_subscription_delivery_log.status = ANY($11::text[])
+           OR b2b_report_subscription_delivery_log.status = ANY($12::text[])
         RETURNING id
         """,
         row["id"],
         row["account_id"],
         row["next_delivery_at"],
+        delivery_mode,
         row["scope_type"],
         row["scope_key"],
         list(row["recipient_emails"] or []),
@@ -982,7 +990,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     failed = 0
 
     for row in due_rows:
-        claim = await _claim_delivery_attempt(pool, row)
+        claim = await _claim_delivery_attempt(pool, row, dry_run=dry_run)
         if not claim:
             continue
 

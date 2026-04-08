@@ -82,7 +82,7 @@ export default function ReportDetail() {
   const title = ['vendor_comparison', 'account_comparison'].includes(report.report_type) && report.vendor_filter && report.category_filter
     ? `${report.vendor_filter} vs ${report.category_filter}`
     : report.report_type === 'challenger_brief' && report.vendor_filter && report.category_filter
-      ? `${report.vendor_filter} → ${report.category_filter}`
+      ? `${report.vendor_filter} -> ${report.category_filter}`
       : (report.vendor_filter ?? report.report_type.replace(/_/g, ' '))
 
   // intelligence_data can be an object (keyed fields) or an array (vendor/edge rows)
