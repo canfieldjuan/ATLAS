@@ -117,6 +117,11 @@ def _pool_or_503():
     return pool
 
 
+def _canonical_review_predicate(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}duplicate_of_review_id IS NULL"
+
+
 def _normalize_vendor_name(value: str | None) -> str:
     return str(value or "").strip().lower()
 
@@ -745,6 +750,7 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
+          AND {_canonical_review_predicate()}
           AND {_suppress_predicate('review')}
         """,
         vname,
@@ -765,6 +771,7 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
           AND enrichment_status = 'enriched'
+          AND {_canonical_review_predicate()}
           AND enrichment->>'pain_category' IS NOT NULL
           AND {_suppress_predicate('review')}
         GROUP BY enrichment->>'pain_category'
@@ -1455,9 +1462,15 @@ async def get_pipeline_status(user: AuthUser | None = Depends(optional_auth)):
     scrape_scope = ""
     scope_params: list = []
     if _should_scope(user):
-        vendor_scope = f" WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid) AND {_rev_sup}"
+        vendor_scope = (
+            f" WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+            f" AND {_canonical_review_predicate()}"
+            f" AND {_rev_sup}"
+        )
         scrape_scope = " WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
         scope_params = [user.account_id]
+    else:
+        vendor_scope = f" WHERE {_canonical_review_predicate()} AND {_rev_sup}"
 
     status_rows = await pool.fetch(
         f"""
@@ -1803,6 +1816,7 @@ async def get_operational_overview(
                 COUNT(*) FILTER (WHERE enrichment_status = 'no_signal') AS no_signal,
                 COUNT(*)                                                 AS total
             FROM b2b_reviews
+            WHERE duplicate_of_review_id IS NULL
         """),
         pool.fetch("""
             SELECT source,
@@ -1835,6 +1849,7 @@ async def get_operational_overview(
                 COUNT(DISTINCT vendor_name) AS vendors_tracked,
                 MAX(imported_at) AS last_review_at
             FROM b2b_reviews
+            WHERE duplicate_of_review_id IS NULL
         """),
     )
 

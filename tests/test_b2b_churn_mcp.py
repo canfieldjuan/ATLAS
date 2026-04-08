@@ -545,6 +545,10 @@ class TestB2BChurnMCPTools:
         assert len(profile["high_intent_companies"]) == 1
         assert profile["high_intent_companies"][0]["company"] == "Acme Corp"
         assert len(profile["pain_distribution"]) == 1
+        counts_sql = pool.fetchrow.call_args_list[1][0][0]
+        pain_sql = pool.fetch.call_args_list[0][0][0]
+        assert "duplicate_of_review_id IS NULL" in counts_sql
+        assert "duplicate_of_review_id IS NULL" in pain_sql
 
     async def test_get_vendor_profile_no_signal(self):
         from atlas_brain.mcp.b2b.signals import get_vendor_profile
@@ -815,6 +819,54 @@ class TestB2BChurnMCPTools:
         assert data["enrichment_counts"]["enriched"] == 200
         assert data["recent_imports_24h"] == 12
         assert data["active_scrape_targets"] == 8
+        status_sql = pool.fetch.call_args[0][0]
+        stats_sql = pool.fetchrow.call_args_list[0][0][0]
+        assert "duplicate_of_review_id IS NULL" in status_sql
+        assert "duplicate_of_review_id IS NULL" in stats_sql
+
+    async def test_get_operational_overview_excludes_cross_source_duplicates(self):
+        from atlas_brain.mcp.b2b.pipeline import get_operational_overview
+
+        pipeline_row = {
+            "pending": 5,
+            "enriched": 20,
+            "failed": 1,
+            "total": 26,
+        }
+        telemetry_row = {
+            "captcha_total": 3,
+            "blocks_total": 1,
+        }
+        review_row = {
+            "total_reviews": 26,
+            "vendors_tracked": 4,
+        }
+        health_rows = [
+            {"source": "g2", "total": 8, "success": 7, "blocked": 1},
+        ]
+        event_rows = [
+            {
+                "vendor_name": "Zendesk",
+                "event_type": "vendor_alert",
+                "event_date": date(2026, 2, 28),
+                "description": "Urgency spiked",
+            }
+        ]
+
+        pool = _mock_pool()
+        pool.fetchrow = AsyncMock(side_effect=[pipeline_row, telemetry_row, review_row])
+        pool.fetch = AsyncMock(side_effect=[health_rows, event_rows])
+
+        with _patch_pool(pool):
+            raw = await get_operational_overview()
+
+        data = json.loads(raw)
+        assert data["pipeline"]["total"] == 26
+        assert data["data_summary"]["total_reviews"] == 26
+        pipeline_sql = pool.fetchrow.call_args_list[0][0][0]
+        review_sql = pool.fetchrow.call_args_list[2][0][0]
+        assert "duplicate_of_review_id IS NULL" in pipeline_sql
+        assert "duplicate_of_review_id IS NULL" in review_sql
 
     async def test_get_pipeline_status_error(self):
         from atlas_brain.mcp.b2b.pipeline import get_pipeline_status

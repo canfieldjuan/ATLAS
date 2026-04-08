@@ -115,6 +115,71 @@ async def test_dashboard_overview_member_role_reads_account_scoped_vendor_count(
 
 
 @pytest.mark.asyncio
+async def test_tenant_pipeline_excludes_cross_source_duplicates(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[{"enrichment_status": "enriched", "cnt": 5}]),
+        fetchrow=AsyncMock(
+            side_effect=[
+                {"recent_imports_24h": 2, "last_enrichment_at": None},
+                {"active_scrape_targets": 1, "last_scrape_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="owner", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.get_tenant_pipeline_status(user=user)
+
+    assert result["recent_imports_24h"] == 2
+    status_sql = pool.fetch.await_args.args[0]
+    stats_sql = pool.fetchrow.await_args_list[0].args[0]
+    assert "duplicate_of_review_id IS NULL" in status_sql
+    assert "duplicate_of_review_id IS NULL" in stats_sql
+
+
+@pytest.mark.asyncio
+async def test_tenant_pain_trends_excludes_cross_source_duplicates(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="owner", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.pain_trends(window_days=90, user=user)
+
+    assert result == {"trends": [], "count": 0}
+    sql = pool.fetch.await_args.args[0]
+    assert "duplicate_of_review_id IS NULL" in sql
+
+
+@pytest.mark.asyncio
+async def test_tenant_competitor_displacement_excludes_cross_source_duplicates(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="owner", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.competitor_displacement(limit=20, user=user)
+
+    assert result == {"displacement": [], "count": 0}
+    sql = pool.fetch.await_args.args[0]
+    assert "duplicate_of_review_id IS NULL" in sql
+
+
+@pytest.mark.asyncio
 async def test_list_tenant_reports_excludes_stale_and_allows_global_rows(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 

@@ -289,11 +289,15 @@ class _FakeTransaction:
 
 
 class _FakeInsertPool:
-    def __init__(self):
+    def __init__(self, fetch_rows=None):
         self.inserted_rows = []
+        self.fetch_rows = list(fetch_rows or [])
 
     def transaction(self):
         return _FakeTransaction(self)
+
+    async def fetch(self, _sql, *_args):
+        return list(self.fetch_rows)
 
     async def fetchrow(self, _sql, _batch_id):
         return {
@@ -383,6 +387,63 @@ async def test_insert_reviews_dedupes_by_text_hash_when_ids_differ(monkeypatch):
     assert stats["duplicate_or_existing"] == 1
     assert stats["duplicate_same_batch"] == 1
     assert stats["skipped_quality_gate"] == 0
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_marks_cross_source_duplicate_rows(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    canonical_id = "11111111-1111-1111-1111-111111111111"
+    pool = _FakeInsertPool(fetch_rows=[
+        {
+            "id": canonical_id,
+            "source": "g2",
+            "source_review_id": "g2-existing",
+            "reviewer_name": "Alex P",
+            "reviewed_at": "2026-03-20T00:00:00+00:00",
+            "rating": 2.0,
+            "imported_at": "2026-03-20T01:00:00+00:00",
+            "enrichment_status": "enriched",
+            "source_weight": 1.0,
+            "cross_source_content_hash": None,
+            "cross_source_identity_key": "hubspot|alexp|2026-03-20|2.0",
+            "summary": None,
+            "review_text": "same syndicated body " * 12,
+            "pros": None,
+            "cons": None,
+        }
+    ])
+    reviews = [
+        {
+            "source": "capterra",
+            "vendor_name": "HubSpot",
+            "source_review_id": "cap-1",
+            "review_text": "same syndicated body " * 12,
+            "reviewed_at": "2026-03-20",
+            "reviewer_name": "Alex P.",
+            "rating": 2.0,
+        },
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-cross", parser_version="mixed:1")
+
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["cross_source_duplicates"] == 1
+    assert pool.inserted_rows[0][43] == "duplicate"
+    assert str(pool.inserted_rows[0][40]) == canonical_id
+    assert pool.inserted_rows[0][41] in {
+        "cross_source_exact_content",
+        "cross_source_identity_similarity",
+    }
 
 
 @pytest.mark.asyncio

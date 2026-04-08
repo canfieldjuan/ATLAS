@@ -2364,6 +2364,16 @@ class B2BChurnConfig(BaseSettings):
         le=600.0,
         description="HTTP timeout for Tier 2 extraction requests",
     )
+    enrichment_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow B2B enrichment extraction to use Anthropic Message Batches when available",
+    )
+    enrichment_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of enrichment rows required before using Anthropic batching",
+    )
     enrichment_tier1_connect_timeout_seconds: float = Field(
         default=10.0,
         ge=1.0,
@@ -2459,6 +2469,16 @@ class B2BChurnConfig(BaseSettings):
         ge=64,
         le=4096,
         description="Max completion tokens for the narrow field-repair extraction pass",
+    )
+    enrichment_repair_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow B2B enrichment repair extraction to use Anthropic Message Batches when available",
+    )
+    enrichment_repair_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of repair rows required before using Anthropic batching",
     )
     enrichment_repair_strict_discussion_sources: str = Field(
         default="reddit",
@@ -2648,6 +2668,16 @@ class B2BChurnConfig(BaseSettings):
     product_profile_openrouter_model: str = Field(
         default="openai/gpt-oss-120b",
         description="OpenRouter model for product profile synthesis",
+    )
+    product_profile_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow B2B product profile synthesis to use Anthropic Message Batches when available",
+    )
+    product_profile_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of vendor profiles required before using Anthropic batching",
     )
     product_profile_cache_trace_enabled: bool = Field(
         default=False,
@@ -3805,6 +3835,46 @@ class B2BScrapeConfig(BaseSettings):
     source_quality_drop_capterra_aggregates: bool = Field(
         default=True,
         description="Drop Capterra JSON-LD aggregate pages that are not real reviews",
+    )
+    cross_source_dedup_enabled: bool = Field(
+        default=True,
+        description="Detect and suppress duplicate B2B reviews syndicated across multiple sources",
+    )
+    cross_source_dedup_similarity_threshold: float = Field(
+        default=0.82,
+        ge=0.5,
+        le=1.0,
+        description="Minimum normalized text similarity for reviewer/date cross-source duplicate matches",
+    )
+    cross_source_dedup_max_candidates: int = Field(
+        default=20,
+        ge=1,
+        le=500,
+        description="Max existing vendor review candidates to compare when checking cross-source duplicates",
+    )
+    cross_source_dedup_loose_similarity_threshold: float = Field(
+        default=0.9,
+        ge=0.5,
+        le=1.0,
+        description="Minimum normalized text similarity for reviewer-prefix/date-tolerant duplicate matches",
+    )
+    cross_source_dedup_review_date_tolerance_days: int = Field(
+        default=1,
+        ge=0,
+        le=7,
+        description="Allowed review-date drift when matching syndicated duplicates across sources",
+    )
+    cross_source_dedup_rating_tolerance: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=5.0,
+        description="Allowed rating delta when matching syndicated duplicates across sources",
+    )
+    cross_source_dedup_reviewer_stem_length: int = Field(
+        default=5,
+        ge=2,
+        le=12,
+        description="Reviewer-name prefix length used for loose cross-source duplicate candidate matching",
     )
 
     # Exhaustive scrape mode

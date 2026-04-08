@@ -620,4 +620,28 @@ async def test_dashboard_vendor_profile_only_uses_trusted_account_resolution(mon
 
     assert result["vendor_name"] == "Zendesk"
     hi_sql = pool.fetch.await_args_list[0].args[0]
+    counts_sql = pool.fetchrow.await_args_list[1].args[0]
     assert "WHEN ar.confidence_label IN ('high', 'medium')" in hi_sql
+    assert "duplicate_of_review_id IS NULL" in counts_sql
+
+
+@pytest.mark.asyncio
+async def test_dashboard_pipeline_excludes_cross_source_duplicates(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+
+    pool = SimpleNamespace(
+        fetch=AsyncMock(return_value=[]),
+        fetchrow=AsyncMock(side_effect=[
+            {"recent_imports_24h": 3, "last_enrichment_at": None},
+            {"active_scrape_targets": 1, "last_scrape_at": None},
+        ]),
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+
+    result = await mod.get_pipeline_status(user=None)
+
+    assert result["recent_imports_24h"] == 3
+    status_sql = pool.fetch.await_args.args[0]
+    stats_sql = pool.fetchrow.await_args_list[0].args[0]
+    assert "duplicate_of_review_id IS NULL" in status_sql
+    assert "duplicate_of_review_id IS NULL" in stats_sql

@@ -2,7 +2,13 @@
 import json
 from typing import Optional
 
-from ._shared import _suppress_predicate, logger, get_pool, VALID_SOURCES
+from ._shared import (
+    _canonical_review_predicate,
+    _suppress_predicate,
+    logger,
+    get_pool,
+    VALID_SOURCES,
+)
 from .server import mcp
 
 
@@ -26,6 +32,7 @@ async def get_pipeline_status() -> str:
             SELECT enrichment_status, COUNT(*) AS cnt
             FROM b2b_reviews
             WHERE {_rev_sup}
+              AND {_canonical_review_predicate()}
             GROUP BY enrichment_status
             """
         )
@@ -39,6 +46,7 @@ async def get_pipeline_status() -> str:
                 MAX(enriched_at) AS last_enrichment_at
             FROM b2b_reviews
             WHERE {_rev_sup}
+              AND {_canonical_review_predicate()}
             """
         )
 
@@ -428,6 +436,7 @@ async def get_operational_overview() -> str:
                     COUNT(*) FILTER (WHERE enrichment_status = 'failed')    AS failed,
                     COUNT(*)                                                 AS total
                 FROM b2b_reviews
+                WHERE duplicate_of_review_id IS NULL
             """),
             pool.fetch("""
                 SELECT source, COUNT(*) AS total,
@@ -454,6 +463,7 @@ async def get_operational_overview() -> str:
                 SELECT COUNT(*) AS total_reviews,
                        COUNT(DISTINCT vendor_name) AS vendors_tracked
                 FROM b2b_reviews
+                WHERE duplicate_of_review_id IS NULL
             """),
         )
 

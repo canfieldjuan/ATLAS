@@ -59,6 +59,17 @@ def _safe_json(val):
     return val
 
 
+def _canonical_review_predicate(alias: str = "") -> str:
+    """Return the canonical-review filter for analytics surfaces.
+
+    Raw/provenance endpoints should not use this predicate. It is intended for
+    analytics/count surfaces that should collapse cross-source duplicates onto
+    the canonical surviving review row.
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}duplicate_of_review_id IS NULL"
+
+
 # ---------------------------------------------------------------------------
 # Tool group gating: maps group names to the tool function names they contain.
 # Used by _apply_tool_gating() in server.py to remove tools from disabled groups.

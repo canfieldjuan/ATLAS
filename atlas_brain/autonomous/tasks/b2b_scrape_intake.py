@@ -19,6 +19,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ...config import settings
+from ...autonomous.visibility import record_dedup
+from ...services.b2b.review_dedup import (
+    choose_cross_source_duplicate_survivor,
+    load_cross_source_review_candidates,
+    make_cross_source_identity_key,
+    make_review_text_payload,
+    normalize_review_date_key,
+    normalize_reviewer_stem_key,
+)
 from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
@@ -167,6 +176,15 @@ def _make_review_content_hash(
     if not payload:
         return None
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _review_text_payload_from_row(review: dict[str, Any]) -> str:
+    return make_review_text_payload(
+        review.get("summary"),
+        review.get("review_text"),
+        review.get("pros"),
+        review.get("cons"),
+    )
 
 
 def _tokenize_vendor_name(vendor_name: str) -> list[str]:
@@ -323,6 +341,35 @@ async def _load_existing_review_identity_sets(
         source,
     )
     return known_keys, known_identities
+
+
+async def _load_vendor_cross_source_candidates(
+    pool,
+    *,
+    vendor_name: str,
+    content_hash: str | None,
+    identity_key: str | None,
+    reviewer_name: Any = None,
+    reviewed_at: Any = None,
+    rating: Any = None,
+) -> list[dict[str, Any]]:
+    cfg = settings.b2b_scrape
+    return await load_cross_source_review_candidates(
+        pool,
+        vendor_name=vendor_name,
+        content_hash=content_hash,
+        identity_key=identity_key,
+        reviewer_stem=normalize_reviewer_stem_key(
+            reviewer_name,
+            stem_length=cfg.cross_source_dedup_reviewer_stem_length,
+        ),
+        reviewed_date=normalize_review_date_key(reviewed_at),
+        rating=rating,
+        max_candidates=cfg.cross_source_dedup_max_candidates,
+        reviewer_stem_length=cfg.cross_source_dedup_reviewer_stem_length,
+        review_date_tolerance_days=cfg.cross_source_dedup_review_date_tolerance_days,
+        rating_tolerance=cfg.cross_source_dedup_rating_tolerance,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -553,14 +600,19 @@ INSERT INTO b2b_reviews (
     relevance_score, author_churn_score, source_weight,
     reddit_subreddit, reddit_trending, reddit_flair,
     reddit_is_edited, reddit_is_crosspost, reddit_num_comments,
-    reddit_score, reddit_comment_thread_count, reddit_crosspost_subreddits
+    reddit_score, reddit_comment_thread_count, reddit_crosspost_subreddits,
+    cross_source_content_hash, cross_source_identity_key,
+    duplicate_of_review_id, duplicate_reason, deduped_at,
+    enrichment_status, id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
     $24, $25, $26,
     $27, $28, $29,
     $30, $31, $32, $33, $34, $35,
-    $36, $37, $38::jsonb
+    $36, $37, $38::jsonb,
+    $39, $40, $41::uuid, $42, $43,
+    $44, $45::uuid
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -1358,6 +1410,7 @@ async def _insert_reviews(
 ) -> dict[str, int]:
     """Insert reviews into b2b_reviews with dedup and return batch stats."""
     rows = []
+    dedup_audit_events: list[tuple[str, str, str, dict[str, Any]]] = []
     cfg = settings.b2b_scrape
     _known = set(known_keys or set())
     _known_identities = set(known_identities or set())
@@ -1365,11 +1418,14 @@ async def _insert_reviews(
     _existing_keys = set(_known)
     _existing_identities = set(_known_identities)
     _existing_content_hashes = set(_known_content_hashes)
+    _batch_canonical_by_content_hash: dict[str, dict[str, Any]] = {}
+    _batch_canonical_by_identity_key: dict[str, dict[str, Any]] = {}
     skipped_short = 0
     skipped_quality_gate = 0
     duplicate_or_existing = 0
     duplicate_same_batch = 0
     duplicate_existing = 0
+    cross_source_duplicates = 0
     repaired_existing = 0
     repair_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str | None, str | None]] = []
     for r in reviews:
@@ -1397,6 +1453,13 @@ async def _insert_reviews(
 
         reviewed_at_ts = _parse_date(r.get("reviewed_at"))
         content_hash = _make_review_content_hash(review_text, pros, cons)
+        review_payload = _review_text_payload_from_row(r)
+        cross_source_identity_key = make_cross_source_identity_key(
+            canonical_vendor,
+            r.get("reviewer_name"),
+            reviewed_at_ts or r.get("reviewed_at"),
+            r.get("rating"),
+        )
 
         dedup_key = _make_dedup_key(
             r["source"], canonical_vendor,
@@ -1454,9 +1517,70 @@ async def _insert_reviews(
         if content_hash is not None:
             _known_content_hashes.add(content_hash)
 
+        review_uuid = _uuid.uuid4()
+        duplicate_of_review_id: _uuid.UUID | None = None
+        duplicate_reason: str | None = None
+        deduped_at: datetime | None = None
+        enrichment_status = "pending"
+        duplicate_detail: dict[str, Any] | None = None
+
+        if cfg.cross_source_dedup_enabled:
+            candidate_rows: list[dict[str, Any]] = []
+            if content_hash is not None and content_hash in _batch_canonical_by_content_hash:
+                candidate_rows.append(_batch_canonical_by_content_hash[content_hash])
+            if (
+                cross_source_identity_key is not None
+                and cross_source_identity_key in _batch_canonical_by_identity_key
+            ):
+                candidate = _batch_canonical_by_identity_key[cross_source_identity_key]
+                if candidate not in candidate_rows:
+                    candidate_rows.append(candidate)
+            if content_hash is not None or cross_source_identity_key is not None:
+                existing_candidates = await _load_vendor_cross_source_candidates(
+                    pool,
+                    vendor_name=canonical_vendor,
+                    content_hash=content_hash,
+                    identity_key=cross_source_identity_key,
+                    reviewer_name=r.get("reviewer_name"),
+                    reviewed_at=reviewed_at_ts or r.get("reviewed_at"),
+                    rating=r.get("rating"),
+                )
+                candidate_rows.extend(existing_candidates)
+            survivor, duplicate_reason, duplicate_detail = choose_cross_source_duplicate_survivor(
+                candidates=candidate_rows,
+                incoming_source=r["source"],
+                incoming_content_hash=content_hash,
+                incoming_identity_key=cross_source_identity_key,
+                incoming_payload=review_payload,
+                similarity_threshold=cfg.cross_source_dedup_similarity_threshold,
+                incoming_reviewer_name=r.get("reviewer_name"),
+                incoming_reviewed_at=reviewed_at_ts or r.get("reviewed_at"),
+                incoming_rating=r.get("rating"),
+                loose_similarity_threshold=cfg.cross_source_dedup_loose_similarity_threshold,
+                reviewer_stem_length=cfg.cross_source_dedup_reviewer_stem_length,
+                review_date_tolerance_days=cfg.cross_source_dedup_review_date_tolerance_days,
+                rating_tolerance=cfg.cross_source_dedup_rating_tolerance,
+            )
+            if survivor is not None:
+                survivor_id = survivor.get("id")
+                if survivor_id:
+                    duplicate_of_review_id = (
+                        survivor_id if isinstance(survivor_id, _uuid.UUID)
+                        else _uuid.UUID(str(survivor_id))
+                    )
+                    duplicate_reason = duplicate_reason or "cross_source_duplicate"
+                    deduped_at = datetime.now(timezone.utc)
+                    enrichment_status = "duplicate"
+                    cross_source_duplicates += 1
+
         raw_metadata = _merge_scrape_raw_metadata(r.get("raw_metadata", {}), target_context)
         if content_hash is not None:
             raw_metadata["review_content_hash"] = content_hash
+        if duplicate_of_review_id is not None:
+            raw_metadata["duplicate_of_review_id"] = str(duplicate_of_review_id)
+            raw_metadata["duplicate_reason"] = duplicate_reason
+            if duplicate_detail:
+                raw_metadata["duplicate_detail"] = duplicate_detail
 
         rows.append((
             dedup_key,
@@ -1504,7 +1628,39 @@ async def _insert_reviews(
             json.dumps(raw_metadata.get("crosspost_subreddits"))
             if raw_metadata.get("crosspost_subreddits") is not None
             else None,
+            content_hash,
+            cross_source_identity_key,
+            duplicate_of_review_id,
+            duplicate_reason,
+            deduped_at,
+            enrichment_status,
+            review_uuid,
         ))
+        if duplicate_of_review_id is None:
+            canonical_row = {
+                "id": review_uuid,
+                "source": r["source"],
+                "cross_source_content_hash": content_hash,
+                "cross_source_identity_key": cross_source_identity_key,
+                "summary": r.get("summary"),
+                "review_text": r.get("review_text"),
+                "pros": r.get("pros"),
+                "cons": r.get("cons"),
+                "enrichment_status": enrichment_status,
+                "source_weight": raw_metadata.get("source_weight"),
+                "imported_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if content_hash is not None:
+                _batch_canonical_by_content_hash[content_hash] = canonical_row
+            if cross_source_identity_key is not None:
+                _batch_canonical_by_identity_key[cross_source_identity_key] = canonical_row
+        else:
+            dedup_audit_events.append((
+                str(review_uuid),
+                str(duplicate_of_review_id),
+                duplicate_reason or "cross_source_duplicate",
+                duplicate_detail or {},
+            ))
 
     if skipped_short:
         logger.info("Skipped %d reviews with text < %d chars", skipped_short, _MIN_ENRICHABLE_TEXT_LEN)
@@ -1526,6 +1682,7 @@ async def _insert_reviews(
             "duplicate_same_batch": duplicate_same_batch,
             "duplicate_existing": duplicate_existing,
             "duplicate_db_conflict": 0,
+            "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
             "named_company_reviews": 0,
             "eligible_rows": 0,
@@ -1544,6 +1701,7 @@ async def _insert_reviews(
             "duplicate_same_batch": duplicate_same_batch,
             "duplicate_existing": duplicate_existing,
             "duplicate_db_conflict": len(rows),
+            "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
             "named_company_reviews": 0,
             "eligible_rows": len(rows),
@@ -1572,6 +1730,16 @@ async def _insert_reviews(
     inserted = int(count_row["cnt"] or 0) if count_row else 0
     named_company_reviews = int(count_row["named_company_reviews"] or 0) if count_row else 0
     duplicate_db_conflict = max(len(rows) - inserted, 0)
+    for entity_id, survivor_id, reason_code, detail in dedup_audit_events:
+        await record_dedup(
+            pool,
+            stage="review_ingest",
+            entity_type="review",
+            entity_id=entity_id,
+            survivor_entity_id=survivor_id,
+            reason=f"Suppressed cross-source duplicate review ({reason_code})",
+            detail=detail,
+        )
     return {
         "inserted": inserted,
         "skipped_short": skipped_short,
@@ -1580,6 +1748,7 @@ async def _insert_reviews(
         "duplicate_same_batch": duplicate_same_batch,
         "duplicate_existing": duplicate_existing,
         "duplicate_db_conflict": duplicate_db_conflict,
+        "cross_source_duplicates": cross_source_duplicates,
         "repaired_existing": repaired_existing,
         "named_company_reviews": named_company_reviews,
         "eligible_rows": len(rows),
