@@ -743,7 +743,13 @@ async def push_to_crm(
         if opp_ok:
             pushed += 1
         else:
-            failed.append({"company": opp.company, "reason": failure_reason})
+            failed.append(
+                {
+                    "company": opp.company,
+                    "vendor": opp.vendor,
+                    "reason": failure_reason,
+                }
+            )
 
     return {"pushed": pushed, "failed": failed}
 

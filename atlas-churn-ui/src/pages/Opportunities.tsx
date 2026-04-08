@@ -26,6 +26,7 @@ import { usePlanGate } from '../hooks/usePlanGate'
 import {
   fetchHighIntent,
   generateCampaigns,
+  pushToCrm,
   downloadCsv,
 } from '../api/client'
 import type { HighIntentCompany } from '../types'
@@ -222,6 +223,55 @@ export default function Opportunities() {
     } finally {
       setBulkGenerating(false)
       setBulkProgress(null)
+    }
+  }
+
+  // -- CRM push --
+  const [pushing, setPushing] = useState(false)
+  async function handlePushToCrm() {
+    if (selectedIds.size === 0) return
+    setPushing(true)
+    setGenResult(null)
+    const selected = filtered.filter((r) => selectedIds.has(rowKey(r)))
+    try {
+      const result = await pushToCrm(
+        selected.map((r) => ({
+          company: r.company,
+          vendor: r.vendor,
+          urgency: r.urgency,
+          pain: r.pain ?? undefined,
+          buying_stage: r.buying_stage ?? undefined,
+          contract_end: r.contract_end ?? undefined,
+          decision_maker: r.decision_maker ?? undefined,
+          seat_count: r.seat_count ?? undefined,
+          industry: r.industry ?? undefined,
+          company_domain: r.company_domain ?? undefined,
+          revenue_range: r.revenue_range ?? undefined,
+          alternatives: r.alternatives?.map((a) => a.name).filter(Boolean) ?? [],
+        })),
+      )
+      const failedKeys = new Set(
+        result.failed.map((item) => `${item.company}::${item.vendor}`),
+      )
+      if (result.failed.length > 0) {
+        setSelectedIds(
+          new Set(
+            selected
+              .filter((row) => failedKeys.has(`${row.company}::${row.vendor}`))
+              .map(rowKey),
+          ),
+        )
+        setGenResult(
+          `Pushed ${result.pushed} opportunit${result.pushed === 1 ? 'y' : 'ies'} to CRM; ${result.failed.length} failed`,
+        )
+      } else {
+        setGenResult(`Pushed ${result.pushed} opportunit${result.pushed === 1 ? 'y' : 'ies'} to CRM`)
+        setSelectedIds(new Set())
+      }
+    } catch (err) {
+      setGenResult(err instanceof Error ? err.message : 'CRM push failed')
+    } finally {
+      setPushing(false)
     }
   }
 
@@ -532,6 +582,13 @@ export default function Opportunities() {
                 {bulkGenerating ? 'Generating...' : 'Generate Campaigns'}
               </button>
             )}
+            <button
+              onClick={handlePushToCrm}
+              disabled={pushing || bulkGenerating}
+              className="px-3 py-1.5 text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg disabled:opacity-50"
+            >
+              {pushing ? 'Pushing...' : 'Push to CRM'}
+            </button>
             <button
               onClick={handleBulkHide}
               className="px-3 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg"

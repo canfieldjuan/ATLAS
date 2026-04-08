@@ -420,6 +420,27 @@ export async function generateCampaigns(body?: {
   return post<{ generated: number; companies?: number }>(CAMPAIGNS_BASE, '/generate', body ?? {})
 }
 
+export async function pushToCrm(
+  opportunities: {
+    company: string
+    vendor: string
+    urgency: number
+    pain?: string
+    buying_stage?: string
+    contract_end?: string
+    decision_maker?: boolean | null
+    seat_count?: number | null
+    industry?: string | null
+    company_domain?: string | null
+    revenue_range?: string | null
+    alternatives?: string[]
+  }[],
+) {
+  return post<{ pushed: number; failed: { company: string; vendor: string; reason: string }[] }>(
+    TENANT_BASE, '/push-to-crm', { opportunities },
+  )
+}
+
 export async function approveCampaign(id: string) {
   return post<{ status: string }>(CAMPAIGNS_BASE, `/${id}/approve`)
 }
