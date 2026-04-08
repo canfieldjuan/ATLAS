@@ -320,6 +320,7 @@ export interface BattleCardViewModel {
   quality_warnings: string[]
   reasoning_source?: string
   reasoning_reference_ids?: ReasoningReferenceIdsViewModel
+  reasoning_witness_highlights?: ReasoningWitnessViewModel[]
 }
 
 export interface ComparisonMetricSnapshotViewModel {

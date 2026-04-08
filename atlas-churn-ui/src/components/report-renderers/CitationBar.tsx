@@ -33,6 +33,9 @@ export default function CitationBar({ citations, vendorName, onOpenWitness }: Ci
             [{c.index}]
           </button>
         ))}
+        {!expanded && citations.length > COLLAPSED_MAX && (
+          <span className="text-[10px] text-slate-500 ml-0.5">+{citations.length - COLLAPSED_MAX}</span>
+        )}
         {!expanded && (
           <button
             type="button"

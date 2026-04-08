@@ -744,6 +744,9 @@ export function toBattleCardViewModel(value: UnknownRecord): BattleCardViewModel
     quality_warnings: toStringArray(asRecord(value.battle_card_quality).warnings),
     reasoning_source: asString(value.reasoning_source),
     reasoning_reference_ids: toReasoningReferenceIds(value.reference_ids ?? value.reasoning_reference_ids),
+    reasoning_witness_highlights: toReasoningWitnesses(
+      value.witness_highlights ?? value.reasoning_witness_highlights,
+    ),
   }
 }
 

@@ -1074,7 +1074,7 @@ function BattleCardDetail({ data, onOpenWitness }: { data: BattleCardViewModel; 
               </div>
               {onOpenWitness && data.vendor && data.reasoning_reference_ids?.witness_ids && data.reasoning_reference_ids.witness_ids.length > 0 && (
                 <CitationBar
-                  citations={registerWitnessIds(registry, data.reasoning_reference_ids.witness_ids)}
+                  citations={registerWitnessIds(registry, data.reasoning_reference_ids.witness_ids, data.reasoning_witness_highlights)}
                   vendorName={data.vendor}
                   onOpenWitness={onOpenWitness}
                 />
@@ -1134,7 +1134,7 @@ function BattleCardDetail({ data, onOpenWitness }: { data: BattleCardViewModel; 
                 )}
                 {onOpenWitness && data.vendor && battle.reference_ids?.witness_ids && battle.reference_ids.witness_ids.length > 0 && (
                   <CitationBar
-                    citations={registerWitnessIds(registry, battle.reference_ids.witness_ids)}
+                    citations={registerWitnessIds(registry, battle.reference_ids.witness_ids, data.reasoning_witness_highlights)}
                     vendorName={data.vendor}
                     onOpenWitness={onOpenWitness}
                   />

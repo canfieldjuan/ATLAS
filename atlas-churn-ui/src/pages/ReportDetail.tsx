@@ -165,14 +165,26 @@ export default function ReportDetail() {
           <h3 className="text-sm font-medium text-slate-300 mb-2">Executive Summary</h3>
           <p className="text-sm text-slate-300 whitespace-pre-wrap break-words">{report.executive_summary}</p>
           {(() => {
-            const witnessIds = (intel as Record<string, unknown>).reasoning_reference_ids as { witness_ids?: string[] } | undefined
-            const highlights = (intel as Record<string, unknown>).reasoning_witness_highlights as Array<{ witness_id?: string; reviewer_company?: string; excerpt_text?: string }> | undefined
-            const wids = witnessIds?.witness_ids
-            if (!wids || wids.length === 0 || !report.vendor_filter) return null
+            if (!report.vendor_filter) return null
+            const refIds = intel.reasoning_reference_ids
+            const wids = refIds && typeof refIds === 'object' && !Array.isArray(refIds) && Array.isArray((refIds as Record<string, unknown>).witness_ids)
+              ? (refIds as Record<string, unknown>).witness_ids as string[]
+              : null
+            if (!wids || wids.length === 0) return null
+            const hlRaw = Array.isArray(intel.reasoning_witness_highlights)
+              ? intel.reasoning_witness_highlights
+              : intel.witness_highlights
+            const highlights = Array.isArray(hlRaw) ? hlRaw as Array<Record<string, unknown>> : []
             const reg = createCitationRegistry()
             const hlMap = new Map<string, { companyName?: string; excerptSnippet?: string }>()
-            for (const hl of highlights ?? []) {
-              if (hl.witness_id) hlMap.set(hl.witness_id, { companyName: hl.reviewer_company, excerptSnippet: hl.excerpt_text?.slice(0, 80) })
+            for (const hl of highlights) {
+              const wid = typeof hl.witness_id === 'string' ? hl.witness_id : null
+              if (wid) {
+                hlMap.set(wid, {
+                  companyName: typeof hl.reviewer_company === 'string' ? hl.reviewer_company : undefined,
+                  excerptSnippet: typeof hl.excerpt_text === 'string' ? hl.excerpt_text.slice(0, 80) : undefined,
+                })
+              }
             }
             const entries: CitationEntry[] = wids.map((wid) => {
               const meta = hlMap.get(wid)
