@@ -1255,6 +1255,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         limit=cfg.max_campaigns_per_run,
         target_mode=cfg.target_mode,
         run_id=_task_run_id(task),
+        task=task,
     )
 
     # Send notification
@@ -1384,6 +1385,7 @@ async def generate_campaigns(
     ignore_recent_dedup: bool = False,
     ignore_briefing_gate: bool = False,
     run_id: str | None = None,
+    task: ScheduledTask | Any | None = None,
 ) -> dict[str, Any]:
     """Core generation logic, shared by autonomous task and manual API trigger.
 
@@ -1406,6 +1408,7 @@ async def generate_campaigns(
             bypass_briefing_gate=bypass_briefing_gate,
             bypass_recent_dedup=bypass_recent_dedup,
             run_id=run_id,
+            task=task,
         )
     elif mode == "challenger_intel":
         return await _generate_challenger_campaigns(
@@ -1413,6 +1416,7 @@ async def generate_campaigns(
             bypass_briefing_gate=bypass_briefing_gate,
             bypass_recent_dedup=bypass_recent_dedup,
             run_id=run_id,
+            task=task,
         )
 
     # Default: churning_company (original behavior)
@@ -1420,6 +1424,7 @@ async def generate_campaigns(
         pool, min_score, limit, vendor_filter, company_filter,
         bypass_recent_dedup=bypass_recent_dedup,
         run_id=run_id,
+        task=task,
     )
 
 
@@ -1565,6 +1570,7 @@ async def _generate_churning_company_campaigns(
     company_filter: str | None,
     bypass_recent_dedup: bool = False,
     run_id: str | None = None,
+    task: ScheduledTask | Any | None = None,
 ) -> dict[str, Any]:
     """Original generation path: outreach to the churning company."""
     cfg = settings.b2b_campaign
@@ -1764,6 +1770,7 @@ async def _generate_churning_company_campaigns(
         skill.content,
         phase_one_entries,
         run_id=run_id,
+        task=task,
     )
     _merge_batch_metrics(batch_metrics, phase_one_batch)
 
@@ -1961,6 +1968,7 @@ async def _generate_churning_company_campaigns(
         skill.content,
         followup_entries,
         run_id=run_id,
+        task=task,
     )
     _merge_batch_metrics(batch_metrics, phase_two_batch)
 
@@ -2308,6 +2316,7 @@ async def _generate_vendor_campaigns(
     bypass_briefing_gate: bool = False,
     bypass_recent_dedup: bool = False,
     run_id: str | None = None,
+    task: ScheduledTask | Any | None = None,
 ) -> dict[str, Any]:
     """Generate campaigns targeting vendor CS/Product leaders with churn intelligence."""
     cfg = settings.b2b_campaign
@@ -2594,6 +2603,7 @@ async def _generate_vendor_campaigns(
         skill.content,
         phase_one_entries,
         run_id=run_id,
+        task=task,
     )
     _merge_batch_metrics(batch_metrics, phase_one_batch)
 
@@ -2772,6 +2782,7 @@ async def _generate_vendor_campaigns(
         skill.content,
         followup_entries,
         run_id=run_id,
+        task=task,
     )
     _merge_batch_metrics(batch_metrics, phase_two_batch)
 
@@ -3046,6 +3057,7 @@ async def _generate_challenger_campaigns(
     bypass_briefing_gate: bool = False,
     bypass_recent_dedup: bool = False,
     run_id: str | None = None,
+    task: ScheduledTask | Any | None = None,
 ) -> dict[str, Any]:
     """Generate campaigns targeting challenger Sales/Competitive Intel leaders."""
     cfg = settings.b2b_campaign
@@ -3292,6 +3304,7 @@ async def _generate_challenger_campaigns(
         skill.content,
         phase_one_entries,
         run_id=run_id,
+        task=task,
     )
     _merge_batch_metrics(batch_metrics, phase_one_batch)
 
@@ -3470,6 +3483,7 @@ async def _generate_challenger_campaigns(
         skill.content,
         followup_entries,
         run_id=run_id,
+        task=task,
     )
     _merge_batch_metrics(batch_metrics, phase_two_batch)
 
@@ -4529,6 +4543,7 @@ async def _run_campaign_batch(
     entries: list[dict[str, Any]],
     *,
     run_id: str | None,
+    task: ScheduledTask | Any | None = None,
 ) -> tuple[dict[str, dict[str, Any] | None], dict[str, int | str]]:
     """Run the first campaign attempt through Anthropic batching when eligible."""
     from ...services.b2b.anthropic_batch import (
@@ -4542,9 +4557,14 @@ async def _run_campaign_batch(
         prepare_b2b_exact_stage_request,
     )
     from ...services.b2b.llm_exact_cache import llm_identity
-    from ...services.llm.anthropic import AnthropicLLM
     from ...services.protocols import Message
     import inspect
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        is_anthropic_llm,
+        resolve_anthropic_batch_llm,
+    )
 
     async def _invoke_generate_content(
         entry: dict[str, Any],
@@ -4586,11 +4606,14 @@ async def _run_campaign_batch(
             "failed_items": 0,
         }
 
-    if not (
-        settings.b2b_churn.anthropic_batch_enabled
-        and settings.b2b_campaign.anthropic_batch_enabled
-        and isinstance(llm, AnthropicLLM)
-    ):
+    batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=bool(getattr(settings.b2b_campaign, "anthropic_batch_enabled", True)),
+        task_keys=("campaign_anthropic_batch_enabled",),
+    )
+    batch_llm = resolve_anthropic_batch_llm(current_llm=llm) if batch_requested else None
+    if not is_anthropic_llm(batch_llm):
         results: dict[str, dict[str, Any] | None] = {}
         for entry in entries:
             content, _ = await _invoke_generate_content(entry)
@@ -4604,7 +4627,7 @@ async def _run_campaign_batch(
             "failed_items": 0,
         }
 
-    provider_name, model_name = llm_identity(llm)
+    provider_name, model_name = llm_identity(batch_llm)
     batch_items: list[AnthropicBatchItem] = []
     for entry in entries:
         payload = entry["payload"]
@@ -4646,12 +4669,16 @@ async def _run_campaign_batch(
 
     if settings.b2b_campaign.anthropic_batch_detached_enabled:
         execution = await submit_anthropic_message_batch(
-            llm=llm,
+            llm=batch_llm,
             stage_id="b2b_campaign_generation.content",
             task_name="b2b_campaign_generation",
             items=batch_items,
             run_id=run_id,
-            min_batch_size=int(settings.b2b_campaign.anthropic_batch_min_items),
+            min_batch_size=anthropic_batch_min_items(
+                task,
+                default=int(getattr(settings.b2b_campaign, "anthropic_batch_min_items", 2)),
+                keys=("campaign_anthropic_batch_min_items",),
+            ),
             batch_metadata={"phase_channels": sorted({str(entry["channel"]) for entry in entries})},
         )
         if execution.provider_batch_id:
@@ -4702,12 +4729,16 @@ async def _run_campaign_batch(
         }
 
     execution = await run_anthropic_message_batch(
-        llm=llm,
+        llm=batch_llm,
         stage_id="b2b_campaign_generation.content",
         task_name="b2b_campaign_generation",
         items=batch_items,
         run_id=run_id,
-        min_batch_size=int(settings.b2b_campaign.anthropic_batch_min_items),
+        min_batch_size=anthropic_batch_min_items(
+            task,
+            default=int(getattr(settings.b2b_campaign, "anthropic_batch_min_items", 2)),
+            keys=("campaign_anthropic_batch_min_items",),
+        ),
         batch_metadata={"phase_channels": sorted({str(entry["channel"]) for entry in entries})},
     )
 

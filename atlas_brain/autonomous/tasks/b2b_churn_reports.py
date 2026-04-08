@@ -1379,23 +1379,34 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         store_b2b_exact_stage_text,
     )
     from ...services.b2b.llm_exact_cache import CacheUnavailable, llm_identity
-    from ...services.llm.anthropic import AnthropicLLM
     from ...services.protocols import Message
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        is_anthropic_llm,
+        resolve_anthropic_batch_llm,
+    )
 
     _llm_workload = "synthesis"
     _llm_max_tokens = _scorecard_narrative_max_tokens()
     _cache_stage_id = "b2b_churn_reports.scorecard_narrative"
     _resolved_llm = get_pipeline_llm(workload=_llm_workload)
     _provider, _model = llm_identity(_resolved_llm)
+    _batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=bool(getattr(settings.b2b_churn, "scorecard_anthropic_batch_enabled", True)),
+        task_keys=("scorecard_anthropic_batch_enabled",),
+    )
     _batch_llm = (
-        get_pipeline_llm(workload="anthropic")
-        if (
-            settings.b2b_churn.anthropic_batch_enabled
-            and settings.b2b_churn.scorecard_anthropic_batch_enabled
+        resolve_anthropic_batch_llm(
+            current_llm=_resolved_llm,
+            target_model_candidates=(getattr(settings.llm, "openrouter_reasoning_model", ""),),
         )
+        if _batch_requested
         else None
     )
-    _batch_enabled = isinstance(_batch_llm, AnthropicLLM)
+    _batch_enabled = is_anthropic_llm(_batch_llm)
     _batch_provider, _batch_model = llm_identity(_batch_llm) if _batch_enabled else ("", "")
     scorecard_llm_failures = 0
     scorecard_cache_hits = 0
@@ -1569,7 +1580,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         for entry in batch_entries
                     ],
                     run_id=str(task.id),
-                    min_batch_size=int(settings.b2b_churn.scorecard_anthropic_batch_min_items),
+                    min_batch_size=anthropic_batch_min_items(
+                        task,
+                        default=int(getattr(settings.b2b_churn, "scorecard_anthropic_batch_min_items", 2)),
+                        keys=("scorecard_anthropic_batch_min_items",),
+                    ),
                     batch_metadata={
                         "report_type": "vendor_scorecard",
                     },
@@ -1604,7 +1619,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         sc,
                         entry["llm_input"],
                         request=request,
-                        workload="anthropic",
+                        workload=_llm_workload,
                         usage_out=(fallback_usage := {}),
                     )
                     await mark_batch_fallback_result(

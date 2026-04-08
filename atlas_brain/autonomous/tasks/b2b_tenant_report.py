@@ -1006,6 +1006,7 @@ async def _run_chunked_tenant_synthesis(
     *,
     max_tokens: int,
     data_context: dict[str, Any],
+    task: ScheduledTask | Any | None = None,
     run_id: str | None = None,
     account_id: str | None = None,
     pool: Any | None = None,
@@ -1025,7 +1026,12 @@ async def _run_chunked_tenant_synthesis(
         lookup_b2b_exact_stage_text,
         store_b2b_exact_stage_text,
     )
-    from ...services.llm.anthropic import AnthropicLLM
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        is_anthropic_llm,
+        resolve_anthropic_batch_llm,
+    )
 
     partials: list[dict[str, Any]] = []
     total_input = 0
@@ -1042,12 +1048,22 @@ async def _run_chunked_tenant_synthesis(
         "failed_items": 0,
     }
 
-    batch_requested = bool(
-        getattr(settings.b2b_churn, "anthropic_batch_enabled", False)
-        and getattr(settings.b2b_churn, "tenant_report_anthropic_batch_enabled", True)
+    resolved_llm = get_pipeline_llm(workload="synthesis")
+    batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=bool(getattr(settings.b2b_churn, "tenant_report_anthropic_batch_enabled", True)),
+        task_keys=("tenant_report_anthropic_batch_enabled",),
     )
-    batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
-    if not isinstance(batch_llm, AnthropicLLM):
+    batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=resolved_llm,
+            target_model_candidates=(getattr(settings.llm, "openrouter_reasoning_model", ""),),
+        )
+        if batch_requested
+        else None
+    )
+    if not is_anthropic_llm(batch_llm):
         batch_llm = None
 
     chunk_entries = []
@@ -1121,7 +1137,11 @@ async def _run_chunked_tenant_synthesis(
                 for entry in prepared_entries
             ],
             run_id=run_id,
-            min_batch_size=int(getattr(settings.b2b_churn, "tenant_report_anthropic_batch_min_items", 2)),
+            min_batch_size=anthropic_batch_min_items(
+                task,
+                default=int(getattr(settings.b2b_churn, "tenant_report_anthropic_batch_min_items", 2)),
+                keys=("tenant_report_anthropic_batch_min_items",),
+            ),
             batch_metadata={"report_type": "weekly_b2b_intelligence"},
             pool=pool,
         )
@@ -1482,6 +1502,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 payload,
                 max_tokens=cfg.intelligence_max_tokens,
                 data_context=payload.get("data_context") or {},
+                task=task,
                 run_id=str(task.id),
                 account_id=str(account_id),
                 pool=pool,

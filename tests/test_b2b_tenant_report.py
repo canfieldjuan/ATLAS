@@ -426,6 +426,146 @@ async def test_run_chunked_tenant_synthesis_marks_fallback_with_usage(monkeypatc
     assert kwargs["model"] == "claude-sonnet-4-5"
 
 
+@pytest.mark.asyncio
+async def test_run_chunked_tenant_synthesis_task_metadata_can_enable_batch(monkeypatch):
+    class FakeAnthropicLLM:
+        model = "claude-sonnet-4-5"
+        name = "anthropic"
+
+    batch_llm = FakeAnthropicLLM()
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_tenant_report.settings.b2b_churn.anthropic_batch_enabled",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_tenant_report.settings.b2b_churn.tenant_report_anthropic_batch_enabled",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.llm.anthropic.AnthropicLLM",
+        FakeAnthropicLLM,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.pipelines.llm.get_pipeline_llm",
+        lambda *, workload, **_kwargs: batch_llm if workload == "anthropic" else None,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_tenant_report._tenant_payload_vendor_chunks",
+        lambda _payload: [["Zendesk"], ["HubSpot"]],
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_tenant_report._prepare_tenant_synthesis_request",
+        lambda payload, *, max_tokens, llm=None, provider=None, model=None: (
+            SimpleNamespace(
+                provider=provider or getattr(llm, "name", "anthropic"),
+                model=model or getattr(llm, "model", "claude-sonnet-4-5"),
+                request_envelope={"vendor": payload["vendor_churn_scores"][0]["vendor_name"]},
+            ),
+            [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": json.dumps(payload, separators=(",", ":"), default=str)},
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text",
+        AsyncMock(),
+    )
+
+    async def _fake_run_batch(**kwargs):
+        assert kwargs["llm"] is batch_llm
+        assert kwargs["min_batch_size"] == 1
+        return SimpleNamespace(
+            local_batch_id="batch-tenant-metadata",
+            provider_batch_id="provider-tenant-metadata",
+            results_by_custom_id={
+                "tenant_report:0": SimpleNamespace(
+                    response_text=json.dumps(
+                        {
+                            "executive_summary": "Zendesk summary",
+                            "weekly_churn_feed": [{"vendor": "Zendesk"}],
+                            "vendor_scorecards": [{"vendor": "Zendesk"}],
+                            "displacement_map": [],
+                            "category_insights": [],
+                            "timeline_hot_list": [],
+                        }
+                    ),
+                    usage={"input_tokens": 10, "output_tokens": 5},
+                    cached=False,
+                    error_text=None,
+                ),
+                "tenant_report:1": SimpleNamespace(
+                    response_text=json.dumps(
+                        {
+                            "executive_summary": "HubSpot summary",
+                            "weekly_churn_feed": [{"vendor": "HubSpot"}],
+                            "vendor_scorecards": [{"vendor": "HubSpot"}],
+                            "displacement_map": [],
+                            "category_insights": [],
+                            "timeline_hot_list": [],
+                        }
+                    ),
+                    usage={"input_tokens": 10, "output_tokens": 5},
+                    cached=False,
+                    error_text=None,
+                ),
+            },
+            submitted_items=2,
+            cache_prefiltered_items=0,
+            fallback_single_call_items=0,
+            completed_items=2,
+            failed_items=0,
+        )
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        _fake_run_batch,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.mark_batch_fallback_result",
+        AsyncMock(),
+    )
+
+    payload = {
+        "data_context": {
+            "enrichment_period": {"earliest": "2026-03-01", "latest": "2026-03-21"},
+            "source_distribution": {},
+        },
+        "vendor_churn_scores": [
+            {"vendor_name": "Zendesk", "category": "Helpdesk"},
+            {"vendor_name": "HubSpot", "category": "CRM"},
+        ],
+        "competitive_displacement": [],
+        "competitor_reasons": [],
+    }
+
+    merged, usage = await _run_chunked_tenant_synthesis(
+        payload,
+        max_tokens=512,
+        data_context=payload["data_context"],
+        task=SimpleNamespace(
+            metadata={
+                "anthropic_batch_enabled": True,
+                "tenant_report_anthropic_batch_enabled": True,
+                "tenant_report_anthropic_batch_min_items": 1,
+            }
+        ),
+        run_id="run-tenant-metadata",
+        account_id="acct-tenant-metadata",
+        pool=SimpleNamespace(),
+    )
+
+    assert [row["vendor"] for row in merged["weekly_churn_feed"]] == ["Zendesk", "HubSpot"]
+    assert usage["batch_jobs"] == 1
+
+
 def test_tenant_payload_vendor_chunks_groups_categories_before_splitting(monkeypatch):
     monkeypatch.setattr(
         "atlas_brain.autonomous.tasks.b2b_tenant_report._tenant_report_chunk_size",

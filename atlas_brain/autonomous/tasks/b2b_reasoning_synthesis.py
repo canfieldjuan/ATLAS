@@ -1387,7 +1387,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         mark_batch_fallback_result,
         run_anthropic_message_batch,
     )
-    from ...services.llm.anthropic import AnthropicLLM
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        is_anthropic_llm,
+        resolve_anthropic_batch_llm,
+    )
 
     synthesis_model = str(
         getattr(cfg, "reasoning_synthesis_model", "") or ""
@@ -1405,17 +1410,31 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return await _finalize_scope_result(
             {"_skip_synthesis": "No LLM available for reasoning synthesis"}
         )
-    batch_requested = bool(settings.b2b_churn.anthropic_batch_enabled) and bool(
-        getattr(cfg, "reasoning_synthesis_anthropic_batch_enabled", True)
-        or getattr(cfg, "cross_vendor_anthropic_batch_enabled", True)
+    vendor_batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=bool(getattr(cfg, "reasoning_synthesis_anthropic_batch_enabled", True)),
+        task_keys=("reasoning_synthesis_anthropic_batch_enabled",),
     )
-    batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
-    vendor_batch_enabled = bool(
-        getattr(cfg, "reasoning_synthesis_anthropic_batch_enabled", True)
-    ) and isinstance(batch_llm, AnthropicLLM)
-    cross_vendor_batch_enabled = bool(
-        getattr(cfg, "cross_vendor_anthropic_batch_enabled", True)
-    ) and isinstance(batch_llm, AnthropicLLM)
+    cross_vendor_batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=bool(getattr(cfg, "cross_vendor_anthropic_batch_enabled", True)),
+        task_keys=("cross_vendor_anthropic_batch_enabled",),
+    )
+    batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=llm,
+            target_model_candidates=(
+                synthesis_model,
+                getattr(settings.llm, "openrouter_reasoning_model", ""),
+            ),
+        )
+        if (vendor_batch_requested or cross_vendor_batch_requested)
+        else None
+    )
+    vendor_batch_enabled = bool(vendor_batch_requested) and is_anthropic_llm(batch_llm)
+    cross_vendor_batch_enabled = bool(cross_vendor_batch_requested) and is_anthropic_llm(batch_llm)
     vendor_generation_llm = batch_llm if vendor_batch_enabled else llm
     cross_vendor_generation_llm = batch_llm if cross_vendor_batch_enabled else llm
 
@@ -2365,7 +2384,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     for entry in vendor_entries
                 ],
                 run_id=run_id,
-                min_batch_size=int(getattr(cfg, "reasoning_synthesis_anthropic_batch_min_items", 2)),
+                min_batch_size=anthropic_batch_min_items(
+                    task,
+                    default=int(getattr(cfg, "reasoning_synthesis_anthropic_batch_min_items", 2)),
+                    keys=("reasoning_synthesis_anthropic_batch_min_items",),
+                ),
                 batch_metadata={"reasoning_mode": "vendor_synthesis"},
                 pool=pool,
             )
@@ -2431,6 +2454,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 pool=pool,
                 vendor_pools=vendor_pools,
                 llm=cross_vendor_generation_llm,
+                task=task,
                 cfg=cfg,
                 today=today,
                 window_days=window_days,
@@ -2514,6 +2538,7 @@ async def _run_cross_vendor_synthesis(
     pool,
     vendor_pools: dict[str, dict],
     llm,
+    task: Any | None = None,
     cfg,
     today: date,
     window_days: int,
@@ -2551,6 +2576,7 @@ async def _run_cross_vendor_synthesis(
         run_anthropic_message_batch,
     )
     from ...services.protocols import Message
+    from ._b2b_batch_utils import anthropic_batch_min_items
     from ._b2b_cross_vendor_synthesis import (
         _sorted_vendors,
         attach_cross_vendor_citation_registry,
@@ -3480,7 +3506,11 @@ async def _run_cross_vendor_synthesis(
                 for entry in xv_entries
             ],
             run_id=run_id,
-            min_batch_size=int(getattr(cfg, "cross_vendor_anthropic_batch_min_items", 2)),
+            min_batch_size=anthropic_batch_min_items(
+                task,
+                default=int(getattr(cfg, "cross_vendor_anthropic_batch_min_items", 2)),
+                keys=("cross_vendor_anthropic_batch_min_items",),
+            ),
             batch_metadata={"reasoning_mode": "cross_vendor"},
             pool=pool,
         )

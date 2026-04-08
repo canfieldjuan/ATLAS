@@ -3117,6 +3117,7 @@ class TestBattleCardAnthropicBatching:
 
         class FakeAnthropicLLM:
             model = "fake-anthropic-batch"
+            name = "anthropic"
 
         class FakeDirectLLM:
             model = "fake-direct"
@@ -3417,6 +3418,7 @@ class TestBattleCardAnthropicBatching:
 
         class FakeAnthropicLLM:
             model = "fake-anthropic-batch"
+            name = "anthropic"
 
         class FakeDirectLLM:
             model = "claude-sonnet-4-5"

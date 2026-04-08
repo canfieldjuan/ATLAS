@@ -6,6 +6,7 @@ import time
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -4321,6 +4322,14 @@ class TestReasoningSynthesisTask:
             lambda: fake_pool,
         )
         monkeypatch.setattr(
+            "atlas_brain.storage.repositories.competitive_set.CompetitiveSetRepository.list_due_scheduled",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._scheduled_scope_strategy",
+            lambda _task: "full_universe",
+        )
+        monkeypatch.setattr(
             "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
             _fake_fetch_all_pool_layers,
         )
@@ -4344,7 +4353,7 @@ class TestReasoningSynthesisTask:
             settings.b2b_churn, "reasoning_synthesis_temperature", 0.0, raising=False,
         )
 
-        result = await run(SimpleNamespace(metadata={"force": True}))
+        result = await run(SimpleNamespace(metadata={"force": True, "test_vendors": ["BatchVendor"]}))
 
         assert result["vendors_reasoned"] == 1
         assert result["vendors_failed"] == 0
@@ -4474,6 +4483,14 @@ class TestReasoningSynthesisTask:
             lambda: fake_pool,
         )
         monkeypatch.setattr(
+            "atlas_brain.storage.repositories.competitive_set.CompetitiveSetRepository.list_due_scheduled",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._scheduled_scope_strategy",
+            lambda _task: "full_universe",
+        )
+        monkeypatch.setattr(
             "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
             _fake_fetch_all_pool_layers,
         )
@@ -4506,7 +4523,7 @@ class TestReasoningSynthesisTask:
             settings.b2b_churn, "reasoning_synthesis_anthropic_batch_min_items", 1, raising=False,
         )
 
-        result = await run(SimpleNamespace(metadata={"force": True}))
+        result = await run(SimpleNamespace(metadata={"force": True, "test_vendors": ["BatchVendor"]}))
 
         assert result["vendors_reasoned"] == 1
         assert result["vendors_failed"] == 0
@@ -4606,6 +4623,14 @@ class TestReasoningSynthesisTask:
             lambda: fake_pool,
         )
         monkeypatch.setattr(
+            "atlas_brain.storage.repositories.competitive_set.CompetitiveSetRepository.list_due_scheduled",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            "atlas_brain.autonomous.tasks.b2b_reasoning_synthesis._scheduled_scope_strategy",
+            lambda _task: "full_universe",
+        )
+        monkeypatch.setattr(
             "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
             _fake_fetch_all_pool_layers,
         )
@@ -4631,7 +4656,7 @@ class TestReasoningSynthesisTask:
         monkeypatch.setattr(settings.b2b_churn, "reasoning_synthesis_anthropic_batch_min_items", 1, raising=False)
         monkeypatch.setattr(settings.b2b_churn, "reasoning_synthesis_attempts", 2, raising=False)
 
-        result = await run(SimpleNamespace(metadata={"force": True}))
+        result = await run(SimpleNamespace(metadata={"force": True, "test_vendors": ["BatchVendor"]}))
 
         assert result["vendors_reasoned"] == 1
         assert batch_llm.calls

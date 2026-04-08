@@ -2783,9 +2783,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         run_anthropic_message_batch,
     )
     from ...services.b2b.llm_exact_cache import build_skill_messages
-    from ...services.llm.anthropic import AnthropicLLM
     from ...services.protocols import Message
     from ..visibility import record_attempt, emit_event
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        is_anthropic_llm,
+    )
 
     _bc_cache = SemanticCache(pool)
     bc_llm_failures = 0
@@ -2807,13 +2811,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     cache_confidence = cfg.battle_card_cache_confidence
     llm_options = _battle_card_llm_options(cfg)
     batch_requested = (
-        settings.b2b_churn.anthropic_batch_enabled
-        and bool(getattr(cfg, "battle_card_anthropic_batch_enabled", True))
+        anthropic_batch_requested(
+            task,
+            global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+            task_default=bool(getattr(cfg, "battle_card_anthropic_batch_enabled", True)),
+            task_keys=("battle_card_anthropic_batch_enabled",),
+        )
         and str(llm_options.get("workload") or "").strip().lower() == "anthropic"
         and not bool(llm_options.get("try_openrouter"))
     )
     batch_llm = get_pipeline_llm(workload="anthropic") if batch_requested else None
-    battle_card_batch_enabled = isinstance(batch_llm, AnthropicLLM)
+    battle_card_batch_enabled = is_anthropic_llm(batch_llm)
     battle_card_batch_metrics = {
         "jobs": 0,
         "submitted_items": 0,
@@ -3372,7 +3380,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 for entry in overlay_entries
             ],
             run_id=str(task.id),
-            min_batch_size=int(getattr(cfg, "battle_card_anthropic_batch_min_items", 2)),
+            min_batch_size=anthropic_batch_min_items(
+                task,
+                default=int(getattr(cfg, "battle_card_anthropic_batch_min_items", 2)),
+                keys=("battle_card_anthropic_batch_min_items",),
+            ),
             batch_metadata={
                 "report_type": "battle_card",
             },

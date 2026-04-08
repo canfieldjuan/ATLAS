@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 import pytest
 
 from atlas_brain.autonomous.tasks import b2b_campaign_generation as mod
@@ -1549,6 +1550,90 @@ async def test_call_llm_populates_usage_out(monkeypatch):
     assert usage_out["provider"] == "anthropic"
     assert usage_out["model"] == "claude-sonnet-4-5"
     assert usage_out["provider_request_id"] == "req_campaign_123"
+
+
+@pytest.mark.asyncio
+async def test_run_campaign_batch_task_metadata_can_enable_batch(monkeypatch):
+    class FakeAnthropicLLM:
+        name = "anthropic"
+        model = "claude-sonnet-4-5"
+
+    batch_llm = FakeAnthropicLLM()
+    batch_calls = []
+
+    monkeypatch.setattr(mod.settings.b2b_churn, "anthropic_batch_enabled", False, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "anthropic_batch_enabled", False, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_campaign, "anthropic_batch_detached_enabled", False, raising=False)
+    monkeypatch.setattr("atlas_brain.services.llm.anthropic.AnthropicLLM", FakeAnthropicLLM)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.mark_batch_fallback_result",
+        AsyncMock(),
+    )
+
+    async def _fake_run_batch(**kwargs):
+        batch_calls.append(kwargs)
+        return SimpleNamespace(
+            local_batch_id="campaign-batch-1",
+            provider_batch_id="provider-campaign-batch-1",
+            results_by_custom_id={
+                "campaign:1": SimpleNamespace(
+                    response_text=json.dumps(
+                        {
+                            "subject": "Subject",
+                            "body": _html_body_with_min_words("Body"),
+                            "proof_points": ["Proof"],
+                            "cta": "CTA",
+                        }
+                    ),
+                    usage={"input_tokens": 10, "output_tokens": 5},
+                    error_text=None,
+                )
+            },
+            submitted_items=1,
+            cache_prefiltered_items=0,
+            fallback_single_call_items=0,
+            completed_items=1,
+            failed_items=0,
+        )
+
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        _fake_run_batch,
+    )
+
+    results, metrics = await mod._run_campaign_batch(
+        batch_llm,
+        "system",
+        [
+            {
+                "custom_id": "campaign:1",
+                "artifact_id": "artifact-1",
+                "payload": {"channel": "email_cold", "target_mode": "vendor_retention"},
+                "channel": "email_cold",
+                "max_tokens": 512,
+                "temperature": 0.3,
+                "trace_metadata": {"vendor_name": "Asana"},
+            }
+        ],
+        run_id="run-campaign-batch",
+        task=SimpleNamespace(
+            metadata={
+                "anthropic_batch_enabled": True,
+                "campaign_anthropic_batch_enabled": True,
+                "campaign_anthropic_batch_min_items": 1,
+            }
+        ),
+    )
+
+    assert batch_calls
+    assert batch_calls[0]["llm"] is batch_llm
+    assert batch_calls[0]["min_batch_size"] == 1
+    assert metrics["jobs"] == 1
+    assert results["campaign:1"]["subject"] == "Subject"
 
 
 @pytest.mark.asyncio
