@@ -96,3 +96,4 @@ requirements.freeze.bak
 *.pem
 .claude/
 .vercel
+.env*.local
