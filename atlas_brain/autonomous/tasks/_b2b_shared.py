@@ -522,6 +522,7 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
     p = f"{alias}." if alias else ""
     time_expr = _eligible_review_timestamp_expr(alias=alias)
     parts = [f"{p}enrichment_status = 'enriched'"]
+    parts.append(f"{p}duplicate_of_review_id IS NULL")
     if window_param is not None:
         parts.append(f"{time_expr} > NOW() - make_interval(days => ${window_param})")
     parts.append(f"{p}source = ANY(${source_param}::text[])")

@@ -8,6 +8,12 @@ from typing import Any
 
 logger = logging.getLogger("atlas.autonomous.tasks._b2b_batch_utils")
 
+_ANTHROPIC_BATCH_SUCCESS_STATUSES = {
+    "cache_hit",
+    "batch_succeeded",
+    "fallback_succeeded",
+}
+
 
 def task_metadata(task: Any) -> dict[str, Any]:
     metadata = getattr(task, "metadata", None)
@@ -176,3 +182,142 @@ def resolve_anthropic_batch_llm(
             exc,
         )
     return batch_llm if is_anthropic_llm(batch_llm) else None
+
+
+async def reconcile_existing_batch_artifacts(
+    *,
+    pool: Any,
+    llm: Any | None,
+    task_name: str,
+    artifact_type: str,
+    artifact_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Reconcile matching Anthropic batch rows and return the best-known item state.
+
+    This lets a rerun reuse already-completed provider work and avoid duplicating
+    requests that are still in flight after a process restart.
+    """
+    if (
+        not artifact_ids
+        or pool is None
+        or not getattr(pool, "is_initialized", False)
+        or not hasattr(pool, "fetch")
+    ):
+        return {}
+
+    artifact_ids = [str(value) for value in artifact_ids if str(value or "").strip()]
+    if not artifact_ids:
+        return {}
+
+    rows = await pool.fetch(
+        """
+        SELECT
+            i.*,
+            b.status AS batch_status,
+            b.provider_batch_id,
+            b.created_at AS batch_created_at
+        FROM anthropic_message_batch_items i
+        JOIN anthropic_message_batches b ON b.id = i.batch_id
+        WHERE b.task_name = $1
+          AND i.artifact_type = $2
+          AND i.artifact_id = ANY($3::text[])
+        ORDER BY i.artifact_id ASC, b.created_at DESC, i.created_at DESC
+        """,
+        task_name,
+        artifact_type,
+        artifact_ids,
+    )
+    if not rows:
+        return {}
+
+    batch_ids_to_reconcile = {
+        str(row["batch_id"])
+        for row in rows
+        if str(row.get("batch_status") or "") == "in_progress"
+        and str(row.get("provider_batch_id") or "").strip()
+    }
+    if batch_ids_to_reconcile and llm is not None:
+        from ...services.b2b.anthropic_batch import reconcile_anthropic_message_batch
+
+        for batch_id in sorted(batch_ids_to_reconcile):
+            try:
+                await reconcile_anthropic_message_batch(
+                    llm=llm,
+                    local_batch_id=batch_id,
+                    pool=pool,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed reconciling existing Anthropic batch %s for %s/%s",
+                    batch_id,
+                    task_name,
+                    artifact_type,
+                )
+        rows = await pool.fetch(
+            """
+            SELECT
+                i.*,
+                b.status AS batch_status,
+                b.provider_batch_id,
+                b.created_at AS batch_created_at
+            FROM anthropic_message_batch_items i
+            JOIN anthropic_message_batches b ON b.id = i.batch_id
+            WHERE b.task_name = $1
+              AND i.artifact_type = $2
+              AND i.artifact_id = ANY($3::text[])
+            ORDER BY i.artifact_id ASC, b.created_at DESC, i.created_at DESC
+            """,
+            task_name,
+            artifact_type,
+            artifact_ids,
+        )
+
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["artifact_id"]), []).append(row)
+
+    selected: dict[str, dict[str, Any]] = {}
+    for artifact_id, artifact_rows in grouped.items():
+        success_row = next(
+            (
+                row
+                for row in artifact_rows
+                if str(row.get("status") or "") in _ANTHROPIC_BATCH_SUCCESS_STATUSES
+                and str(row.get("response_text") or "").strip()
+            ),
+            None,
+        )
+        if success_row is not None:
+            status = str(success_row.get("status") or "")
+            selected[artifact_id] = {
+                "state": "succeeded",
+                "status": status,
+                "cached": status == "cache_hit",
+                "response_text": str(success_row.get("response_text") or ""),
+                "error_text": str(success_row.get("error_text") or "") or None,
+                "batch_id": str(success_row["batch_id"]),
+                "custom_id": str(success_row["custom_id"]),
+            }
+            continue
+
+        pending_row = next(
+            (
+                row
+                for row in artifact_rows
+                if str(row.get("status") or "") == "pending"
+                and str(row.get("provider_batch_id") or "").strip()
+            ),
+            None,
+        )
+        if pending_row is not None:
+            selected[artifact_id] = {
+                "state": "pending",
+                "status": str(pending_row.get("status") or ""),
+                "cached": False,
+                "response_text": None,
+                "error_text": str(pending_row.get("error_text") or "") or None,
+                "batch_id": str(pending_row["batch_id"]),
+                "custom_id": str(pending_row["custom_id"]),
+            }
+
+    return selected

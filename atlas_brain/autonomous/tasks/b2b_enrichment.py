@@ -23,6 +23,7 @@ import re
 import time
 import unicodedata
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from ...config import settings
@@ -50,6 +51,12 @@ _TIER1_JSON_SCHEMA: dict[str, Any] = {
 }
 _TIER2_INSIDER_SECTION_HEADER = "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)"
 _TIER2_OUTPUT_SECTION_HEADER = "## Output"
+
+
+def _enrichment_batch_custom_id(stage: str, review_id: Any) -> str:
+    normalized_stage = re.sub(r"[^A-Za-z0-9_-]+", "_", str(stage or "").strip()).strip("_") or "stage"
+    normalized_review = re.sub(r"[^A-Za-z0-9_-]+", "_", str(review_id or "").strip()).strip("_") or "review"
+    return f"{normalized_stage}_{normalized_review}"[:64]
 
 def _get_base_enrichment_llm(local_only: bool):
     """Resolve the deterministic local enrichment model from vLLM only."""
@@ -2245,6 +2252,183 @@ def _witness_metrics(result: dict[str, Any] | None) -> tuple[int, int]:
     return (1 if witness_count > 0 else 0), witness_count
 
 
+async def _persist_enrichment_result(
+    pool,
+    row: dict[str, Any],
+    result: dict[str, Any] | None,
+    *,
+    model_id: str,
+    max_attempts: int,
+    run_id: str | None,
+    cache_usage: dict[str, int],
+) -> bool | str:
+    review_id = row["id"]
+    cfg = settings.b2b_churn
+
+    if result:
+        result, finalize_error = _finalize_enrichment_for_persist(result, row)
+        if finalize_error == "compute_failed":
+            logger.warning(
+                "Evidence engine compute failed for %s -- quarantining to prevent model-dependent output",
+                review_id, exc_info=True,
+            )
+            await pool.execute(
+                """
+                UPDATE b2b_reviews
+                SET enrichment_status = 'quarantined',
+                    enrichment_attempts = enrichment_attempts + 1,
+                    low_fidelity = true,
+                    low_fidelity_reasons = $2::jsonb
+                WHERE id = $1
+                """,
+                review_id,
+                json.dumps(["evidence_engine_compute_failure"]),
+            )
+            from ..visibility import record_quarantine
+
+            await record_quarantine(
+                pool,
+                review_id=str(review_id),
+                vendor_name=row.get("vendor_name"),
+                source=row.get("source"),
+                reason_code="evidence_engine_compute_failure",
+                severity="error",
+                actionable=True,
+                summary=f"Evidence engine failed for {row.get('vendor_name')} review",
+                run_id=run_id,
+            )
+            return "quarantined"
+        if finalize_error == "validation_failed":
+            logger.warning(
+                "Enrichment validation failed for %s -- quarantining",
+                review_id,
+            )
+            await pool.execute(
+                """
+                UPDATE b2b_reviews
+                SET enrichment_status = 'quarantined',
+                    enrichment_attempts = enrichment_attempts + 1,
+                    low_fidelity = true,
+                    low_fidelity_reasons = $2::jsonb
+                WHERE id = $1
+                """,
+                review_id,
+                json.dumps(["enrichment_validation_failed"]),
+            )
+            from ..visibility import record_quarantine
+
+            await record_quarantine(
+                pool,
+                review_id=str(review_id),
+                vendor_name=row.get("vendor_name"),
+                source=row.get("source"),
+                reason_code="enrichment_validation_failed",
+                severity="warning",
+                actionable=True,
+                summary=f"Validation failed for {row.get('vendor_name')} review",
+                run_id=run_id,
+            )
+            return "quarantined"
+
+    if result:
+        st = result.get("sentiment_trajectory") or {}
+        st_direction = st.get("direction") if isinstance(st, dict) else None
+        st_tenure = st.get("tenure") if isinstance(st, dict) else None
+        st_turning = st.get("turning_point") if isinstance(st, dict) else None
+        witness_rows, witness_count = _witness_metrics(result)
+        cache_usage["witness_rows"] += witness_rows
+        cache_usage["witness_count"] += witness_count
+        low_fidelity_reasons = (
+            _detect_low_fidelity_reasons(row, result)
+            if cfg.enrichment_low_fidelity_enabled
+            else []
+        )
+        detected_at = datetime.now(timezone.utc)
+        if not low_fidelity_reasons and _is_no_signal_result(result, row):
+            target_status = "no_signal"
+        else:
+            target_status = "quarantined" if low_fidelity_reasons else "enriched"
+
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment = $1,
+                enrichment_status = $8,
+                enrichment_attempts = enrichment_attempts + 1,
+                enriched_at = $2,
+                enrichment_model = $4,
+                sentiment_direction = $5,
+                sentiment_tenure = $6,
+                sentiment_turning_point = $7,
+                low_fidelity = $9,
+                low_fidelity_reasons = $10::jsonb,
+                low_fidelity_detected_at = $11
+            WHERE id = $3
+            """,
+            json.dumps(result),
+            detected_at,
+            review_id,
+            model_id,
+            st_direction,
+            st_tenure,
+            st_turning if st_turning and st_turning != "null" else None,
+            target_status,
+            bool(low_fidelity_reasons),
+            json.dumps(low_fidelity_reasons),
+            detected_at if low_fidelity_reasons else None,
+        )
+
+        if low_fidelity_reasons:
+            from ..visibility import record_quarantine
+
+            await record_quarantine(
+                pool,
+                review_id=str(review_id),
+                vendor_name=row.get("vendor_name"),
+                source=row.get("source"),
+                reason_code=low_fidelity_reasons[0],
+                severity="warning",
+                summary=f"Low-fidelity: {', '.join(low_fidelity_reasons[:3])}",
+                evidence={"reasons": low_fidelity_reasons, "source": row.get("source")},
+                run_id=run_id,
+            )
+
+        try:
+            urgency = result.get("urgency_score", 0)
+            threshold = settings.b2b_churn.high_churn_urgency_threshold
+            if urgency >= threshold:
+                signals = result.get("churn_signals", {})
+                await _notify_high_urgency(
+                    vendor_name=row["vendor_name"],
+                    reviewer_company=row.get("reviewer_company") or "",
+                    urgency=urgency,
+                    pain_category=result.get("pain_category", ""),
+                    intent_to_leave=bool(signals.get("intent_to_leave")),
+                )
+        except Exception:
+            logger.warning("ntfy notification failed for review %s, enrichment preserved", review_id)
+
+        try:
+            _ctx = result.get("reviewer_context") or {}
+            _extracted_company = (_ctx.get("company_name") or "").strip()
+            if _extracted_company and not (row.get("reviewer_company") or "").strip():
+                _extracted_company_norm = normalize_company_name(_extracted_company) or None
+                await pool.execute(
+                    "UPDATE b2b_reviews SET reviewer_company = $1, reviewer_company_norm = $2 WHERE id = $3",
+                    _extracted_company,
+                    _extracted_company_norm,
+                    review_id,
+                )
+                cache_usage["secondary_write_hits"] += 1
+        except Exception:
+            logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
+
+        return "quarantined" if target_status == "quarantined" else True
+
+    await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
+    return False
+
+
 async def _enrich_rows(
     rows,
     cfg,
@@ -2252,6 +2436,7 @@ async def _enrich_rows(
     *,
     concurrency_override: int | None = None,
     run_id: str | None = None,
+    task: ScheduledTask | Any | None = None,
 ) -> dict[str, Any]:
     """Enrich a list of claimed rows concurrently."""
     max_attempts = cfg.enrichment_max_attempts
@@ -2291,10 +2476,362 @@ async def _enrich_rows(
                 )
             return usage
 
-    results = await asyncio.gather(
-        *[_bounded_enrich(row) for row in rows],
-        return_exceptions=True,
+    async def _run_single_rows(target_rows: list[dict[str, Any]]) -> list[dict[str, Any] | Exception]:
+        if not target_rows:
+            return []
+        return await asyncio.gather(
+            *[_bounded_enrich(row) for row in target_rows],
+            return_exceptions=True,
+        )
+
+    results: list[dict[str, Any] | Exception] = []
+    batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+    }
+
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
     )
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
+    )
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.protocols import Message
+    from ...pipelines.llm import clean_llm_output, parse_json_response
+    from ...skills import get_skill_registry
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        resolve_anthropic_batch_llm,
+    )
+
+    def _eligible_for_batch(row: dict[str, Any]) -> bool:
+        review_text = row.get("review_text") or ""
+        if len(review_text) < _MIN_REVIEW_TEXT_LENGTH:
+            return False
+        source = str(row.get("source") or "").strip().lower()
+        return source not in _effective_enrichment_skip_sources()
+
+    def _parse_batch_text(text: str | None) -> dict[str, Any] | None:
+        if not text:
+            return None
+        cleaned = clean_llm_output(text)
+        parsed = parse_json_response(cleaned, recover_truncated=True)
+        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+            return parsed
+        return None
+
+    use_openrouter = (
+        not cfg.enrichment_local_only
+        and bool(getattr(cfg, "enrichment_openrouter_model", ""))
+        and bool(getattr(cfg, "openrouter_api_key", ""))
+    )
+    batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=True,
+        task_keys=("enrichment_anthropic_batch_enabled",),
+    )
+    tier1_batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=SimpleNamespace(
+                name="openrouter",
+                model=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
+            ),
+            target_model_candidates=(cfg.enrichment_openrouter_model,),
+        )
+        if use_openrouter and batch_requested
+        else None
+    )
+    tier2_model_id = (
+        getattr(cfg, "enrichment_tier2_openrouter_model", "")
+        or getattr(cfg, "enrichment_openrouter_model", "")
+        or "anthropic/claude-haiku-4-5"
+    )
+    tier2_batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=SimpleNamespace(name="openrouter", model=str(tier2_model_id)),
+            target_model_candidates=(tier2_model_id,),
+        )
+        if use_openrouter and batch_requested
+        else None
+    )
+
+    if not isinstance(tier1_batch_llm, AnthropicLLM):
+        tier1_batch_llm = None
+    if not isinstance(tier2_batch_llm, AnthropicLLM):
+        tier2_batch_llm = None
+
+    if tier1_batch_llm is None:
+        results = await _run_single_rows(rows)
+    else:
+        tier1_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
+        tier2_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
+        if not tier1_skill or not tier2_skill:
+            results = await _run_single_rows(rows)
+        else:
+            direct_rows = [row for row in rows if not _eligible_for_batch(row)]
+            batched_rows = [row for row in rows if _eligible_for_batch(row)]
+            row_results: dict[Any, dict[str, Any] | Exception] = {}
+
+            if direct_rows:
+                direct_results = await _run_single_rows(direct_rows)
+                for row, result in zip(direct_rows, direct_results):
+                    row_results[row["id"]] = result
+
+            tier1_entries: list[dict[str, Any]] = []
+            for row in batched_rows:
+                payload_json = json.dumps(_build_classify_payload(row, cfg.review_truncate_length))
+                messages = [
+                    {"role": "system", "content": tier1_skill.content},
+                    {"role": "user", "content": payload_json},
+                ]
+                request = prepare_b2b_exact_stage_request(
+                    "b2b_enrichment.tier1",
+                    provider="openrouter",
+                    model=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
+                    messages=messages,
+                    max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                )
+                cached = await lookup_b2b_exact_stage_text(request)
+                tier1_entries.append(
+                    {
+                        "row": row,
+                        "payload_json": payload_json,
+                        "messages": messages,
+                        "request": request,
+                        "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                        "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                    }
+                )
+
+            tier1_execution = await run_anthropic_message_batch(
+                llm=tier1_batch_llm,
+                stage_id="b2b_enrichment.tier1",
+                task_name="b2b_enrichment",
+                items=[
+                    AnthropicBatchItem(
+                        custom_id=_enrichment_batch_custom_id("tier1", entry["row"]["id"]),
+                        artifact_type="review_enrichment_tier1",
+                        artifact_id=str(entry["row"]["id"]),
+                        vendor_name=str(entry["row"].get("vendor_name") or "") or None,
+                        messages=[
+                            Message(role=str(message["role"]), content=str(message["content"]))
+                            for message in entry["messages"]
+                        ],
+                        max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+                        temperature=0.0,
+                        trace_span_name="task.b2b_enrichment.tier1",
+                        trace_metadata={
+                            "run_id": run_id,
+                            "vendor_name": str(entry["row"].get("vendor_name") or ""),
+                            "review_id": str(entry["row"]["id"]),
+                            "source": str(entry["row"].get("source") or ""),
+                            "tier": "tier1",
+                            "workload": "anthropic_batch",
+                        },
+                        request_metadata={"review_id": str(entry["row"]["id"]), "tier": 1},
+                        cached_response_text=entry["cached_response_text"],
+                        cached_usage=entry["cached_usage"],
+                    )
+                    for entry in tier1_entries
+                ],
+                run_id=run_id,
+                min_batch_size=anthropic_batch_min_items(
+                    task,
+                    default=2,
+                    keys=("enrichment_anthropic_batch_min_items",),
+                ),
+                batch_metadata={"stage": "tier1"},
+                pool=pool,
+            )
+            batch_metrics["jobs"] += 1 if tier1_execution.provider_batch_id else 0
+            batch_metrics["submitted_items"] += int(tier1_execution.submitted_items or 0)
+            batch_metrics["cache_prefiltered_items"] += int(tier1_execution.cache_prefiltered_items or 0)
+            batch_metrics["fallback_single_call_items"] += int(tier1_execution.fallback_single_call_items or 0)
+            batch_metrics["completed_items"] += int(tier1_execution.completed_items or 0)
+            batch_metrics["failed_items"] += int(tier1_execution.failed_items or 0)
+
+            tier2_entries: list[dict[str, Any]] = []
+            fallback_rows: list[dict[str, Any]] = []
+            per_row_batch_usage: dict[Any, dict[str, int]] = {}
+
+            for entry in tier1_entries:
+                row = entry["row"]
+                usage = _empty_exact_cache_usage()
+                tier1_custom_id = _enrichment_batch_custom_id("tier1", row["id"])
+                outcome = tier1_execution.results_by_custom_id.get(tier1_custom_id)
+                tier1 = _parse_batch_text(outcome.response_text if outcome is not None else None)
+                if tier1 is None:
+                    fallback_rows.append(row)
+                    if outcome is not None:
+                        await mark_batch_fallback_result(
+                            batch_id=tier1_execution.local_batch_id,
+                            custom_id=tier1_custom_id,
+                            succeeded=False,
+                            error_text=outcome.error_text or "tier1_batch_parse_failed",
+                            pool=pool,
+                        )
+                    continue
+                if outcome is not None and outcome.cached:
+                    usage["tier1_exact_cache_hits"] += 1
+                    usage["exact_cache_hits"] += 1
+                else:
+                    usage["tier1_generated_calls"] += 1
+                    usage["generated"] += 1
+                    await store_b2b_exact_stage_text(
+                        entry["request"],
+                        response_text=clean_llm_output(outcome.response_text or ""),
+                metadata={"tier": 1, "backend": "anthropic_batch"},
+            )
+
+                per_row_batch_usage[row["id"]] = usage
+                if _tier1_has_extraction_gaps(tier1, source=row.get("source")) and tier2_batch_llm is not None:
+                    payload = _build_classify_payload(row, cfg.review_truncate_length)
+                    payload["tier1_specific_complaints"] = tier1.get("specific_complaints", [])
+                    payload["tier1_quotable_phrases"] = tier1.get("quotable_phrases", [])
+                    payload_json = json.dumps(payload)
+                    system_prompt = _tier2_system_prompt_for_content_type(
+                        tier2_skill.content,
+                        payload.get("content_type"),
+                    )
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": payload_json},
+                    ]
+                    request = prepare_b2b_exact_stage_request(
+                        "b2b_enrichment.tier2",
+                        provider="openrouter",
+                        model=str(tier2_model_id),
+                        messages=messages,
+                        max_tokens=cfg.enrichment_tier2_max_tokens,
+                        temperature=0.0,
+                        response_format={"type": "json_object"},
+                    )
+                    cached = await lookup_b2b_exact_stage_text(request)
+                    tier2_entries.append(
+                        {
+                            "row": row,
+                            "tier1": tier1,
+                            "messages": messages,
+                            "request": request,
+                            "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                            "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                        }
+                    )
+                else:
+                    row_results[row["id"]] = await _persist_enrichment_result(
+                        pool,
+                        row,
+                        _merge_tier1_tier2(tier1, None),
+                        model_id=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
+                        max_attempts=max_attempts,
+                        run_id=run_id,
+                        cache_usage=usage,
+                    )
+
+            if tier2_entries:
+                tier2_execution = await run_anthropic_message_batch(
+                    llm=tier2_batch_llm,
+                    stage_id="b2b_enrichment.tier2",
+                    task_name="b2b_enrichment",
+                    items=[
+                        AnthropicBatchItem(
+                            custom_id=_enrichment_batch_custom_id("tier2", entry["row"]["id"]),
+                            artifact_type="review_enrichment_tier2",
+                            artifact_id=str(entry["row"]["id"]),
+                            vendor_name=str(entry["row"].get("vendor_name") or "") or None,
+                            messages=[
+                                Message(role=str(message["role"]), content=str(message["content"]))
+                                for message in entry["messages"]
+                            ],
+                            max_tokens=cfg.enrichment_tier2_max_tokens,
+                            temperature=0.0,
+                            trace_span_name="task.b2b_enrichment.tier2",
+                            trace_metadata={
+                                "run_id": run_id,
+                                "vendor_name": str(entry["row"].get("vendor_name") or ""),
+                                "review_id": str(entry["row"]["id"]),
+                                "source": str(entry["row"].get("source") or ""),
+                                "tier": "tier2",
+                                "workload": "anthropic_batch",
+                            },
+                            request_metadata={"review_id": str(entry["row"]["id"]), "tier": 2},
+                            cached_response_text=entry["cached_response_text"],
+                            cached_usage=entry["cached_usage"],
+                        )
+                        for entry in tier2_entries
+                    ],
+                    run_id=run_id,
+                    min_batch_size=anthropic_batch_min_items(
+                        task,
+                        default=2,
+                        keys=("enrichment_anthropic_batch_min_items",),
+                    ),
+                    batch_metadata={"stage": "tier2"},
+                    pool=pool,
+                )
+                batch_metrics["jobs"] += 1 if tier2_execution.provider_batch_id else 0
+                batch_metrics["submitted_items"] += int(tier2_execution.submitted_items or 0)
+                batch_metrics["cache_prefiltered_items"] += int(tier2_execution.cache_prefiltered_items or 0)
+                batch_metrics["fallback_single_call_items"] += int(tier2_execution.fallback_single_call_items or 0)
+                batch_metrics["completed_items"] += int(tier2_execution.completed_items or 0)
+                batch_metrics["failed_items"] += int(tier2_execution.failed_items or 0)
+
+                for entry in tier2_entries:
+                    row = entry["row"]
+                    usage = per_row_batch_usage[row["id"]]
+                    tier2_custom_id = _enrichment_batch_custom_id("tier2", row["id"])
+                    outcome = tier2_execution.results_by_custom_id.get(tier2_custom_id)
+                    tier2 = _parse_batch_text(outcome.response_text if outcome is not None else None)
+                    if tier2 is None:
+                        fallback_rows.append(row)
+                        if outcome is not None:
+                            await mark_batch_fallback_result(
+                                batch_id=tier2_execution.local_batch_id,
+                                custom_id=tier2_custom_id,
+                                succeeded=False,
+                                error_text=outcome.error_text or "tier2_batch_parse_failed",
+                                pool=pool,
+                            )
+                        continue
+                    if outcome is not None and outcome.cached:
+                        usage["tier2_exact_cache_hits"] += 1
+                        usage["exact_cache_hits"] += 1
+                    else:
+                        usage["tier2_generated_calls"] += 1
+                        usage["generated"] += 1
+                        await store_b2b_exact_stage_text(
+                            entry["request"],
+                            response_text=clean_llm_output(outcome.response_text or ""),
+                            metadata={"tier": 2, "backend": "anthropic_batch"},
+                        )
+                    row_results[row["id"]] = await _persist_enrichment_result(
+                        pool,
+                        row,
+                        _merge_tier1_tier2(entry["tier1"], tier2),
+                        model_id=f"hybrid:{cfg.enrichment_openrouter_model or 'anthropic/claude-haiku-4-5'}+{tier2_model_id}",
+                        max_attempts=max_attempts,
+                        run_id=run_id,
+                        cache_usage=usage,
+                    )
+
+            fallback_results = await _run_single_rows(fallback_rows)
+            for row, result in zip(fallback_rows, fallback_results):
+                row_results[row["id"]] = result
+
+            results = [row_results[row["id"]] for row in rows]
 
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
@@ -2334,6 +2871,12 @@ async def _enrich_rows(
         "quarantined": quarantined,
         "no_signal": no_signal or 0,
         "failed": failed,
+        "anthropic_batch_jobs": batch_metrics["jobs"],
+        "anthropic_batch_items_submitted": batch_metrics["submitted_items"],
+        "anthropic_batch_cache_prefiltered_items": batch_metrics["cache_prefiltered_items"],
+        "anthropic_batch_fallback_single_call_items": batch_metrics["fallback_single_call_items"],
+        "anthropic_batch_completed_items": batch_metrics["completed_items"],
+        "anthropic_batch_failed_items": batch_metrics["failed_items"],
         **cache_usage,
     }
 
@@ -2556,6 +3099,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     total_no_signal = 0
     total_quarantined = 0
     cache_usage = _empty_exact_cache_usage()
+    batch_metrics = {
+        "anthropic_batch_jobs": 0,
+        "anthropic_batch_items_submitted": 0,
+        "anthropic_batch_cache_prefiltered_items": 0,
+        "anthropic_batch_fallback_single_call_items": 0,
+        "anthropic_batch_completed_items": 0,
+        "anthropic_batch_failed_items": 0,
+    }
     rounds = 0
 
     while rounds < max_rounds:
@@ -2598,6 +3149,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             pool,
             concurrency_override=effective_concurrency,
             run_id=run_id,
+            task=task,
         )
         total_enriched += result.get("enriched", 0)
         batch_failed = result.get("failed", 0)
@@ -2605,6 +3157,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         total_no_signal += result.get("no_signal", 0)
         total_quarantined += result.get("quarantined", 0)
         _accumulate_exact_cache_usage(cache_usage, result)
+        for key in batch_metrics:
+            batch_metrics[key] += int(result.get(key, 0) or 0)
         rounds += 1
 
         # If most of the batch failed, vLLM is likely overwhelmed -- stop the loop
@@ -2640,6 +3194,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "reviews_processed": total_enriched + total_quarantined + total_failed + total_no_signal,
         "secondary_write_hits": secondary_write_hits,
         "secondary_write_breakdown": secondary_write_breakdown,
+        **batch_metrics,
         "_skip_synthesis": "B2B enrichment complete",
     }
     if requeued:
@@ -2834,174 +3389,17 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             model_id = tier1_model or ""
 
         result = _merge_tier1_tier2(tier1, tier2)
-
-        # Layer 3: compute derived fields from indicators (urgency, pain, recommend, etc.)
-        # Hard-fail if compute breaks -- do NOT fall back to model-dependent output.
-        if result:
-            result, finalize_error = _finalize_enrichment_for_persist(result, row)
-            if finalize_error == "compute_failed":
-                logger.warning(
-                    "Evidence engine compute failed for %s -- quarantining to prevent model-dependent output",
-                    review_id, exc_info=True,
-                )
-                await pool.execute(
-                    """
-                    UPDATE b2b_reviews
-                    SET enrichment_status = 'quarantined',
-                        enrichment_attempts = enrichment_attempts + 1,
-                        low_fidelity = true,
-                        low_fidelity_reasons = $2::jsonb
-                    WHERE id = $1
-                    """,
-                    review_id,
-                    json.dumps(["evidence_engine_compute_failure"]),
-                )
-                from ..visibility import record_quarantine
-                await record_quarantine(
-                    pool,
-                    review_id=str(review_id),
-                    vendor_name=row.get("vendor_name"),
-                    source=row.get("source"),
-                    reason_code="evidence_engine_compute_failure",
-                    severity="error",
-                    actionable=True,
-                    summary=f"Evidence engine failed for {row.get('vendor_name')} review",
-                    run_id=run_id,
-                )
-                return _finish("quarantined")
-            elif finalize_error == "validation_failed":
-                logger.warning(
-                    "Enrichment validation failed for %s -- quarantining",
-                    review_id,
-                )
-                await pool.execute(
-                    """
-                    UPDATE b2b_reviews
-                    SET enrichment_status = 'quarantined',
-                        enrichment_attempts = enrichment_attempts + 1,
-                        low_fidelity = true,
-                        low_fidelity_reasons = $2::jsonb
-                    WHERE id = $1
-                    """,
-                    review_id,
-                    json.dumps(["enrichment_validation_failed"]),
-                )
-                from ..visibility import record_quarantine
-                await record_quarantine(
-                    pool,
-                    review_id=str(review_id),
-                    vendor_name=row.get("vendor_name"),
-                    source=row.get("source"),
-                    reason_code="enrichment_validation_failed",
-                    severity="warning",
-                    actionable=True,
-                    summary=f"Validation failed for {row.get('vendor_name')} review",
-                    run_id=run_id,
-                )
-                return _finish("quarantined")
-
-        if result:
-            # Extract sentiment_trajectory subfields for indexed columns
-            st = result.get("sentiment_trajectory") or {}
-            st_direction = st.get("direction") if isinstance(st, dict) else None
-            st_tenure = st.get("tenure") if isinstance(st, dict) else None
-            st_turning = st.get("turning_point") if isinstance(st, dict) else None
-            witness_rows, witness_count = _witness_metrics(result)
-            cache_usage["witness_rows"] += witness_rows
-            cache_usage["witness_count"] += witness_count
-            low_fidelity_reasons = (
-                _detect_low_fidelity_reasons(row, result)
-                if cfg.enrichment_low_fidelity_enabled
-                else []
+        return _finish(
+            await _persist_enrichment_result(
+                pool,
+                row,
+                result,
+                model_id=model_id,
+                max_attempts=max_attempts,
+                run_id=run_id,
+                cache_usage=cache_usage,
             )
-            detected_at = datetime.now(timezone.utc)
-            if not low_fidelity_reasons and _is_no_signal_result(result, row):
-                target_status = "no_signal"
-            else:
-                target_status = "quarantined" if low_fidelity_reasons else "enriched"
-
-            await pool.execute(
-                """
-                UPDATE b2b_reviews
-                SET enrichment = $1,
-                    enrichment_status = $8,
-                    enrichment_attempts = enrichment_attempts + 1,
-                    enriched_at = $2,
-                    enrichment_model = $4,
-                    sentiment_direction = $5,
-                    sentiment_tenure = $6,
-                    sentiment_turning_point = $7,
-                    low_fidelity = $9,
-                    low_fidelity_reasons = $10::jsonb,
-                    low_fidelity_detected_at = $11
-                WHERE id = $3
-                """,
-                json.dumps(result),
-                detected_at,
-                review_id,
-                model_id,
-                st_direction,
-                st_tenure,
-                st_turning if st_turning and st_turning != "null" else None,
-                target_status,
-                bool(low_fidelity_reasons),
-                json.dumps(low_fidelity_reasons),
-                detected_at if low_fidelity_reasons else None,
-            )
-
-            if low_fidelity_reasons:
-                from ..visibility import record_quarantine
-                await record_quarantine(
-                    pool,
-                    review_id=str(review_id),
-                    vendor_name=row.get("vendor_name"),
-                    source=row.get("source"),
-                    reason_code=low_fidelity_reasons[0],
-                    severity="warning",
-                    summary=f"Low-fidelity: {', '.join(low_fidelity_reasons[:3])}",
-                    evidence={"reasons": low_fidelity_reasons, "source": row.get("source")},
-                    run_id=run_id,
-                )
-
-            # Fire ntfy notification for high-urgency signals (must never
-            # break enrichment -- wrapped in its own try/except)
-            try:
-                urgency = result.get("urgency_score", 0)
-                threshold = settings.b2b_churn.high_churn_urgency_threshold
-                if urgency >= threshold:
-                    signals = result.get("churn_signals", {})
-                    await _notify_high_urgency(
-                        vendor_name=row["vendor_name"],
-                        reviewer_company=row.get("reviewer_company") or "",
-                        urgency=urgency,
-                        pain_category=result.get("pain_category", ""),
-                        intent_to_leave=bool(signals.get("intent_to_leave")),
-                    )
-            except Exception:
-                logger.warning("ntfy notification failed for review %s, enrichment preserved", review_id)
-
-            # Backfill reviewer_company from LLM extraction when parser left it empty
-            try:
-                _ctx = result.get("reviewer_context") or {}
-                _extracted_company = (_ctx.get("company_name") or "").strip()
-                if _extracted_company and not (row.get("reviewer_company") or "").strip():
-                    _extracted_company_norm = normalize_company_name(_extracted_company) or None
-                    await pool.execute(
-                        "UPDATE b2b_reviews SET reviewer_company = $1, reviewer_company_norm = $2 WHERE id = $3",
-                        _extracted_company,
-                        _extracted_company_norm,
-                        review_id,
-                    )
-                    cache_usage["secondary_write_hits"] += 1
-            except Exception:
-                logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
-
-            if target_status == "quarantined":
-                return _finish("quarantined")
-            return _finish(True)
-        else:
-            await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-            return _finish(False)
+        )
 
     except Exception:
         logger.exception("Failed to enrich B2B review %s", review_id)

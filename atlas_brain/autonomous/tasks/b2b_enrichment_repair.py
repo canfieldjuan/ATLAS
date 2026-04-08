@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from ...config import settings
@@ -144,6 +145,14 @@ _HARD_GAP_SQL = """
   OR COALESCE(enrichment->>'evidence_map_hash', '') = ''
 )
 """
+
+
+def _repair_batch_custom_id(review_id: Any) -> str:
+    normalized_review = "".join(
+        char if str(char).isalnum() or char in {"_", "-"} else "_"
+        for char in str(review_id or "").strip()
+    ).strip("_") or "review"
+    return f"repair_{normalized_review}"[:64]
 
 
 def _normalize_test_vendors(raw: Any) -> list[str]:
@@ -606,8 +615,128 @@ async def _persist_shadow_result(
             False,
             json.dumps(combined_shadow_reasons),
             repaired_at if combined_shadow_reasons else None,
-        )
+    )
     return "shadowed"
+
+
+def _empty_repair_usage() -> dict[str, int]:
+    return {
+        "exact_cache_hits": 0,
+        "generated": 0,
+        "witness_rows": 0,
+        "witness_count": 0,
+    }
+
+
+async def _persist_repair_result(
+    pool,
+    row: dict[str, Any],
+    cfg,
+    baseline: dict[str, Any],
+    strategic_reasons: list[str],
+    repair_result: dict[str, Any] | None,
+    *,
+    model_id: str | None,
+    max_attempts: int,
+    cache_usage: dict[str, int],
+) -> str:
+    review_id = row["id"]
+    if repair_result is None:
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment_repair_status = 'failed',
+                enrichment_repair_attempts = enrichment_repair_attempts + 1,
+                enrichment_repair_model = COALESCE($2, enrichment_repair_model),
+                enrichment_repaired_at = $3
+            WHERE id = $1
+            """,
+            review_id,
+            model_id,
+            datetime.now(timezone.utc),
+        )
+        return "failed"
+
+    promoted, applied_fields = base_enrichment._apply_field_repair(
+        baseline,
+        repair_result,
+    )
+    adjudication_markers = _adjudication_markers(strategic_reasons)
+    persisted_applied_fields = list(applied_fields)
+    for marker in adjudication_markers:
+        if marker not in persisted_applied_fields:
+            persisted_applied_fields.append(marker)
+    repaired_at = datetime.now(timezone.utc)
+    if applied_fields:
+        promoted = base_enrichment._compute_derived_fields(promoted, row)
+    if applied_fields and base_enrichment._validate_enrichment(promoted, row):
+        _, baseline_witness_count = base_enrichment._witness_metrics(baseline)
+        promoted_witness_rows, promoted_witness_count = base_enrichment._witness_metrics(promoted)
+        witness_count_delta = max(promoted_witness_count - baseline_witness_count, 0)
+        if witness_count_delta > 0:
+            cache_usage["witness_rows"] += 1 if promoted_witness_rows > 0 else 0
+            cache_usage["witness_count"] += witness_count_delta
+        unresolved_strategic_reasons = _strategic_adjudication_reasons(promoted, row)
+        low_fidelity_reasons = (
+            base_enrichment._detect_low_fidelity_reasons(row, promoted)
+            if getattr(cfg, "enrichment_low_fidelity_enabled", False)
+            else []
+        )
+        if unresolved_strategic_reasons:
+            return await _persist_shadow_result(
+                pool,
+                review_id=review_id,
+                row=row,
+                repair_result=repair_result,
+                model_id=model_id,
+                applied_fields=persisted_applied_fields,
+                repaired_at=repaired_at,
+                persisted_enrichment=promoted,
+                shadow_reasons=unresolved_strategic_reasons,
+            )
+        if not low_fidelity_reasons and base_enrichment._is_no_signal_result(promoted, row):
+            target_status = "no_signal"
+        else:
+            target_status = "quarantined" if low_fidelity_reasons else "enriched"
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment_baseline = COALESCE(enrichment_baseline, enrichment),
+                enrichment = $2::jsonb,
+                enrichment_repair = $3::jsonb,
+                enrichment_repair_status = 'promoted',
+                enrichment_repair_attempts = enrichment_repair_attempts + 1,
+                enrichment_repair_model = $4,
+                enrichment_repaired_at = $5,
+                enrichment_repair_applied_fields = $6::jsonb,
+                enrichment_status = $7,
+                low_fidelity = $8,
+                low_fidelity_reasons = $9::jsonb,
+                low_fidelity_detected_at = $10
+            WHERE id = $1
+            """,
+            review_id,
+            json.dumps(promoted),
+            json.dumps(repair_result),
+            model_id,
+            repaired_at,
+            json.dumps(persisted_applied_fields),
+            target_status,
+            bool(low_fidelity_reasons),
+            json.dumps(low_fidelity_reasons),
+            repaired_at if low_fidelity_reasons else None,
+        )
+        return "promoted"
+
+    return await _persist_shadow_result(
+        pool,
+        review_id=review_id,
+        row=row,
+        repair_result=repair_result,
+        model_id=model_id,
+        applied_fields=persisted_applied_fields,
+        repaired_at=repaired_at,
+    )
 
 
 async def _repair_single(
@@ -622,12 +751,7 @@ async def _repair_single(
     baseline = base_enrichment._coerce_json_dict(row.get("enrichment"))
     strategic_reasons = _strategic_adjudication_reasons(baseline, row) if baseline else []
     target_fields = _repair_target_fields(baseline, row) if baseline else []
-    usage = {
-        "exact_cache_hits": 0,
-        "generated": 0,
-        "witness_rows": 0,
-        "witness_count": 0,
-    }
+    usage = _empty_repair_usage()
 
     def _finish(status: str) -> str:
         if usage_out is not None:
@@ -678,103 +802,33 @@ async def _repair_single(
         usage["generated"] += 1
 
     if repair_result is None:
-        await pool.execute(
-            """
-            UPDATE b2b_reviews
-            SET enrichment_repair_status = 'failed',
-                enrichment_repair_attempts = enrichment_repair_attempts + 1,
-                enrichment_repair_model = COALESCE($2, enrichment_repair_model),
-                enrichment_repaired_at = $3
-            WHERE id = $1
-            """,
-            review_id,
-            model_id,
-            datetime.now(timezone.utc),
-        )
-        return _finish("failed")
-
-    promoted, applied_fields = base_enrichment._apply_field_repair(
-        baseline,
-        repair_result,
-    )
-    adjudication_markers = _adjudication_markers(strategic_reasons)
-    persisted_applied_fields = list(applied_fields)
-    for marker in adjudication_markers:
-        if marker not in persisted_applied_fields:
-            persisted_applied_fields.append(marker)
-    repaired_at = datetime.now(timezone.utc)
-    if applied_fields:
-        promoted = base_enrichment._compute_derived_fields(promoted, row)
-    if applied_fields and base_enrichment._validate_enrichment(promoted, row):
-        _, baseline_witness_count = base_enrichment._witness_metrics(baseline)
-        promoted_witness_rows, promoted_witness_count = base_enrichment._witness_metrics(promoted)
-        witness_count_delta = max(promoted_witness_count - baseline_witness_count, 0)
-        if witness_count_delta > 0:
-            usage["witness_rows"] += 1 if promoted_witness_rows > 0 else 0
-            usage["witness_count"] += witness_count_delta
-        unresolved_strategic_reasons = _strategic_adjudication_reasons(promoted, row)
-        low_fidelity_reasons = (
-            base_enrichment._detect_low_fidelity_reasons(row, promoted)
-            if getattr(cfg, "enrichment_low_fidelity_enabled", False)
-            else []
-        )
-        if unresolved_strategic_reasons:
-            status = await _persist_shadow_result(
+        return _finish(
+            await _persist_repair_result(
                 pool,
-                review_id=review_id,
-                row=row,
-                repair_result=repair_result,
+                row,
+                cfg,
+                baseline,
+                strategic_reasons,
+                None,
                 model_id=model_id,
-                applied_fields=persisted_applied_fields,
-                repaired_at=repaired_at,
-                persisted_enrichment=promoted,
-                shadow_reasons=unresolved_strategic_reasons,
+                max_attempts=max_attempts,
+                cache_usage=usage,
             )
-            return _finish(status)
-        if not low_fidelity_reasons and base_enrichment._is_no_signal_result(promoted, row):
-            target_status = "no_signal"
-        else:
-            target_status = "quarantined" if low_fidelity_reasons else "enriched"
-        await pool.execute(
-            """
-            UPDATE b2b_reviews
-            SET enrichment_baseline = COALESCE(enrichment_baseline, enrichment),
-                enrichment = $2::jsonb,
-                enrichment_repair = $3::jsonb,
-                enrichment_repair_status = 'promoted',
-                enrichment_repair_attempts = enrichment_repair_attempts + 1,
-                enrichment_repair_model = $4,
-                enrichment_repaired_at = $5,
-                enrichment_repair_applied_fields = $6::jsonb,
-                enrichment_status = $7,
-                low_fidelity = $8,
-                low_fidelity_reasons = $9::jsonb,
-                low_fidelity_detected_at = $10
-            WHERE id = $1
-            """,
-            review_id,
-            json.dumps(promoted),
-            json.dumps(repair_result),
-            model_id,
-            repaired_at,
-            json.dumps(persisted_applied_fields),
-            target_status,
-            bool(low_fidelity_reasons),
-            json.dumps(low_fidelity_reasons),
-            repaired_at if low_fidelity_reasons else None,
         )
-        return _finish("promoted")
 
-    status = await _persist_shadow_result(
-        pool,
-        review_id=review_id,
-        row=row,
-        repair_result=repair_result,
-        model_id=model_id,
-        applied_fields=persisted_applied_fields,
-        repaired_at=repaired_at,
+    return _finish(
+        await _persist_repair_result(
+            pool,
+            row,
+            cfg,
+            baseline,
+            strategic_reasons,
+            repair_result,
+            model_id=model_id,
+            max_attempts=max_attempts,
+            cache_usage=usage,
+        )
     )
-    return _finish(status)
 
 
 async def _repair_rows(
@@ -784,6 +838,7 @@ async def _repair_rows(
     *,
     concurrency_override: int | None = None,
     run_id: str | None = None,
+    task: ScheduledTask | Any | None = None,
 ) -> dict[str, int]:
     max_attempts = cfg.enrichment_repair_max_attempts
     effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_repair_concurrency))
@@ -793,12 +848,7 @@ async def _repair_rows(
 
     async def _bounded(row: dict[str, Any]) -> dict[str, int | str]:
         async with sem:
-            usage = {
-                "exact_cache_hits": 0,
-                "generated": 0,
-                "witness_rows": 0,
-                "witness_count": 0,
-            }
+            usage = _empty_repair_usage()
             kwargs: dict[str, Any] = {"usage_out": usage}
             if supports_run_id:
                 kwargs["run_id"] = run_id
@@ -808,7 +858,12 @@ async def _repair_rows(
                 **usage,
             }
 
-    results = await asyncio.gather(*[_bounded(row) for row in rows], return_exceptions=True)
+    async def _run_single_rows(target_rows: list[dict[str, Any]]) -> list[dict[str, Any] | Exception]:
+        if not target_rows:
+            return []
+        return await asyncio.gather(*[_bounded(row) for row in target_rows], return_exceptions=True)
+
+    results: list[dict[str, Any] | Exception] = []
     counts = {
         "promoted": 0,
         "shadowed": 0,
@@ -817,7 +872,261 @@ async def _repair_rows(
         "generated": 0,
         "witness_rows": 0,
         "witness_count": 0,
+        "anthropic_batch_jobs": 0,
+        "anthropic_batch_items_submitted": 0,
+        "anthropic_batch_cache_prefiltered_items": 0,
+        "anthropic_batch_fallback_single_call_items": 0,
+        "anthropic_batch_completed_items": 0,
+        "anthropic_batch_failed_items": 0,
+        "anthropic_batch_reused_completed_items": 0,
+        "anthropic_batch_reused_pending_items": 0,
     }
+
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
+    )
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_skill_stage_request,
+        store_b2b_exact_stage_text,
+    )
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...pipelines.llm import clean_llm_output
+    from ...services.protocols import Message
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        reconcile_existing_batch_artifacts,
+        resolve_anthropic_batch_llm,
+    )
+
+    def _batch_eligible(row: dict[str, Any]) -> bool:
+        baseline = base_enrichment._coerce_json_dict(row.get("enrichment"))
+        if not baseline:
+            return False
+        return bool(_repair_target_fields(baseline, row))
+
+    def _parse_batch_text(text: str | None) -> dict[str, Any] | None:
+        if not text:
+            return None
+        parsed = parse_json_response(text, recover_truncated=True)
+        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+            return parsed
+        return None
+
+    repair_model = str(cfg.enrichment_repair_model or "").strip()
+    batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=bool(getattr(cfg, "enrichment_repair_anthropic_batch_enabled", True)),
+        task_keys=("enrichment_repair_anthropic_batch_enabled",),
+    )
+    batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=SimpleNamespace(name="openrouter", model=repair_model),
+            target_model_candidates=(repair_model,),
+        )
+        if batch_requested and repair_model
+        else None
+    )
+    if not isinstance(batch_llm, AnthropicLLM):
+        batch_llm = None
+
+    if batch_llm is None:
+        results = await _run_single_rows(rows)
+    else:
+        direct_rows = [row for row in rows if not _batch_eligible(row)]
+        batched_rows = [row for row in rows if _batch_eligible(row)]
+        row_results: dict[Any, dict[str, Any] | Exception] = {}
+
+        if direct_rows:
+            direct_results = await _run_single_rows(direct_rows)
+            for row, result in zip(direct_rows, direct_results):
+                row_results[row["id"]] = result
+
+        entries: list[dict[str, Any]] = []
+        for row in batched_rows:
+            baseline = base_enrichment._coerce_json_dict(row.get("enrichment")) or {}
+            strategic_reasons = _strategic_adjudication_reasons(baseline, row)
+            payload = _build_repair_payload(row, baseline, cfg.review_truncate_length)
+            request, messages = prepare_b2b_exact_skill_stage_request(
+                "b2b_enrichment_repair.extraction",
+                skill_name="digest/b2b_churn_repair_extraction",
+                payload=json.dumps(payload, ensure_ascii=True),
+                provider="openrouter",
+                model=repair_model,
+                max_tokens=int(
+                    getattr(
+                        cfg,
+                        "enrichment_repair_max_tokens",
+                        getattr(cfg, "enrichment_max_tokens", 2048),
+                    )
+                ),
+                temperature=0.0,
+                guided_json=_REPAIR_JSON_SCHEMA,
+                response_format={"type": "json_object"},
+                extra={"requested_model": repair_model},
+            )
+            cached = await lookup_b2b_exact_stage_text(request)
+            entries.append(
+                {
+                    "row": row,
+                    "baseline": baseline,
+                    "strategic_reasons": strategic_reasons,
+                    "payload": payload,
+                    "request": request,
+                    "messages": messages,
+                    "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                    "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                }
+            )
+
+        existing_batch_results = await reconcile_existing_batch_artifacts(
+            pool=pool,
+            llm=batch_llm,
+            task_name="b2b_enrichment_repair",
+            artifact_type="review_enrichment_repair",
+            artifact_ids=[str(entry["row"]["id"]) for entry in entries],
+        )
+
+        remaining_entries: list[dict[str, Any]] = []
+        for entry in entries:
+            row = entry["row"]
+            existing = existing_batch_results.get(str(row["id"]))
+            if existing and existing.get("state") == "succeeded":
+                parsed = _parse_batch_text(existing.get("response_text"))
+                if parsed is not None:
+                    status = await _persist_repair_result(
+                        pool,
+                        row,
+                        cfg,
+                        entry["baseline"],
+                        entry["strategic_reasons"],
+                        parsed,
+                        model_id=repair_model,
+                        max_attempts=max_attempts,
+                        cache_usage=_empty_repair_usage(),
+                    )
+                    row_results[row["id"]] = {"status": status, **_empty_repair_usage()}
+                    counts["anthropic_batch_reused_completed_items"] += 1
+                    continue
+            if existing and existing.get("state") == "pending":
+                logger.info(
+                    "Skipping duplicate enrichment-repair submission for %s; existing Anthropic batch item %s is still pending",
+                    row["id"],
+                    existing.get("custom_id"),
+                )
+                row_results[row["id"]] = {"status": "deferred"}
+                counts["anthropic_batch_reused_pending_items"] += 1
+                continue
+            remaining_entries.append(entry)
+
+        entries = remaining_entries
+
+        if not entries:
+            results = [row_results[row["id"]] for row in rows]
+        else:
+            execution = await run_anthropic_message_batch(
+                llm=batch_llm,
+                stage_id="b2b_enrichment_repair.extraction",
+                task_name="b2b_enrichment_repair",
+                items=[
+                    AnthropicBatchItem(
+                        custom_id=_repair_batch_custom_id(entry["row"]["id"]),
+                        artifact_type="review_enrichment_repair",
+                        artifact_id=str(entry["row"]["id"]),
+                        vendor_name=str(entry["row"].get("vendor_name") or "") or None,
+                        messages=[
+                            Message(role=str(message["role"]), content=str(message["content"]))
+                            for message in entry["messages"]
+                        ],
+                        max_tokens=int(
+                            getattr(
+                                cfg,
+                                "enrichment_repair_max_tokens",
+                                getattr(cfg, "enrichment_max_tokens", 2048),
+                            )
+                        ),
+                        temperature=0.0,
+                        trace_span_name="task.b2b_enrichment_repair.extraction",
+                        trace_metadata={
+                            "run_id": run_id,
+                            "vendor_name": str(entry["row"].get("vendor_name") or ""),
+                            "review_id": str(entry["row"]["id"]),
+                            "source": str(entry["row"].get("source") or ""),
+                            "stage": "repair_extraction",
+                            "workload": "anthropic_batch",
+                        },
+                        request_metadata={"review_id": str(entry["row"]["id"])},
+                        cached_response_text=entry["cached_response_text"],
+                        cached_usage=entry["cached_usage"],
+                    )
+                    for entry in entries
+                ],
+                run_id=run_id,
+                min_batch_size=anthropic_batch_min_items(
+                    task,
+                    default=int(getattr(cfg, "enrichment_repair_anthropic_batch_min_items", 2)),
+                    keys=("enrichment_repair_anthropic_batch_min_items",),
+                ),
+                batch_metadata={"stage": "repair_extraction"},
+                pool=pool,
+            )
+            counts["anthropic_batch_jobs"] += 1 if execution.provider_batch_id else 0
+            counts["anthropic_batch_items_submitted"] += execution.submitted_items
+            counts["anthropic_batch_cache_prefiltered_items"] += execution.cache_prefiltered_items
+            counts["anthropic_batch_fallback_single_call_items"] += execution.fallback_single_call_items
+            counts["anthropic_batch_completed_items"] += execution.completed_items
+            counts["anthropic_batch_failed_items"] += execution.failed_items
+
+            fallback_rows: list[dict[str, Any]] = []
+            for entry in entries:
+                row = entry["row"]
+                usage = _empty_repair_usage()
+                repair_custom_id = _repair_batch_custom_id(row["id"])
+                outcome = execution.results_by_custom_id.get(repair_custom_id)
+                parsed = _parse_batch_text(outcome.response_text if outcome is not None else None)
+                if parsed is None:
+                    fallback_rows.append(row)
+                    if outcome is not None:
+                        await mark_batch_fallback_result(
+                            batch_id=execution.local_batch_id,
+                            custom_id=repair_custom_id,
+                            succeeded=False,
+                            error_text=outcome.error_text or "repair_batch_parse_failed",
+                            pool=pool,
+                        )
+                    continue
+                if outcome is not None and outcome.cached:
+                    usage["exact_cache_hits"] += 1
+                else:
+                    usage["generated"] += 1
+                    await store_b2b_exact_stage_text(
+                        entry["request"],
+                        response_text=clean_llm_output(outcome.response_text or ""),
+                        metadata={"requested_model": repair_model, "backend": "anthropic_batch"},
+                    )
+                status = await _persist_repair_result(
+                    pool,
+                    row,
+                    cfg,
+                    entry["baseline"],
+                    entry["strategic_reasons"],
+                    parsed,
+                    model_id=repair_model,
+                    max_attempts=max_attempts,
+                    cache_usage=usage,
+                )
+                row_results[row["id"]] = {"status": status, **usage}
+
+            fallback_results = await _run_single_rows(fallback_rows)
+            for row, result in zip(fallback_rows, fallback_results):
+                row_results[row["id"]] = result
+
+            results = [row_results[row["id"]] for row in rows]
+
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
             logger.error("Unexpected repair error for %s: %s", row["id"], result, exc_info=result)
@@ -1188,6 +1497,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     generated = 0
     witness_rows = 0
     witness_count = 0
+    batch_metrics = {
+        "anthropic_batch_jobs": 0,
+        "anthropic_batch_items_submitted": 0,
+        "anthropic_batch_cache_prefiltered_items": 0,
+        "anthropic_batch_fallback_single_call_items": 0,
+        "anthropic_batch_completed_items": 0,
+        "anthropic_batch_failed_items": 0,
+    }
     strict_discussion_kept = 0
     strict_discussion_dropped = 0
     rounds = 0
@@ -1504,6 +1821,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             pool,
             concurrency_override=concurrency,
             run_id=run_id,
+            task=task,
         )
         promoted += result.get("promoted", 0)
         shadowed += result.get("shadowed", 0)
@@ -1512,6 +1830,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         generated += result.get("generated", 0)
         witness_rows += result.get("witness_rows", 0)
         witness_count += result.get("witness_count", 0)
+        for key in batch_metrics:
+            batch_metrics[key] += int(result.get(key, 0) or 0)
         rounds += 1
         await asyncio.sleep(1)
 
@@ -1544,6 +1864,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "orphaned_recovered": orphaned,
         "secondary_write_hits": secondary_write_hits,
         "secondary_write_breakdown": secondary_write_breakdown,
+        **batch_metrics,
         "strict_discussion_candidates_kept": strict_discussion_kept,
         "strict_discussion_candidates_dropped": strict_discussion_dropped,
         "low_signal_discussion_skipped": int(low_signal_discussion_skipped or 0),

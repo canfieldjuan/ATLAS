@@ -22,6 +22,10 @@ def _task() -> ScheduledTask:
     )
 
 
+def test_repair_batch_custom_id_is_anthropic_safe():
+    assert repair_mod._repair_batch_custom_id("1234-5678") == "repair_1234-5678"
+
+
 @pytest.mark.asyncio
 async def test_run_skips_when_repair_disabled(monkeypatch):
     monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
@@ -1683,3 +1687,103 @@ async def test_run_scopes_strict_discussion_gate_from_config(monkeypatch):
     args = pool.fetch.await_args.args
     assert args[6] == ["hackernews", "reddit"]
     assert args[7] == ["comment", "community_discussion"]
+
+
+@pytest.mark.asyncio
+async def test_repair_rows_uses_anthropic_batch_when_enabled(monkeypatch):
+    class FakeAnthropicLLM:
+        def __init__(self, model: str = "claude-haiku-4-5"):
+            self.model = model
+            self.name = "anthropic"
+
+    row_id = uuid4()
+    row = {
+        "id": row_id,
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk",
+        "product_category": "Help Desk",
+        "source": "reddit",
+        "summary": "Pricing issue",
+        "review_text": "Pricing increased and we are considering alternatives.",
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "enrichment": {
+            "specific_complaints": [],
+            "competitors_mentioned": [],
+            "pricing_phrases": [],
+            "recommendation_language": [],
+            "feature_gaps": [],
+            "event_mentions": [],
+        },
+        "enrichment_repair_attempts": 0,
+    }
+    cfg = SimpleNamespace(
+        enrichment_repair_max_attempts=2,
+        enrichment_repair_concurrency=2,
+        enrichment_repair_model="anthropic/claude-haiku-4-5",
+        enrichment_repair_max_tokens=256,
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+        enrichment_low_fidelity_enabled=False,
+        enrichment_repair_anthropic_batch_enabled=True,
+    )
+    task = _task()
+    task.metadata["anthropic_batch_enabled"] = True
+    task.metadata["enrichment_repair_anthropic_batch_enabled"] = True
+    pool = SimpleNamespace()
+    persist = AsyncMock(return_value="promoted")
+
+    monkeypatch.setattr("atlas_brain.services.llm.anthropic.AnthropicLLM", FakeAnthropicLLM)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_batch_utils.resolve_anthropic_batch_llm",
+        lambda **_kwargs: FakeAnthropicLLM(),
+    )
+    monkeypatch.setattr(repair_mod, "_repair_target_fields", lambda *_args, **_kwargs: ["specific_complaints"])
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_skill_stage_request",
+        lambda *args, **_kwargs: (
+            SimpleNamespace(namespace="ns", request_envelope={}, provider="openrouter", model="anthropic/claude-haiku-4-5"),
+            [
+                {"role": "system", "content": "repair prompt"},
+                {"role": "user", "content": "{}"},
+            ],
+        ),
+    )
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text", AsyncMock(return_value=None))
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                local_batch_id="batch-1",
+                provider_batch_id="provider-batch-1",
+                submitted_items=1,
+                cache_prefiltered_items=0,
+                fallback_single_call_items=0,
+                completed_items=1,
+                failed_items=0,
+                results_by_custom_id={
+                    repair_mod._repair_batch_custom_id(row_id): SimpleNamespace(
+                        response_text=json.dumps({"specific_complaints": ["pricing pressure"]}),
+                        cached=False,
+                        usage={},
+                        error_text=None,
+                    )
+                },
+            )
+        ),
+    )
+    monkeypatch.setattr(repair_mod, "_persist_repair_result", persist)
+
+    result = await repair_mod._repair_rows([row], cfg, pool, run_id="run-1", task=task)
+
+    assert result["promoted"] == 1
+    assert result["anthropic_batch_jobs"] == 1
+    assert result["anthropic_batch_items_submitted"] == 1
+    assert persist.await_count == 1
