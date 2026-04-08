@@ -63,6 +63,13 @@ def update_blog_index(index_path: Path, slug: str, var_name: str) -> bool:
         return False
 
     index_text = index_path.read_text(encoding="utf-8")
+
+    # Dynamic glob discovery -- posts are auto-discovered by filename pattern,
+    # so no static import or array entry is needed.
+    if "import.meta.glob" in index_text:
+        logger.debug("index.ts uses dynamic glob; skipping static registration for %s", slug)
+        return False
+
     import_line = f"import {var_name} from './{slug}'"
 
     # Already registered
