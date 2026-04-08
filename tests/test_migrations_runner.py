@@ -83,3 +83,20 @@ def test_find_duplicate_migration_prefixes_detects_repo_collisions():
             "272_b2b_watchlist_alert_events.sql",
         ]
     }
+
+
+def test_repo_migration_prefix_collisions_are_only_historical_exceptions():
+    from atlas_brain.storage.migrations import MIGRATIONS_DIR, _find_duplicate_migration_prefixes
+
+    duplicates = _find_duplicate_migration_prefixes(sorted(MIGRATIONS_DIR.glob("*.sql")))
+
+    assert duplicates == {
+        76: [
+            "076_consumer_analytics_views.sql",
+            "076_saas_accounts.sql",
+        ],
+        230: [
+            "230_b2b_reasoning_synthesis.sql",
+            "230_scrape_target_checkpoints.sql",
+        ],
+    }

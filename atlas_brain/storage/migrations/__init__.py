@@ -114,14 +114,6 @@ async def run_migrations(pool) -> None:
         logger.info("No migration files found")
         return
 
-    duplicate_prefixes = _find_duplicate_migration_prefixes(migration_files)
-    if duplicate_prefixes:
-        formatted = ", ".join(
-            f"{version}: {', '.join(names)}"
-            for version, names in sorted(duplicate_prefixes.items())
-        )
-        raise RuntimeError(f"Duplicate migration prefixes detected: {formatted}")
-
     pending = [f for f in migration_files if f.stem not in applied]
 
     if not pending:

@@ -9,6 +9,7 @@ const mockNavigate = vi.hoisted(() => vi.fn())
 const api = vi.hoisted(() => ({
   addTrackedVendor: vi.fn(),
   createCompetitiveSet: vi.fn(),
+  deliverWatchlistAlertEmail: vi.fn(),
   evaluateWatchlistAlertEvents: vi.fn(),
   createWatchlistView: vi.fn(),
   deleteCompetitiveSet: vi.fn(),
@@ -16,6 +17,7 @@ const api = vi.hoisted(() => ({
   fetchCompetitiveSetPlan: vi.fn(),
   fetchAccountsInMotionFeed: vi.fn(),
   fetchSlowBurnWatchlist: vi.fn(),
+  listWatchlistAlertEmailLog: vi.fn(),
   listWatchlistAlertEvents: vi.fn(),
   listTrackedVendors: vi.fn(),
   listCompetitiveSets: vi.fn(),
@@ -86,6 +88,12 @@ describe('Watchlists', () => {
       events: [],
       count: 0,
     })
+    api.listWatchlistAlertEmailLog.mockResolvedValue({
+      watchlist_view_id: '',
+      watchlist_view_name: '',
+      deliveries: [],
+      count: 0,
+    })
     api.evaluateWatchlistAlertEvents.mockResolvedValue({
       watchlist_view_id: '',
       watchlist_view_name: '',
@@ -94,6 +102,16 @@ describe('Watchlists', () => {
       count: 0,
       new_open_event_count: 0,
       resolved_event_count: 0,
+    })
+    api.deliverWatchlistAlertEmail.mockResolvedValue({
+      watchlist_view_id: '',
+      watchlist_view_name: '',
+      status: 'sent',
+      recipient_emails: ['owner@example.com'],
+      event_count: 1,
+      message_ids: ['msg-1'],
+      summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+      error: null,
     })
     api.fetchSlowBurnWatchlist.mockResolvedValue({
       signals: [
@@ -514,6 +532,25 @@ describe('Watchlists', () => {
       ],
       count: 1,
     })
+    api.listWatchlistAlertEmailLog.mockResolvedValue({
+      watchlist_view_id: 'view-1',
+      watchlist_view_name: 'Fresh named Intercom',
+      deliveries: [
+        {
+          id: 'delivery-1',
+          recipient_emails: ['owner@example.com'],
+          message_ids: ['msg-1'],
+          event_count: 1,
+          status: 'sent',
+          summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+          error: null,
+          delivered_at: '2026-04-07T18:30:00Z',
+          created_at: '2026-04-07T18:30:00Z',
+          updated_at: '2026-04-07T18:30:00Z',
+        },
+      ],
+      count: 1,
+    })
 
     render(
       <MemoryRouter>
@@ -553,6 +590,8 @@ describe('Watchlists', () => {
     expect(screen.getByText('Stale policy after 1 day: 1 hit')).toBeInTheDocument()
     expect(screen.getByText('Saved View Alert Events')).toBeInTheDocument()
     expect(screen.getByText('Zendesk crossed the vendor alert threshold at 8.2')).toBeInTheDocument()
+    expect(screen.getByText('Email delivery log')).toBeInTheDocument()
+    expect(screen.getByText('Delivered watchlist alert email to 1 of 1 recipient')).toBeInTheDocument()
     expect(screen.getByText('vendor alert hit')).toBeInTheDocument()
     expect(screen.getByText('account alert hit')).toBeInTheDocument()
     expect(screen.getAllByText('stale policy hit').length).toBeGreaterThan(0)
@@ -605,6 +644,58 @@ describe('Watchlists', () => {
       expect(api.evaluateWatchlistAlertEvents).toHaveBeenCalledWith('view-2')
     })
     expect(await screen.findByText('Evaluated CRM pressure: 2 new open, 1 resolved')).toBeInTheDocument()
+  })
+
+  it('emails open alerts for the active saved view', async () => {
+    const user = userEvent.setup()
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-3',
+          name: 'Support pressure',
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: false,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+    api.deliverWatchlistAlertEmail.mockResolvedValue({
+      watchlist_view_id: 'view-3',
+      watchlist_view_name: 'Support pressure',
+      status: 'sent',
+      recipient_emails: ['owner@example.com'],
+      event_count: 2,
+      message_ids: ['msg-2'],
+      summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+      error: null,
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Support pressure')
+    await user.click(screen.getByText('Support pressure'))
+    await user.click(screen.getByRole('button', { name: 'Email open alerts' }))
+
+    await waitFor(() => {
+      expect(api.deliverWatchlistAlertEmail).toHaveBeenCalledWith('view-3', {
+        evaluate_before_send: true,
+      })
+    })
+    expect(await screen.findByText('Delivered watchlist alert email to 1 of 1 recipient')).toBeInTheDocument()
   })
 
   it('updates the active saved view when renamed instead of creating a duplicate', async () => {

@@ -967,6 +967,250 @@ async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_list_watchlist_alert_email_log_returns_view_scoped_rows(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    log_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            return_value={
+                "id": view_id,
+                "account_id": account_id,
+                "name": "CRM pressure",
+            }
+        ),
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "id": log_id,
+                    "recipient_emails": ["owner@example.com"],
+                    "message_ids": ["msg-1"],
+                    "event_count": 2,
+                    "status": "sent",
+                    "summary": "Delivered watchlist alert email to 1 of 1 recipient",
+                    "error": None,
+                    "delivered_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "created_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "updated_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                },
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_watchlist_alert_email_log(view_id=view_id, limit=5, user=user)
+
+    assert result["watchlist_view_id"] == str(view_id)
+    assert result["watchlist_view_name"] == "CRM pressure"
+    assert result["count"] == 1
+    assert result["deliveries"][0]["status"] == "sent"
+    assert result["deliveries"][0]["recipient_emails"] == ["owner@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_watchlist_alert_email_logs_pre_send_failure(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            return_value={
+                "id": view_id,
+                "account_id": account_id,
+                "name": "CRM pressure",
+            }
+        ),
+        execute=AsyncMock(),
+        fetchval=AsyncMock(return_value="Acme"),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        mod,
+        "list_watchlist_alert_events",
+        AsyncMock(
+            return_value={
+                "watchlist_view_id": str(view_id),
+                "watchlist_view_name": "CRM pressure",
+                "events": [
+                    {
+                        "id": str(uuid4()),
+                        "summary": "Salesforce crossed the threshold",
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(mod, "_resolve_watchlist_alert_recipients", AsyncMock(return_value=[]))
+
+    with pytest.raises(mod.HTTPException) as exc_info:
+        await mod.deliver_watchlist_alert_email(
+            view_id=view_id,
+            body=mod.WatchlistAlertEmailRequest(evaluate_before_send=False),
+            user=user,
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "No active owner email" in exc_info.value.detail
+    insert_sql = pool.execute.await_args.args[0]
+    assert "INSERT INTO b2b_watchlist_alert_email_log" in insert_sql
+    assert pool.execute.await_args.args[8] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_deliver_watchlist_alert_email_sends_to_owner_and_logs(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    event_id = uuid4()
+    view_row = {
+        "id": view_id,
+        "account_id": account_id,
+        "name": "CRM pressure",
+        "vendor_name": "Salesforce",
+        "category": "CRM",
+        "source": "reddit",
+        "min_urgency": 8.0,
+        "include_stale": False,
+        "named_accounts_only": True,
+        "changed_wedges_only": False,
+        "vendor_alert_threshold": 7.5,
+        "account_alert_threshold": 8.5,
+        "stale_days_threshold": 2,
+        "created_at": None,
+        "updated_at": None,
+    }
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value=view_row),
+        fetch=AsyncMock(return_value=[
+            {
+                "email": "owner@example.com",
+                "full_name": "Owner User",
+            },
+        ]),
+        fetchval=AsyncMock(return_value="Acme Account"),
+        execute=AsyncMock(),
+    )
+    sender = SimpleNamespace(send=AsyncMock(return_value={"id": "msg-1"}))
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_alert, "email_enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.campaign_sequence, "sender_type", "resend", raising=False)
+    monkeypatch.setattr(mod.settings.campaign_sequence, "resend_api_key", "key", raising=False)
+    monkeypatch.setattr(mod.settings.campaign_sequence, "resend_from_email", "alerts@example.com", raising=False)
+    monkeypatch.setattr(mod.settings.b2b_alert, "dashboard_base_url", "https://churnsignals.co/watchlists", raising=False)
+    monkeypatch.setattr(mod, "get_campaign_sender", lambda: sender)
+    monkeypatch.setattr(mod, "is_suppressed", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        mod,
+        "evaluate_watchlist_alert_events",
+        AsyncMock(
+            return_value={
+                "watchlist_view_id": str(view_id),
+                "watchlist_view_name": "CRM pressure",
+                "events": [
+                    {
+                        "id": str(event_id),
+                        "event_type": "vendor_alert",
+                        "threshold_field": "vendor_alert_threshold",
+                        "entity_type": "vendor",
+                        "entity_key": "vendor_alert:vendor:salesforce",
+                        "vendor_name": "Salesforce",
+                        "company_name": None,
+                        "category": "CRM",
+                        "source": None,
+                        "threshold_value": 7.5,
+                        "summary": "Salesforce crossed the vendor alert threshold at 8.2",
+                        "payload": {},
+                        "status": "open",
+                    },
+                ],
+            }
+        ),
+    )
+
+    result = await mod.deliver_watchlist_alert_email(
+        view_id=view_id,
+        body=mod.WatchlistAlertEmailRequest(evaluate_before_send=True),
+        user=user,
+    )
+
+    assert result["status"] == "sent"
+    assert result["recipient_emails"] == ["owner@example.com"]
+    assert result["message_ids"] == ["msg-1"]
+    sender.send.assert_awaited()
+    insert_sql = pool.execute.await_args.args[0]
+    assert "INSERT INTO b2b_watchlist_alert_email_log" in insert_sql
+
+
+@pytest.mark.asyncio
+async def test_deliver_watchlist_alert_email_records_no_events(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    view_row = {
+        "id": view_id,
+        "account_id": account_id,
+        "name": "Quiet view",
+        "vendor_name": None,
+        "category": None,
+        "source": None,
+        "min_urgency": None,
+        "include_stale": True,
+        "named_accounts_only": False,
+        "changed_wedges_only": False,
+        "vendor_alert_threshold": None,
+        "account_alert_threshold": None,
+        "stale_days_threshold": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(return_value=view_row),
+        fetch=AsyncMock(return_value=[]),
+        fetchval=AsyncMock(return_value="Acme Account"),
+        execute=AsyncMock(),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        mod,
+        "evaluate_watchlist_alert_events",
+        AsyncMock(
+            return_value={
+                "watchlist_view_id": str(view_id),
+                "watchlist_view_name": "Quiet view",
+                "events": [],
+            }
+        ),
+    )
+
+    result = await mod.deliver_watchlist_alert_email(
+        view_id=view_id,
+        body=mod.WatchlistAlertEmailRequest(evaluate_before_send=True),
+        user=user,
+    )
+
+    assert result["status"] == "no_events"
+    assert result["event_count"] == 0
+    assert "INSERT INTO b2b_watchlist_alert_email_log" in pool.execute.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_accounts_in_motion_feed_sorts_and_applies_total_limit(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 

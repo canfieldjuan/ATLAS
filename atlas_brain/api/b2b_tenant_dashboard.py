@@ -9,7 +9,6 @@ import json
 import logging
 import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
-from html import escape
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -619,6 +618,45 @@ async def _send_watchlist_alert_email(
         return True, message_id, None, False
     except Exception as exc:
         return False, None, f"{recipient}: {exc}", False
+
+
+async def _record_watchlist_alert_email_log(
+    pool,
+    *,
+    log_id: _uuid.UUID,
+    account_id: _uuid.UUID,
+    view_id: _uuid.UUID,
+    event_ids: list[_uuid.UUID],
+    recipient_emails: list[str],
+    message_ids: list[str],
+    event_count: int,
+    status: str,
+    summary: str,
+    error: str | None,
+    delivered_at: datetime | None,
+    recorded_at: datetime,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO b2b_watchlist_alert_email_log (
+            id, account_id, watchlist_view_id, event_ids, recipient_emails, message_ids,
+            event_count, status, summary, error, delivered_at, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4::uuid[], $5::text[], $6::text[], $7, $8, $9, $10, $11, $12, $12)
+        """,
+        log_id,
+        account_id,
+        view_id,
+        event_ids,
+        recipient_emails,
+        message_ids,
+        event_count,
+        status,
+        summary,
+        error,
+        delivered_at,
+        recorded_at,
+    )
 
 
 def _pool_or_503():
@@ -2646,6 +2684,261 @@ async def evaluate_watchlist_alert_events(
         "count": len(events),
         "new_open_event_count": new_open_count,
         "resolved_event_count": len(resolved_ids),
+    }
+
+
+@router.get("/watchlist-views/{view_id}/alert-email-log")
+async def list_watchlist_alert_email_log(
+    view_id: _uuid.UUID,
+    limit: int = Query(10, ge=1, le=100),
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    view_row = await _fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
+    if not view_row:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+    rows = await pool.fetch(
+        """
+        SELECT id, recipient_emails, message_ids, event_count, status, summary, error,
+               delivered_at, created_at, updated_at
+        FROM b2b_watchlist_alert_email_log
+        WHERE account_id = $1
+          AND watchlist_view_id = $2
+        ORDER BY created_at DESC
+        LIMIT $3
+        """,
+        account_id,
+        view_id,
+        limit,
+    )
+    deliveries = [
+        {
+            "id": str(_row_value(row, "id")),
+            "recipient_emails": list(_row_value(row, "recipient_emails") or []),
+            "message_ids": list(_row_value(row, "message_ids") or []),
+            "event_count": int(_row_value(row, "event_count") or 0),
+            "status": _row_value(row, "status"),
+            "summary": _row_value(row, "summary"),
+            "error": _row_value(row, "error"),
+            "delivered_at": str(_row_value(row, "delivered_at")) if _row_value(row, "delivered_at") else None,
+            "created_at": str(_row_value(row, "created_at")) if _row_value(row, "created_at") else None,
+            "updated_at": str(_row_value(row, "updated_at")) if _row_value(row, "updated_at") else None,
+        }
+        for row in rows
+    ]
+    return {
+        "watchlist_view_id": str(view_id),
+        "watchlist_view_name": view_row["name"],
+        "deliveries": deliveries,
+        "count": len(deliveries),
+    }
+
+
+@router.post("/watchlist-views/{view_id}/alert-events/deliver-email")
+async def deliver_watchlist_alert_email(
+    view_id: _uuid.UUID,
+    body: WatchlistAlertEmailRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    view_row = await _fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
+    if not view_row:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+
+    if body.evaluate_before_send:
+        evaluation = await evaluate_watchlist_alert_events(view_id=view_id, user=user)
+        events = evaluation["events"]
+    else:
+        existing = await list_watchlist_alert_events(view_id=view_id, status="open", limit=25, user=user)
+        events = existing["events"]
+
+    now = datetime.now(timezone.utc)
+    event_ids = [_uuid.UUID(str(event["id"])) for event in events]
+    event_count = len(events)
+    recipients = await _resolve_watchlist_alert_recipients(pool, account_id=account_id)
+    recipient_emails = [item["email"] for item in recipients]
+    account_name = await pool.fetchval(
+        "SELECT name FROM saas_accounts WHERE id = $1",
+        account_id,
+    ) or "your account"
+
+    if not events:
+        log_id = _uuid.uuid4()
+        await _record_watchlist_alert_email_log(
+            pool,
+            log_id=log_id,
+            account_id=account_id,
+            view_id=view_id,
+            event_ids=event_ids,
+            recipient_emails=recipient_emails,
+            message_ids=[],
+            event_count=0,
+            status="no_events",
+            summary="No open alert events to deliver",
+            error=None,
+            delivered_at=now,
+            recorded_at=now,
+        )
+        return {
+            "watchlist_view_id": str(view_id),
+            "watchlist_view_name": view_row["name"],
+            "status": "no_events",
+            "recipient_emails": recipient_emails,
+            "event_count": 0,
+            "message_ids": [],
+        }
+
+    if not recipient_emails:
+        await _record_watchlist_alert_email_log(
+            pool,
+            log_id=_uuid.uuid4(),
+            account_id=account_id,
+            view_id=view_id,
+            event_ids=event_ids,
+            recipient_emails=[],
+            message_ids=[],
+            event_count=event_count,
+            status="failed",
+            summary="Watchlist alert email delivery failed before send",
+            error="No active owner email is configured for this account",
+            delivered_at=None,
+            recorded_at=now,
+        )
+        raise HTTPException(status_code=422, detail="No active owner email is configured for this account")
+    if not _watchlist_alert_sender_configured():
+        await _record_watchlist_alert_email_log(
+            pool,
+            log_id=_uuid.uuid4(),
+            account_id=account_id,
+            view_id=view_id,
+            event_ids=event_ids,
+            recipient_emails=recipient_emails,
+            message_ids=[],
+            event_count=event_count,
+            status="failed",
+            summary="Watchlist alert email delivery failed before send",
+            error="Campaign sender not configured for watchlist alert email delivery",
+            delivered_at=None,
+            recorded_at=now,
+        )
+        raise HTTPException(status_code=503, detail="Campaign sender not configured for watchlist alert email delivery")
+
+    try:
+        sender = get_campaign_sender()
+    except Exception as exc:
+        await _record_watchlist_alert_email_log(
+            pool,
+            log_id=_uuid.uuid4(),
+            account_id=account_id,
+            view_id=view_id,
+            event_ids=event_ids,
+            recipient_emails=recipient_emails,
+            message_ids=[],
+            event_count=event_count,
+            status="failed",
+            summary="Watchlist alert email delivery failed before send",
+            error=f"Campaign sender unavailable: {exc}",
+            delivered_at=None,
+            recorded_at=now,
+        )
+        raise HTTPException(status_code=503, detail=f"Campaign sender unavailable: {exc}")
+
+    from_addr = _watchlist_alert_from_email()
+    if not from_addr:
+        await _record_watchlist_alert_email_log(
+            pool,
+            log_id=_uuid.uuid4(),
+            account_id=account_id,
+            view_id=view_id,
+            event_ids=event_ids,
+            recipient_emails=recipient_emails,
+            message_ids=[],
+            event_count=event_count,
+            status="failed",
+            summary="Watchlist alert email delivery failed before send",
+            error="Campaign sender from-address is not configured",
+            delivered_at=None,
+            recorded_at=now,
+        )
+        raise HTTPException(status_code=503, detail="Campaign sender from-address is not configured")
+
+    manage_url = _watchlist_manage_url()
+    summary_line = f"{event_count} open saved-view alert{'s' if event_count != 1 else ''} are ready for review."
+    html_body = render_watchlist_alert_delivery_html(
+        account_name=str(account_name),
+        view_name=str(view_row["name"]),
+        summary_line=summary_line,
+        manage_url=manage_url,
+        events=_watchlist_alert_event_email_rows(events),
+    )
+    subject = f"Watchlist alerts: {view_row['name']}"
+
+    delivered_count = 0
+    suppressed_count = 0
+    message_ids: list[str] = []
+    errors: list[str] = []
+    for recipient in recipient_emails:
+        sent, message_id, send_error, suppressed = await _send_watchlist_alert_email(
+            pool,
+            sender,
+            recipient=recipient,
+            from_addr=from_addr,
+            subject=subject,
+            html_body=html_body,
+            view_name=str(view_row["name"]),
+        )
+        if sent:
+            delivered_count += 1
+            if message_id:
+                message_ids.append(message_id)
+        elif suppressed:
+            suppressed_count += 1
+            if send_error:
+                errors.append(send_error)
+        elif send_error:
+            errors.append(send_error)
+
+    status = "sent"
+    if delivered_count == 0:
+        status = "failed"
+    elif delivered_count < len(recipient_emails):
+        status = "partial"
+    summary = (
+        f"Delivered watchlist alert email to {delivered_count} of {len(recipient_emails)} recipient"
+        f"{'' if len(recipient_emails) == 1 else 's'}"
+    )
+    if suppressed_count > 0:
+        summary += f" ({suppressed_count} suppressed)"
+    error_text = "; ".join(errors) if errors else None
+    delivered_at = now if delivered_count > 0 else None
+    await _record_watchlist_alert_email_log(
+        pool,
+        log_id=_uuid.uuid4(),
+        account_id=account_id,
+        view_id=view_id,
+        event_ids=event_ids,
+        recipient_emails=recipient_emails,
+        message_ids=message_ids,
+        event_count=event_count,
+        status=status,
+        summary=summary,
+        error=error_text,
+        delivered_at=delivered_at,
+        recorded_at=now,
+    )
+    return {
+        "watchlist_view_id": str(view_id),
+        "watchlist_view_name": view_row["name"],
+        "status": status,
+        "recipient_emails": recipient_emails,
+        "event_count": event_count,
+        "message_ids": message_ids,
+        "summary": summary,
+        "error": error_text,
     }
 
 

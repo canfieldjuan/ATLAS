@@ -851,6 +851,19 @@ export interface WatchlistAlertEvent {
   updated_at: string | null
 }
 
+export interface WatchlistAlertEmailDelivery {
+  id: string
+  recipient_emails: string[]
+  message_ids: string[]
+  event_count: number
+  status: 'sent' | 'partial' | 'failed' | 'no_events'
+  summary: string
+  error: string | null
+  delivered_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
 export async function searchAvailableVendors(q: string) {
   return get<{ vendors: VendorSearchResult[]; count: number }>(TENANT_BASE, '/vendors/search', { q })
 }
@@ -942,6 +955,42 @@ export async function evaluateWatchlistAlertEvents(watchlistViewId: string) {
   }>(
     TENANT_BASE,
     `/watchlist-views/${encodeURIComponent(watchlistViewId)}/alert-events/evaluate`,
+  )
+}
+
+export async function listWatchlistAlertEmailLog(
+  watchlistViewId: string,
+  params?: { limit?: number },
+) {
+  return get<{
+    watchlist_view_id: string
+    watchlist_view_name: string
+    deliveries: WatchlistAlertEmailDelivery[]
+    count: number
+  }>(
+    TENANT_BASE,
+    `/watchlist-views/${encodeURIComponent(watchlistViewId)}/alert-email-log`,
+    params,
+  )
+}
+
+export async function deliverWatchlistAlertEmail(
+  watchlistViewId: string,
+  body?: { evaluate_before_send?: boolean },
+) {
+  return post<{
+    watchlist_view_id: string
+    watchlist_view_name: string
+    status: 'sent' | 'partial' | 'failed' | 'no_events'
+    recipient_emails: string[]
+    event_count: number
+    message_ids: string[]
+    summary: string
+    error: string | null
+  }>(
+    TENANT_BASE,
+    `/watchlist-views/${encodeURIComponent(watchlistViewId)}/alert-events/deliver-email`,
+    body,
   )
 }
 

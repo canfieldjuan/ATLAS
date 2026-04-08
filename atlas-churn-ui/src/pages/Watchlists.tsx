@@ -21,6 +21,7 @@ import useApiData from '../hooks/useApiData'
 import {
   addTrackedVendor,
   createCompetitiveSet,
+  deliverWatchlistAlertEmail,
   evaluateWatchlistAlertEvents,
   createWatchlistView,
   deleteCompetitiveSet,
@@ -28,6 +29,7 @@ import {
   fetchCompetitiveSetPlan,
   fetchAccountsInMotionFeed,
   fetchSlowBurnWatchlist,
+  listWatchlistAlertEmailLog,
   listWatchlistAlertEvents,
   listTrackedVendors,
   listCompetitiveSets,
@@ -312,6 +314,7 @@ export default function Watchlists() {
   const [savingWatchlistView, setSavingWatchlistView] = useState(false)
   const [deletingWatchlistViewId, setDeletingWatchlistViewId] = useState<string | null>(null)
   const [evaluatingWatchlistViewId, setEvaluatingWatchlistViewId] = useState<string | null>(null)
+  const [emailingWatchlistViewId, setEmailingWatchlistViewId] = useState<string | null>(null)
   const [savingCompetitiveSet, setSavingCompetitiveSet] = useState(false)
   const [runningCompetitiveSetId, setRunningCompetitiveSetId] = useState<string | null>(null)
   const [previewingCompetitiveSetId, setPreviewingCompetitiveSetId] = useState<string | null>(null)
@@ -515,6 +518,25 @@ export default function Watchlists() {
     [activeWatchlistView?.id],
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
+  const {
+    data: activeAlertEmailLogData,
+    refresh: refreshAlertEmailLog,
+    refreshing: refreshingAlertEmailLog,
+  } = useApiData(
+    async () => {
+      if (!activeWatchlistView) {
+        return {
+          watchlist_view_id: '',
+          watchlist_view_name: '',
+          deliveries: [],
+          count: 0,
+        }
+      }
+      return listWatchlistAlertEmailLog(activeWatchlistView.id, { limit: 5 })
+    },
+    [activeWatchlistView?.id],
+    { refreshOnFocus: false, refreshOnReconnect: false },
+  )
   const filteredFeed = useMemo(
     () => (changedWedgesOnly ? feed.filter((row) => Boolean(row.reasoning_delta?.wedge_changed)) : feed),
     [changedWedgesOnly, feed],
@@ -578,6 +600,7 @@ export default function Watchlists() {
   )
   const staleThresholdHitCount = vendorStaleThresholdHitCount + accountStaleThresholdHitCount
   const activeAlertEvents = activeAlertEventsData?.events ?? []
+  const activeAlertEmailDeliveries = activeAlertEmailLogData?.deliveries ?? []
   const hasActiveAlertPolicy = (
     activeVendorAlertThreshold != null
     || activeAccountAlertThreshold != null
@@ -726,6 +749,30 @@ export default function Watchlists() {
       setActionError(err instanceof Error ? err.message : 'Failed to evaluate watchlist alerts')
     } finally {
       setEvaluatingWatchlistViewId(null)
+    }
+  }
+
+  async function handleEmailWatchlistAlerts() {
+    if (!activeWatchlistView) {
+      setActionError('Save or apply a watchlist view before emailing alerts')
+      setActionMessage(null)
+      return
+    }
+    setEmailingWatchlistViewId(activeWatchlistView.id)
+    setActionError(null)
+    setActionMessage(null)
+    try {
+      const result = await deliverWatchlistAlertEmail(activeWatchlistView.id, {
+        evaluate_before_send: true,
+      })
+      setActionMessage(result.summary)
+      refresh()
+      refreshAlertEvents()
+      refreshAlertEmailLog()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to email watchlist alerts')
+    } finally {
+      setEmailingWatchlistViewId(null)
     }
   }
 
@@ -1379,13 +1426,22 @@ export default function Watchlists() {
               Persisted alert hits are tied to saved views so the same policy can drive UI review now and scheduled delivery later.
             </p>
           </div>
-          <button
-            className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
-            onClick={handleEvaluateWatchlistAlerts}
-            disabled={!activeWatchlistView || evaluatingWatchlistViewId === activeWatchlistView?.id}
-          >
-            {evaluatingWatchlistViewId === activeWatchlistView?.id ? 'Evaluating...' : 'Evaluate alerts'}
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+              onClick={handleEvaluateWatchlistAlerts}
+              disabled={!activeWatchlistView || evaluatingWatchlistViewId === activeWatchlistView?.id}
+            >
+              {evaluatingWatchlistViewId === activeWatchlistView?.id ? 'Evaluating...' : 'Evaluate alerts'}
+            </button>
+            <button
+              className="rounded-md bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+              onClick={handleEmailWatchlistAlerts}
+              disabled={!activeWatchlistView || emailingWatchlistViewId === activeWatchlistView?.id}
+            >
+              {emailingWatchlistViewId === activeWatchlistView?.id ? 'Emailing...' : 'Email open alerts'}
+            </button>
+          </div>
         </div>
         {!activeWatchlistView ? (
           <div className="mt-4 rounded-lg border border-dashed border-slate-700/50 px-3 py-4 text-sm text-slate-500">
@@ -1445,6 +1501,40 @@ export default function Watchlists() {
                 ))}
               </div>
             )}
+            <div className="rounded-lg border border-slate-800/60 bg-slate-950/40 p-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-medium text-slate-200">Email delivery log</span>
+                {refreshingAlertEmailLog ? (
+                  <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-400">
+                    refreshing
+                  </span>
+                ) : null}
+              </div>
+              {activeAlertEmailDeliveries.length === 0 ? (
+                <div className="mt-2 text-sm text-slate-500">No watchlist alert emails have been sent for this saved view yet.</div>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {activeAlertEmailDeliveries.map((delivery) => (
+                    <div key={delivery.id} className="rounded-md border border-slate-800/60 bg-slate-900/50 px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-200">
+                          {delivery.status}
+                        </span>
+                        <span className="text-slate-400">{delivery.event_count} event{delivery.event_count === 1 ? '' : 's'}</span>
+                        <span className="text-slate-500">{formatTs(delivery.delivered_at || delivery.created_at)}</span>
+                      </div>
+                      <div className="mt-1 text-sm text-slate-200">{delivery.summary}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {delivery.recipient_emails.join(', ') || '--'}
+                      </div>
+                      {delivery.error ? (
+                        <div className="mt-1 text-xs text-rose-300">{delivery.error}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
