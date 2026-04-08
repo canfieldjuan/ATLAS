@@ -95,6 +95,9 @@ export default function Opportunities() {
   // -- Local hide --
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set())
 
+  // -- Campaign refresh signal: increment to trigger CampaignQueue refetch --
+  const [campaignRefreshKey, setCampaignRefreshKey] = useState(0)
+
   // -- Generate --
   const [generating, setGenerating] = useState<string | null>(null)
   const [bulkGenerating, setBulkGenerating] = useState(false)
@@ -130,13 +133,13 @@ export default function Opportunities() {
 
   // -- Campaign status lookup --
   const { data: campaignData, refresh: refreshCampaigns } = useApiData(
-    () => fetchCampaigns({ limit: 200 }),
+    () => fetchCampaigns({ limit: 100 }),
     [],
   )
   const campaignMap = useMemo(() => {
     const map = new Map<string, { drafts: number; approved: number; sent: number; total: number }>()
     for (const c of campaignData?.campaigns ?? []) {
-      const key = `${c.company_name}::${c.vendor_name}`
+      const key = `${(c.company_name ?? '').toLowerCase()}::${(c.vendor_name ?? '').toLowerCase()}`
       const entry = map.get(key) ?? { drafts: 0, approved: 0, sent: 0, total: 0 }
       entry.total++
       if (c.status === 'draft') entry.drafts++
@@ -216,6 +219,7 @@ export default function Opportunities() {
       setGenResult(`Generated ${result.generated ?? 0} campaign(s) for ${row.company}`)
       refresh()
       refreshCampaigns()
+      setCampaignRefreshKey((k) => k + 1)
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Generation failed')
     } finally {
@@ -247,6 +251,7 @@ export default function Opportunities() {
       setSelectedIds(new Set())
       refresh()
       refreshCampaigns()
+      setCampaignRefreshKey((k) => k + 1)
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Bulk generation failed')
     } finally {
@@ -269,12 +274,21 @@ export default function Opportunities() {
           vendor: r.vendor,
           urgency: r.urgency,
           pain: r.pain ?? undefined,
+          role_type: r.role_level ?? undefined,
           buying_stage: r.buying_stage ?? undefined,
           contract_end: r.contract_end ?? undefined,
+          decision_timeline: r.contract_signal ?? undefined,
           decision_maker: r.decision_maker ?? undefined,
+          competitor_context: r.alternatives?.[0]?.name ?? undefined,
+          primary_quote: r.quotes?.[0] ?? undefined,
+          trust_tier: r.resolution_confidence ?? undefined,
+          source: r.source ?? undefined,
+          review_id: r.review_id ?? undefined,
           seat_count: r.seat_count ?? undefined,
           industry: r.industry ?? undefined,
+          company_size: r.company_size ?? undefined,
           company_domain: r.company_domain ?? undefined,
+          company_country: r.company_country ?? undefined,
           revenue_range: r.revenue_range ?? undefined,
           alternatives: r.alternatives?.map((a) => a.name).filter(Boolean) ?? [],
         })),
@@ -336,7 +350,7 @@ export default function Opportunities() {
       key: 'company',
       header: 'Company',
       render: (r) => {
-        const cs = campaignMap.get(`${r.company}::${r.vendor}`)
+        const cs = campaignMap.get(`${(r.company ?? '').toLowerCase()}::${(r.vendor ?? '').toLowerCase()}`)
         return (
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
@@ -696,6 +710,8 @@ export default function Opportunities() {
           onGenerate={canAccessCampaigns ? handleGenerate : undefined}
           onHide={handleHide}
           generating={generating === rowKey(expandedRow)}
+          campaignRefreshKey={campaignRefreshKey}
+          onCampaignAction={refreshCampaigns}
         />
       )}
     </div>
@@ -715,16 +731,20 @@ const CAMPAIGN_STATUS_COLORS: Record<string, string> = {
   expired: 'bg-slate-500/20 text-slate-400',
 }
 
-function CampaignQueue({ company, vendor }: { company: string; vendor: string }) {
+function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: string; vendor: string; refreshKey?: number; onAction?: () => void }) {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
 
   const { data, loading, refresh } = useApiData(
     () => fetchCampaigns({ company, vendor, limit: 20 }),
-    [company, vendor],
+    [company, vendor, refreshKey],
   )
 
-  const campaigns = data?.campaigns ?? []
+  // Filter to exact company match (backend uses ILIKE substring)
+  const campaigns = (data?.campaigns ?? []).filter(
+    (c) => c.company_name.toLowerCase() === company.toLowerCase()
+      && c.vendor_name.toLowerCase() === vendor.toLowerCase(),
+  )
   const drafts = campaigns.filter((c) => c.status === 'draft')
   const others = campaigns.filter((c) => c.status !== 'draft')
 
@@ -735,6 +755,7 @@ function CampaignQueue({ company, vendor }: { company: string; vendor: string })
       await approveCampaign(c.id)
       setResult(`Approved: ${c.subject ?? c.channel}`)
       refresh()
+      onAction?.()
     } catch (err) {
       setResult(err instanceof Error ? err.message : 'Approve failed')
     } finally {
@@ -749,6 +770,7 @@ function CampaignQueue({ company, vendor }: { company: string; vendor: string })
       await updateCampaign(c.id, { status: 'cancelled' })
       setResult(`Rejected: ${c.subject ?? c.channel}`)
       refresh()
+      onAction?.()
     } catch (err) {
       setResult(err instanceof Error ? err.message : 'Reject failed')
     } finally {
@@ -853,12 +875,16 @@ function EvidencePanel({
   onGenerate,
   onHide,
   generating,
+  campaignRefreshKey,
+  onCampaignAction,
 }: {
   row: HighIntentCompany
   onClose: () => void
   onGenerate?: (row: HighIntentCompany) => void
   onHide?: (row: HighIntentCompany) => void
   generating: boolean
+  campaignRefreshKey?: number
+  onCampaignAction?: () => void
 }) {
   const signals = row.intent_signals
   const alternatives = Array.isArray(row.alternatives)
@@ -1044,7 +1070,7 @@ function EvidencePanel({
           <Mail className="h-4 w-4 text-cyan-400" />
           <h4 className="text-sm font-medium text-white">Generated Campaigns</h4>
         </div>
-        <CampaignQueue company={row.company} vendor={row.vendor} />
+        <CampaignQueue company={row.company} vendor={row.vendor} refreshKey={campaignRefreshKey} onAction={onCampaignAction} />
       </div>
 
       {/* Actions */}

@@ -50,6 +50,7 @@ import type {
   AdminTaskHealthRow,
   DedupDecision,
   PipelineReviewAction,
+  ReasoningReferenceIds,
 } from '../types'
 import { normalizeReportDetail, normalizeVendorProfile } from '../lib/reportNormalization'
 
@@ -433,12 +434,21 @@ export async function pushToCrm(
     vendor: string
     urgency: number
     pain?: string
+    role_type?: string
     buying_stage?: string
     contract_end?: string
+    decision_timeline?: string
     decision_maker?: boolean | null
+    competitor_context?: string
+    primary_quote?: string
+    trust_tier?: string
+    source?: string | null
+    review_id?: string | null
     seat_count?: number | null
     industry?: string | null
+    company_size?: string | null
     company_domain?: string | null
+    company_country?: string | null
     revenue_range?: string | null
     alternatives?: string[]
   }[],
@@ -809,6 +819,19 @@ export async function runCompetitiveSetNow(
 }
 
 export interface AccountsInMotionFeedItem {
+  source_reviews: Array<{
+    id: string
+    source: string | null
+    source_url: string | null
+    vendor_name: string
+    rating: number | null
+    summary: string | null
+    review_excerpt: string | null
+    reviewer_name: string | null
+    reviewer_title: string | null
+    reviewer_company: string | null
+    reviewed_at: string | null
+  }>
   company: string | null
   vendor: string
   watch_vendor: string
@@ -829,7 +852,10 @@ export interface AccountsInMotionFeedItem {
   opportunity_score: number | null
   quote_match_type: string | null
   confidence: number | null
+  reasoning_reference_ids: ReasoningReferenceIds | null
   source_distribution: Record<string, number>
+  source_review_ids: string[]
+  evidence_count: number
   enriched_at: string | null
   employee_count: number | null
   industry: string | null

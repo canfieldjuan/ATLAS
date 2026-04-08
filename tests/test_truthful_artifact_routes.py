@@ -467,6 +467,17 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
                         "vendor": "Salesforce",
                         "urgency": 8.5,
                         "pain": "pricing",
+                        "role_type": "revops",
+                        "buying_stage": "evaluation",
+                        "contract_end": "2026-06-30",
+                        "decision_timeline": "renewal in 60 days",
+                        "competitor_context": "HubSpot",
+                        "primary_quote": "We need better renewal controls.",
+                        "trust_tier": "high",
+                        "source": "reddit",
+                        "review_id": "review-1",
+                        "company_size": "51-200",
+                        "company_country": "US",
                     }
                 ]
             },
@@ -481,6 +492,10 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
     assert envelope["event"] == "high_intent_push"
     assert envelope["vendor"] == "Salesforce"
     assert envelope["data"]["company_name"] == "Acme"
+    assert envelope["data"]["role_type"] == "revops"
+    assert envelope["data"]["competitor_context"] == "HubSpot"
+    assert envelope["data"]["primary_quote"] == "We need better renewal controls."
+    assert envelope["data"]["trust_tier"] == "high"
     assert "company" not in envelope["data"]
     assert log_push.await_count == 1
 

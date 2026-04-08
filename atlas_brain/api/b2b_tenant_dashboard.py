@@ -223,7 +223,8 @@ async def _fetch_report_subscription_row(
             FROM b2b_report_subscription_delivery_log
             WHERE subscription_id = s.id
               AND status <> 'processing'
-            ORDER BY delivered_at DESC
+            ORDER BY CASE WHEN delivery_mode = 'live' THEN 0 ELSE 1 END,
+                     delivered_at DESC
             LIMIT 1
         ) dl ON TRUE
         WHERE s.account_id = $1::uuid
@@ -474,12 +475,21 @@ class PushToCrmOpportunity(BaseModel):
     vendor: str = Field(..., min_length=1, max_length=200)
     urgency: float = Field(..., ge=0, le=10)
     pain: str | None = None
+    role_type: str | None = None
     buying_stage: str | None = None
     contract_end: str | None = None
+    decision_timeline: str | None = None
     decision_maker: bool | None = None
+    competitor_context: str | None = None
+    primary_quote: str | None = None
+    trust_tier: str | None = None
+    source: str | None = None
+    review_id: str | None = None
     seat_count: int | None = None
     industry: str | None = None
+    company_size: str | None = None
     company_domain: str | None = None
+    company_country: str | None = None
     revenue_range: str | None = None
     alternatives: list[str] | None = None
 
