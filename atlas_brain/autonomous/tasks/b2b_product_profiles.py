@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+from types import SimpleNamespace
 from typing import Any
 
 import math
@@ -25,6 +26,7 @@ from ...services.scraping.sources import VERIFIED_SOURCES
 from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._execution_progress import task_run_id as _task_run_id
 
 
 def _compute_profile_confidence(
@@ -77,6 +79,12 @@ def _normalize_test_vendors(raw: Any) -> list[str]:
         return normalized
     value = str(raw).strip()
     return [value] if value else []
+
+
+def _profile_batch_custom_id(raw_vendor: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw_vendor or "").strip())
+    normalized = normalized.strip("_") or "vendor"
+    return f"profile_{normalized[:56]}"
 
 
 def _safe_json(value: Any, default: Any = None) -> Any:
@@ -590,6 +598,86 @@ def _log_product_profile_cache_trace(
     )
 
 
+def _build_profile_synthesis_payload(
+    *,
+    vendor_name: str,
+    metrics: dict[str, Any],
+    strengths: list[dict],
+    weaknesses: list[dict],
+    use_cases: list[dict],
+    integrations: list[str],
+    competitive: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "vendor_name": vendor_name,
+        "product_category": metrics.get("product_category"),
+        "total_reviews": metrics.get("total_reviews", 0),
+        "avg_rating": metrics.get("avg_rating"),
+        "strengths": strengths[:8],
+        "weaknesses": weaknesses[:8],
+        "use_cases": use_cases[:5],
+        "integrations": integrations[:10],
+        "competitive_data": {
+            "commonly_compared_to": competitive.get("compared_to", {})
+            if isinstance(competitive.get("compared_to"), dict)
+            else competitive.get("compared_to", []),
+            "commonly_switched_from": competitive.get("switched_from", {})
+            if isinstance(competitive.get("switched_from"), dict)
+            else competitive.get("switched_from", []),
+        },
+        "pain_categories": _PAIN_CATEGORIES,
+    }
+
+
+def _clean_profile_synthesis_text(text: str | None) -> str | None:
+    if not text:
+        return None
+    candidate = str(text or "").strip()
+    candidate = re.sub(r"<think>[\s\S]*?</think>", "", candidate).strip()
+    candidate = re.sub(r"^```(?:json)?\s*\n?", "", candidate)
+    candidate = re.sub(r"\n?```\s*$", "", candidate)
+    candidate = candidate.strip()
+    return candidate or None
+
+
+def _validated_profile_pain_scores(
+    llm_pain: dict[str, Any],
+    pain_heuristic: dict[str, float],
+) -> dict[str, float]:
+    validated_pain: dict[str, float] = {}
+    for cat in _PAIN_CATEGORIES:
+        if cat in llm_pain:
+            score = _safe_float(llm_pain[cat], -1)
+            if 0.0 <= score <= 1.0:
+                validated_pain[cat] = round(score, 2)
+            else:
+                validated_pain[cat] = pain_heuristic.get(cat, 0.5)
+        else:
+            validated_pain[cat] = pain_heuristic.get(cat, 0.5)
+    return validated_pain
+
+
+def _parse_profile_synthesis_text(
+    text: str | None,
+    *,
+    pain_heuristic: dict[str, float],
+) -> tuple[str | None, dict[str, float]] | None:
+    cleaned = _clean_profile_synthesis_text(text)
+    if not cleaned:
+        return None
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    return (
+        parsed.get("summary"),
+        _validated_profile_pain_scores(
+            parsed.get("pain_addressed", {}) if isinstance(parsed.get("pain_addressed"), dict) else {},
+            pain_heuristic,
+        ),
+    )
+
+
 async def _synthesize_profile(
     vendor_name: str,
     metrics: dict,
@@ -618,25 +706,15 @@ async def _synthesize_profile(
         logger.warning("Skill 'b2b/product_profile_synthesis' not found, using heuristic only")
         return None, pain_heuristic
 
-    payload = {
-        "vendor_name": vendor_name,
-        "product_category": metrics.get("product_category"),
-        "total_reviews": metrics.get("total_reviews", 0),
-        "avg_rating": metrics.get("avg_rating"),
-        "strengths": strengths[:8],
-        "weaknesses": weaknesses[:8],
-        "use_cases": use_cases[:5],
-        "integrations": integrations[:10],
-        "competitive_data": {
-            "commonly_compared_to": competitive.get("compared_to", {})
-            if isinstance(competitive.get("compared_to"), dict)
-            else competitive.get("compared_to", []),
-            "commonly_switched_from": competitive.get("switched_from", {})
-            if isinstance(competitive.get("switched_from"), dict)
-            else competitive.get("switched_from", []),
-        },
-        "pain_categories": _PAIN_CATEGORIES,
-    }
+    payload = _build_profile_synthesis_payload(
+        vendor_name=vendor_name,
+        metrics=metrics,
+        strengths=strengths,
+        weaknesses=weaknesses,
+        use_cases=use_cases,
+        integrations=integrations,
+        competitive=competitive,
+    )
 
     cfg = settings.b2b_churn
     backend = cfg.product_profile_llm_backend
@@ -675,17 +753,9 @@ async def _synthesize_profile(
         cache_hit = cached is not None
         text: str | None = None
         if cached is not None:
-            candidate = str(cached["response_text"] or "").strip()
-            candidate = re.sub(r"<think>[\s\S]*?</think>", "", candidate).strip()
-            candidate = re.sub(r"^```(?:json)?\s*\n?", "", candidate)
-            candidate = re.sub(r"\n?```\s*$", "", candidate)
-            candidate = candidate.strip()
-            try:
-                json.loads(candidate)
-            except json.JSONDecodeError:
+            text = _clean_profile_synthesis_text(str(cached["response_text"] or ""))
+            if _parse_profile_synthesis_text(text, pain_heuristic=pain_heuristic) is None:
                 text = None
-            else:
-                text = candidate
 
         if backend == "openrouter":
             if text is None:
@@ -696,35 +766,15 @@ async def _synthesize_profile(
         if not text:
             return None, pain_heuristic
 
-        # Strip <think>...</think> tags (qwen3 thinking tokens)
-        text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
-
-        # Strip markdown code fences (```json ... ```)
-        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
-        text = re.sub(r"\n?```\s*$", "", text)
-        text = text.strip()
-
-        parsed = json.loads(text)
-
-        summary = parsed.get("summary")
-        llm_pain = parsed.get("pain_addressed", {})
-
-        # Validate and merge LLM pain scores
-        validated_pain: dict[str, float] = {}
-        for cat in _PAIN_CATEGORIES:
-            if cat in llm_pain:
-                score = _safe_float(llm_pain[cat], -1)
-                if 0.0 <= score <= 1.0:
-                    validated_pain[cat] = round(score, 2)
-                else:
-                    validated_pain[cat] = pain_heuristic.get(cat, 0.5)
-            else:
-                validated_pain[cat] = pain_heuristic.get(cat, 0.5)
+        parsed = _parse_profile_synthesis_text(text, pain_heuristic=pain_heuristic)
+        if parsed is None:
+            raise json.JSONDecodeError("Invalid product profile synthesis JSON", text, 0)
+        summary, validated_pain = parsed
 
         if not cache_hit:
             await store_b2b_exact_stage_text(
                 request,
-                response_text=text,
+                response_text=_clean_profile_synthesis_text(text) or text,
                 metadata={
                     "vendor_name": vendor_name,
                     "product_category": metrics.get("product_category"),
@@ -949,6 +999,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     max_tokens = cfg.product_profile_max_tokens
 
     logger.info("Starting product profile generation (window=%dd, min_reviews=%d)", window_days, min_reviews)
+    run_id = _task_run_id(task)
 
     # 1. Fetch all data dimensions in parallel
     (
@@ -989,105 +1040,367 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         logger.info("No vendors with >= %d enriched reviews, nothing to generate", min_reviews)
         return {"_skip_synthesis": "No vendors meet min review threshold", "vendors": 0}
 
-    # 2. Build and upsert profiles (bounded concurrency for LLM calls)
+    # 2. Build vendor contexts, then synthesize/upsert profiles.
     generated = 0
     failed = 0
-    _sem = asyncio.Semaphore(5)  # max 5 concurrent vLLM synthesis calls
+    batch_metrics = {
+        "anthropic_batch_jobs": 0,
+        "anthropic_batch_items_submitted": 0,
+        "anthropic_batch_cache_prefiltered_items": 0,
+        "anthropic_batch_fallback_single_call_items": 0,
+        "anthropic_batch_completed_items": 0,
+        "anthropic_batch_failed_items": 0,
+        "anthropic_batch_reused_completed_items": 0,
+        "anthropic_batch_reused_pending_items": 0,
+    }
+    vendor_entries: list[dict[str, Any]] = []
+    for raw_vendor, metrics in aggregate_metrics.items():
+        vendor_name = await resolve_vendor_name(raw_vendor)
+        satisfaction = satisfaction_data.get(raw_vendor, [])
+        strengths, weaknesses = _build_strengths_weaknesses(satisfaction)
+        use_cases = _build_use_cases(
+            use_case_data.get(raw_vendor, []),
+            metrics["total_reviews"],
+        )
+        company_size = _build_company_size(
+            company_size_data.get(raw_vendor, {}),
+        )
+        compared_to, switched_from = _build_competitive_positioning(
+            competitive_data.get(raw_vendor, {}),
+        )
+        integrations = _build_top_integrations(
+            integration_data.get(raw_vendor, {}),
+        )
+        pain_heuristic = _compute_pain_addressed_heuristic(
+            pain_data.get(raw_vendor, {}),
+            satisfaction,
+            metrics["total_reviews"],
+        )
+        vendor_entries.append(
+            {
+                "raw_vendor": raw_vendor,
+                "vendor_name": vendor_name,
+                "metrics": metrics,
+                "strengths": strengths,
+                "weaknesses": weaknesses,
+                "use_cases": use_cases,
+                "company_size": company_size,
+                "compared_to": compared_to,
+                "switched_from": switched_from,
+                "integrations": integrations,
+                "pain_heuristic": pain_heuristic,
+                "source_distribution": source_dist_data.get(raw_vendor, {}),
+            }
+        )
+
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
+    )
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
+    )
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.protocols import Message
+    from ...skills import get_skill_registry
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        reconcile_existing_batch_artifacts,
+        resolve_anthropic_batch_llm,
+    )
+
+    backend = str(cfg.product_profile_llm_backend or "").strip().lower()
+    batch_requested = (
+        backend == "openrouter"
+        and anthropic_batch_requested(
+            task,
+            global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+            task_default=bool(getattr(cfg, "product_profile_anthropic_batch_enabled", True)),
+            task_keys=("product_profile_anthropic_batch_enabled",),
+        )
+    )
+    batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=SimpleNamespace(name="openrouter", model=str(cfg.product_profile_openrouter_model or "")),
+            target_model_candidates=(cfg.product_profile_openrouter_model,),
+        )
+        if batch_requested
+        else None
+    )
+    if not isinstance(batch_llm, AnthropicLLM):
+        batch_llm = None
+    skill = get_skill_registry().get("b2b/product_profile_synthesis")
+
+    async def _upsert_vendor_profile(
+        entry: dict[str, Any],
+        *,
+        summary: str | None,
+        pain_addressed: dict[str, float],
+    ) -> None:
+        profile = {
+            "vendor_name": entry["vendor_name"],
+            "product_category": entry["metrics"].get("product_category"),
+            "strengths": entry["strengths"],
+            "weaknesses": entry["weaknesses"],
+            "pain_addressed": pain_addressed,
+            "total_reviews_analyzed": entry["metrics"]["total_reviews"],
+            "avg_rating": entry["metrics"].get("avg_rating"),
+            "recommend_rate": entry["metrics"].get("recommend_rate"),
+            "avg_urgency": entry["metrics"].get("avg_urgency"),
+            "primary_use_cases": entry["use_cases"],
+            "typical_company_size": entry["company_size"],
+            "typical_industries": [],
+            "top_integrations": entry["integrations"],
+            "commonly_compared_to": entry["compared_to"],
+            "commonly_switched_from": entry["switched_from"],
+            "profile_summary": summary,
+            "source_distribution": entry["source_distribution"],
+            "sample_review_ids": entry["metrics"].get("sample_review_ids", []),
+            "review_window_start": entry["metrics"].get("review_window_start"),
+            "review_window_end": entry["metrics"].get("review_window_end"),
+            "confidence_score": _compute_profile_confidence(
+                entry["metrics"]["total_reviews"],
+                entry["source_distribution"],
+            ),
+        }
+        await _upsert_profile(pool, profile)
+        logger.info(
+            "Generated profile for %s (%d reviews, %d strengths, %d weaknesses)",
+            entry["vendor_name"],
+            entry["metrics"]["total_reviews"],
+            len(entry["strengths"]),
+            len(entry["weaknesses"]),
+        )
+
+    _sem = asyncio.Semaphore(5)
     _http_client = httpx.AsyncClient(timeout=120)
 
-    async def _process_vendor(raw_vendor: str, metrics: dict) -> bool:
+    async def _fallback_process_entry(entry: dict[str, Any]) -> bool:
         nonlocal generated, failed
         try:
-            vendor_name = await resolve_vendor_name(raw_vendor)
-            satisfaction = satisfaction_data.get(raw_vendor, [])
-            strengths, weaknesses = _build_strengths_weaknesses(satisfaction)
-
-            use_cases = _build_use_cases(
-                use_case_data.get(raw_vendor, []),
-                metrics["total_reviews"],
-            )
-
-            company_size = _build_company_size(
-                company_size_data.get(raw_vendor, {}),
-            )
-
-            compared_to, switched_from = _build_competitive_positioning(
-                competitive_data.get(raw_vendor, {}),
-            )
-
-            integrations = _build_top_integrations(
-                integration_data.get(raw_vendor, {}),
-            )
-
-            pain_heuristic = _compute_pain_addressed_heuristic(
-                pain_data.get(raw_vendor, {}),
-                satisfaction,
-                metrics["total_reviews"],
-            )
-
-            # LLM synthesis (summary + validated pain scores) -- rate-limited
             async with _sem:
                 summary, pain_addressed = await _synthesize_profile(
-                    vendor_name=vendor_name,
-                    metrics=metrics,
-                    strengths=strengths,
-                    weaknesses=weaknesses,
-                    use_cases=use_cases,
-                    integrations=integrations,
+                    vendor_name=entry["vendor_name"],
+                    metrics=entry["metrics"],
+                    strengths=entry["strengths"],
+                    weaknesses=entry["weaknesses"],
+                    use_cases=entry["use_cases"],
+                    integrations=entry["integrations"],
                     competitive={
-                        "compared_to": compared_to,
-                        "switched_from": switched_from,
+                        "compared_to": entry["compared_to"],
+                        "switched_from": entry["switched_from"],
                     },
-                    pain_heuristic=pain_heuristic,
+                    pain_heuristic=entry["pain_heuristic"],
                     max_tokens=max_tokens,
                     client=_http_client,
                 )
-
-            profile = {
-                "vendor_name": vendor_name,
-                "product_category": metrics.get("product_category"),
-                "strengths": strengths,
-                "weaknesses": weaknesses,
-                "pain_addressed": pain_addressed,
-                "total_reviews_analyzed": metrics["total_reviews"],
-                "avg_rating": metrics.get("avg_rating"),
-                "recommend_rate": metrics.get("recommend_rate"),
-                "avg_urgency": metrics.get("avg_urgency"),
-                "primary_use_cases": use_cases,
-                "typical_company_size": company_size,
-                "typical_industries": [],  # populated from reviewer_industry in future
-                "top_integrations": integrations,
-                "commonly_compared_to": compared_to,
-                "commonly_switched_from": switched_from,
-                "profile_summary": summary,
-                "source_distribution": source_dist_data.get(raw_vendor, {}),
-                "sample_review_ids": metrics.get("sample_review_ids", []),
-                "review_window_start": metrics.get("review_window_start"),
-                "review_window_end": metrics.get("review_window_end"),
-                "confidence_score": _compute_profile_confidence(
-                    metrics["total_reviews"],
-                    source_dist_data.get(raw_vendor, {}),
-                ),
-            }
-
-            await _upsert_profile(pool, profile)
+            await _upsert_vendor_profile(entry, summary=summary, pain_addressed=pain_addressed)
             generated += 1
-            logger.info(
-                "Generated profile for %s (%d reviews, %d strengths, %d weaknesses)",
-                vendor_name, metrics["total_reviews"], len(strengths), len(weaknesses),
-            )
             return True
-
         except Exception:
-            logger.exception("Failed to generate profile for %s", raw_vendor)
+            logger.exception("Failed to generate profile for %s", entry["raw_vendor"])
             failed += 1
             return False
 
     try:
-        await asyncio.gather(
-            *[_process_vendor(v, m) for v, m in aggregate_metrics.items()],
-            return_exceptions=True,
-        )
+        if batch_llm is not None and skill is not None:
+            existing_batch_results = await reconcile_existing_batch_artifacts(
+                pool=pool,
+                llm=batch_llm,
+                task_name="b2b_product_profiles",
+                artifact_type="product_profile",
+                artifact_ids=[str(entry["raw_vendor"]) for entry in vendor_entries],
+            )
+            pending_existing_items = 0
+            remaining_vendor_entries: list[dict[str, Any]] = []
+            for entry in vendor_entries:
+                existing = existing_batch_results.get(str(entry["raw_vendor"]))
+                if existing and existing.get("state") == "succeeded":
+                    parsed = _parse_profile_synthesis_text(
+                        existing.get("response_text"),
+                        pain_heuristic=entry["pain_heuristic"],
+                    )
+                    if parsed is not None:
+                        summary, pain_addressed = parsed
+                        await _upsert_vendor_profile(
+                            entry,
+                            summary=summary,
+                            pain_addressed=pain_addressed,
+                        )
+                        generated += 1
+                        continue
+                if existing and existing.get("state") == "pending":
+                    pending_existing_items += 1
+                    logger.info(
+                        "Skipping duplicate product-profile submission for %s; existing Anthropic batch item %s is still pending",
+                        entry["vendor_name"],
+                        existing.get("custom_id"),
+                    )
+                    continue
+                remaining_vendor_entries.append(entry)
+
+            vendor_entries = remaining_vendor_entries
+            batch_metrics["anthropic_batch_reused_completed_items"] = generated
+            batch_metrics["anthropic_batch_reused_pending_items"] = pending_existing_items
+
+            if not vendor_entries:
+                snapshots_persisted = await _persist_profile_snapshots(pool, generated)
+                return {
+                    "vendors_processed": generated,
+                    "vendors_failed": failed,
+                    "total_eligible": len(aggregate_metrics),
+                    "snapshots_persisted": snapshots_persisted,
+                    **batch_metrics,
+                }
+
+            prepared_entries: list[dict[str, Any]] = []
+            for entry in vendor_entries:
+                payload = _build_profile_synthesis_payload(
+                    vendor_name=entry["vendor_name"],
+                    metrics=entry["metrics"],
+                    strengths=entry["strengths"],
+                    weaknesses=entry["weaknesses"],
+                    use_cases=entry["use_cases"],
+                    integrations=entry["integrations"],
+                    competitive={
+                        "compared_to": entry["compared_to"],
+                        "switched_from": entry["switched_from"],
+                    },
+                )
+                messages = [
+                    {"role": "system", "content": skill.content},
+                    {"role": "user", "content": json.dumps(payload, default=str)},
+                ]
+                request = prepare_b2b_exact_stage_request(
+                    "b2b_product_profiles.synthesis",
+                    provider="openrouter",
+                    model=str(cfg.product_profile_openrouter_model or ""),
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.3,
+                )
+                cached = await lookup_b2b_exact_stage_text(request)
+                _log_product_profile_cache_trace(
+                    cfg=cfg,
+                    phase="lookup_hit" if cached is not None else "lookup_miss",
+                    request=request,
+                    vendor_name=entry["vendor_name"],
+                    payload=payload,
+                    cached=cached,
+                )
+                prepared_entries.append(
+                    {
+                        **entry,
+                        "payload": payload,
+                        "request": request,
+                        "messages": messages,
+                        "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                        "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                    }
+                )
+
+            execution = await run_anthropic_message_batch(
+                llm=batch_llm,
+                stage_id="b2b_product_profiles.synthesis",
+                task_name="b2b_product_profiles",
+                items=[
+                    AnthropicBatchItem(
+                        custom_id=_profile_batch_custom_id(str(entry["raw_vendor"])),
+                        artifact_type="product_profile",
+                        artifact_id=str(entry["raw_vendor"]),
+                        vendor_name=entry["vendor_name"],
+                        messages=[
+                            Message(role=str(message["role"]), content=str(message["content"]))
+                            for message in entry["messages"]
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=0.3,
+                        trace_span_name="task.b2b_product_profiles.synthesis",
+                        trace_metadata={
+                            "vendor_name": entry["vendor_name"],
+                            "raw_vendor": entry["raw_vendor"],
+                            "workload": "anthropic_batch",
+                        },
+                        request_metadata={"vendor_name": entry["vendor_name"]},
+                        cached_response_text=entry["cached_response_text"],
+                        cached_usage=entry["cached_usage"],
+                    )
+                    for entry in prepared_entries
+                ],
+                run_id=run_id,
+                min_batch_size=anthropic_batch_min_items(
+                    task,
+                    default=int(getattr(cfg, "product_profile_anthropic_batch_min_items", 2)),
+                    keys=("product_profile_anthropic_batch_min_items",),
+                ),
+                batch_metadata={"stage": "profile_synthesis"},
+                pool=pool,
+            )
+            batch_metrics["anthropic_batch_jobs"] += 1 if execution.provider_batch_id else 0
+            batch_metrics["anthropic_batch_items_submitted"] += execution.submitted_items
+            batch_metrics["anthropic_batch_cache_prefiltered_items"] += execution.cache_prefiltered_items
+            batch_metrics["anthropic_batch_fallback_single_call_items"] += execution.fallback_single_call_items
+            batch_metrics["anthropic_batch_completed_items"] += execution.completed_items
+            batch_metrics["anthropic_batch_failed_items"] += execution.failed_items
+
+            fallback_entries: list[dict[str, Any]] = []
+            for entry in prepared_entries:
+                custom_id = _profile_batch_custom_id(str(entry["raw_vendor"]))
+                outcome = execution.results_by_custom_id.get(custom_id)
+                parsed = _parse_profile_synthesis_text(
+                    outcome.response_text if outcome is not None else None,
+                    pain_heuristic=entry["pain_heuristic"],
+                )
+                if parsed is None:
+                    fallback_entries.append(entry)
+                    if outcome is not None:
+                        await mark_batch_fallback_result(
+                            batch_id=execution.local_batch_id,
+                            custom_id=custom_id,
+                            succeeded=False,
+                            error_text=outcome.error_text or "profile_batch_parse_failed",
+                            pool=pool,
+                        )
+                    continue
+
+                summary, pain_addressed = parsed
+                if not (outcome is not None and outcome.cached):
+                    cleaned = _clean_profile_synthesis_text(outcome.response_text if outcome is not None else None)
+                    if cleaned:
+                        await store_b2b_exact_stage_text(
+                            entry["request"],
+                            response_text=cleaned,
+                            metadata={
+                                "vendor_name": entry["vendor_name"],
+                                "product_category": entry["metrics"].get("product_category"),
+                                "backend": "anthropic_batch",
+                            },
+                        )
+                        _log_product_profile_cache_trace(
+                            cfg=cfg,
+                            phase="store",
+                            request=entry["request"],
+                            vendor_name=entry["vendor_name"],
+                            payload=entry["payload"],
+                            response_text=cleaned,
+                        )
+                await _upsert_vendor_profile(entry, summary=summary, pain_addressed=pain_addressed)
+                generated += 1
+
+            if fallback_entries:
+                await asyncio.gather(
+                    *[_fallback_process_entry(entry) for entry in fallback_entries],
+                    return_exceptions=True,
+                )
+        else:
+            await asyncio.gather(
+                *[_fallback_process_entry(entry) for entry in vendor_entries],
+                return_exceptions=True,
+            )
     finally:
         await _http_client.aclose()
 
@@ -1107,4 +1420,5 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "failed": failed,
         "total_eligible": len(aggregate_metrics),
         "snapshots_persisted": snapshots_persisted,
+        **batch_metrics,
     }
