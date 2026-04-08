@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Benchmark B2B enrichment models against the production end-to-end pipeline.
+"""Benchmark B2B enrichment models against the current two-tier production pipeline.
 
 This script mirrors the deployed enrichment flow as closely as possible:
   1. Skip too-short reviews (`not_applicable`)
-  2. Run triage for non-verified sources
-  3. Skip full extraction when triage returns `signal=false` (`no_signal`)
-  4. Build the production extraction payload with smart truncation
-  5. Clean, parse, and validate/coerce extraction output with production logic
+  2. Build the production extraction payload with smart truncation
+  3. Run Tier 1 extraction
+  4. Run conditional Tier 2 classification when Tier 1 leaves extraction gaps
+  5. Merge, finalize, validate, and map the result to `enriched`, `no_signal`, or `quarantined`
 
-It is therefore a benchmark of pipeline outcomes, not just raw prompt responses.
+It benchmarks actual pipeline outcomes, not just raw prompt responses.
 
 Usage:
   cd /home/juan-canfield/Desktop/Atlas
@@ -41,6 +41,12 @@ load_dotenv(_ROOT / ".env.local", override=True)
 from atlas_brain.autonomous.tasks.b2b_enrichment import (
     _MIN_REVIEW_TEXT_LENGTH,
     _build_classify_payload,
+    _detect_low_fidelity_reasons,
+    _finalize_enrichment_for_persist,
+    _is_no_signal_result,
+    _merge_tier1_tier2,
+    _tier1_has_extraction_gaps,
+    _tier2_system_prompt_for_content_type,
     _validate_enrichment,
 )
 from atlas_brain.config import settings
@@ -57,23 +63,50 @@ logging.getLogger("atlas.llm").setLevel(logging.WARNING)
 logging.getLogger("atlas.registry").setLevel(logging.WARNING)
 
 
-BASELINE = {
-    "id": "openrouter/hunter-alpha",
-    "label": "Hunter Alpha",
-    "input_cost": 0.00,
-    "output_cost": 0.00,
-}
+def _model_label(model_id: str) -> str:
+    model_id = str(model_id or "").strip()
+    if not model_id:
+        return "Unknown Model"
+    if model_id == "anthropic/claude-haiku-4-5":
+        return "Claude Haiku 4.5"
+    if "/" in model_id:
+        return model_id.split("/", 1)[1]
+    return model_id
 
-CHALLENGERS = [
-    {
-        "id": "openai/gpt-4.1",
-        "label": "GPT-4.1",
-        "input_cost": 2.00,
-        "output_cost": 8.00,
-    },
-]
 
-ALL_MODELS = [BASELINE] + CHALLENGERS
+def _model_costs(model_id: str) -> tuple[float, float]:
+    model_norm = str(model_id or "").strip().lower()
+    if "claude" in model_norm and "haiku" in model_norm:
+        return (0.25, 1.25)
+    return (1.10, 4.40)
+
+
+def _default_model_ids() -> list[str]:
+    primary = (
+        str(settings.b2b_churn.enrichment_tier2_openrouter_model or "").strip()
+        or str(settings.b2b_churn.enrichment_openrouter_model or "").strip()
+        or "anthropic/claude-haiku-4-5"
+    )
+    return [primary]
+
+
+def _resolve_models(explicit_models: list[str] | None) -> list[dict[str, Any]]:
+    ids = explicit_models or _default_model_ids()
+    models: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for model_id in ids:
+        normalized = str(model_id or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        input_cost, output_cost = _model_costs(normalized)
+        models.append({
+            "id": normalized,
+            "label": _model_label(normalized),
+            "input_cost": input_cost,
+            "output_cost": output_cost,
+        })
+    return models
 
 
 async def fetch_sample(pool, per_bucket: int = 10):
@@ -175,22 +208,6 @@ async def fetch_sample(pool, per_bucket: int = 10):
     return buckets
 
 
-def build_triage_payload(row) -> str:
-    """Build the same compact payload production triage uses."""
-    review_text = (row.get("review_text") or "")[:1500]
-    payload = {
-        "vendor_name": row["vendor_name"],
-        "source": row.get("source") or "",
-        "content_type": row.get("content_type") or "review",
-        "rating": float(row["rating"]) if row.get("rating") is not None else None,
-        "summary": row.get("summary") or "",
-        "review_text": review_text,
-        "pros": (row.get("pros") or "")[:300],
-        "cons": (row.get("cons") or "")[:300],
-    }
-    return json.dumps(payload)
-
-
 async def call_openrouter(
     client: httpx.AsyncClient,
     model_id: str,
@@ -272,7 +289,10 @@ def score_extraction(parsed: dict[str, Any] | None, review_text: str) -> dict[st
 
     valid_pains = {
         "pricing", "features", "reliability", "support", "integration",
-        "performance", "security", "ux", "onboarding", "other",
+        "performance", "security", "ux", "onboarding", "technical_debt",
+        "contract_lock_in", "data_migration", "api_limitations",
+        "outcome_gap", "admin_burden", "ai_hallucination",
+        "integration_debt", "other", "overall_dissatisfaction",
     }
     scores["valid_pain_category"] = parsed.get("pain_category") in valid_pains
 
@@ -349,8 +369,8 @@ def aggregate_scores(results: list[dict[str, Any]]) -> dict[str, Any]:
         "total": len(results),
         "enriched": len(enriched),
         "no_signal": sum(1 for r in results if r.get("pipeline_outcome") == "no_signal"),
+        "quarantined": sum(1 for r in results if r.get("pipeline_outcome") == "quarantined"),
         "not_applicable": sum(1 for r in results if r.get("pipeline_outcome") == "not_applicable"),
-        "triage_failed": sum(1 for r in results if r.get("pipeline_outcome") == "triage_failed"),
         "invalid_extraction": sum(1 for r in results if r.get("pipeline_outcome") == "invalid_extraction"),
         "api_error": sum(1 for r in results if r.get("pipeline_outcome") == "api_error"),
         "valid_json": sum(1 for r in results if r["scores"].get("valid_json")),
@@ -360,6 +380,14 @@ def aggregate_scores(results: list[dict[str, Any]]) -> dict[str, Any]:
         "total_cost_usd": round(sum(r["cost_usd"] for r in results), 4),
         "total_input_tokens": sum(r["input_tokens"] for r in results),
         "total_output_tokens": sum(r["output_tokens"] for r in results),
+        "tier1_calls": sum(1 for r in results if (r.get("tier1_metrics") or {}).get("called")),
+        "tier1_input_tokens": sum((r.get("tier1_metrics") or {}).get("input_tokens", 0) for r in results),
+        "tier1_output_tokens": sum((r.get("tier1_metrics") or {}).get("output_tokens", 0) for r in results),
+        "tier1_cost_usd": round(sum((r.get("tier1_metrics") or {}).get("cost_usd", 0.0) for r in results), 4),
+        "tier2_calls": sum(1 for r in results if (r.get("tier2_metrics") or {}).get("called")),
+        "tier2_input_tokens": sum((r.get("tier2_metrics") or {}).get("input_tokens", 0) for r in results),
+        "tier2_output_tokens": sum((r.get("tier2_metrics") or {}).get("output_tokens", 0) for r in results),
+        "tier2_cost_usd": round(sum((r.get("tier2_metrics") or {}).get("cost_usd", 0.0) for r in results), 4),
     }
 
     agg["valid_json_pct"] = round(agg["valid_json"] * 100 / agg["total"], 1)
@@ -400,6 +428,9 @@ def aggregate_scores(results: list[dict[str, Any]]) -> dict[str, Any]:
         agg["avg_latency_ms"] = int(sum(latencies) / len(latencies))
         agg["p95_latency_ms"] = int(sorted(latencies)[int(len(latencies) * 0.95)])
 
+    if agg["total"] > 0:
+        agg["tier2_trigger_rate"] = round(agg["tier2_calls"] * 100 / agg["total"], 1)
+
     return agg
 
 
@@ -416,19 +447,18 @@ async def run_pipeline_for_model(
     model: dict[str, Any],
     entry: dict[str, Any],
     api_key: str,
-    extraction_prompt: str,
-    triage_prompt: str,
+    tier1_prompt: str,
+    tier2_prompt: str,
 ) -> dict[str, Any]:
-    """Run the production-like enrichment pipeline for one model and one review."""
+    """Run the current production-like two-tier enrichment pipeline for one review."""
     row = entry["row"]
     review_text = row.get("review_text") or ""
-    source = (row.get("source") or "").lower().strip()
-    is_verified = source in VERIFIED_SOURCES
 
     output: dict[str, Any] = {
         "review_id": entry["review_id"],
         "pipeline_outcome": "api_error",
-        "triage": None,
+        "tier1": None,
+        "tier2": None,
         "parsed": None,
         "scores": {"valid_json": False},
         "latency_ms": 0,
@@ -436,6 +466,20 @@ async def run_pipeline_for_model(
         "output_tokens": 0,
         "cost_usd": 0.0,
         "error": None,
+        "tier1_metrics": {
+            "called": False,
+            "latency_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+        },
+        "tier2_metrics": {
+            "called": False,
+            "latency_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+        },
     }
 
     if len(review_text) < _MIN_REVIEW_TEXT_LENGTH:
@@ -447,77 +491,119 @@ async def run_pipeline_for_model(
     total_output_tokens = 0
     total_cost_usd = 0.0
 
-    if not is_verified:
-        triage_result = await call_openrouter(
-            client,
-            model["id"],
-            triage_prompt,
-            build_triage_payload(row),
-            api_key,
-            max_tokens=256,
-            temperature=0.0,
-        )
-        total_latency_ms += triage_result["latency_ms"]
-        total_input_tokens += triage_result["input_tokens"]
-        total_output_tokens += triage_result["output_tokens"]
-        total_cost_usd += _cost_usd(triage_result, model)
+    tier1_payload = _build_classify_payload(
+        row,
+        settings.b2b_churn.review_truncate_length,
+    )
+    tier1_payload_json = json.dumps(tier1_payload, separators=(",", ":"))
 
-        if not triage_result["success"]:
-            output["pipeline_outcome"] = "api_error"
-            output["error"] = triage_result.get("error")
-            output["latency_ms"] = total_latency_ms
-            output["input_tokens"] = total_input_tokens
-            output["output_tokens"] = total_output_tokens
-            output["cost_usd"] = round(total_cost_usd, 6)
-            return output
-
-        triage = parse_json_response(triage_result["content"])
-        output["triage"] = triage
-        if triage is None or "signal" not in triage:
-            output["pipeline_outcome"] = "triage_failed"
-            output["latency_ms"] = total_latency_ms
-            output["input_tokens"] = total_input_tokens
-            output["output_tokens"] = total_output_tokens
-            output["cost_usd"] = round(total_cost_usd, 6)
-            return output
-
-        if not triage.get("signal", True):
-            output["pipeline_outcome"] = "no_signal"
-            output["latency_ms"] = total_latency_ms
-            output["input_tokens"] = total_input_tokens
-            output["output_tokens"] = total_output_tokens
-            output["cost_usd"] = round(total_cost_usd, 6)
-            return output
-
-    extraction_result = await call_openrouter(
+    tier1_result = await call_openrouter(
         client,
         model["id"],
-        extraction_prompt,
-        json.dumps(_build_classify_payload(row, settings.b2b_churn.review_truncate_length)),
+        tier1_prompt,
+        tier1_payload_json,
         api_key,
-        max_tokens=settings.b2b_churn.enrichment_max_tokens,
-        temperature=0.1,
+        max_tokens=max(settings.b2b_churn.enrichment_tier1_max_tokens, 4096),
+        temperature=0.0,
     )
-    total_latency_ms += extraction_result["latency_ms"]
-    total_input_tokens += extraction_result["input_tokens"]
-    total_output_tokens += extraction_result["output_tokens"]
-    total_cost_usd += _cost_usd(extraction_result, model)
+    total_latency_ms += tier1_result["latency_ms"]
+    total_input_tokens += tier1_result["input_tokens"]
+    total_output_tokens += tier1_result["output_tokens"]
+    tier1_cost_usd = _cost_usd(tier1_result, model)
+    total_cost_usd += tier1_cost_usd
+    output["tier1_metrics"] = {
+        "called": True,
+        "latency_ms": tier1_result["latency_ms"],
+        "input_tokens": tier1_result["input_tokens"],
+        "output_tokens": tier1_result["output_tokens"],
+        "cost_usd": tier1_cost_usd,
+    }
 
     output["latency_ms"] = total_latency_ms
     output["input_tokens"] = total_input_tokens
     output["output_tokens"] = total_output_tokens
     output["cost_usd"] = round(total_cost_usd, 6)
 
-    if not extraction_result["success"]:
+    if not tier1_result["success"]:
         output["pipeline_outcome"] = "api_error"
-        output["error"] = extraction_result.get("error")
+        output["error"] = tier1_result.get("error")
         return output
 
-    parsed = parse_json_response(extraction_result["content"])
-    if parsed and _validate_enrichment(parsed, row):
-        output["pipeline_outcome"] = "enriched"
-        output["parsed"] = parsed
-        output["scores"] = score_extraction(parsed, review_text)
+    tier1 = parse_json_response(tier1_result["content"])
+    output["tier1"] = tier1
+    if not isinstance(tier1, dict):
+        output["pipeline_outcome"] = "invalid_extraction"
+        return output
+
+    tier2 = None
+    if _tier1_has_extraction_gaps(tier1, source=row.get("source")):
+        tier2_payload = dict(tier1_payload)
+        tier2_payload["tier1_specific_complaints"] = tier1.get("specific_complaints", [])
+        tier2_payload["tier1_quotable_phrases"] = tier1.get("quotable_phrases", [])
+        tier2_payload_json = json.dumps(tier2_payload, separators=(",", ":"))
+        tier2_system_prompt = _tier2_system_prompt_for_content_type(
+            tier2_prompt,
+            tier2_payload.get("content_type"),
+        )
+        tier2_result = await call_openrouter(
+            client,
+            model["id"],
+            tier2_system_prompt,
+            tier2_payload_json,
+            api_key,
+            max_tokens=settings.b2b_churn.enrichment_tier2_max_tokens,
+            temperature=0.0,
+        )
+        total_latency_ms += tier2_result["latency_ms"]
+        total_input_tokens += tier2_result["input_tokens"]
+        total_output_tokens += tier2_result["output_tokens"]
+        tier2_cost_usd = _cost_usd(tier2_result, model)
+        total_cost_usd += tier2_cost_usd
+        output["tier2_metrics"] = {
+            "called": True,
+            "latency_ms": tier2_result["latency_ms"],
+            "input_tokens": tier2_result["input_tokens"],
+            "output_tokens": tier2_result["output_tokens"],
+            "cost_usd": tier2_cost_usd,
+        }
+        output["latency_ms"] = total_latency_ms
+        output["input_tokens"] = total_input_tokens
+        output["output_tokens"] = total_output_tokens
+        output["cost_usd"] = round(total_cost_usd, 6)
+        if not tier2_result["success"]:
+            output["pipeline_outcome"] = "api_error"
+            output["error"] = tier2_result.get("error")
+            return output
+        tier2 = parse_json_response(tier2_result["content"])
+        output["tier2"] = tier2
+        if tier2 is not None and not isinstance(tier2, dict):
+            output["pipeline_outcome"] = "invalid_extraction"
+            return output
+
+    merged = _merge_tier1_tier2(tier1, tier2)
+    finalized, finalize_error = _finalize_enrichment_for_persist(merged, row)
+    if finalize_error == "validation_failed" or finalized is None:
+        output["pipeline_outcome"] = "invalid_extraction"
+        return output
+    if finalize_error == "compute_failed":
+        output["pipeline_outcome"] = "quarantined"
+        output["error"] = "finalize_compute_failed"
+        return output
+    if finalized and _validate_enrichment(finalized, row):
+        output["parsed"] = finalized
+        output["scores"] = score_extraction(finalized, review_text)
+        low_fidelity_reasons = (
+            _detect_low_fidelity_reasons(row, finalized)
+            if settings.b2b_churn.enrichment_low_fidelity_enabled
+            else []
+        )
+        if low_fidelity_reasons:
+            output["pipeline_outcome"] = "quarantined"
+            output["error"] = ",".join(low_fidelity_reasons)
+        elif _is_no_signal_result(finalized, row):
+            output["pipeline_outcome"] = "no_signal"
+        else:
+            output["pipeline_outcome"] = "enriched"
         return output
 
     output["pipeline_outcome"] = "invalid_extraction"
@@ -532,11 +618,21 @@ async def main():
                     help="Output file path")
     ap.add_argument("--concurrency", type=int, default=10,
                     help="Concurrent reviews per model")
+    ap.add_argument(
+        "--model",
+        action="append",
+        default=None,
+        help="OpenRouter model id to benchmark. Repeat to compare multiple models. Default: active enrichment model.",
+    )
     args = ap.parse_args()
 
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         logger.error("OPENROUTER_API_KEY not set")
+        return
+    all_models = _resolve_models(args.model)
+    if not all_models:
+        logger.error("No benchmark models configured")
         return
 
     from atlas_brain.skills import get_skill_registry
@@ -566,10 +662,10 @@ async def main():
         await close_database()
         return
 
-    extraction_skill = get_skill_registry().get("digest/b2b_churn_extraction")
-    triage_skill = get_skill_registry().get("digest/b2b_churn_triage")
-    if not extraction_skill or not triage_skill:
-        logger.error("Required skills missing: extraction=%s triage=%s", bool(extraction_skill), bool(triage_skill))
+    tier1_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
+    tier2_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
+    if not tier1_skill or not tier2_skill:
+        logger.error("Required skills missing: tier1=%s tier2=%s", bool(tier1_skill), bool(tier2_skill))
         await close_database()
         return
 
@@ -597,7 +693,7 @@ async def main():
 
     logger.info("Benchmark sample: %d unique reviews", len(entries))
 
-    model_results: dict[str, list[dict[str, Any]]] = {m["label"]: [] for m in ALL_MODELS}
+    model_results: dict[str, list[dict[str, Any]]] = {m["label"]: [] for m in all_models}
 
     async with httpx.AsyncClient() as client:
 
@@ -615,8 +711,8 @@ async def main():
                         model,
                         entry,
                         api_key,
-                        extraction_skill.content,
-                        triage_skill.content,
+                        tier1_skill.content,
+                        tier2_skill.content,
                     )
                 done_count += 1
                 if done_count % 10 == 0:
@@ -635,7 +731,8 @@ async def main():
                     results.append({
                         "review_id": entries[i]["review_id"],
                         "pipeline_outcome": "api_error",
-                        "triage": None,
+                        "tier1": None,
+                        "tier2": None,
                         "parsed": None,
                         "latency_ms": 0,
                         "input_tokens": 0,
@@ -643,16 +740,19 @@ async def main():
                         "cost_usd": 0.0,
                         "scores": {"valid_json": False},
                         "error": str(result),
+                        "tier1_metrics": {"called": False, "latency_ms": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+                        "tier2_metrics": {"called": False, "latency_ms": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
                     })
                 else:
                     results.append(result)
 
             agg = aggregate_scores(results)
             logger.info(
-                "  %s complete: enriched=%d no_signal=%d invalid=%d api_error=%d cost=$%.4f",
+                "  %s complete: enriched=%d no_signal=%d quarantined=%d invalid=%d api_error=%d cost=$%.4f",
                 label,
                 agg.get("enriched", 0),
                 agg.get("no_signal", 0),
+                agg.get("quarantined", 0),
                 agg.get("invalid_extraction", 0),
                 agg.get("api_error", 0),
                 agg.get("total_cost_usd", 0.0),
@@ -660,30 +760,34 @@ async def main():
             return results
 
         # Run ALL models in parallel
-        logger.info("Launching %d models in parallel...", len(ALL_MODELS))
+        logger.info("Launching %d models in parallel...", len(all_models))
         all_results = await asyncio.gather(
-            *[_run_model(m) for m in ALL_MODELS], return_exceptions=True,
+            *[_run_model(m) for m in all_models], return_exceptions=True,
         )
 
-        for model, result in zip(ALL_MODELS, all_results):
+        for model, result in zip(all_models, all_results):
             if isinstance(result, Exception):
                 logger.error("Model %s failed entirely: %s", model["label"], result)
                 model_results[model["label"]] = [{
                     "review_id": e["review_id"],
                     "pipeline_outcome": "api_error",
-                    "triage": None, "parsed": None,
+                    "tier1": None, "tier2": None, "parsed": None,
                     "latency_ms": 0, "input_tokens": 0, "output_tokens": 0,
                     "cost_usd": 0.0, "scores": {"valid_json": False},
                     "error": str(result),
+                    "tier1_metrics": {"called": False, "latency_ms": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
+                    "tier2_metrics": {"called": False, "latency_ms": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0},
                 } for e in entries]
             else:
                 model_results[model["label"]] = result
 
-    aggregates = {model["label"]: aggregate_scores(model_results[model["label"]]) for model in ALL_MODELS}
+    aggregates = {model["label"]: aggregate_scores(model_results[model["label"]]) for model in all_models}
 
-    baseline_label = BASELINE["label"]
+    baseline = all_models[0]
+    baseline_label = baseline["label"]
+    challengers = all_models[1:]
     agreement: dict[str, Any] = {}
-    for model in CHALLENGERS:
+    for model in challengers:
         label = model["label"]
         outcome_match = 0
         urgency_deltas = []
@@ -744,7 +848,7 @@ async def main():
             "existing_urgency": entry["existing_urgency"],
             "existing_pain": entry["existing_pain"],
         }
-        for model in ALL_MODELS:
+        for model in all_models:
             label = model["label"]
             result = model_results[label][i]
             parsed = result.get("parsed") or {}
@@ -752,6 +856,10 @@ async def main():
             comparison[f"{label}_urgency"] = parsed.get("urgency_score") if isinstance(parsed, dict) else None
             comparison[f"{label}_pain"] = parsed.get("pain_category") if isinstance(parsed, dict) else None
             comparison[f"{label}_latency"] = result["latency_ms"]
+            comparison[f"{label}_tier1_input_tokens"] = (result.get("tier1_metrics") or {}).get("input_tokens", 0)
+            comparison[f"{label}_tier2_input_tokens"] = (result.get("tier2_metrics") or {}).get("input_tokens", 0)
+            comparison[f"{label}_tier1_output_tokens"] = (result.get("tier1_metrics") or {}).get("output_tokens", 0)
+            comparison[f"{label}_tier2_output_tokens"] = (result.get("tier2_metrics") or {}).get("output_tokens", 0)
             comparison[f"{label}_valid"] = result["scores"].get("valid_json", False)
         review_comparisons.append(comparison)
 
@@ -762,7 +870,7 @@ async def main():
             bucket: sum(1 for entry in entries if entry["bucket"] == bucket)
             for bucket in buckets
         },
-        "models": {m["label"]: m["id"] for m in ALL_MODELS},
+        "models": {m["label"]: m["id"] for m in all_models},
         "aggregates": aggregates,
         "agreement_vs_baseline": agreement,
         "reviews": review_comparisons,
@@ -775,10 +883,10 @@ async def main():
     print("END-TO-END ENRICHMENT BENCHMARK")
     print("=" * 110)
     print(f"Sample: {len(entries)} unique reviews across {len(buckets)} buckets")
-    print(f"Baseline: {BASELINE['label']} ({BASELINE['id']})")
+    print(f"Baseline: {baseline['label']} ({baseline['id']})")
     print()
 
-    labels = [m["label"] for m in ALL_MODELS]
+    labels = [m["label"] for m in all_models]
     col_w = 14
     header = f"  {'Metric':<35s}" + "".join(f"{label:>{col_w}s}" for label in labels)
     print(header)
@@ -793,8 +901,8 @@ async def main():
     for key, suffix, label in [
         ("enriched_pct", "%", "Enriched"),
         ("no_signal", "", "No-signal"),
+        ("quarantined", "", "Quarantined"),
         ("invalid_extraction", "", "Invalid extraction"),
-        ("triage_failed", "", "Triage failed"),
         ("api_error", "", "API errors"),
         ("valid_json_pct", "%", "Validated extraction"),
         ("schema_completeness_avg", "%", "Schema completeness"),
@@ -805,6 +913,12 @@ async def main():
         ("avg_latency_ms", "ms", "Avg latency"),
         ("p95_latency_ms", "ms", "P95 latency"),
         ("total_cost_usd", "", "Total cost ($)"),
+        ("tier1_input_tokens", "", "Tier 1 input"),
+        ("tier1_output_tokens", "", "Tier 1 output"),
+        ("tier2_calls", "", "Tier 2 calls"),
+        ("tier2_trigger_rate", "%", "Tier 2 trigger"),
+        ("tier2_input_tokens", "", "Tier 2 input"),
+        ("tier2_output_tokens", "", "Tier 2 output"),
     ]:
         row = f"  {label:<35s}"
         for model_label in labels:
@@ -812,29 +926,32 @@ async def main():
             value = _fmt(agg, key, suffix)
             if key == "total_cost_usd":
                 value = f"${agg.get(key, 0):.4f}"
+            elif key.endswith("_tokens"):
+                value = f"{agg.get(key, 0):,}"
             row += f"{value:>{col_w}s}"
         print(row)
 
-    print()
-    print(f"  AGREEMENT vs {BASELINE['label']} baseline:")
-    for model in CHALLENGERS:
-        label = model["label"]
-        ag = agreement.get(label, {})
-        po = ag.get("pipeline_outcome", {})
-        ua = ag.get("urgency", {})
-        pa = ag.get("pain_category", {})
-        print(f"    {label}:")
-        if po:
-            print(f"      Outcome: {po['exact_match']}/{po['total']} ({po['pct']:.1f}%)")
-        if ua:
-            print(
-                f"      Urgency: avg delta={ua['avg_delta']:.1f}, "
-                f"exact={ua['exact_match']}/{ua['total']}, "
-                f"within+/-1={ua['within_1']}/{ua['total']}, "
-                f"within+/-2={ua['within_2']}/{ua['total']}"
-            )
-        if pa:
-            print(f"      Pain category: {pa['exact_match']}/{pa['total']} ({pa['pct']:.1f}%)")
+    if challengers:
+        print()
+        print(f"  AGREEMENT vs {baseline['label']} baseline:")
+        for model in challengers:
+            label = model["label"]
+            ag = agreement.get(label, {})
+            po = ag.get("pipeline_outcome", {})
+            ua = ag.get("urgency", {})
+            pa = ag.get("pain_category", {})
+            print(f"    {label}:")
+            if po:
+                print(f"      Outcome: {po['exact_match']}/{po['total']} ({po['pct']:.1f}%)")
+            if ua:
+                print(
+                    f"      Urgency: avg delta={ua['avg_delta']:.1f}, "
+                    f"exact={ua['exact_match']}/{ua['total']}, "
+                    f"within+/-1={ua['within_1']}/{ua['total']}, "
+                    f"within+/-2={ua['within_2']}/{ua['total']}"
+                )
+            if pa:
+                print(f"      Pain category: {pa['exact_match']}/{pa['total']} ({pa['pct']:.1f}%)")
 
     print("=" * 110)
     print(f"Full results: {args.output}")

@@ -611,6 +611,41 @@ async def test_call_openrouter_tier2_uses_exact_cache_hit(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_openrouter_tier1_defaults_to_claude_haiku_when_model_unset(monkeypatch):
+    prompt = "Return JSON."
+
+    class _Registry:
+        def get(self, name):
+            if name == "digest/b2b_churn_extraction_tier1":
+                return SimpleNamespace(content=prompt)
+            return None
+
+    cache_lookup = AsyncMock(
+        return_value=(
+            {"specific_complaints": ["support delays"], "churn_signals": {"actively_evaluating": True}},
+            {"messages": [{"role": "user", "content": "cached"}]},
+        )
+    )
+    monkeypatch.setattr("atlas_brain.skills.get_skill_registry", lambda: _Registry())
+    monkeypatch.setattr(b2b_enrichment, "_lookup_cached_json_response", cache_lookup)
+    cfg = SimpleNamespace(
+        openrouter_api_key="test-key",
+        enrichment_openrouter_model="",
+        enrichment_tier1_max_tokens=512,
+    )
+
+    parsed, model = await b2b_enrichment._call_openrouter_tier1(
+        json.dumps({"vendor_name": "Zendesk"}),
+        cfg,
+    )
+
+    assert parsed["specific_complaints"] == ["support delays"]
+    assert model == "anthropic/claude-haiku-4-5"
+    assert cache_lookup.await_count == 1
+    assert cache_lookup.await_args.kwargs["model"] == "anthropic/claude-haiku-4-5"
+
+
+@pytest.mark.asyncio
 async def test_enrich_single_uses_single_pass_tier1_only(monkeypatch):
     pool = SimpleNamespace(execute=AsyncMock(return_value="UPDATE 1"))
     row = {

@@ -1,10 +1,15 @@
 """
-B2B review enrichment: extract churn signals from pending reviews via LLM
-using the b2b_churn_extraction skill.
+B2B review enrichment: extract churn signals from pending reviews via the
+current two-tier pipeline.
 
-Single-pass enrichment (one LLM call per review). Polls b2b_reviews WHERE
-enrichment_status = 'pending', calls LLM, stores result in enrichment JSONB
-column, sets status to 'enriched'.
+Flow:
+  1. Tier 1 extraction for base factual fields
+  2. Conditional Tier 2 classification when Tier 1 leaves extraction gaps
+  3. Deterministic finalize/validation before persistence
+
+Polls b2b_reviews WHERE enrichment_status = 'pending', stores the finalized
+enrichment JSONB payload, and sets status to `enriched`, `no_signal`, or
+`quarantined`.
 
 Runs on an interval (default 5 min). Returns _skip_synthesis so the
 runner does not double-synthesize.
@@ -368,7 +373,7 @@ async def _call_openrouter_tier1(
         logger.warning("OpenRouter API key not configured for enrichment")
         return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
-    model_id = cfg.enrichment_openrouter_model or "openai/gpt-oss-120b"
+    model_id = cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"
     request_envelope: dict[str, Any] | None = None
     messages = [
         {"role": "system", "content": skill.content},

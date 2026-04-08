@@ -2291,17 +2291,16 @@ class B2BChurnConfig(BaseSettings):
     enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
     enrichment_openrouter_model: str = Field(
-        default="",
+        default="anthropic/claude-haiku-4-5",
         description=(
-            "OpenRouter model for B2B enrichment (structured extraction). "
-            "Empty = inherit ATLAS_LLM__OPENROUTER_REASONING_MODEL."
+            "OpenRouter model for B2B enrichment (structured extraction)."
         ),
     )
 
     # Hybrid two-pass enrichment (Tier 1 local + Tier 2 local)
     enrichment_schema_version: int = Field(
         default=3,
-        description="Current enrichment schema version (1 = original LLM inference, 2 = extract plus Tier 2 LLM, 3 = single-pass extract plus deterministic compute)",
+        description="Current enrichment schema version (1 = original LLM inference, 2 = extract plus Tier 2 LLM, 3 = Tier 1 extract plus conditional Tier 2 plus deterministic compute)",
     )
     evidence_map_path: str = Field(
         default="",
