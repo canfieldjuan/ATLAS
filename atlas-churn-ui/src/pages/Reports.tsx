@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
@@ -8,6 +8,7 @@ import { usePlanGate } from '../hooks/usePlanGate'
 import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport, generateBattleCard } from '../api/client'
 import { useState, useEffect, useMemo } from 'react'
 import { REPORT_TYPE_COLORS } from '../lib/reportConstants'
+import SubscriptionModal from '../components/SubscriptionModal'
 import type { Report } from '../types'
 
 const QUALITY_STATUS_COLORS: Record<string, string> = {
@@ -24,6 +25,15 @@ function qualityStatusLabel(status: string | null | undefined): string {
   if (key === 'thin_evidence') return 'Thin Evidence'
   if (key === 'deterministic_fallback') return 'Fallback'
   return ''
+}
+
+function freshnessLabel(dateStr: string | null | undefined): { text: string; color: string } {
+  if (!dateStr) return { text: '', color: '' }
+  const hours = (Date.now() - new Date(dateStr).getTime()) / 3600000
+  if (hours < 24) return { text: 'Fresh', color: 'text-green-400' }
+  if (hours < 72) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-slate-400' }
+  if (hours < 168) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-amber-400' }
+  return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-red-400' }
 }
 
 function CardSkeleton() {
@@ -64,6 +74,7 @@ export default function Reports() {
   const [creatingAccountDeepDive, setCreatingAccountDeepDive] = useState(false)
   const [battleCardVendor, setBattleCardVendor] = useState('')
   const [creatingBattleCard, setCreatingBattleCard] = useState(false)
+  const [libSubOpen, setLibSubOpen] = useState(false)
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
@@ -227,14 +238,23 @@ export default function Reports() {
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-white">Intelligence Reports</h1>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLibSubOpen(true)}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-cyan-700/40 bg-cyan-900/20 text-cyan-300 hover:bg-cyan-900/40 transition-colors"
+            >
+              <Bell className="h-4 w-4" />
+              Subscribe to Library
+            </button>
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+              Refresh
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap">
@@ -266,7 +286,6 @@ export default function Reports() {
             <option value="challenger_intel">Challenger Intel</option>
             <option value="battle_card">Battle Card</option>
             <option value="vendor_deep_dive">Vendor Deep Dive</option>
-            <option value="battle_card">Battle Card</option>
             <option value="challenger_brief">Challenger Brief</option>
           </select>
           <select
@@ -277,6 +296,7 @@ export default function Reports() {
             <option value="">All Quality</option>
             <option value="sales_ready">Sales Ready</option>
             <option value="needs_review">Needs Review</option>
+            <option value="thin_evidence">Thin Evidence</option>
             <option value="deterministic_fallback">Fallback</option>
           </select>
           {hasFilters && (
@@ -471,9 +491,20 @@ export default function Reports() {
                 <p className="text-sm text-slate-400 line-clamp-2">
                   {r.executive_summary ?? 'No summary available'}
                 </p>
-                <p className="text-xs text-slate-500 mt-3">
-                  {r.report_date ?? r.created_at ?? '--'}
-                </p>
+                <div className="flex items-center gap-2 mt-3">
+                  <p className="text-xs text-slate-500">
+                    {r.report_date ?? r.created_at ?? '--'}
+                  </p>
+                  {(() => {
+                    const f = freshnessLabel(r.created_at ?? r.report_date)
+                    return f.text ? (
+                      <span className={clsx('inline-flex items-center gap-1 text-xs', f.color)}>
+                        <Clock className="w-3 h-3" />
+                        {f.text}
+                      </span>
+                    ) : null
+                  })()}
+                </div>
               </button>
             ))}
           </div>
@@ -517,6 +548,14 @@ export default function Reports() {
           )}
         </>
       )}
+
+      <SubscriptionModal
+        open={libSubOpen}
+        onClose={() => setLibSubOpen(false)}
+        scopeType="library"
+        scopeKey="library"
+        scopeLabel="Full Report Library"
+      />
     </div>
   )
 }

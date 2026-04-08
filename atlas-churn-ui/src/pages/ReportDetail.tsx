@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, RefreshCw, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -15,6 +15,9 @@ import type { ReportDetail as ReportDetailType } from '../types'
 import ReportActionBar from '../components/ReportActionBar'
 import SubscriptionModal from '../components/SubscriptionModal'
 import EvidenceDrawer from '../components/EvidenceDrawer'
+import CitationBar from '../components/report-renderers/CitationBar'
+import { createCitationRegistry } from '../components/report-renderers/useCitationRegistry'
+import type { CitationEntry } from '../components/report-renderers/useCitationRegistry'
 
 function formatInlineValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '--'
@@ -63,8 +66,14 @@ export default function ReportDetail() {
   const [subModalOpen, setSubModalOpen] = useState(false)
   const [hasSubscription, setHasSubscription] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const drawerWitnessId = null
-  const drawerVendor = ''
+  const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(null)
+  const [drawerVendor, setDrawerVendor] = useState('')
+
+  const handleOpenWitness = useCallback((witnessId: string, vendorName: string) => {
+    setDrawerWitnessId(witnessId)
+    setDrawerVendor(vendorName)
+    setDrawerOpen(true)
+  }, [])
 
   const { data: report, loading, error, refresh, refreshing } = useApiData<ReportDetailType>(
     () => {
@@ -155,12 +164,35 @@ export default function ReportDetail() {
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden">
           <h3 className="text-sm font-medium text-slate-300 mb-2">Executive Summary</h3>
           <p className="text-sm text-slate-300 whitespace-pre-wrap break-words">{report.executive_summary}</p>
+          {(() => {
+            const witnessIds = (intel as Record<string, unknown>).reasoning_reference_ids as { witness_ids?: string[] } | undefined
+            const highlights = (intel as Record<string, unknown>).reasoning_witness_highlights as Array<{ witness_id?: string; reviewer_company?: string; excerpt_text?: string }> | undefined
+            const wids = witnessIds?.witness_ids
+            if (!wids || wids.length === 0 || !report.vendor_filter) return null
+            const reg = createCitationRegistry()
+            const hlMap = new Map<string, { companyName?: string; excerptSnippet?: string }>()
+            for (const hl of highlights ?? []) {
+              if (hl.witness_id) hlMap.set(hl.witness_id, { companyName: hl.reviewer_company, excerptSnippet: hl.excerpt_text?.slice(0, 80) })
+            }
+            const entries: CitationEntry[] = wids.map((wid) => {
+              const meta = hlMap.get(wid)
+              const idx = reg.register(wid, meta)
+              return { index: idx, witnessId: wid, companyName: meta?.companyName, excerptSnippet: meta?.excerptSnippet }
+            })
+            return (
+              <CitationBar
+                citations={entries}
+                vendorName={report.vendor_filter}
+                onOpenWitness={handleOpenWitness}
+              />
+            )
+          })()}
         </div>
       )}
 
       {/* Challenger brief - dedicated renderer */}
       {isSpecializedReportType(report.report_type) && (
-        <SpecializedReportData reportType={report.report_type} data={intelIsArray ? rawIntel : intel} />
+        <SpecializedReportData reportType={report.report_type} data={intelIsArray ? rawIntel : intel} vendorName={report.vendor_filter ?? undefined} onOpenWitness={handleOpenWitness} />
       )}
 
       {/* Generic rendering for all other report types */}
@@ -224,7 +256,10 @@ export default function ReportDetail() {
         vendorName={drawerVendor}
         witnessId={drawerWitnessId}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false)
+          setDrawerWitnessId(null)
+        }}
       />
     </div>
   )
