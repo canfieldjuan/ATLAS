@@ -59,6 +59,20 @@ const ACCOUNT_URGENCY_FILTER_OPTIONS = [7, 8, 9] as const
 
 type AccountPresentationTier = 'named_high' | 'named_medium' | 'review'
 
+function isSameAccountMovementRow(
+  left: AccountsInMotionFeedItem,
+  right: AccountsInMotionFeedItem,
+) {
+  return (
+    left.vendor === right.vendor
+    && (left.company || '') === (right.company || '')
+    && (left.report_date || '') === (right.report_date || '')
+    && (left.watch_vendor || '') === (right.watch_vendor || '')
+    && (left.category || '') === (right.category || '')
+    && (left.track_mode || '') === (right.track_mode || '')
+  )
+}
+
 function formatTs(value: string | null | undefined) {
   if (!value) return '--'
   const date = new Date(value)
@@ -323,26 +337,32 @@ export default function Watchlists() {
       primary: [...high, ...medium],
     }
   }, [accounts])
-  const hasActiveFeedFilters = Boolean(
-    selectedVendorFilter
-    || selectedCategoryFilter
-    || selectedSourceFilter
-    || selectedMinUrgency
-    || freshOnly,
+  const visibleReviewAccounts = namedAccountsOnly ? [] : accountBuckets.review
+  const visibleAccounts = useMemo(
+    () => [...accountBuckets.primary, ...visibleReviewAccounts],
+    [accountBuckets.primary, visibleReviewAccounts],
   )
+  const hasActiveFeedFilters = [
+    selectedVendorFilter,
+    selectedCategoryFilter,
+    selectedSourceFilter,
+    selectedMinUrgency,
+    freshOnly,
+    namedAccountsOnly,
+    changedWedgesOnly,
+  ].some(Boolean)
 
   useEffect(() => {
     if (!selectedAccount) return
-    const stillVisible = accounts.some((account) => (
-      account.vendor === selectedAccount.vendor
-      && (account.company || '') === (selectedAccount.company || '')
-      && (account.report_date || '') === (selectedAccount.report_date || '')
-      && (account.watch_vendor || '') === (selectedAccount.watch_vendor || '')
-    ))
-    if (!stillVisible) {
+    const currentAccount = visibleAccounts.find((account) => isSameAccountMovementRow(account, selectedAccount))
+    if (!currentAccount) {
       setSelectedAccount(null)
+      return
     }
-  }, [accounts, selectedAccount])
+    if (currentAccount !== selectedAccount) {
+      setSelectedAccount(currentAccount)
+    }
+  }, [selectedAccount, visibleAccounts])
 
   useEffect(() => {
     if (editingCompetitiveSetId) return

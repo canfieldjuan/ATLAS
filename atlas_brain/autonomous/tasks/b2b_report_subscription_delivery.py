@@ -748,6 +748,17 @@ async def _advance_subscription(
     )
 
 
+def _should_advance_subscription(status: str, *, skip_reason: str | None = None) -> bool:
+    if status in {"sent", "partial"}:
+        return True
+    if status != "skipped":
+        return False
+    return skip_reason in {
+        "unchanged_package",
+        "all_recipients_suppressed",
+    }
+
+
 async def _fetch_report_row(pool, report_id: Any) -> Any | None:
     return await pool.fetchrow(
         """
@@ -1004,6 +1015,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         delivered_report_ids: list[Any] = []
         freshness_state = "none"
         content_hash: str | None = None
+        skip_reason: str | None = None
 
         try:
             tracked_vendors = await _tracked_vendors(pool, row["account_id"])
@@ -1017,6 +1029,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             elif not artifacts:
                 status = "skipped"
                 summary = "Skipped delivery because no eligible persisted artifacts matched the saved policy."
+                skip_reason = "no_eligible_artifacts"
             else:
                 content_hash = _delivery_content_hash(row, artifacts)
                 if delivery_cfg.suppress_unchanged_deliveries:
@@ -1027,6 +1040,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                             "Skipped delivery because the eligible report package has not materially "
                             "changed since the last completed delivery."
                         )
+                        skip_reason = "unchanged_package"
 
                 if dry_run and status != "skipped":
                     status = "dry_run"
@@ -1086,6 +1100,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         status = "skipped"
                         error_message = "; ".join(send_failures)
                         summary = "Skipped delivery because every recipient on the subscription is currently suppressed."
+                        skip_reason = "all_recipients_suppressed"
                     elif send_failures and successful_recipient_count == 0:
                         status = "failed"
                         error_message = "; ".join(send_failures)
@@ -1115,7 +1130,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 error=error_message,
             )
 
-            if not dry_run and status in {"sent", "partial", "skipped"}:
+            if not dry_run and _should_advance_subscription(status, skip_reason=skip_reason):
                 await _advance_subscription(
                     pool,
                     row["id"],

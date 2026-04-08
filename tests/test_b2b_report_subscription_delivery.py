@@ -290,6 +290,47 @@ async def test_run_skips_unchanged_delivery_without_sending(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_does_not_advance_when_no_artifacts_match_policy(monkeypatch):
+    scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=5)
+    row = {
+        "id": "sub-no-artifacts",
+        "account_id": "acct-no-artifacts",
+        "account_name": "Smoke Co",
+        "report_id": "report-no-artifacts",
+        "scope_type": "library",
+        "scope_key": "library",
+        "scope_label": "Smoke recurring library",
+        "delivery_frequency": "weekly",
+        "deliverable_focus": "all",
+        "freshness_policy": "any",
+        "recipient_emails": ["buyer@example.com"],
+        "delivery_note": "note",
+        "next_delivery_at": scheduled_for,
+    }
+    pool = _DuePool(row)
+    finalize = AsyncMock()
+    advance = AsyncMock()
+
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "max_subscriptions_per_run", 1, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "suppress_unchanged_deliveries", True, raising=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "get_campaign_sender", lambda: SimpleNamespace())
+    monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-no-artifacts"}))
+    monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
+    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
+    monkeypatch.setattr(mod, "_advance_subscription", advance)
+
+    result = await mod.run(SimpleNamespace())
+
+    assert result["skipped"] == 1
+    assert finalize.await_args.kwargs["status"] == "skipped"
+    assert "no eligible persisted artifacts matched the saved policy" in finalize.await_args.kwargs["summary"]
+    advance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_run_sends_and_advances_subscription_with_anchor(monkeypatch):
     scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=5)
     row = {
@@ -419,6 +460,67 @@ async def test_run_dry_run_skips_send_and_does_not_advance(monkeypatch):
     assert finalize.await_args.kwargs["status"] == "dry_run"
     assert "Dry run: would deliver 1 artifact(s) to 1 recipient(s)." == finalize.await_args.kwargs["summary"]
     advance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_advances_when_all_recipients_are_suppressed(monkeypatch):
+    scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=5)
+    row = {
+        "id": "sub-suppressed",
+        "account_id": "acct-suppressed",
+        "account_name": "Suppressed Co",
+        "report_id": "report-suppressed",
+        "scope_type": "report",
+        "scope_key": "report-suppressed",
+        "scope_label": "Suppressed recurring report",
+        "delivery_frequency": "weekly",
+        "deliverable_focus": "all",
+        "freshness_policy": "any",
+        "recipient_emails": ["buyer@example.com"],
+        "delivery_note": "note",
+        "next_delivery_at": scheduled_for,
+    }
+    artifact = {
+        "report_id": "report-suppressed",
+        "report_type": "vendor_scorecard",
+        "title": "Suppressed recurring report",
+        "trust_label": "Evidence-backed",
+        "quality_status": "sales_ready",
+        "blocker_count": 0,
+        "unresolved_issue_count": 0,
+        "freshness_state": "fresh",
+        "executive_summary": "summary",
+        "evidence_highlights": ["highlight"],
+    }
+    pool = _DuePool(row)
+    finalize = AsyncMock()
+    advance = AsyncMock()
+    send_helper = AsyncMock(return_value=(False, None, "buyer@example.com: suppressed (manual)", True))
+
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "max_subscriptions_per_run", 1, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "suppress_unchanged_deliveries", False, raising=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "get_campaign_sender", lambda: SimpleNamespace())
+    monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-suppressed"}))
+    monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
+    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(mod, "_delivery_content_hash", lambda *_args, **_kwargs: "suppressed-hash")
+    monkeypatch.setattr(mod, "_send_subscription_email", send_helper)
+    monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
+    monkeypatch.setattr(mod, "_advance_subscription", advance)
+
+    result = await mod.run(SimpleNamespace())
+
+    assert result["skipped"] == 1
+    assert finalize.await_args.kwargs["status"] == "skipped"
+    assert "every recipient on the subscription is currently suppressed" in finalize.await_args.kwargs["summary"]
+    assert advance.await_args.args == (
+        pool,
+        "sub-suppressed",
+        "weekly",
+        scheduled_for,
+    )
 
 
 @pytest.mark.asyncio
