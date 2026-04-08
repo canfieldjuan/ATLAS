@@ -149,6 +149,21 @@ def test_delivery_eligibility_reason_blocks_competitive_quality_and_reviews(monk
     assert review_reason == "unresolved_issue_count=2 exceeds max_open_review_count=0"
 
 
+def test_artifact_ready_accepts_published_and_sales_ready():
+    assert mod._artifact_ready(
+        {"report_type": "vendor_scorecard", "status": "published", "quality_status": None},
+        {},
+    ) is True
+    assert mod._artifact_ready(
+        {"report_type": "battle_card", "status": "sales_ready", "quality_status": None},
+        {},
+    ) is True
+    assert mod._artifact_ready(
+        {"report_type": "vendor_scorecard", "status": "failed", "quality_status": None},
+        {},
+    ) is False
+
+
 @pytest.mark.asyncio
 async def test_resolve_artifacts_skips_overridden_library_reports(monkeypatch):
     monkeypatch.setattr(
@@ -161,11 +176,15 @@ async def test_resolve_artifacts_skips_overridden_library_reports(monkeypatch):
         {
             "id": "report-1",
             "report_type": "vendor_scorecard",
+            "status": "published",
+            "quality_status": None,
             "intelligence_data": {},
         },
         {
             "id": "report-2",
             "report_type": "vendor_scorecard",
+            "status": "published",
+            "quality_status": None,
             "intelligence_data": {},
         },
     ]))

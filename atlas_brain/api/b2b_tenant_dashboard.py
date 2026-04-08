@@ -151,6 +151,30 @@ def _next_report_subscription_delivery_at(
     return datetime.now(timezone.utc) + timedelta(days=days)
 
 
+def _resolve_report_subscription_next_delivery_at(
+    *,
+    existing_row,
+    delivery_frequency: str,
+    enabled: bool,
+) -> datetime | None:
+    if not enabled:
+        return None
+    if not existing_row:
+        return _next_report_subscription_delivery_at(delivery_frequency, enabled)
+
+    was_enabled = bool(existing_row.get("enabled"))
+    previous_frequency = str(existing_row.get("delivery_frequency") or "").strip().lower()
+    previous_next_delivery_at = existing_row.get("next_delivery_at")
+
+    if not was_enabled:
+        return _next_report_subscription_delivery_at(delivery_frequency, enabled)
+    if previous_frequency != delivery_frequency:
+        return _next_report_subscription_delivery_at(delivery_frequency, enabled)
+    if previous_next_delivery_at:
+        return previous_next_delivery_at
+    return _next_report_subscription_delivery_at(delivery_frequency, enabled)
+
+
 def _serialize_report_subscription(row) -> dict[str, Any]:
     return {
         "id": str(row["id"]),
@@ -205,6 +229,27 @@ async def _fetch_report_subscription_row(
         WHERE s.account_id = $1::uuid
           AND s.scope_type = $2
           AND s.scope_key = $3
+        """,
+        account_id,
+        scope_type,
+        scope_key,
+    )
+
+
+async def _fetch_report_subscription_schedule_row(
+    pool,
+    *,
+    account_id: _uuid.UUID | str,
+    scope_type: str,
+    scope_key: str,
+):
+    return await pool.fetchrow(
+        """
+        SELECT enabled, delivery_frequency, next_delivery_at
+        FROM b2b_report_subscriptions
+        WHERE account_id = $1::uuid
+          AND scope_type = $2
+          AND scope_key = $3
         """,
         account_id,
         scope_type,
@@ -2311,9 +2356,17 @@ async def upsert_report_subscription(
     if not scope_label:
         raise HTTPException(status_code=400, detail="scope_label is required")
 
-    next_delivery_at = _next_report_subscription_delivery_at(
-        body.delivery_frequency,
-        body.enabled,
+    existing_subscription = await _fetch_report_subscription_schedule_row(
+        pool,
+        account_id=account_id,
+        scope_type=normalized_scope_type,
+        scope_key=normalized_scope_key,
+    )
+
+    next_delivery_at = _resolve_report_subscription_next_delivery_at(
+        existing_row=existing_subscription,
+        delivery_frequency=body.delivery_frequency,
+        enabled=body.enabled,
     )
 
     await pool.execute(

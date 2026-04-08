@@ -551,6 +551,144 @@ def test_push_to_crm_skips_payloads_above_size_limit(monkeypatch):
     log_push.assert_not_awaited()
 
 
+def test_upsert_report_subscription_preserves_next_delivery_when_schedule_unchanged(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    existing_next_delivery_at = datetime(2026, 4, 9, 15, 0, tzinfo=timezone.utc)
+    captured_execute_args = {}
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            if "SELECT enabled, delivery_frequency, next_delivery_at" in query:
+                return {
+                    "enabled": True,
+                    "delivery_frequency": "weekly",
+                    "next_delivery_at": existing_next_delivery_at,
+                }
+            if "FROM b2b_report_subscriptions s" in query:
+                return {
+                    "id": uuid4(),
+                    "scope_type": "library",
+                    "scope_key": "library",
+                    "scope_label": "Recurring brief library",
+                    "report_id": None,
+                    "delivery_frequency": "weekly",
+                    "deliverable_focus": "all",
+                    "freshness_policy": "fresh_or_monitor",
+                    "recipient_emails": ["ops@example.com"],
+                    "delivery_note": "Keep the current cadence",
+                    "enabled": True,
+                    "next_delivery_at": existing_next_delivery_at,
+                    "created_at": existing_next_delivery_at,
+                    "updated_at": existing_next_delivery_at,
+                    "last_delivery_status": "sent",
+                    "last_delivery_at": existing_next_delivery_at,
+                    "last_delivery_summary": "Delivered",
+                    "last_delivery_error": None,
+                    "last_delivery_report_count": 2,
+                }
+            return None
+
+        async def execute(self, query, *args):
+            if "INSERT INTO b2b_report_subscriptions" in query:
+                captured_execute_args["args"] = args
+            return "INSERT 0 1"
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/b2b/tenant/report-subscriptions/library/library",
+            json={
+                "scope_label": "Recurring brief library",
+                "delivery_frequency": "weekly",
+                "deliverable_focus": "all",
+                "freshness_policy": "fresh_or_monitor",
+                "recipients": ["ops@example.com"],
+                "delivery_note": "Keep the current cadence",
+                "enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured_execute_args["args"][11] == existing_next_delivery_at
+
+
+def test_upsert_report_subscription_recomputes_next_delivery_when_frequency_changes(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    existing_next_delivery_at = datetime(2026, 4, 9, 15, 0, tzinfo=timezone.utc)
+    captured_execute_args = {}
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            if "SELECT enabled, delivery_frequency, next_delivery_at" in query:
+                return {
+                    "enabled": True,
+                    "delivery_frequency": "weekly",
+                    "next_delivery_at": existing_next_delivery_at,
+                }
+            if "FROM b2b_report_subscriptions s" in query:
+                recomputed_next = captured_execute_args["args"][11]
+                return {
+                    "id": uuid4(),
+                    "scope_type": "library",
+                    "scope_key": "library",
+                    "scope_label": "Recurring brief library",
+                    "report_id": None,
+                    "delivery_frequency": "monthly",
+                    "deliverable_focus": "all",
+                    "freshness_policy": "fresh_or_monitor",
+                    "recipient_emails": ["ops@example.com"],
+                    "delivery_note": "Move to monthly",
+                    "enabled": True,
+                    "next_delivery_at": recomputed_next,
+                    "created_at": existing_next_delivery_at,
+                    "updated_at": existing_next_delivery_at,
+                    "last_delivery_status": None,
+                    "last_delivery_at": None,
+                    "last_delivery_summary": None,
+                    "last_delivery_error": None,
+                    "last_delivery_report_count": 0,
+                }
+            return None
+
+        async def execute(self, query, *args):
+            if "INSERT INTO b2b_report_subscriptions" in query:
+                captured_execute_args["args"] = args
+            return "INSERT 0 1"
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/b2b/tenant/report-subscriptions/library/library",
+            json={
+                "scope_label": "Recurring brief library",
+                "delivery_frequency": "monthly",
+                "deliverable_focus": "all",
+                "freshness_policy": "fresh_or_monitor",
+                "recipients": ["ops@example.com"],
+                "delivery_note": "Move to monthly",
+                "enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    recomputed_next = captured_execute_args["args"][11]
+    assert recomputed_next is not None
+    assert recomputed_next != existing_next_delivery_at
+    assert recomputed_next > datetime.now(timezone.utc)
+
+
 def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)

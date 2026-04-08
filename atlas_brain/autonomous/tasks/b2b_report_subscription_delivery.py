@@ -57,6 +57,7 @@ _REPORT_FREQUENCY_DAYS = {
     "quarterly": 90,
 }
 _QUALITY_GATED_REPORT_TYPES = {"battle_card", "challenger_brief"}
+_PERSISTED_ARTIFACT_STATUSES = {"completed", "published"}
 _DELIVERY_CONTENT_HASH_STATUSES = ("sent",)
 _DELIVERY_LOG_CLAIMABLE_STALE_STATUSES = ("failed", "processing")
 _DELIVERY_LOG_RECLAIMABLE_IMMEDIATE_STATUSES = ("dry_run",)
@@ -195,9 +196,19 @@ def _report_trust_label(row, intelligence_data: dict[str, Any]) -> str:
             return "Thin evidence"
         return "Fallback render"
 
-    if status == "completed":
+    if status in _PERSISTED_ARTIFACT_STATUSES:
         return "Persisted artifact"
     return "In workflow"
+
+
+def _artifact_ready(row, intelligence_data: dict[str, Any]) -> bool:
+    report_type = str(row["report_type"] or "").strip().lower()
+    status = str(row["status"] or "").strip().lower()
+    quality_status = _quality_status(row, intelligence_data)
+
+    if report_type == "battle_card":
+        return status == "sales_ready" or quality_status == "sales_ready"
+    return status in _PERSISTED_ARTIFACT_STATUSES
 
 
 def _parse_timestamp_candidate(value: Any) -> datetime | None:
@@ -773,7 +784,7 @@ async def _fetch_library_rows(pool, account_id: Any, tracked_vendors: set[str], 
                COALESCE(intelligence_data->>'quality_status', intelligence_data->'battle_card_quality'->>'status')
                    AS quality_status
         FROM b2b_intelligence
-        WHERE status = 'completed'
+        WHERE status = ANY($5::text[])
           AND (
                 vendor_filter IS NULL
                 OR vendor_filter = ''
@@ -788,6 +799,7 @@ async def _fetch_library_rows(pool, account_id: Any, tracked_vendors: set[str], 
         list(tracked_vendors),
         list(allowed_types) if allowed_types else None,
         scan_limit,
+        ["completed", "published", "sales_ready"],
     )
 
 
@@ -830,13 +842,13 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
         report_row = await _fetch_report_row(pool, row["report_id"])
         if not report_row:
             return []
-        if str(report_row["status"] or "").strip().lower() != "completed":
-            return []
-        if not _tracked_vendor_allowed(report_row, tracked_vendors, row["account_id"]):
-            return []
         intelligence_data = _safe_json(report_row["intelligence_data"])
         if not isinstance(intelligence_data, dict):
             intelligence_data = {}
+        if not _artifact_ready(report_row, intelligence_data):
+            return []
+        if not _tracked_vendor_allowed(report_row, tracked_vendors, row["account_id"]):
+            return []
         if _delivery_eligibility_reason(report_row, intelligence_data):
             return []
         artifact = _build_delivery_artifact(report_row)
@@ -863,6 +875,8 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
         intelligence_data = _safe_json(report_row["intelligence_data"])
         if not isinstance(intelligence_data, dict):
             intelligence_data = {}
+        if not _artifact_ready(report_row, intelligence_data):
+            continue
         if _delivery_eligibility_reason(report_row, intelligence_data):
             continue
         artifact = _build_delivery_artifact(report_row)
