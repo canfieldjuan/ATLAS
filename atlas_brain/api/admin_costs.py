@@ -207,6 +207,26 @@ def _classify_b2b_pass(span_name: str, metadata: dict) -> str | None:
     return None
 
 
+def _classify_b2b_enrichment_tier(span_name: str, metadata: dict) -> str | None:
+    skill = str(metadata.get("skill") or "").strip().lower()
+    if span_name == "task.b2b_enrichment.tier1" or skill == "digest/b2b_churn_extraction_tier1":
+        return "tier1"
+    if span_name == "task.b2b_enrichment.tier2" or skill == "digest/b2b_churn_extraction_tier2":
+        return "tier2"
+    return None
+
+
+def _b2b_token_rollup_row(key: str, label: str) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "calls": 0,
+        "cost_usd": 0.0,
+        "billable_input_tokens": 0,
+        "output_tokens": 0,
+    }
+
+
 def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | None]:
     vendor_name = _recent_metadata_value(metadata, "vendor_name")
     report_type = _recent_metadata_value(metadata, "report_type")
@@ -1877,6 +1897,8 @@ async def b2b_efficiency(
         SELECT
           span_name,
           cost_usd,
+          billable_input_tokens,
+          output_tokens,
           vendor_name,
           run_id,
           metadata,
@@ -1899,6 +1921,16 @@ async def b2b_efficiency(
     vendor_rollups: dict[str, dict[str, Any]] = {}
     source_rollups: dict[str, dict[str, Any]] = {}
     run_usage: dict[str, dict[str, Any]] = {}
+    token_rollups_by_pass: dict[str, dict[str, Any]] = {
+        "extraction": _b2b_token_rollup_row("extraction", "Extraction"),
+        "repair": _b2b_token_rollup_row("repair", "Repair"),
+        "reasoning": _b2b_token_rollup_row("reasoning", "Reasoning"),
+        "battle_card_overlay": _b2b_token_rollup_row("battle_card_overlay", "Battle Cards"),
+    }
+    enrichment_tier_rollups: dict[str, dict[str, Any]] = {
+        "tier1": _b2b_token_rollup_row("tier1", "Tier 1"),
+        "tier2": _b2b_token_rollup_row("tier2", "Tier 2"),
+    }
 
     for row in usage_rows:
         metadata = _normalize_metadata(row.get("metadata"))
@@ -1906,9 +1938,31 @@ async def b2b_efficiency(
         if pass_name is None:
             continue
         cost_usd = _safe_float(row.get("cost_usd"))
+        billable_input_tokens = _safe_int(row.get("billable_input_tokens"))
+        output_tokens = _safe_int(row.get("output_tokens"))
         vendor_name = _b2b_vendor_name(row.get("vendor_name"), metadata)
         source_name = _b2b_source_name(metadata).lower()
         run_id = str(row.get("run_id") or "").strip()
+        enrichment_tier = _classify_b2b_enrichment_tier(str(row.get("span_name") or ""), metadata)
+
+        pass_bucket = token_rollups_by_pass.setdefault(
+            pass_name,
+            _b2b_token_rollup_row(pass_name, _humanize_identifier(pass_name)),
+        )
+        pass_bucket["calls"] += 1
+        pass_bucket["cost_usd"] += cost_usd
+        pass_bucket["billable_input_tokens"] += billable_input_tokens
+        pass_bucket["output_tokens"] += output_tokens
+
+        if enrichment_tier:
+            tier_bucket = enrichment_tier_rollups.setdefault(
+                enrichment_tier,
+                _b2b_token_rollup_row(enrichment_tier, _humanize_identifier(enrichment_tier)),
+            )
+            tier_bucket["calls"] += 1
+            tier_bucket["cost_usd"] += cost_usd
+            tier_bucket["billable_input_tokens"] += billable_input_tokens
+            tier_bucket["output_tokens"] += output_tokens
 
         if vendor_name:
             vendor_bucket = vendor_rollups.setdefault(
@@ -1964,20 +2018,47 @@ async def b2b_efficiency(
                     "run_id": run_id,
                     "total_cost_usd": 0.0,
                     "calls": 0,
+                    "total_billable_input_tokens": 0,
+                    "total_output_tokens": 0,
                     "extraction_cost_usd": 0.0,
                     "extraction_calls": 0,
+                    "extraction_billable_input_tokens": 0,
+                    "extraction_output_tokens": 0,
                     "repair_cost_usd": 0.0,
                     "repair_calls": 0,
+                    "repair_billable_input_tokens": 0,
+                    "repair_output_tokens": 0,
                     "reasoning_cost_usd": 0.0,
                     "reasoning_calls": 0,
+                    "reasoning_billable_input_tokens": 0,
+                    "reasoning_output_tokens": 0,
                     "battle_card_overlay_cost_usd": 0.0,
                     "battle_card_overlay_calls": 0,
+                    "battle_card_overlay_billable_input_tokens": 0,
+                    "battle_card_overlay_output_tokens": 0,
+                    "enrichment_tier1_cost_usd": 0.0,
+                    "enrichment_tier1_calls": 0,
+                    "enrichment_tier1_billable_input_tokens": 0,
+                    "enrichment_tier1_output_tokens": 0,
+                    "enrichment_tier2_cost_usd": 0.0,
+                    "enrichment_tier2_calls": 0,
+                    "enrichment_tier2_billable_input_tokens": 0,
+                    "enrichment_tier2_output_tokens": 0,
                 },
             )
             run_bucket["total_cost_usd"] += cost_usd
             run_bucket["calls"] += 1
+            run_bucket["total_billable_input_tokens"] += billable_input_tokens
+            run_bucket["total_output_tokens"] += output_tokens
             run_bucket[f"{pass_name}_cost_usd"] += cost_usd
             run_bucket[f"{pass_name}_calls"] += 1
+            run_bucket[f"{pass_name}_billable_input_tokens"] += billable_input_tokens
+            run_bucket[f"{pass_name}_output_tokens"] += output_tokens
+            if enrichment_tier:
+                run_bucket[f"enrichment_{enrichment_tier}_cost_usd"] += cost_usd
+                run_bucket[f"enrichment_{enrichment_tier}_calls"] += 1
+                run_bucket[f"enrichment_{enrichment_tier}_billable_input_tokens"] += billable_input_tokens
+                run_bucket[f"enrichment_{enrichment_tier}_output_tokens"] += output_tokens
 
     # APPROVED-ENRICHMENT-READ: evidence_spans
     # Reason: admin analytics aggregation (evidence_spans count)
@@ -2139,6 +2220,8 @@ async def b2b_efficiency(
                 "started_at": row["started_at"].isoformat() if row["started_at"] else None,
                 "total_cost_usd": round(total_cost_usd, 6),
                 "calls": calls,
+                "total_billable_input_tokens": _safe_int(run_usage.get(run_id, {}).get("total_billable_input_tokens")),
+                "total_output_tokens": _safe_int(run_usage.get(run_id, {}).get("total_output_tokens")),
                 "reviews_processed": reviews_processed,
                 "witness_rows": _safe_int(payload.get("witness_rows")),
                 "witness_count": witness_count,
@@ -2159,13 +2242,51 @@ async def b2b_efficiency(
                 "exact_cache_hits": _safe_int(payload.get("exact_cache_hits")),
                 "generated": _safe_int(payload.get("generated")),
                 "extraction_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("extraction_cost_usd")), 6),
+                "extraction_billable_input_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("extraction_billable_input_tokens")
+                ),
+                "extraction_output_tokens": _safe_int(run_usage.get(run_id, {}).get("extraction_output_tokens")),
                 "repair_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("repair_cost_usd")), 6),
+                "repair_billable_input_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("repair_billable_input_tokens")
+                ),
+                "repair_output_tokens": _safe_int(run_usage.get(run_id, {}).get("repair_output_tokens")),
                 "reasoning_cost_usd": round(_safe_float(run_usage.get(run_id, {}).get("reasoning_cost_usd")), 6),
+                "reasoning_billable_input_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("reasoning_billable_input_tokens")
+                ),
+                "reasoning_output_tokens": _safe_int(run_usage.get(run_id, {}).get("reasoning_output_tokens")),
                 "battle_card_overlay_cost_usd": round(
                     _safe_float(run_usage.get(run_id, {}).get("battle_card_overlay_cost_usd")), 6
                 ),
                 "battle_card_overlay_calls": _safe_int(
                     run_usage.get(run_id, {}).get("battle_card_overlay_calls")
+                ),
+                "battle_card_overlay_billable_input_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("battle_card_overlay_billable_input_tokens")
+                ),
+                "battle_card_overlay_output_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("battle_card_overlay_output_tokens")
+                ),
+                "enrichment_tier1_cost_usd": round(
+                    _safe_float(run_usage.get(run_id, {}).get("enrichment_tier1_cost_usd")), 6
+                ),
+                "enrichment_tier1_calls": _safe_int(run_usage.get(run_id, {}).get("enrichment_tier1_calls")),
+                "enrichment_tier1_billable_input_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("enrichment_tier1_billable_input_tokens")
+                ),
+                "enrichment_tier1_output_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("enrichment_tier1_output_tokens")
+                ),
+                "enrichment_tier2_cost_usd": round(
+                    _safe_float(run_usage.get(run_id, {}).get("enrichment_tier2_cost_usd")), 6
+                ),
+                "enrichment_tier2_calls": _safe_int(run_usage.get(run_id, {}).get("enrichment_tier2_calls")),
+                "enrichment_tier2_billable_input_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("enrichment_tier2_billable_input_tokens")
+                ),
+                "enrichment_tier2_output_tokens": _safe_int(
+                    run_usage.get(run_id, {}).get("enrichment_tier2_output_tokens")
                 ),
                 "battle_card_cache_hits": _safe_int(payload.get("cache_hits")),
                 "battle_card_llm_updated": _safe_int(payload.get("cards_llm_updated")),
@@ -2195,6 +2316,30 @@ async def b2b_efficiency(
                 if summary_witness_count > 0 and summary_cost > 0
                 else None
             ),
+        },
+        "token_summary": {
+            "total_billable_input_tokens": sum(
+                _safe_int(bucket.get("billable_input_tokens")) for bucket in token_rollups_by_pass.values()
+            ),
+            "total_output_tokens": sum(
+                _safe_int(bucket.get("output_tokens")) for bucket in token_rollups_by_pass.values()
+            ),
+            "by_pass": [
+                {
+                    **bucket,
+                    "cost_usd": round(_safe_float(bucket["cost_usd"]), 6),
+                }
+                for bucket in token_rollups_by_pass.values()
+                if bucket["calls"] > 0
+            ],
+            "enrichment_tiers": [
+                {
+                    **bucket,
+                    "cost_usd": round(_safe_float(bucket["cost_usd"]), 6),
+                }
+                for bucket in enrichment_tier_rollups.values()
+                if bucket["calls"] > 0
+            ],
         },
         "vendor_passes": vendor_passes,
         "source_efficiency": source_efficiency,

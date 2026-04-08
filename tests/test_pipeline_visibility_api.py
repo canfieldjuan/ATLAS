@@ -214,6 +214,98 @@ def test_visibility_queue_runs_detached_batch_health_sync(monkeypatch):
     assert sync.await_count == 1
 
 
+def test_watchlist_delivery_ops_returns_summary_views_and_logs(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "enabled_views": 3,
+                "due_views": 1,
+                "open_event_count": 17,
+                "recent_sent": 2,
+                "recent_partial": 1,
+                "recent_failed": 1,
+                "recent_no_events": 4,
+                "recent_skipped": 2,
+            },
+            {
+                "id": uuid4(),
+                "name": "b2b_watchlist_alert_delivery",
+                "task_type": "builtin",
+                "schedule_type": "interval",
+                "cron_expression": None,
+                "interval_seconds": 3600,
+                "enabled": True,
+                "last_run_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                "next_run_at": datetime(2026, 4, 7, 19, 0, tzinfo=timezone.utc),
+                "last_status": "completed",
+                "last_duration_ms": 812,
+                "last_error": None,
+                "recent_runs": 5,
+                "recent_failures": 1,
+            },
+        ]
+    )
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "id": uuid4(),
+                    "account_id": uuid4(),
+                    "account_name": "Effingham Office Maids",
+                    "view_name": "Daily CRM Watch",
+                    "alert_delivery_frequency": "daily",
+                    "next_alert_delivery_at": datetime(2026, 4, 7, 19, 0, tzinfo=timezone.utc),
+                    "last_alert_delivery_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "last_alert_delivery_status": "sent",
+                    "last_alert_delivery_summary": "Delivered watchlist alert email to 1 of 1 recipient",
+                    "open_event_count": 17,
+                    "due_now": True,
+                }
+            ],
+            [
+                {
+                    "id": uuid4(),
+                    "watchlist_view_id": uuid4(),
+                    "account_id": uuid4(),
+                    "account_name": "Effingham Office Maids",
+                    "view_name": "Daily CRM Watch",
+                    "status": "sent",
+                    "summary": "Delivered watchlist alert email to 1 of 1 recipient",
+                    "error": None,
+                    "event_count": 17,
+                    "recipient_count": 1,
+                    "delivered_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "created_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "scheduled_for": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "delivery_mode": "scheduled",
+                }
+            ],
+        ]
+    )
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get("/pipeline/visibility/watchlist-delivery?days=14&limit=5")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["period_days"] == 14
+    assert body["summary"]["enabled_views"] == 3
+    assert body["summary"]["recent_failed"] == 1
+    assert body["task"]["name"] == "b2b_watchlist_alert_delivery"
+    assert body["task"]["recent_failure_rate"] == 0.2
+    assert body["views"][0]["view_name"] == "Daily CRM Watch"
+    assert body["views"][0]["due_now"] is True
+    assert body["deliveries"][0]["delivery_mode"] == "scheduled"
+    assert body["deliveries"][0]["recipient_count"] == 1
+    assert "FROM b2b_watchlist_views" in pool.fetch.await_args_list[0].args[0]
+    assert "FROM b2b_watchlist_alert_email_log l" in pool.fetch.await_args_list[1].args[0]
+
+
 @pytest.mark.asyncio
 async def test_sync_detached_batch_health_emits_stale_batch_and_scheduler_events(monkeypatch):
     class _Pool:

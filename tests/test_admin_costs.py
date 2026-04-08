@@ -503,6 +503,8 @@ class _FakePool:
                 {
                     "span_name": "task.b2b_enrichment.tier1",
                     "cost_usd": Decimal("0.10"),
+                    "billable_input_tokens": 700,
+                    "output_tokens": 120,
                     "vendor_name": "Slack",
                     "run_id": "run-enrich-1",
                     "metadata": {"vendor_name": "Slack", "source": "reddit"},
@@ -511,6 +513,8 @@ class _FakePool:
                 {
                     "span_name": "task.b2b_enrichment_repair.extraction",
                     "cost_usd": Decimal("0.05"),
+                    "billable_input_tokens": 500,
+                    "output_tokens": 100,
                     "vendor_name": "Slack",
                     "run_id": "run-repair-1",
                     "metadata": {"vendor_name": "Slack", "source": "reddit"},
@@ -519,6 +523,8 @@ class _FakePool:
                 {
                     "span_name": "task.b2b_reasoning_synthesis",
                     "cost_usd": Decimal("0.20"),
+                    "billable_input_tokens": 1200,
+                    "output_tokens": 300,
                     "vendor_name": "Slack",
                     "run_id": "run-reason-1",
                     "metadata": {"vendor_name": "Slack"},
@@ -527,6 +533,8 @@ class _FakePool:
                 {
                     "span_name": "b2b.churn_intelligence.battle_card_sales_copy",
                     "cost_usd": Decimal("0.07"),
+                    "billable_input_tokens": 950,
+                    "output_tokens": 260,
                     "vendor_name": "Slack",
                     "run_id": "run-battle-1",
                     "metadata": {
@@ -539,6 +547,8 @@ class _FakePool:
                 {
                     "span_name": "task.b2b_enrichment.tier1",
                     "cost_usd": Decimal("0.08"),
+                    "billable_input_tokens": 350,
+                    "output_tokens": 110,
                     "vendor_name": None,
                     "run_id": "run-enrich-2",
                     "metadata": {"vendor_name": "Zoom", "source": "g2"},
@@ -1077,6 +1087,20 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     assert body["summary"]["tracked_witness_count"] == 35
     assert body["summary"]["tracked_cost_usd"] == 0.35
     assert body["summary"]["cost_per_witness_usd"] == pytest.approx(0.01)
+    assert body["token_summary"]["total_billable_input_tokens"] == 3700
+    assert body["token_summary"]["total_output_tokens"] == 890
+
+    by_pass = {row["key"]: row for row in body["token_summary"]["by_pass"]}
+    assert by_pass["extraction"]["calls"] == 2
+    assert by_pass["extraction"]["billable_input_tokens"] == 1050
+    assert by_pass["repair"]["billable_input_tokens"] == 500
+    assert by_pass["reasoning"]["billable_input_tokens"] == 1200
+    assert by_pass["battle_card_overlay"]["billable_input_tokens"] == 950
+
+    by_tier = {row["key"]: row for row in body["token_summary"]["enrichment_tiers"]}
+    assert by_tier["tier1"]["calls"] == 2
+    assert by_tier["tier1"]["billable_input_tokens"] == 1050
+    assert by_tier["tier1"]["output_tokens"] == 230
 
     vendor_row = body["vendor_passes"][0]
     assert vendor_row["vendor_name"] == "Slack"
@@ -1099,14 +1123,24 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     run_rows = {row["run_id"]: row for row in body["recent_runs"]}
     assert run_rows["run-enrich-1"]["task_name"] == "b2b_enrichment"
     assert run_rows["run-enrich-1"]["total_cost_usd"] == 0.1
+    assert run_rows["run-enrich-1"]["total_billable_input_tokens"] == 700
+    assert run_rows["run-enrich-1"]["total_output_tokens"] == 120
     assert run_rows["run-enrich-1"]["witness_count"] == 15
     assert run_rows["run-enrich-1"]["strict_discussion_candidates_kept"] == 4
+    assert run_rows["run-enrich-1"]["enrichment_tier1_billable_input_tokens"] == 700
+    assert run_rows["run-enrich-1"]["enrichment_tier1_output_tokens"] == 120
     assert run_rows["run-repair-1"]["secondary_write_hits"] == 1
     assert run_rows["run-repair-1"]["strict_discussion_candidates_dropped"] == 3
+    assert run_rows["run-repair-1"]["repair_billable_input_tokens"] == 500
+    assert run_rows["run-repair-1"]["repair_output_tokens"] == 100
     assert run_rows["run-reason-1"]["reasoning_cost_usd"] == 0.2
+    assert run_rows["run-reason-1"]["reasoning_billable_input_tokens"] == 1200
+    assert run_rows["run-reason-1"]["reasoning_output_tokens"] == 300
     assert run_rows["run-battle-1"]["task_name"] == "b2b_battle_cards"
     assert run_rows["run-battle-1"]["battle_card_overlay_cost_usd"] == 0.07
     assert run_rows["run-battle-1"]["battle_card_overlay_calls"] == 1
+    assert run_rows["run-battle-1"]["battle_card_overlay_billable_input_tokens"] == 950
+    assert run_rows["run-battle-1"]["battle_card_overlay_output_tokens"] == 260
     assert run_rows["run-battle-1"]["battle_card_cache_hits"] == 1
     assert run_rows["run-battle-1"]["battle_card_llm_updated"] == 1
     assert run_rows["run-battle-1"]["battle_card_llm_failures"] == 1

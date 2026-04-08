@@ -36,6 +36,7 @@ import type {
   AdminCostVendor,
   AdminCostVendorPassRow,
   AdminCostSourceEfficiencyRow,
+  AdminCostB2bTokenRollupRow,
   AdminCostB2bRunRow,
   AdminCostB2bEfficiency,
   AdminCostBurnDashboard,
@@ -63,6 +64,7 @@ import type {
   AdminCostRunBatchJob,
   AdminCostRunBatchItem,
   AdminTaskHealthRow,
+  WatchlistDeliveryOpsSummary,
 } from '../types'
 import {
   fetchVisibilitySummary,
@@ -85,6 +87,7 @@ import {
   fetchAdminCostReasoningActivity,
   fetchAdminCostRun,
   fetchAdminTaskHealth,
+  fetchWatchlistDeliveryOps,
   runAutonomousTask,
 } from '../api/client'
 
@@ -97,6 +100,7 @@ const B2B_EFFICIENCY_RUN_LIMIT = 25
 const BURN_DASHBOARD_TOP_N = 25
 const GENERIC_REASONING_TOP_N = 8
 const RECON_TASK_NAME = 'b2b_campaign_batch_reconciliation'
+const WATCHLIST_DELIVERY_TASK_NAME = 'b2b_watchlist_alert_delivery'
 
 // ---------------------------------------------------------------------------
 // Severity badge
@@ -129,8 +133,15 @@ function StatusBadge({ status }: { status: string }) {
     resolved: 'bg-green-500/20 text-green-400',
     ignored: 'bg-slate-500/20 text-slate-400',
     accepted_risk: 'bg-purple-500/20 text-purple-400',
+    idle: 'bg-slate-500/20 text-slate-400',
+    due: 'bg-amber-500/20 text-amber-400',
+    enabled: 'bg-cyan-500/20 text-cyan-400',
     passed: 'bg-green-500/20 text-green-400',
+    completed: 'bg-green-500/20 text-green-400',
     succeeded: 'bg-green-500/20 text-green-400',
+    sent: 'bg-green-500/20 text-green-400',
+    partial: 'bg-amber-500/20 text-amber-400',
+    no_events: 'bg-slate-500/20 text-slate-400',
     failed: 'bg-red-500/20 text-red-400',
     rejected: 'bg-red-500/20 text-red-400',
     retried: 'bg-amber-500/20 text-amber-400',
@@ -375,6 +386,9 @@ function FilterSelect({
 function QueueTab({ onRefresh }: { onRefresh: () => void }) {
   const [stageFilter, setStageFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
+  const [deliveryMessage, setDeliveryMessage] = useState<string | null>(null)
+  const [deliveryError, setDeliveryError] = useState<string | null>(null)
+  const [deliveryTriggering, setDeliveryTriggering] = useState(false)
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
@@ -385,10 +399,35 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
       }),
     [stageFilter, severityFilter],
   )
+  const {
+    data: watchlistDelivery,
+    loading: watchlistDeliveryLoading,
+    error: watchlistDeliveryError,
+    refresh: refreshWatchlistDelivery,
+    refreshing: watchlistDeliveryRefreshing,
+  } = useApiData<WatchlistDeliveryOpsSummary>(
+    () => fetchWatchlistDeliveryOps({ days: 30, limit: 8 }),
+    [],
+  )
 
   const handleResolved = () => {
     refresh()
     onRefresh()
+  }
+
+  async function handleRunWatchlistDelivery() {
+    setDeliveryMessage(null)
+    setDeliveryError(null)
+    setDeliveryTriggering(true)
+    try {
+      const result = await runAutonomousTask(WATCHLIST_DELIVERY_TASK_NAME)
+      setDeliveryMessage(result?.message || result?.status || 'Triggered watchlist delivery task')
+      refreshWatchlistDelivery()
+    } catch (err) {
+      setDeliveryError(err instanceof Error ? err.message : 'Failed to trigger watchlist delivery task')
+    } finally {
+      setDeliveryTriggering(false)
+    }
   }
 
   const columns: Column<VisibilityQueueItem>[] = [
@@ -460,6 +499,125 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
   ]
 
   const items = data?.items ?? []
+  const watchlistTask = watchlistDelivery?.task ?? null
+  const watchlistViews = watchlistDelivery?.views ?? []
+  const watchlistLogs = watchlistDelivery?.deliveries ?? []
+  const watchlistSummary = watchlistDelivery?.summary
+
+  const watchlistViewColumns: Column<WatchlistDeliveryOpsSummary['views'][number]>[] = [
+    {
+      key: 'view_name',
+      header: 'Saved View',
+      render: (row) => (
+        <div className="max-w-[260px]">
+          <p className="truncate text-sm text-white">{row.view_name}</p>
+          <p className="truncate text-xs text-slate-500">{row.account_name}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.account_name}:${row.view_name}`,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => (
+        <div className="space-y-1">
+          <StatusBadge status={row.last_alert_delivery_status || (row.due_now ? 'due' : 'idle')} />
+          <p className="text-[11px] text-slate-500">
+            {row.alert_delivery_frequency || '--'}
+          </p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.last_alert_delivery_status || ''}:${row.alert_delivery_frequency || ''}`,
+    },
+    {
+      key: 'open_event_count',
+      header: 'Open Events',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.open_event_count)}</span>,
+      sortable: true,
+      sortValue: (row) => row.open_event_count,
+    },
+    {
+      key: 'next_alert_delivery_at',
+      header: 'Next Due',
+      render: (row) => (
+        <div className="space-y-1">
+          <p className={clsx('text-xs', row.due_now ? 'text-amber-300' : 'text-slate-300')}>
+            {row.next_alert_delivery_at ? formatTs(row.next_alert_delivery_at) : '--'}
+          </p>
+          {row.due_now ? <p className="text-[11px] text-amber-400">Due now</p> : null}
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.next_alert_delivery_at || '',
+    },
+    {
+      key: 'last_alert_delivery_at',
+      header: 'Last Delivery',
+      render: (row) => (
+        <div className="max-w-[280px]">
+          <p className="text-xs text-slate-300">{row.last_alert_delivery_at ? formatTs(row.last_alert_delivery_at) : '--'}</p>
+          <p className="truncate text-[11px] text-slate-500">{row.last_alert_delivery_summary || 'No delivery recorded yet'}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.last_alert_delivery_at || '',
+    },
+  ]
+
+  const watchlistLogColumns: Column<WatchlistDeliveryOpsSummary['deliveries'][number]>[] = [
+    {
+      key: 'created_at',
+      header: 'Time',
+      render: (row) => <span className="text-xs text-slate-400">{formatTs(row.delivered_at || row.created_at)}</span>,
+      sortable: true,
+      sortValue: (row) => row.delivered_at || row.created_at || '',
+    },
+    {
+      key: 'view_name',
+      header: 'Delivery',
+      render: (row) => (
+        <div className="max-w-[260px]">
+          <p className="truncate text-sm text-white">{row.view_name}</p>
+          <p className="truncate text-xs text-slate-500">{row.account_name}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => `${row.account_name}:${row.view_name}`,
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (row) => <StatusBadge status={row.status} />,
+      sortable: true,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: 'event_count',
+      header: 'Events',
+      render: (row) => (
+        <div className="space-y-1">
+          <p className="text-xs text-slate-300">{formatNumber(row.event_count)}</p>
+          <p className="text-[11px] text-slate-500">{formatNumber(row.recipient_count)} recipients</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.event_count,
+    },
+    {
+      key: 'summary',
+      header: 'Summary',
+      render: (row) => (
+        <div className="max-w-[320px]">
+          <p className="truncate text-xs text-slate-300">{row.summary}</p>
+          <p className="truncate text-[11px] text-slate-500">{row.error || row.delivery_mode || '--'}</p>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.summary,
+    },
+  ]
 
   return (
     <div className="space-y-4">
@@ -493,10 +651,10 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
         />
         <button
           onClick={refresh}
-          disabled={refreshing}
+          disabled={refreshing || watchlistDeliveryRefreshing}
           className="ml-auto flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 hover:text-white transition-colors"
         >
-          <RefreshCw className={clsx('h-3 w-3', refreshing && 'animate-spin')} />
+          <RefreshCw className={clsx('h-3 w-3', (refreshing || watchlistDeliveryRefreshing) && 'animate-spin')} />
           Refresh
         </button>
       </div>
@@ -506,6 +664,133 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
           {error.message}
         </div>
       )}
+      {watchlistDeliveryError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-400 text-sm">
+          {watchlistDeliveryError.message}
+        </div>
+      )}
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+          <div>
+            <h2 className="text-sm font-medium text-white">Watchlist Alert Delivery</h2>
+            <p className="text-xs text-slate-500">
+              Scheduled watchlist alert coverage, due views, and recent delivery outcomes.
+            </p>
+          </div>
+          <button
+            onClick={handleRunWatchlistDelivery}
+            disabled={deliveryTriggering}
+            className="inline-flex items-center gap-1.5 rounded border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <RefreshCw className={clsx('h-3 w-3', deliveryTriggering && 'animate-spin')} />
+            {deliveryTriggering ? 'Triggering...' : 'Run Delivery Now'}
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 border-b border-slate-700/50 p-4 md:grid-cols-3 xl:grid-cols-6">
+          <StatCard
+            label="Enabled Views"
+            value={formatNumber(watchlistSummary?.enabled_views)}
+            icon={<Workflow className="h-4 w-4" />}
+            skeleton={watchlistDeliveryLoading}
+          />
+          <StatCard
+            label="Due Views"
+            value={formatNumber(watchlistSummary?.due_views)}
+            icon={<Clock className="h-4 w-4" />}
+            skeleton={watchlistDeliveryLoading}
+          />
+          <StatCard
+            label="Open Alert Events"
+            value={formatNumber(watchlistSummary?.open_event_count)}
+            icon={<AlertTriangle className="h-4 w-4" />}
+            skeleton={watchlistDeliveryLoading}
+          />
+          <StatCard
+            label="Sent 30d"
+            value={formatNumber(watchlistSummary?.recent_sent)}
+            icon={<CheckCircle2 className="h-4 w-4" />}
+            skeleton={watchlistDeliveryLoading}
+          />
+          <StatCard
+            label="Failed 30d"
+            value={formatNumber(watchlistSummary?.recent_failed)}
+            icon={<XCircle className="h-4 w-4" />}
+            skeleton={watchlistDeliveryLoading}
+          />
+          <StatCard
+            label="Suppressed / No Events"
+            value={formatNumber((watchlistSummary?.recent_skipped ?? 0) + (watchlistSummary?.recent_no_events ?? 0))}
+            icon={<CalendarClock className="h-4 w-4" />}
+            skeleton={watchlistDeliveryLoading}
+          />
+        </div>
+
+        <div className="grid gap-4 border-b border-slate-700/50 p-4 xl:grid-cols-[0.9fr,1.1fr]">
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 p-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-medium text-white">Scheduler</span>
+              <StatusBadge status={watchlistTask?.last_status || (watchlistTask?.enabled ? 'enabled' : 'missing')} />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-400">
+              <div>
+                <p className="text-slate-500">Last run</p>
+                <p className="text-slate-200">{watchlistTask?.last_run_at ? formatTs(watchlistTask.last_run_at) : '--'}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Next run</p>
+                <p className="text-slate-200">{watchlistTask?.next_run_at ? formatTs(watchlistTask.next_run_at) : '--'}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Recent failure rate</p>
+                <p className="text-slate-200">{formatFailureRate(watchlistTask?.recent_failure_rate)}</p>
+              </div>
+              <div>
+                <p className="text-slate-500">Recent runs</p>
+                <p className="text-slate-200">{formatNumber(watchlistTask?.recent_runs)}</p>
+              </div>
+            </div>
+            {watchlistTask?.last_error ? (
+              <p className="mt-3 text-xs text-rose-300">{watchlistTask.last_error}</p>
+            ) : null}
+            {deliveryMessage ? <p className="mt-3 text-xs text-cyan-300">{deliveryMessage}</p> : null}
+            {deliveryError ? <p className="mt-3 text-xs text-rose-300">{deliveryError}</p> : null}
+          </div>
+
+          <div className="rounded-xl border border-slate-700/50 bg-slate-950/30 overflow-hidden">
+            <div className="border-b border-slate-700/50 px-4 py-3">
+              <h3 className="text-sm font-medium text-white">Due Saved Views</h3>
+              <p className="text-xs text-slate-500">Enabled views, delivery cadence, and current open-event load.</p>
+            </div>
+            {watchlistDeliveryLoading ? (
+              <DataTable columns={watchlistViewColumns} data={[]} skeletonRows={4} />
+            ) : (
+              <DataTable
+                columns={watchlistViewColumns}
+                data={watchlistViews}
+                emptyMessage="No saved views currently have scheduled email enabled"
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-b-xl border-t border-slate-700/50 bg-slate-950/20">
+          <div className="border-b border-slate-700/50 px-4 py-3">
+            <h3 className="text-sm font-medium text-white">Recent Delivery Attempts</h3>
+            <p className="text-xs text-slate-500">Recent scheduled or live watchlist email outcomes across all accounts.</p>
+          </div>
+          {watchlistDeliveryLoading ? (
+            <DataTable columns={watchlistLogColumns} data={[]} skeletonRows={4} />
+          ) : (
+            <DataTable
+              columns={watchlistLogColumns}
+              data={watchlistLogs}
+              emptyMessage="No watchlist alert delivery attempts in the selected window"
+            />
+          )}
+        </div>
+      </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
         {loading ? (
@@ -1748,6 +2033,11 @@ function CostsTab() {
   const vendorRows = vendors ?? []
   const vendorPasses = b2bEfficiency?.vendor_passes ?? []
   const sourceEfficiency = b2bEfficiency?.source_efficiency ?? []
+  const b2bTokenSummary = b2bEfficiency?.token_summary ?? null
+  const b2bTokenByPass = b2bTokenSummary?.by_pass ?? []
+  const b2bEnrichmentTierTokens = b2bTokenSummary?.enrichment_tiers ?? []
+  const tier1TokenSummary = b2bEnrichmentTierTokens.find((row) => row.key === 'tier1') ?? null
+  const tier2TokenSummary = b2bEnrichmentTierTokens.find((row) => row.key === 'tier2') ?? null
   const recentPipelineRuns = b2bEfficiency?.recent_runs ?? []
   const burnRows = burnDashboard?.rows ?? []
   const burnBudgetRows = burnDashboard?.reasoning_budget_pressure.rows ?? []
@@ -2719,6 +3009,44 @@ function CostsTab() {
     },
   ]
 
+  const b2bTokenRollupColumns: Column<AdminCostB2bTokenRollupRow>[] = [
+    {
+      key: 'label',
+      header: 'Stage',
+      render: (row) => <span className="text-sm text-white">{row.label}</span>,
+      sortable: true,
+      sortValue: (row) => row.label,
+    },
+    {
+      key: 'calls',
+      header: 'Calls',
+      render: (row) => <span className="text-xs text-slate-300">{formatNumber(row.calls)}</span>,
+      sortable: true,
+      sortValue: (row) => row.calls,
+    },
+    {
+      key: 'cost_usd',
+      header: 'Cost',
+      render: (row) => <span className="text-xs font-medium text-cyan-400">{formatCurrency(row.cost_usd)}</span>,
+      sortable: true,
+      sortValue: (row) => row.cost_usd,
+    },
+    {
+      key: 'billable_input_tokens',
+      header: 'Billable In',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.billable_input_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.billable_input_tokens,
+    },
+    {
+      key: 'output_tokens',
+      header: 'Output',
+      render: (row) => <span className="text-xs text-slate-300">{formatCompactTokens(row.output_tokens)}</span>,
+      sortable: true,
+      sortValue: (row) => row.output_tokens,
+    },
+  ]
+
   const b2bRunColumns: Column<AdminCostB2bRunRow>[] = [
     {
       key: 'started_at',
@@ -2743,7 +3071,7 @@ function CostsTab() {
       key: 'pass_costs',
       header: 'Pass Split',
       render: (row) => (
-          <div className="space-y-0.5 text-[11px] text-slate-400">
+        <div className="space-y-0.5 text-[11px] text-slate-400">
           <div>Ext {formatMaybeCurrency(row.extraction_cost_usd)}</div>
           <div>Rep {formatMaybeCurrency(row.repair_cost_usd)}</div>
           <div>Reas {formatMaybeCurrency(row.reasoning_cost_usd)}</div>
@@ -2756,6 +3084,19 @@ function CostsTab() {
         + row.repair_cost_usd
         + row.reasoning_cost_usd
         + row.battle_card_overlay_cost_usd,
+    },
+    {
+      key: 'token_split',
+      header: 'Tokens',
+      render: (row) => (
+        <div className="space-y-0.5 text-[11px] text-slate-400">
+          <div>All {formatCompactTokens(row.total_billable_input_tokens)} in / {formatCompactTokens(row.total_output_tokens)} out</div>
+          <div>T1 {formatCompactTokens(row.enrichment_tier1_billable_input_tokens)} / {formatCompactTokens(row.enrichment_tier1_output_tokens)}</div>
+          <div>T2 {formatCompactTokens(row.enrichment_tier2_billable_input_tokens)} / {formatCompactTokens(row.enrichment_tier2_output_tokens)}</div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => row.total_billable_input_tokens + row.total_output_tokens,
     },
     {
       key: 'reviews_processed',
@@ -4468,6 +4809,33 @@ function CostsTab() {
         />
       </div>
 
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard
+          label="B2B Billable In"
+          value={formatCompactTokens(b2bTokenSummary?.total_billable_input_tokens)}
+          icon={<Cpu className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+        <StatCard
+          label="B2B Output"
+          value={formatCompactTokens(b2bTokenSummary?.total_output_tokens)}
+          icon={<Database className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+        <StatCard
+          label="Tier 1 Billable In"
+          value={formatCompactTokens(tier1TokenSummary?.billable_input_tokens)}
+          icon={<Cpu className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+        <StatCard
+          label="Tier 2 Billable In"
+          value={formatCompactTokens(tier2TokenSummary?.billable_input_tokens)}
+          icon={<Cpu className="h-4 w-4" />}
+          skeleton={b2bEfficiencyLoading}
+        />
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-700/50">
@@ -4502,10 +4870,44 @@ function CostsTab() {
         </div>
       </div>
 
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">B2B Tokens By Pass</h2>
+            <p className="text-xs text-slate-500">Window-level billable input and output tokens split by extraction, repair, reasoning, and battle-card overlay.</p>
+          </div>
+          {b2bEfficiencyLoading ? (
+            <DataTable columns={b2bTokenRollupColumns} data={[]} skeletonRows={4} />
+          ) : (
+            <DataTable
+              columns={b2bTokenRollupColumns}
+              data={b2bTokenByPass}
+              emptyMessage="No B2B token usage rows in the selected window"
+            />
+          )}
+        </div>
+
+        <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-700/50">
+            <h2 className="text-sm font-medium text-white">Enrichment Tier Tokens</h2>
+            <p className="text-xs text-slate-500">Tier 1 versus Tier 2 billable input and output across the current B2B enrichment window.</p>
+          </div>
+          {b2bEfficiencyLoading ? (
+            <DataTable columns={b2bTokenRollupColumns} data={[]} skeletonRows={2} />
+          ) : (
+            <DataTable
+              columns={b2bTokenRollupColumns}
+              data={b2bEnrichmentTierTokens}
+              emptyMessage="No enrichment tier token rows in the selected window"
+            />
+          )}
+        </div>
+      </div>
+
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-700/50">
           <h2 className="text-sm font-medium text-white">Recent Pipeline Run Efficiency</h2>
-          <p className="text-xs text-slate-500">Per-run cost, witness yield, strict-gate keep/drop counts, and secondary-write activity. Window-only rollup; provider/model filters do not change this section.</p>
+          <p className="text-xs text-slate-500">Per-run cost, token split, witness yield, strict-gate keep/drop counts, and secondary-write activity. Window-only rollup; provider/model filters do not change this section.</p>
         </div>
         {b2bEfficiencyLoading ? (
           <DataTable columns={b2bRunColumns} data={[]} skeletonRows={6} />

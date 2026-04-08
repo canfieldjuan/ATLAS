@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -23,6 +23,7 @@ logger = logging.getLogger("atlas.api.pipeline_visibility")
 router = APIRouter(prefix="/pipeline/visibility", tags=["pipeline-visibility"])
 
 _RECON_TASK_NAME = "b2b_campaign_batch_reconciliation"
+_WATCHLIST_DELIVERY_TASK_NAME = "b2b_watchlist_alert_delivery"
 _MANAGED_HEALTH_REASON_CODES = {
     "detached_batch_stale",
     "detached_batch_item_claim_stale",
@@ -510,6 +511,233 @@ async def get_visibility_summary(
         "recovered_validation_retries_period": (
             events["recovered_validation_retries"] if events else 0
         ),
+    }
+
+
+@router.get("/watchlist-delivery")
+async def get_watchlist_delivery_ops(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=100),
+    _user: AuthUser = Depends(require_auth),
+):
+    """Operator summary for scheduled watchlist alert delivery."""
+    pool = get_db_pool()
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    summary_row = await pool.fetchrow(
+        """
+        SELECT
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_views
+             WHERE alert_email_enabled = TRUE) AS enabled_views,
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_views
+             WHERE alert_email_enabled = TRUE
+               AND next_alert_delivery_at IS NOT NULL
+               AND next_alert_delivery_at <= NOW()) AS due_views,
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_alert_events e
+             JOIN b2b_watchlist_views v ON v.id = e.watchlist_view_id
+             WHERE e.status = 'open'
+               AND v.alert_email_enabled = TRUE) AS open_event_count,
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_alert_email_log
+             WHERE created_at >= $1 AND status = 'sent') AS recent_sent,
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_alert_email_log
+             WHERE created_at >= $1 AND status = 'partial') AS recent_partial,
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_alert_email_log
+             WHERE created_at >= $1 AND status = 'failed') AS recent_failed,
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_alert_email_log
+             WHERE created_at >= $1 AND status = 'no_events') AS recent_no_events,
+            (SELECT COUNT(*)
+             FROM b2b_watchlist_alert_email_log
+             WHERE created_at >= $1 AND status = 'skipped') AS recent_skipped
+        """,
+        since,
+    )
+
+    task_row = await pool.fetchrow(
+        """
+        SELECT
+            t.id,
+            t.name,
+            t.task_type,
+            t.schedule_type,
+            t.cron_expression,
+            t.interval_seconds,
+            t.enabled,
+            t.last_run_at,
+            t.next_run_at,
+            latest.status AS last_status,
+            latest.duration_ms AS last_duration_ms,
+            latest.error AS last_error,
+            COALESCE(stats.recent_runs, 0) AS recent_runs,
+            COALESCE(stats.recent_failures, 0) AS recent_failures
+        FROM scheduled_tasks t
+        LEFT JOIN LATERAL (
+            SELECT e.status, e.duration_ms, e.error
+            FROM task_executions e
+            WHERE e.task_id = t.id
+            ORDER BY e.started_at DESC
+            LIMIT 1
+        ) latest ON true
+        LEFT JOIN LATERAL (
+            SELECT
+                COUNT(*) AS recent_runs,
+                COUNT(*) FILTER (WHERE e2.status != 'completed') AS recent_failures
+            FROM (
+                SELECT e2.status
+                FROM task_executions e2
+                WHERE e2.task_id = t.id
+                  AND e2.started_at >= $1
+                ORDER BY e2.started_at DESC
+                LIMIT 20
+            ) e2
+        ) stats ON true
+        WHERE t.name = $2
+        """,
+        since,
+        _WATCHLIST_DELIVERY_TASK_NAME,
+    )
+
+    view_rows = await pool.fetch(
+        """
+        SELECT
+            v.id,
+            v.account_id,
+            a.name AS account_name,
+            v.name AS view_name,
+            v.alert_delivery_frequency,
+            v.next_alert_delivery_at,
+            v.last_alert_delivery_at,
+            v.last_alert_delivery_status,
+            v.last_alert_delivery_summary,
+            COALESCE(open_events.open_event_count, 0) AS open_event_count,
+            (
+                v.alert_email_enabled = TRUE
+                AND v.next_alert_delivery_at IS NOT NULL
+                AND v.next_alert_delivery_at <= NOW()
+            ) AS due_now
+        FROM b2b_watchlist_views v
+        JOIN saas_accounts a ON a.id = v.account_id
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS open_event_count
+            FROM b2b_watchlist_alert_events e
+            WHERE e.watchlist_view_id = v.id
+              AND e.status = 'open'
+        ) open_events ON true
+        WHERE v.alert_email_enabled = TRUE
+        ORDER BY
+            due_now DESC,
+            v.next_alert_delivery_at ASC NULLS LAST,
+            v.last_alert_delivery_at DESC NULLS LAST,
+            a.name ASC,
+            v.name ASC
+        LIMIT $1
+        """,
+        limit,
+    )
+
+    delivery_rows = await pool.fetch(
+        """
+        SELECT
+            l.id,
+            l.watchlist_view_id,
+            l.account_id,
+            a.name AS account_name,
+            v.name AS view_name,
+            l.status,
+            l.summary,
+            l.error,
+            l.event_count,
+            cardinality(l.recipient_emails) AS recipient_count,
+            l.delivered_at,
+            l.created_at,
+            l.scheduled_for,
+            l.delivery_mode
+        FROM b2b_watchlist_alert_email_log l
+        JOIN b2b_watchlist_views v ON v.id = l.watchlist_view_id
+        JOIN saas_accounts a ON a.id = l.account_id
+        WHERE l.created_at >= $1
+        ORDER BY COALESCE(l.delivered_at, l.created_at) DESC, l.created_at DESC
+        LIMIT $2
+        """,
+        since,
+        limit,
+    )
+
+    task = None
+    if task_row:
+        recent_runs = int(task_row["recent_runs"] or 0)
+        recent_failures = int(task_row["recent_failures"] or 0)
+        task = {
+            "id": str(task_row["id"]),
+            "name": task_row["name"],
+            "task_type": task_row["task_type"],
+            "schedule_type": task_row["schedule_type"],
+            "cron_expression": task_row["cron_expression"],
+            "interval_seconds": task_row["interval_seconds"],
+            "enabled": bool(task_row["enabled"]),
+            "last_run_at": task_row["last_run_at"].isoformat() if task_row["last_run_at"] else None,
+            "next_run_at": task_row["next_run_at"].isoformat() if task_row["next_run_at"] else None,
+            "last_status": task_row["last_status"],
+            "last_duration_ms": task_row["last_duration_ms"],
+            "last_error": task_row["last_error"],
+            "recent_failure_rate": round(recent_failures / recent_runs, 3) if recent_runs else 0.0,
+            "recent_runs": recent_runs,
+        }
+
+    return {
+        "period_days": days,
+        "summary": {
+            "enabled_views": int(summary_row["enabled_views"] or 0) if summary_row else 0,
+            "due_views": int(summary_row["due_views"] or 0) if summary_row else 0,
+            "open_event_count": int(summary_row["open_event_count"] or 0) if summary_row else 0,
+            "recent_sent": int(summary_row["recent_sent"] or 0) if summary_row else 0,
+            "recent_partial": int(summary_row["recent_partial"] or 0) if summary_row else 0,
+            "recent_failed": int(summary_row["recent_failed"] or 0) if summary_row else 0,
+            "recent_no_events": int(summary_row["recent_no_events"] or 0) if summary_row else 0,
+            "recent_skipped": int(summary_row["recent_skipped"] or 0) if summary_row else 0,
+        },
+        "task": task,
+        "views": [
+            {
+                "view_id": str(row["id"]),
+                "view_name": row["view_name"],
+                "account_id": str(row["account_id"]),
+                "account_name": row["account_name"],
+                "alert_delivery_frequency": row["alert_delivery_frequency"],
+                "next_alert_delivery_at": row["next_alert_delivery_at"].isoformat() if row["next_alert_delivery_at"] else None,
+                "last_alert_delivery_at": row["last_alert_delivery_at"].isoformat() if row["last_alert_delivery_at"] else None,
+                "last_alert_delivery_status": row["last_alert_delivery_status"],
+                "last_alert_delivery_summary": row["last_alert_delivery_summary"],
+                "open_event_count": int(row["open_event_count"] or 0),
+                "due_now": bool(row["due_now"]),
+            }
+            for row in view_rows
+        ],
+        "deliveries": [
+            {
+                "id": str(row["id"]),
+                "watchlist_view_id": str(row["watchlist_view_id"]),
+                "view_name": row["view_name"],
+                "account_id": str(row["account_id"]),
+                "account_name": row["account_name"],
+                "status": row["status"],
+                "summary": row["summary"],
+                "error": row["error"],
+                "event_count": int(row["event_count"] or 0),
+                "recipient_count": int(row["recipient_count"] or 0),
+                "delivered_at": row["delivered_at"].isoformat() if row["delivered_at"] else None,
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "scheduled_for": row["scheduled_for"].isoformat() if row["scheduled_for"] else None,
+                "delivery_mode": row["delivery_mode"],
+            }
+            for row in delivery_rows
+        ],
     }
 
 

@@ -982,12 +982,23 @@ export interface AdminCostSourceEfficiencyRow {
   cost_per_witness_usd: number | null
 }
 
+export interface AdminCostB2bTokenRollupRow {
+  key: string
+  label: string
+  calls: number
+  cost_usd: number
+  billable_input_tokens: number
+  output_tokens: number
+}
+
 export interface AdminCostB2bRunRow {
   run_id: string
   task_name: string
   started_at: string | null
   total_cost_usd: number
   calls: number
+  total_billable_input_tokens: number
+  total_output_tokens: number
   reviews_processed: number
   witness_rows: number
   witness_count: number
@@ -1000,10 +1011,26 @@ export interface AdminCostB2bRunRow {
   exact_cache_hits: number
   generated: number
   extraction_cost_usd: number
+  extraction_billable_input_tokens: number
+  extraction_output_tokens: number
   repair_cost_usd: number
+  repair_billable_input_tokens: number
+  repair_output_tokens: number
   reasoning_cost_usd: number
+  reasoning_billable_input_tokens: number
+  reasoning_output_tokens: number
   battle_card_overlay_cost_usd: number
   battle_card_overlay_calls: number
+  battle_card_overlay_billable_input_tokens: number
+  battle_card_overlay_output_tokens: number
+  enrichment_tier1_cost_usd: number
+  enrichment_tier1_calls: number
+  enrichment_tier1_billable_input_tokens: number
+  enrichment_tier1_output_tokens: number
+  enrichment_tier2_cost_usd: number
+  enrichment_tier2_calls: number
+  enrichment_tier2_billable_input_tokens: number
+  enrichment_tier2_output_tokens: number
   battle_card_cache_hits: number
   battle_card_llm_updated: number
   battle_card_llm_failures: number
@@ -1018,6 +1045,12 @@ export interface AdminCostB2bEfficiency {
     tracked_cost_usd: number
     tracked_witness_count: number
     cost_per_witness_usd: number | null
+  }
+  token_summary: {
+    total_billable_input_tokens: number
+    total_output_tokens: number
+    by_pass: AdminCostB2bTokenRollupRow[]
+    enrichment_tiers: AdminCostB2bTokenRollupRow[]
   }
   vendor_passes: AdminCostVendorPassRow[]
   source_efficiency: AdminCostSourceEfficiencyRow[]
@@ -1319,6 +1352,54 @@ export interface AdminTaskHealthRow {
   last_error: string | null
   recent_failure_rate: number
   recent_runs: number
+}
+
+export interface WatchlistDeliveryOpsView {
+  view_id: string
+  view_name: string
+  account_id: string
+  account_name: string
+  alert_delivery_frequency: string | null
+  next_alert_delivery_at: string | null
+  last_alert_delivery_at: string | null
+  last_alert_delivery_status: string | null
+  last_alert_delivery_summary: string | null
+  open_event_count: number
+  due_now: boolean
+}
+
+export interface WatchlistDeliveryOpsLog {
+  id: string
+  watchlist_view_id: string
+  view_name: string
+  account_id: string
+  account_name: string
+  status: string
+  summary: string
+  error: string | null
+  event_count: number
+  recipient_count: number
+  delivered_at: string | null
+  created_at: string | null
+  scheduled_for: string | null
+  delivery_mode: string | null
+}
+
+export interface WatchlistDeliveryOpsSummary {
+  period_days: number
+  summary: {
+    enabled_views: number
+    due_views: number
+    open_event_count: number
+    recent_sent: number
+    recent_partial: number
+    recent_failed: number
+    recent_no_events: number
+    recent_skipped: number
+  }
+  task: AdminTaskHealthRow | null
+  views: WatchlistDeliveryOpsView[]
+  deliveries: WatchlistDeliveryOpsLog[]
 }
 
 export interface AdminCostCacheHealth {

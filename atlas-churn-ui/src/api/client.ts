@@ -51,6 +51,7 @@ import type {
   DedupDecision,
   PipelineReviewAction,
   ReasoningReferenceIds,
+  WatchlistDeliveryOpsSummary,
 } from '../types'
 import { normalizeReportDetail, normalizeVendorProfile } from '../lib/reportNormalization'
 
@@ -1262,6 +1263,17 @@ export async function fetchVisibilityReviewActions(params?: {
 }) {
   return get<{ actions: PipelineReviewAction[]; limit: number; offset: number }>(
     VISIBILITY_BASE, '/review-actions', params as Record<string, string | number>
+  )
+}
+
+export async function fetchWatchlistDeliveryOps(params?: {
+  days?: number
+  limit?: number
+}) {
+  return get<WatchlistDeliveryOpsSummary>(
+    VISIBILITY_BASE,
+    '/watchlist-delivery',
+    params as Record<string, string | number>,
   )
 }
 
