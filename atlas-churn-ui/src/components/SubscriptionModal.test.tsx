@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import SubscriptionModal from './SubscriptionModal'
 
@@ -90,4 +90,148 @@ describe('SubscriptionModal', () => {
     expect(screen.queryByDisplayValue('team@example.com')).not.toBeInTheDocument()
     expect(screen.queryByDisplayValue('Carry forward')).not.toBeInTheDocument()
   })
+
+  it('ignores stale load responses after switching scopes', async () => {
+    let resolveReport: ((value: { subscription: Record<string, unknown> | null }) => void) | undefined
+    let resolveLibrary: ((value: { subscription: Record<string, unknown> | null }) => void) | undefined
+
+    api.fetchReportSubscription
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveReport = resolve
+      }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveLibrary = resolve
+      }))
+
+    const { rerender } = render(
+      <SubscriptionModal
+        open
+        onClose={vi.fn()}
+        scopeType="report"
+        scopeKey="report-1"
+        scopeLabel="Report One"
+      />,
+    )
+
+    rerender(
+      <SubscriptionModal
+        open
+        onClose={vi.fn()}
+        scopeType="library"
+        scopeKey="library"
+        scopeLabel="Full Report Library"
+      />,
+    )
+
+    if (resolveLibrary) {
+      resolveLibrary({ subscription: null })
+    }
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Full Report Library')).toBeInTheDocument()
+    })
+
+    if (resolveReport) {
+      resolveReport({
+        subscription: {
+          id: 'sub-1',
+          scope_type: 'report',
+          scope_key: 'report-1',
+          scope_label: 'Stale report subscription',
+          report_id: 'report-1',
+          delivery_frequency: 'monthly',
+          deliverable_focus: 'battle_cards',
+          freshness_policy: 'any',
+          recipient_emails: ['team@example.com'],
+          delivery_note: 'Carry forward',
+          enabled: false,
+          next_delivery_at: null,
+          last_delivery_at: null,
+          last_delivery_status: null,
+          last_delivery_report_count: null,
+          last_delivery_summary: null,
+          created_at: null,
+          updated_at: null,
+        },
+      })
+    }
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Full Report Library')).toBeInTheDocument()
+    })
+    expect(screen.queryByDisplayValue('Stale report subscription')).not.toBeInTheDocument()
+  })
+
+  it('clears pending close timers when reopened after save', async () => {
+    vi.useFakeTimers()
+    const onClose = vi.fn()
+    const onSaved = vi.fn()
+
+    api.fetchReportSubscription.mockResolvedValue({ subscription: null })
+    api.upsertReportSubscription.mockResolvedValue({
+      subscription: {
+        id: 'sub-1',
+        scope_type: 'report',
+        scope_key: 'report-1',
+        scope_label: 'Report One',
+        report_id: 'report-1',
+        delivery_frequency: 'weekly',
+        deliverable_focus: 'all',
+        freshness_policy: 'fresh_or_monitor',
+        recipient_emails: ['team@example.com'],
+        delivery_note: '',
+        enabled: true,
+        next_delivery_at: null,
+        last_delivery_at: null,
+        last_delivery_status: null,
+        last_delivery_report_count: null,
+        last_delivery_summary: null,
+        created_at: null,
+        updated_at: null,
+      },
+    })
+
+    const { rerender } = render(
+      <SubscriptionModal
+        open
+        onClose={onClose}
+        onSaved={onSaved}
+        scopeType="report"
+        scopeKey="report-1"
+        scopeLabel="Report One"
+      />,
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByDisplayValue('Report One')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Recipient Emails'), {
+      target: { value: 'team@example.com' },
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Subscribe' }))
+      await Promise.resolve()
+      expect(api.upsertReportSubscription).toHaveBeenCalled()
+    })
+
+    rerender(
+      <SubscriptionModal
+        open
+        onClose={onClose}
+        onSaved={onSaved}
+        scopeType="library"
+        scopeKey="library"
+        scopeLabel="Full Report Library"
+      />,
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+      vi.advanceTimersByTime(1300)
+    })
+
+    expect(onClose).not.toHaveBeenCalled()
+    vi.useRealTimers()
+  }, 10000)
 })

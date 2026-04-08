@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { X, Bell, Loader2, Check, AlertTriangle, Calendar, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { fetchReportSubscription, upsertReportSubscription } from '../api/client'
@@ -17,6 +17,8 @@ export default function SubscriptionModal({
   open, onClose, scopeType, scopeKey, scopeLabel, onSaved,
 }: SubscriptionModalProps) {
   const idPrefix = `subscription-${scopeType}-${scopeKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+  const loadRequestIdRef = useRef(0)
+  const saveCloseTimerRef = useRef<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -34,12 +36,20 @@ export default function SubscriptionModal({
 
   // Load existing subscription
   useEffect(() => {
+    loadRequestIdRef.current += 1
+    if (saveCloseTimerRef.current != null) {
+      window.clearTimeout(saveCloseTimerRef.current)
+      saveCloseTimerRef.current = null
+    }
     if (!open) return
+    const requestId = loadRequestIdRef.current + 1
+    loadRequestIdRef.current = requestId
     setLoading(true)
     setError('')
     setSuccess(false)
     fetchReportSubscription(scopeType, scopeKey)
       .then(res => {
+        if (loadRequestIdRef.current !== requestId) return
         const sub = res.subscription
         if (sub) {
           setExisting(sub)
@@ -61,8 +71,14 @@ export default function SubscriptionModal({
           setEnabled(true)
         }
       })
-      .catch(err => setError(err instanceof Error ? err.message : 'Failed to load subscription'))
-      .finally(() => setLoading(false))
+      .catch(err => {
+        if (loadRequestIdRef.current !== requestId) return
+        setError(err instanceof Error ? err.message : 'Failed to load subscription')
+      })
+      .finally(() => {
+        if (loadRequestIdRef.current !== requestId) return
+        setLoading(false)
+      })
   }, [open, scopeType, scopeKey, scopeLabel])
 
   const handleSave = async () => {
@@ -93,7 +109,10 @@ export default function SubscriptionModal({
       const res = await upsertReportSubscription(scopeType, scopeKey, body)
       setExisting(res.subscription)
       setSuccess(true)
-      setTimeout(() => {
+      if (saveCloseTimerRef.current != null) {
+        window.clearTimeout(saveCloseTimerRef.current)
+      }
+      saveCloseTimerRef.current = window.setTimeout(() => {
         onSaved?.(res.subscription)
         onClose()
       }, 1200)
@@ -112,6 +131,14 @@ export default function SubscriptionModal({
     if (open) document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [open, handleKeyDown])
+
+  useEffect(() => () => {
+    loadRequestIdRef.current += 1
+    if (saveCloseTimerRef.current != null) {
+      window.clearTimeout(saveCloseTimerRef.current)
+      saveCloseTimerRef.current = null
+    }
+  }, [])
 
   if (!open) return null
 
