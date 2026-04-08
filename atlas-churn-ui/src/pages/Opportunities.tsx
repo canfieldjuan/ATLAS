@@ -15,6 +15,10 @@ import {
   Globe,
   Users,
   X,
+  CheckCircle2,
+  XCircle,
+  Mail,
+  Loader2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -25,11 +29,14 @@ import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import {
   fetchHighIntent,
+  fetchCampaigns,
   generateCampaigns,
+  approveCampaign,
+  updateCampaign,
   pushToCrm,
   downloadCsv,
 } from '../api/client'
-import type { HighIntentCompany } from '../types'
+import type { Campaign, HighIntentCompany } from '../types'
 
 function rowKey(r: HighIntentCompany): string {
   return r.review_id ?? `${r.company}::${r.vendor}`
@@ -120,6 +127,25 @@ export default function Opportunities() {
 
   const opportunities = data ?? []
 
+  // -- Campaign status lookup --
+  const { data: campaignData, refresh: refreshCampaigns } = useApiData(
+    () => fetchCampaigns({ limit: 500 }),
+    [],
+  )
+  const campaignMap = useMemo(() => {
+    const map = new Map<string, { drafts: number; approved: number; sent: number; total: number }>()
+    for (const c of campaignData?.campaigns ?? []) {
+      const key = `${c.company_name}::${c.vendor_name}`
+      const entry = map.get(key) ?? { drafts: 0, approved: 0, sent: 0, total: 0 }
+      entry.total++
+      if (c.status === 'draft') entry.drafts++
+      else if (c.status === 'approved' || c.status === 'queued') entry.approved++
+      else if (c.status === 'sent') entry.sent++
+      map.set(key, entry)
+    }
+    return map
+  }, [campaignData])
+
   // Clear selection when client-side filters change
   useEffect(() => {
     setSelectedIds(new Set())
@@ -188,6 +214,7 @@ export default function Opportunities() {
       })
       setGenResult(`Generated ${result.generated ?? 0} campaign(s) for ${row.company}`)
       refresh()
+      refreshCampaigns()
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Generation failed')
     } finally {
@@ -218,6 +245,7 @@ export default function Opportunities() {
       setGenResult(`Generated ${totalGenerated} campaign(s) for ${selected.length} companies`)
       setSelectedIds(new Set())
       refresh()
+      refreshCampaigns()
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Bulk generation failed')
     } finally {
@@ -306,14 +334,28 @@ export default function Opportunities() {
     {
       key: 'company',
       header: 'Company',
-      render: (r) => (
+      render: (r) => {
+        const cs = campaignMap.get(`${r.company}::${r.vendor}`)
+        return (
         <div className="min-w-0">
-          <span className="text-white font-medium">{r.company || '--'}</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-white font-medium">{r.company || '--'}</span>
+            {cs && (
+              cs.sent > 0
+                ? <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-medium bg-cyan-500/15 text-cyan-400">{cs.sent} sent</span>
+                : cs.approved > 0
+                  ? <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-medium bg-green-500/15 text-green-300">{cs.approved} approved</span>
+                  : cs.drafts > 0
+                    ? <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-medium bg-amber-500/15 text-amber-400">{cs.drafts} draft{cs.drafts > 1 ? 's' : ''}</span>
+                    : null
+            )}
+          </div>
           {r.company_domain && (
-            <span className="text-xs text-slate-500 ml-1.5">{r.company_domain}</span>
+            <span className="text-xs text-slate-500">{r.company_domain}</span>
           )}
         </div>
-      ),
+        )
+      },
     },
     {
       key: 'vendor',
@@ -341,21 +383,34 @@ export default function Opportunities() {
       },
     },
     {
-      key: 'dm',
-      header: 'DM',
-      render: (r) =>
-        r.decision_maker
-          ? <span className="text-cyan-400 text-xs font-medium">Yes</span>
-          : <span className="text-slate-500 text-xs">No</span>,
+      key: 'role',
+      header: 'Role',
+      render: (r) => {
+        const title = r.reviewer_title ?? r.role_level
+        return (
+          <div className="flex items-center gap-1.5 min-w-0">
+            {title
+              ? <span className="text-xs text-slate-300 truncate max-w-[100px]" title={title}>{title}</span>
+              : <span className="text-xs text-slate-500">--</span>}
+            {r.decision_maker && <span className="shrink-0 px-1 py-0.5 rounded text-[9px] font-bold bg-cyan-500/20 text-cyan-400">DM</span>}
+          </div>
+        )
+      },
     },
     {
       key: 'pain',
-      header: 'Pain',
-      render: (r) => (
-        <span className="text-xs text-slate-400 max-w-[140px] truncate block" title={r.pain ?? ''}>
-          {r.pain ?? '--'}
-        </span>
-      ),
+      header: 'Pain / Quote',
+      render: (r) => {
+        const quote = r.quotes?.[0]
+        return (
+          <div className="min-w-0 max-w-[200px]">
+            {r.pain && <span className="text-xs text-slate-400 truncate block" title={r.pain}>{r.pain}</span>}
+            {quote
+              ? <span className="text-[10px] text-slate-500 italic truncate block" title={quote}>"{quote}"</span>
+              : !r.pain && <span className="text-xs text-slate-500">--</span>}
+          </div>
+        )
+      },
     },
     {
       key: 'contract',
@@ -429,7 +484,7 @@ export default function Opportunities() {
         )
       },
     },
-  ], [selectedIds, toggleSelect, canAccessCampaigns, generating])
+  ], [selectedIds, toggleSelect, canAccessCampaigns, generating, campaignMap])
 
   // -- Expanded row --
   const expandedRow = useMemo(
@@ -647,6 +702,146 @@ export default function Opportunities() {
 }
 
 // ---------------------------------------------------------------------------
+// Campaign Queue (inline approval flow)
+// ---------------------------------------------------------------------------
+
+const CAMPAIGN_STATUS_COLORS: Record<string, string> = {
+  draft: 'bg-amber-500/20 text-amber-400',
+  approved: 'bg-green-500/20 text-green-400',
+  queued: 'bg-cyan-500/20 text-cyan-400',
+  sent: 'bg-cyan-500/20 text-cyan-400',
+  cancelled: 'bg-red-500/20 text-red-400',
+  expired: 'bg-slate-500/20 text-slate-400',
+}
+
+function CampaignQueue({ company, vendor }: { company: string; vendor: string }) {
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [result, setResult] = useState<string | null>(null)
+
+  const { data, loading, refresh } = useApiData(
+    () => fetchCampaigns({ company, vendor, limit: 20 }),
+    [company, vendor],
+  )
+
+  const campaigns = data?.campaigns ?? []
+  const drafts = campaigns.filter((c) => c.status === 'draft')
+  const others = campaigns.filter((c) => c.status !== 'draft')
+
+  async function handleApprove(c: Campaign) {
+    setActionLoading(c.id)
+    setResult(null)
+    try {
+      await approveCampaign(c.id)
+      setResult(`Approved: ${c.subject ?? c.channel}`)
+      refresh()
+    } catch (err) {
+      setResult(err instanceof Error ? err.message : 'Approve failed')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  async function handleReject(c: Campaign) {
+    setActionLoading(c.id)
+    setResult(null)
+    try {
+      await updateCampaign(c.id, { status: 'cancelled' })
+      setResult(`Rejected: ${c.subject ?? c.channel}`)
+      refresh()
+    } catch (err) {
+      setResult(err instanceof Error ? err.message : 'Reject failed')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-slate-500 py-3">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading campaigns...
+      </div>
+    )
+  }
+
+  if (campaigns.length === 0) {
+    return <p className="text-xs text-slate-500 py-2">No campaigns generated yet.</p>
+  }
+
+  return (
+    <div className="space-y-3">
+      {result && (
+        <div className="flex items-center justify-between rounded border border-slate-700/40 bg-slate-800/40 px-3 py-1.5 text-xs text-slate-300">
+          <span>{result}</span>
+          <button onClick={() => setResult(null)} className="text-slate-500 hover:text-white ml-2"><X className="h-3 w-3" /></button>
+        </div>
+      )}
+
+      {drafts.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-amber-400">{drafts.length} pending review</p>
+          {drafts.map((c) => (
+            <div key={c.id} className="bg-slate-800/50 border border-slate-700/30 rounded-lg p-3">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-700/50 text-slate-300">{c.channel}</span>
+                <span className={clsx('px-2 py-0.5 rounded-full text-[10px] font-medium', CAMPAIGN_STATUS_COLORS[c.status])}>{c.status}</span>
+                {c.opportunity_score != null && (
+                  <span className="text-[10px] text-slate-500">score {c.opportunity_score}</span>
+                )}
+                {c.quality_status && (
+                  <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium', c.quality_status === 'pass' ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300')}>
+                    quality: {c.quality_status}
+                  </span>
+                )}
+              </div>
+              {c.subject && <p className="text-sm font-medium text-white mb-1">{c.subject}</p>}
+              {c.body && (
+                <div
+                  className="text-xs text-slate-300 line-clamp-3 prose prose-invert prose-xs max-w-none mb-2"
+                  dangerouslySetInnerHTML={{ __html: c.body }}
+                />
+              )}
+              {c.cta && <p className="text-xs text-cyan-400 mb-2">{c.cta}</p>}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleApprove(c)}
+                  disabled={actionLoading === c.id}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-600 hover:bg-green-500 text-white transition-colors disabled:opacity-50"
+                >
+                  <CheckCircle2 className="h-3 w-3" />
+                  Approve
+                </button>
+                <button
+                  onClick={() => handleReject(c)}
+                  disabled={actionLoading === c.id}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors disabled:opacity-50"
+                >
+                  <XCircle className="h-3 w-3" />
+                  Reject
+                </button>
+                {actionLoading === c.id && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {others.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs text-slate-500">{others.length} processed</p>
+          {others.slice(0, 5).map((c) => (
+            <div key={c.id} className="flex items-center gap-2 text-xs py-1 border-b border-slate-800/50 last:border-0">
+              <span className={clsx('px-1.5 py-0.5 rounded-full text-[10px] font-medium', CAMPAIGN_STATUS_COLORS[c.status])}>{c.status}</span>
+              <span className="text-slate-300 truncate">{c.subject ?? c.channel}</span>
+              {c.created_at && <span className="text-slate-500 shrink-0 ml-auto">{new Date(c.created_at).toLocaleDateString()}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Evidence Panel
 // ---------------------------------------------------------------------------
 
@@ -839,6 +1034,15 @@ function EvidencePanel({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Campaign Queue */}
+      <div className="border-t border-slate-700/40 pt-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Mail className="h-4 w-4 text-cyan-400" />
+          <h4 className="text-sm font-medium text-white">Generated Campaigns</h4>
+        </div>
+        <CampaignQueue company={row.company} vendor={row.vendor} />
       </div>
 
       {/* Actions */}

@@ -1,18 +1,16 @@
 import { useState } from 'react'
-import { Download, Bell, BellOff, Share2, Check, Copy, Loader2 } from 'lucide-react'
+import { Download, Bell, BellOff, Check, Copy } from 'lucide-react'
 import { clsx } from 'clsx'
 import { downloadReportPdf } from '../api/client'
 
 interface ReportActionBarProps {
   reportId: string
-  reportType: string
-  vendorName: string | null
   onSubscribe: () => void
   hasSubscription?: boolean
 }
 
 export default function ReportActionBar({
-  reportId, reportType, vendorName, onSubscribe, hasSubscription,
+  reportId, onSubscribe, hasSubscription,
 }: ReportActionBarProps) {
   const [copied, setCopied] = useState(false)
 
