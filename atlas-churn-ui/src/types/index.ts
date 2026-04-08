@@ -16,6 +16,11 @@ export interface ChurnSignal extends ReasoningOverlayFields {
   archetype_confidence: number | null
   reasoning_mode: string | null
   last_computed_at: string | null
+  freshness_status?: string | null
+  freshness_reason?: string | null
+  freshness_timestamp?: string | null
+  vendor_alert_hit?: boolean
+  stale_threshold_hit?: boolean
 }
 
 export interface ReasoningReferenceIds {

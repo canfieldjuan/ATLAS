@@ -328,6 +328,51 @@ async def test_get_vendor_target_prefers_new_report_types(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_slow_burn_watchlist_applies_threshold_flags(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "vendor_name": "Zendesk",
+                    "product_category": "Helpdesk",
+                    "total_reviews": 300,
+                    "churn_intent_count": 22,
+                    "avg_urgency_score": 8.2,
+                    "avg_rating_normalized": 4.1,
+                    "nps_proxy": 18.2,
+                    "price_complaint_rate": 0.3,
+                    "decision_maker_churn_rate": 0.2,
+                    "support_sentiment": 2.4,
+                    "legacy_support_score": 1.8,
+                    "new_feature_velocity": 0.4,
+                    "employee_growth_rate": 3.2,
+                    "last_computed_at": datetime(2026, 4, 5, 15, 0, tzinfo=timezone.utc),
+                },
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_slow_burn_watchlist(
+        vendor_alert_threshold=8,
+        stale_days_threshold=1,
+        user=user,
+    )
+
+    assert result["count"] == 1
+    assert result["vendor_alert_hit_count"] == 1
+    assert result["stale_threshold_hit_count"] == 1
+    assert result["signals"][0]["vendor_alert_hit"] is True
+    assert result["signals"][0]["stale_threshold_hit"] is True
+
+
+@pytest.mark.asyncio
 async def test_accounts_in_motion_feed_aggregates_tracked_vendor_reports(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -421,6 +466,55 @@ async def test_accounts_in_motion_feed_aggregates_tracked_vendor_reports(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_accounts_in_motion_feed_applies_threshold_flags(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {"vendor_name": "Zendesk", "track_mode": "competitor", "label": "Support", "added_at": None},
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    helper = AsyncMock(
+        return_value={
+            "accounts": [
+                {
+                    "company": "Acme Corp",
+                    "vendor": "Zendesk",
+                    "urgency": 8.6,
+                    "opportunity_score": 82,
+                    "pain_categories": [{"category": "pricing", "severity": ""}],
+                    "evidence": ["We need to move fast."],
+                }
+            ],
+            "report_date": "2026-04-04",
+            "stale_days": 2,
+            "is_stale": True,
+            "data_source": "persisted_report",
+            "freshness_timestamp": "2026-04-04",
+        }
+    )
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_list_accounts_in_motion_from_report", helper)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_accounts_in_motion_feed(
+        account_alert_threshold=8,
+        stale_days_threshold=1,
+        user=user,
+    )
+
+    assert result["count"] == 1
+    assert result["account_alert_hit_count"] == 1
+    assert result["stale_threshold_hit_count"] == 1
+    assert result["accounts"][0]["account_alert_hit"] is True
+    assert result["accounts"][0]["stale_threshold_hit"] is True
+
+
+@pytest.mark.asyncio
 async def test_accounts_in_motion_feed_handles_empty_watchlist(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -445,6 +539,10 @@ async def test_accounts_in_motion_feed_handles_empty_watchlist(monkeypatch):
         "tracked_vendor_count": 0,
         "vendors_with_accounts": 0,
         "min_urgency": mod.settings.b2b_churn.accounts_in_motion_min_urgency,
+        "account_alert_threshold": None,
+        "account_alert_hit_count": 0,
+        "stale_days_threshold": None,
+        "stale_threshold_hit_count": 0,
         "per_vendor_limit": mod.settings.b2b_churn.accounts_in_motion_max_per_vendor,
         "freshest_report_date": None,
     }
@@ -469,6 +567,9 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
                     "include_stale": False,
                     "named_accounts_only": True,
                     "changed_wedges_only": True,
+                    "vendor_alert_threshold": 7.5,
+                    "account_alert_threshold": 8.5,
+                    "stale_days_threshold": 3,
                     "created_at": None,
                     "updated_at": None,
                 }
@@ -485,8 +586,10 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
     assert result["views"][0]["id"] == str(view_id)
     assert result["views"][0]["named_accounts_only"] is True
     assert result["views"][0]["changed_wedges_only"] is True
+    assert result["views"][0]["vendor_alert_threshold"] == 7.5
+    assert result["views"][0]["account_alert_threshold"] == 8.5
+    assert result["views"][0]["stale_days_threshold"] == 3
     assert "is_default" not in result["views"][0]
-    assert "vendor_alert_threshold" not in result["views"][0]
     assert "FROM b2b_watchlist_views" in pool.fetch.await_args.args[0]
 
 
@@ -552,6 +655,9 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
                 "include_stale": False,
                 "named_accounts_only": True,
                 "changed_wedges_only": True,
+                "vendor_alert_threshold": 7.0,
+                "account_alert_threshold": 8.0,
+                "stale_days_threshold": 2,
                 "created_at": None,
                 "updated_at": None,
             }
@@ -571,6 +677,9 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
             include_stale=False,
             named_accounts_only=True,
             changed_wedges_only=True,
+            vendor_alert_threshold=7,
+            account_alert_threshold=8,
+            stale_days_threshold=2,
         ),
         user=user,
     )
@@ -579,6 +688,9 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
     assert result["include_stale"] is False
     assert result["named_accounts_only"] is True
     assert result["changed_wedges_only"] is True
+    assert result["vendor_alert_threshold"] == 7.0
+    assert result["account_alert_threshold"] == 8.0
+    assert result["stale_days_threshold"] == 2
     vendor_lookup_sql = pool.fetchval.await_args_list[1].args[0]
     assert "FROM tracked_vendors" in vendor_lookup_sql
     insert_sql = pool.fetchrow.await_args.args[0]
@@ -606,6 +718,9 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
                     "include_stale": True,
                     "named_accounts_only": False,
                     "changed_wedges_only": True,
+                    "vendor_alert_threshold": 6.5,
+                    "account_alert_threshold": 7.5,
+                    "stale_days_threshold": 5,
                     "created_at": None,
                     "updated_at": None,
                 },
@@ -626,9 +741,229 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
     deleted = await mod.delete_watchlist_view(view_id=view_id, user=user)
 
     assert updated["changed_wedges_only"] is True
+    assert updated["vendor_alert_threshold"] == 6.5
+    assert updated["account_alert_threshold"] == 7.5
+    assert updated["stale_days_threshold"] == 5
     assert "UPDATE b2b_watchlist_views" in pool.fetchrow.await_args_list[1].args[0]
     assert deleted == {"deleted": True, "watchlist_view_id": str(view_id)}
     assert "DELETE FROM b2b_watchlist_views" in pool.fetchrow.await_args_list[-1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_list_watchlist_alert_events_returns_view_scoped_rows(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    event_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            return_value={
+                "id": view_id,
+                "account_id": account_id,
+                "name": "Hot CRM alerts",
+                "vendor_name": "Salesforce",
+                "category": "CRM",
+                "source": None,
+                "min_urgency": 8.0,
+                "include_stale": False,
+                "named_accounts_only": True,
+                "changed_wedges_only": False,
+                "vendor_alert_threshold": 7.5,
+                "account_alert_threshold": 8.5,
+                "stale_days_threshold": 2,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ),
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "id": event_id,
+                    "watchlist_view_id": view_id,
+                    "event_type": "vendor_alert",
+                    "threshold_field": "vendor_alert_threshold",
+                    "entity_type": "vendor",
+                    "entity_key": "vendor_alert:vendor:salesforce",
+                    "vendor_name": "Salesforce",
+                    "company_name": None,
+                    "category": "CRM",
+                    "source": None,
+                    "threshold_value": 7.5,
+                    "summary": "Salesforce crossed the vendor alert threshold at 8.2",
+                    "payload": {"avg_urgency_score": 8.2},
+                    "status": "open",
+                    "first_seen_at": None,
+                    "last_seen_at": None,
+                    "resolved_at": None,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_watchlist_alert_events(view_id=view_id, status="open", limit=25, user=user)
+
+    assert result["watchlist_view_id"] == str(view_id)
+    assert result["watchlist_view_name"] == "Hot CRM alerts"
+    assert result["count"] == 1
+    assert result["events"][0]["event_type"] == "vendor_alert"
+    sql = pool.fetch.await_args.args[0]
+    assert "FROM b2b_watchlist_alert_events" in sql
+    assert "status = $3" in sql
+
+
+@pytest.mark.asyncio
+async def test_evaluate_watchlist_alert_events_persists_and_resolves(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    existing_vendor_event_id = uuid4()
+    resolved_event_id = uuid4()
+    persisted_account_event_id = uuid4()
+    view_row = {
+        "id": view_id,
+        "account_id": account_id,
+        "name": "High urgency CRM",
+        "vendor_name": "Salesforce",
+        "category": "CRM",
+        "source": "reddit",
+        "min_urgency": 8.0,
+        "include_stale": False,
+        "named_accounts_only": True,
+        "changed_wedges_only": False,
+        "vendor_alert_threshold": 7.5,
+        "account_alert_threshold": 8.5,
+        "stale_days_threshold": 2,
+        "created_at": None,
+        "updated_at": None,
+    }
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            side_effect=[
+                view_row,
+                {
+                    "id": existing_vendor_event_id,
+                    "watchlist_view_id": view_id,
+                    "event_type": "vendor_alert",
+                    "threshold_field": "vendor_alert_threshold",
+                    "entity_type": "vendor",
+                    "entity_key": "vendor_alert:vendor:salesforce",
+                    "vendor_name": "Salesforce",
+                    "company_name": None,
+                    "category": "CRM",
+                    "source": None,
+                    "threshold_value": 7.5,
+                    "summary": "Salesforce crossed the vendor alert threshold at 8.2",
+                    "payload": {"avg_urgency_score": 8.2},
+                    "status": "open",
+                    "first_seen_at": None,
+                    "last_seen_at": None,
+                    "resolved_at": None,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+                {
+                    "id": persisted_account_event_id,
+                    "watchlist_view_id": view_id,
+                    "event_type": "account_alert",
+                    "threshold_field": "account_alert_threshold",
+                    "entity_type": "account",
+                    "entity_key": "account_alert:account:salesforce:acme corp:crm:reddit:2026-04-05",
+                    "vendor_name": "Salesforce",
+                    "company_name": "Acme Corp",
+                    "category": "CRM",
+                    "source": "reddit",
+                    "threshold_value": 8.5,
+                    "summary": "Acme Corp crossed the account alert threshold at 9.0",
+                    "payload": {"urgency": 9.0},
+                    "status": "open",
+                    "first_seen_at": None,
+                    "last_seen_at": None,
+                    "resolved_at": None,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+            ]
+        ),
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "id": existing_vendor_event_id,
+                    "event_type": "vendor_alert",
+                    "entity_key": "vendor_alert:vendor:salesforce",
+                },
+                {
+                    "id": resolved_event_id,
+                    "event_type": "stale_data",
+                    "entity_key": "stale_data:vendor:salesforce",
+                },
+            ]
+        ),
+        execute=AsyncMock(),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        mod,
+        "list_tenant_slow_burn_watchlist",
+        AsyncMock(
+            return_value={
+                "signals": [
+                    {
+                        "vendor_name": "Salesforce",
+                        "product_category": "CRM",
+                        "avg_urgency_score": 8.2,
+                        "vendor_alert_hit": True,
+                        "stale_threshold_hit": False,
+                        "freshness_status": "fresh",
+                        "freshness_timestamp": "2026-04-07T12:00:00Z",
+                    }
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "list_tenant_accounts_in_motion_feed",
+        AsyncMock(
+            return_value={
+                "accounts": [
+                    {
+                        "company": "Acme Corp",
+                        "vendor": "Salesforce",
+                        "category": "CRM",
+                        "urgency": 9.0,
+                        "account_alert_hit": True,
+                        "stale_threshold_hit": False,
+                        "report_date": "2026-04-05",
+                        "source_distribution": {"reddit": 2},
+                        "reasoning_reference_ids": {"witness_ids": ["w1"]},
+                        "source_review_ids": ["r1"],
+                    }
+                ]
+            }
+        ),
+    )
+
+    result = await mod.evaluate_watchlist_alert_events(view_id=view_id, user=user)
+
+    assert result["watchlist_view_id"] == str(view_id)
+    assert result["count"] == 2
+    assert result["new_open_event_count"] == 1
+    assert result["resolved_event_count"] == 1
+    assert pool.fetchrow.await_count == 3
+    resolve_sql = pool.execute.await_args.args[0]
+    assert "UPDATE b2b_watchlist_alert_events" in resolve_sql
+    assert resolved_event_id in pool.execute.await_args.args[1]
 
 
 @pytest.mark.asyncio

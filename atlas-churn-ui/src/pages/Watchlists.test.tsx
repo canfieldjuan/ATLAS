@@ -9,16 +9,22 @@ const mockNavigate = vi.hoisted(() => vi.fn())
 const api = vi.hoisted(() => ({
   addTrackedVendor: vi.fn(),
   createCompetitiveSet: vi.fn(),
+  evaluateWatchlistAlertEvents: vi.fn(),
+  createWatchlistView: vi.fn(),
   deleteCompetitiveSet: vi.fn(),
+  deleteWatchlistView: vi.fn(),
   fetchCompetitiveSetPlan: vi.fn(),
   fetchAccountsInMotionFeed: vi.fn(),
   fetchSlowBurnWatchlist: vi.fn(),
+  listWatchlistAlertEvents: vi.fn(),
   listTrackedVendors: vi.fn(),
   listCompetitiveSets: vi.fn(),
+  listWatchlistViews: vi.fn(),
   removeTrackedVendor: vi.fn(),
   runCompetitiveSetNow: vi.fn(),
   searchAvailableVendors: vi.fn(),
   updateCompetitiveSet: vi.fn(),
+  updateWatchlistView: vi.fn(),
 }))
 
 vi.mock('../api/client', () => api)
@@ -50,6 +56,12 @@ describe('Watchlists', () => {
           churn_intent_count: 14,
           total_reviews: 220,
           nps_proxy: 21.5,
+          last_computed_at: '2026-04-07T15:00:00Z',
+          latest_snapshot_date: '2026-04-07',
+          latest_accounts_report_date: '2026-04-06',
+          freshness_status: 'fresh',
+          freshness_reason: null,
+          freshness_timestamp: '2026-04-07T15:00:00Z',
         },
       ],
       count: 1,
@@ -62,6 +74,26 @@ describe('Watchlists', () => {
         max_competitors: 5,
         default_changed_vendors_only: true,
       },
+    })
+    api.listWatchlistViews.mockResolvedValue({
+      views: [],
+      count: 0,
+    })
+    api.listWatchlistAlertEvents.mockResolvedValue({
+      watchlist_view_id: '',
+      watchlist_view_name: '',
+      status: 'open',
+      events: [],
+      count: 0,
+    })
+    api.evaluateWatchlistAlertEvents.mockResolvedValue({
+      watchlist_view_id: '',
+      watchlist_view_name: '',
+      evaluated_at: '2026-04-07T18:00:00Z',
+      events: [],
+      count: 0,
+      new_open_event_count: 0,
+      resolved_event_count: 0,
     })
     api.fetchSlowBurnWatchlist.mockResolvedValue({
       signals: [
@@ -83,6 +115,9 @@ describe('Watchlists', () => {
           archetype_confidence: 0.81,
           reasoning_mode: 'persisted',
           last_computed_at: '2026-04-07T16:00:00Z',
+          freshness_status: 'synthesis_pending',
+          freshness_reason: 'Reasoning synthesis has not been materialized for this vendor yet',
+          freshness_timestamp: '2026-04-07T16:00:00Z',
           synthesis_wedge_label: 'Reliability pressure',
           reasoning_delta: {
             wedge_changed: true,
@@ -148,6 +183,9 @@ describe('Watchlists', () => {
           stale_days: 2,
           is_stale: true,
           data_source: 'persisted_report',
+          freshness_status: 'stale',
+          freshness_reason: 'Persisted report is older than the current watchlist window',
+          freshness_timestamp: '2026-04-05',
         },
         {
           company: null,
@@ -200,6 +238,9 @@ describe('Watchlists', () => {
           stale_days: 2,
           is_stale: true,
           data_source: 'persisted_report',
+          freshness_status: 'stale',
+          freshness_reason: 'Persisted report is older than the current watchlist window',
+          freshness_timestamp: '2026-04-05',
         },
       ],
       count: 2,
@@ -234,7 +275,9 @@ describe('Watchlists', () => {
     expect(screen.getByRole('heading', { name: 'Accounts In Motion' })).toBeInTheDocument()
     expect(screen.getByText('1 review-needed cluster')).toBeInTheDocument()
     expect(screen.getByText(/Freshest report/)).toBeInTheDocument()
-    expect(screen.getByText('stale report')).toBeInTheDocument()
+    expect(screen.getAllByText('stale').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('fresh').length).toBeGreaterThan(0)
+    expect(screen.getByText('synthesis pending')).toBeInTheDocument()
     expect(screen.getByText('We need to move fast before renewal.')).toBeInTheDocument()
     expect(screen.getByText('higher confidence')).toBeInTheDocument()
     expect(screen.queryByText('Anonymous signal cluster')).not.toBeInTheDocument()
@@ -363,5 +406,436 @@ describe('Watchlists', () => {
         include_stale: false,
       })
     })
+
+    await user.click(within(feedControls).getByLabelText('Named accounts only'))
+    expect(screen.queryByRole('button', { name: 'Show 1 cluster' })).not.toBeInTheDocument()
+
+    await user.click(within(feedControls).getByLabelText('Changed wedges only'))
+    expect(screen.queryByText('No vendor movement matches the current filters.')).not.toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('Vendor alert threshold'))
+    await user.type(screen.getByLabelText('Vendor alert threshold'), '7.5')
+    await user.clear(screen.getByLabelText('Stale days threshold'))
+    await user.type(screen.getByLabelText('Stale days threshold'), '3')
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_name: 'Intercom',
+        category: 'Helpdesk',
+        vendor_alert_threshold: 7.5,
+        stale_days_threshold: 3,
+      })
+    })
+
+    await user.type(screen.getByLabelText('Saved view name'), 'Intercom high urgency')
+    await user.type(screen.getByLabelText('Account alert threshold'), '8.5')
+    api.createWatchlistView.mockResolvedValue({
+      id: 'view-1',
+      name: 'Intercom high urgency',
+      vendor_name: 'Intercom',
+      category: 'Helpdesk',
+      source: 'reddit',
+      min_urgency: 8,
+      include_stale: false,
+      named_accounts_only: true,
+      changed_wedges_only: true,
+      vendor_alert_threshold: 7.5,
+      account_alert_threshold: 8.5,
+      stale_days_threshold: 3,
+      created_at: null,
+      updated_at: null,
+    })
+    await user.click(screen.getByRole('button', { name: 'Save current view' }))
+    await waitFor(() => {
+      expect(api.createWatchlistView).toHaveBeenCalledWith({
+        name: 'Intercom high urgency',
+        vendor_name: 'Intercom',
+        category: 'Helpdesk',
+        source: 'reddit',
+        min_urgency: 8,
+        include_stale: false,
+        named_accounts_only: true,
+        changed_wedges_only: true,
+        vendor_alert_threshold: 7.5,
+        account_alert_threshold: 8.5,
+        stale_days_threshold: 3,
+      })
+    })
+  })
+
+  it('applies a saved view and rehydrates the persisted thresholds', async () => {
+    const user = userEvent.setup()
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+    api.listWatchlistAlertEvents.mockResolvedValue({
+      watchlist_view_id: 'view-1',
+      watchlist_view_name: 'Fresh named Intercom',
+      status: 'open',
+      events: [
+        {
+          id: 'event-1',
+          watchlist_view_id: 'view-1',
+          event_type: 'vendor_alert',
+          threshold_field: 'vendor_alert_threshold',
+          entity_type: 'vendor',
+          entity_key: 'vendor_alert:vendor:zendesk',
+          vendor_name: 'Zendesk',
+          company_name: null,
+          category: 'Helpdesk',
+          source: null,
+          threshold_value: 7.5,
+          summary: 'Zendesk crossed the vendor alert threshold at 8.2',
+          payload: {},
+          status: 'open',
+          first_seen_at: null,
+          last_seen_at: '2026-04-07T17:00:00Z',
+          resolved_at: null,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(api.listWatchlistViews).toHaveBeenCalledTimes(1)
+    })
+
+    await user.click(screen.getAllByRole('button', { name: /Fresh named Intercom/i })[0])
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_name: 'Intercom',
+        category: 'Helpdesk',
+        vendor_alert_threshold: 7.5,
+        stale_days_threshold: 1,
+      })
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_name: 'Intercom',
+        category: 'Helpdesk',
+        source: 'reddit',
+        min_urgency: 8,
+        include_stale: false,
+        account_alert_threshold: 8.5,
+        stale_days_threshold: 1,
+      })
+    })
+
+    expect(screen.queryByRole('button', { name: 'Show 1 cluster' })).not.toBeInTheDocument()
+    expect(screen.getByDisplayValue('7.5')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('8.5')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('1')).toBeInTheDocument()
+    expect(screen.getByText('Vendor alerts at 7.5+ urgency: 1 hit')).toBeInTheDocument()
+    expect(screen.getByText('Account alerts at 8.5+ urgency: 1 hit')).toBeInTheDocument()
+    expect(screen.getByText('Stale policy after 1 day: 1 hit')).toBeInTheDocument()
+    expect(screen.getByText('Saved View Alert Events')).toBeInTheDocument()
+    expect(screen.getByText('Zendesk crossed the vendor alert threshold at 8.2')).toBeInTheDocument()
+    expect(screen.getByText('vendor alert hit')).toBeInTheDocument()
+    expect(screen.getByText('account alert hit')).toBeInTheDocument()
+    expect(screen.getAllByText('stale policy hit').length).toBeGreaterThan(0)
+  })
+
+  it('evaluates persisted alert events for the active saved view', async () => {
+    const user = userEvent.setup()
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-2',
+          name: 'CRM pressure',
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: false,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+    api.evaluateWatchlistAlertEvents.mockResolvedValue({
+      watchlist_view_id: 'view-2',
+      watchlist_view_name: 'CRM pressure',
+      evaluated_at: '2026-04-07T18:00:00Z',
+      events: [],
+      count: 0,
+      new_open_event_count: 2,
+      resolved_event_count: 1,
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('CRM pressure')
+    await user.click(screen.getByText('CRM pressure'))
+    await user.click(screen.getByRole('button', { name: 'Evaluate alerts' }))
+
+    await waitFor(() => {
+      expect(api.evaluateWatchlistAlertEvents).toHaveBeenCalledWith('view-2')
+    })
+    expect(await screen.findByText('Evaluated CRM pressure: 2 new open, 1 resolved')).toBeInTheDocument()
+  })
+
+  it('updates the active saved view when renamed instead of creating a duplicate', async () => {
+    const user = userEvent.setup()
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+    api.updateWatchlistView.mockResolvedValue({
+      id: 'view-1',
+      name: 'Exec helpdesk watch',
+      vendor_name: 'Intercom',
+      category: 'Helpdesk',
+      source: 'reddit',
+      min_urgency: 8,
+      include_stale: false,
+      named_accounts_only: true,
+      changed_wedges_only: true,
+      vendor_alert_threshold: 7.5,
+      account_alert_threshold: 8.5,
+      stale_days_threshold: 1,
+      created_at: null,
+      updated_at: null,
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(api.listWatchlistViews).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /Fresh named Intercom/i }).length).toBeGreaterThan(0)
+    })
+    await user.click(screen.getAllByRole('button', { name: /Fresh named Intercom/i })[0])
+    const nameInput = await screen.findByLabelText('Saved view name')
+    await user.clear(nameInput)
+    await user.type(nameInput, 'Exec helpdesk watch')
+    await user.click(screen.getByRole('button', { name: 'Update active view' }))
+
+    await waitFor(() => {
+      expect(api.updateWatchlistView).toHaveBeenCalledWith('view-1', {
+        name: 'Exec helpdesk watch',
+        vendor_name: 'Intercom',
+        category: 'Helpdesk',
+        source: 'reddit',
+        min_urgency: 8,
+        include_stale: false,
+        named_accounts_only: true,
+        changed_wedges_only: true,
+        vendor_alert_threshold: 7.5,
+        account_alert_threshold: 8.5,
+        stale_days_threshold: 1,
+      })
+    })
+    expect(api.createWatchlistView).not.toHaveBeenCalled()
+  })
+
+  it('keeps the account drawer aligned with the refreshed row payload', async () => {
+    const user = userEvent.setup()
+
+    api.fetchAccountsInMotionFeed
+      .mockResolvedValueOnce({
+        accounts: [
+          {
+            company: 'Acme Corp',
+            vendor: 'Zendesk',
+            watch_vendor: 'Zendesk',
+            track_mode: 'competitor',
+            watchlist_label: 'Support',
+            category: 'Helpdesk',
+            urgency: 8.8,
+            role_type: 'executive',
+            buying_stage: 'evaluation',
+            budget_authority: true,
+            pain_categories: [{ category: 'pricing', severity: 'high' }],
+            evidence: ['Old renewal warning.'],
+            alternatives_considering: [{ name: 'Freshdesk', reason: 'pricing' }],
+            contract_signal: 'Q3 2026',
+            reviewer_title: 'VP Support',
+            company_size_raw: '500',
+            quality_flags: [],
+            opportunity_score: 84,
+            quote_match_type: 'company_match',
+            confidence: 7.5,
+            reasoning_reference_ids: { witness_ids: ['witness:zendesk:1'] },
+            source_distribution: { reddit: 2 },
+            source_review_ids: ['review-1'],
+            source_reviews: [
+              {
+                id: 'review-1',
+                source: 'reddit',
+                source_url: 'https://reddit.example/review-1',
+                vendor_name: 'Zendesk',
+                rating: 2,
+                summary: 'Support is slipping',
+                review_excerpt: 'Old renewal warning.',
+                reviewer_name: 'Taylor',
+                reviewer_title: 'VP Support',
+                reviewer_company: 'Acme Corp',
+                reviewed_at: '2026-04-03T00:00:00Z',
+              },
+            ],
+            evidence_count: 1,
+            enriched_at: '2026-04-06T10:00:00Z',
+            employee_count: 500,
+            industry: 'SaaS',
+            annual_revenue: '$10M-$50M',
+            domain: 'acme.com',
+            contacts: [],
+            contact_count: 0,
+            report_date: '2026-04-05',
+            stale_days: 2,
+            is_stale: true,
+            data_source: 'persisted_report',
+          },
+        ],
+        count: 1,
+        tracked_vendor_count: 1,
+        vendors_with_accounts: 1,
+        min_urgency: 7,
+        per_vendor_limit: 10,
+        freshest_report_date: '2026-04-05',
+      })
+      .mockResolvedValueOnce({
+        accounts: [
+          {
+            company: 'Acme Corp',
+            vendor: 'Zendesk',
+            watch_vendor: 'Zendesk',
+            track_mode: 'competitor',
+            watchlist_label: 'Support',
+            category: 'Helpdesk',
+            urgency: 8.9,
+            role_type: 'executive',
+            buying_stage: 'evaluation',
+            budget_authority: true,
+            pain_categories: [{ category: 'pricing', severity: 'high' }],
+            evidence: ['Updated renewal warning.'],
+            alternatives_considering: [{ name: 'Freshdesk', reason: 'pricing' }],
+            contract_signal: 'Q3 2026',
+            reviewer_title: 'VP Support',
+            company_size_raw: '500',
+            quality_flags: [],
+            opportunity_score: 85,
+            quote_match_type: 'company_match',
+            confidence: 7.6,
+            reasoning_reference_ids: { witness_ids: ['witness:zendesk:1'] },
+            source_distribution: { reddit: 2 },
+            source_review_ids: ['review-1'],
+            source_reviews: [
+              {
+                id: 'review-1',
+                source: 'reddit',
+                source_url: 'https://reddit.example/review-1',
+                vendor_name: 'Zendesk',
+                rating: 2,
+                summary: 'Support is slipping',
+                review_excerpt: 'Updated renewal warning.',
+                reviewer_name: 'Taylor',
+                reviewer_title: 'VP Support',
+                reviewer_company: 'Acme Corp',
+                reviewed_at: '2026-04-04T00:00:00Z',
+              },
+            ],
+            evidence_count: 1,
+            enriched_at: '2026-04-06T11:00:00Z',
+            employee_count: 500,
+            industry: 'SaaS',
+            annual_revenue: '$10M-$50M',
+            domain: 'acme.com',
+            contacts: [],
+            contact_count: 0,
+            report_date: '2026-04-05',
+            stale_days: 0,
+            is_stale: false,
+            data_source: 'persisted_report',
+          },
+        ],
+        count: 1,
+        tracked_vendor_count: 1,
+        vendors_with_accounts: 1,
+        min_urgency: 7,
+        per_vendor_limit: 10,
+        freshest_report_date: '2026-04-06',
+      })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    await user.click(screen.getByText('Acme Corp'))
+    const drawer = await screen.findByLabelText('Account movement evidence')
+    expect(within(drawer).getByText('Old renewal warning.')).toBeInTheDocument()
+
+    const feedControls = screen.getByRole('group', { name: 'Feed controls' })
+    await user.click(within(feedControls).getByLabelText('Fresh only'))
+
+    await waitFor(() => {
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_name: undefined,
+        category: undefined,
+        source: undefined,
+        min_urgency: undefined,
+        include_stale: false,
+      })
+    })
+    expect(await within(drawer).findByText('Updated renewal warning.')).toBeInTheDocument()
+    expect(within(drawer).queryByText('Old renewal warning.')).not.toBeInTheDocument()
   })
 })

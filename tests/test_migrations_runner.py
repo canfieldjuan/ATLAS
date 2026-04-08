@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 
 class FakeMigrationPool:
@@ -64,3 +65,21 @@ async def test_record_migration_uses_negative_version_on_prefix_collision():
         (-1, "076_consumer_analytics_views"),
         (-2, "230_b2b_reasoning_synthesis"),
     ]
+
+
+def test_find_duplicate_migration_prefixes_detects_repo_collisions():
+    from atlas_brain.storage.migrations import _find_duplicate_migration_prefixes
+
+    duplicates = _find_duplicate_migration_prefixes([
+        Path("270_b2b_watchlist_views.sql"),
+        Path("271_b2b_watchlist_view_alert_thresholds.sql"),
+        Path("272_b2b_opportunity_dispositions.sql"),
+        Path("272_b2b_watchlist_alert_events.sql"),
+    ])
+
+    assert duplicates == {
+        272: [
+            "272_b2b_opportunity_dispositions.sql",
+            "272_b2b_watchlist_alert_events.sql",
+        ]
+    }

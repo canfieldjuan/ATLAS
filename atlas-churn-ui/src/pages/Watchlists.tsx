@@ -21,12 +21,17 @@ import useApiData from '../hooks/useApiData'
 import {
   addTrackedVendor,
   createCompetitiveSet,
+  evaluateWatchlistAlertEvents,
+  createWatchlistView,
   deleteCompetitiveSet,
+  deleteWatchlistView,
   fetchCompetitiveSetPlan,
   fetchAccountsInMotionFeed,
   fetchSlowBurnWatchlist,
+  listWatchlistAlertEvents,
   listTrackedVendors,
   listCompetitiveSets,
+  listWatchlistViews,
   removeTrackedVendor,
   runCompetitiveSetNow,
   searchAvailableVendors,
@@ -36,6 +41,9 @@ import {
   type CompetitiveSetPlan,
   type CompetitiveSetRun,
   type TrackedVendor,
+  type WatchlistAlertEvent,
+  type WatchlistView,
+  updateWatchlistView,
   updateCompetitiveSet,
   type VendorSearchResult,
 } from '../api/client'
@@ -43,10 +51,15 @@ import type { ChurnSignal } from '../types'
 
 interface WatchlistsData {
   vendors: TrackedVendor[]
+  watchlistViews: WatchlistView[]
   competitiveSets: CompetitiveSet[]
   competitiveSetDefaults: CompetitiveSetDefaults | null
   feed: ChurnSignal[]
+  vendorAlertHitCount: number
+  feedStaleThresholdHitCount: number
   accounts: AccountsInMotionFeedItem[]
+  accountAlertHitCount: number
+  accountStaleThresholdHitCount: number
   vendorsWithAccounts: number
   freshestAccountsReportDate: string | null
 }
@@ -54,7 +67,6 @@ interface WatchlistsData {
 const SEARCH_DEBOUNCE_MS = 250
 const MIN_VENDOR_SEARCH_CHARS = 2
 const SEARCH_RESULTS_PREVIEW_LIMIT = 8
-const STALE_AFTER_HOURS = 24
 const ACCOUNT_URGENCY_FILTER_OPTIONS = [7, 8, 9] as const
 
 type AccountPresentationTier = 'named_high' | 'named_medium' | 'review'
@@ -86,11 +98,35 @@ function toTimestamp(value: string | null | undefined) {
   return Number.isNaN(ts) ? null : ts
 }
 
-function freshnessTone(value: string | null | undefined) {
+function parseOptionalNumber(value: string) {
+  if (!value.trim()) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function ageInDays(value: string | null | undefined) {
   const ts = toTimestamp(value)
+  if (ts == null) return null
+  const diff = Date.now() - ts
+  if (!Number.isFinite(diff) || diff < 0) return 0
+  return diff / (1000 * 60 * 60 * 24)
+}
+
+function freshnessTone(status: string | null | undefined, fallbackTimestamp?: string | null | undefined) {
+  if (status === 'fresh') return 'text-emerald-400'
+  if (status === 'stale') return 'text-amber-400'
+  if (status === 'synthesis_pending' || status === 'artifact_missing') return 'text-slate-400'
+  const ts = toTimestamp(fallbackTimestamp)
   if (ts == null) return 'text-slate-500'
-  const ageHours = (Date.now() - ts) / (1000 * 60 * 60)
-  return ageHours > STALE_AFTER_HOURS ? 'text-amber-400' : 'text-emerald-400'
+  return 'text-slate-400'
+}
+
+function freshnessLabel(status: string | null | undefined, fallbackTimestamp?: string | null | undefined) {
+  if (status === 'fresh') return 'fresh'
+  if (status === 'stale') return 'stale'
+  if (status === 'synthesis_pending') return 'synthesis pending'
+  if (status === 'artifact_missing') return 'artifact missing'
+  return fallbackTimestamp ? 'timestamp only' : '--'
 }
 
 function formatCostUsd(value: number | null | undefined) {
@@ -174,19 +210,108 @@ function accountPresentationTier(row: AccountsInMotionFeedItem): AccountPresenta
   return 'review'
 }
 
+function vendorAlertTriggered(row: ChurnSignal, threshold: number | null) {
+  return threshold != null && row.avg_urgency_score >= threshold
+}
+
+function accountAlertTriggered(row: AccountsInMotionFeedItem, threshold: number | null) {
+  return threshold != null && row.urgency >= threshold
+}
+
+function staleThresholdTriggered(
+  threshold: number | null,
+  options: {
+    staleDays?: number | null
+    freshnessTimestamp?: string | null
+    fallbackTimestamp?: string | null
+  },
+) {
+  if (threshold == null) return false
+  if (options.staleDays != null) return options.staleDays > threshold
+  const age = ageInDays(options.freshnessTimestamp || options.fallbackTimestamp)
+  return age != null && age > threshold
+}
+
+function watchlistViewMatchesState(
+  view: WatchlistView,
+  filters: {
+    vendor_name: string
+    category: string
+    source: string
+    min_urgency: string
+    fresh_only: boolean
+    named_accounts_only: boolean
+    changed_wedges_only: boolean
+    vendor_alert_threshold: string
+    account_alert_threshold: string
+    stale_days_threshold: string
+  },
+) {
+  return (view.vendor_name || '') === filters.vendor_name
+    && (view.category || '') === filters.category
+    && (view.source || '') === filters.source
+    && String(view.min_urgency ?? '') === filters.min_urgency
+    && view.include_stale === !filters.fresh_only
+    && view.named_accounts_only === filters.named_accounts_only
+    && view.changed_wedges_only === filters.changed_wedges_only
+    && String(view.vendor_alert_threshold ?? '') === filters.vendor_alert_threshold
+    && String(view.account_alert_threshold ?? '') === filters.account_alert_threshold
+    && String(view.stale_days_threshold ?? '') === filters.stale_days_threshold
+}
+
+function summarizeWatchlistView(view: WatchlistView) {
+  const parts: string[] = []
+  if (view.vendor_name) parts.push(view.vendor_name)
+  if (view.category) parts.push(view.category)
+  if (view.source) parts.push(view.source)
+  if (view.min_urgency != null) parts.push(`urgency ${view.min_urgency}+`)
+  if (!view.include_stale) parts.push('fresh only')
+  if (view.named_accounts_only) parts.push('named only')
+  if (view.changed_wedges_only) parts.push('changed wedges')
+  if (view.vendor_alert_threshold != null) parts.push(`vendor alert ${view.vendor_alert_threshold}+`)
+  if (view.account_alert_threshold != null) parts.push(`account alert ${view.account_alert_threshold}+`)
+  if (view.stale_days_threshold != null) parts.push(`stale after ${view.stale_days_threshold}d`)
+  return parts.length > 0 ? parts.join(' - ') : 'All signals'
+}
+
+function alertEventTone(event: WatchlistAlertEvent) {
+  if (event.event_type === 'stale_data') {
+    return 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+  }
+  if (event.event_type === 'account_alert') {
+    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+  }
+  return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200'
+}
+
+function alertEventLabel(event: WatchlistAlertEvent) {
+  if (event.event_type === 'stale_data') return 'stale policy'
+  if (event.event_type === 'account_alert') return 'account alert'
+  return 'vendor alert'
+}
+
 export default function Watchlists() {
   const navigate = useNavigate()
   const [searchInput, setSearchInput] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [savedViewName, setSavedViewName] = useState('')
   const [selectedVendorFilter, setSelectedVendorFilter] = useState('')
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('')
   const [selectedSourceFilter, setSelectedSourceFilter] = useState('')
   const [selectedMinUrgency, setSelectedMinUrgency] = useState('')
   const [freshOnly, setFreshOnly] = useState(false)
+  const [namedAccountsOnly, setNamedAccountsOnly] = useState(false)
+  const [changedWedgesOnly, setChangedWedgesOnly] = useState(false)
+  const [vendorAlertThreshold, setVendorAlertThreshold] = useState('')
+  const [accountAlertThreshold, setAccountAlertThreshold] = useState('')
+  const [staleDaysThreshold, setStaleDaysThreshold] = useState('')
   const [trackMode, setTrackMode] = useState<'own' | 'competitor'>('competitor')
   const [label, setLabel] = useState('')
   const [submittingVendor, setSubmittingVendor] = useState<string | null>(null)
   const [removingVendor, setRemovingVendor] = useState<string | null>(null)
+  const [savingWatchlistView, setSavingWatchlistView] = useState(false)
+  const [deletingWatchlistViewId, setDeletingWatchlistViewId] = useState<string | null>(null)
+  const [evaluatingWatchlistViewId, setEvaluatingWatchlistViewId] = useState<string | null>(null)
   const [savingCompetitiveSet, setSavingCompetitiveSet] = useState(false)
   const [runningCompetitiveSetId, setRunningCompetitiveSetId] = useState<string | null>(null)
   const [previewingCompetitiveSetId, setPreviewingCompetitiveSetId] = useState<string | null>(null)
@@ -223,6 +348,8 @@ export default function Watchlists() {
       const slowBurnParams = {
         vendor_name: selectedVendorFilter || undefined,
         category: selectedCategoryFilter || undefined,
+        vendor_alert_threshold: vendorAlertThreshold ? Number(vendorAlertThreshold) : undefined,
+        stale_days_threshold: staleDaysThreshold ? Number(staleDaysThreshold) : undefined,
       }
       const accountsParams = {
         vendor_name: selectedVendorFilter || undefined,
@@ -230,12 +357,15 @@ export default function Watchlists() {
         source: selectedSourceFilter || undefined,
         min_urgency: selectedMinUrgency ? Number(selectedMinUrgency) : undefined,
         include_stale: freshOnly ? false : undefined,
+        account_alert_threshold: accountAlertThreshold ? Number(accountAlertThreshold) : undefined,
+        stale_days_threshold: staleDaysThreshold ? Number(staleDaysThreshold) : undefined,
       }
-      const [tracked, trackedSets, feed, accounts] = await Promise.all([
+      const [tracked, trackedSets, savedViews, feed, accounts] = await Promise.all([
         listTrackedVendors(),
         listCompetitiveSets(true),
+        listWatchlistViews(),
         fetchSlowBurnWatchlist(
-          slowBurnParams.vendor_name || slowBurnParams.category
+          Object.values(slowBurnParams).some((value) => value !== undefined)
             ? slowBurnParams
             : undefined,
         ),
@@ -247,10 +377,15 @@ export default function Watchlists() {
       ])
       return {
         vendors: tracked.vendors,
+        watchlistViews: savedViews.views,
         competitiveSets: trackedSets.competitive_sets,
         competitiveSetDefaults: trackedSets.defaults ?? null,
         feed: feed.signals,
+        vendorAlertHitCount: feed.vendor_alert_hit_count ?? 0,
+        feedStaleThresholdHitCount: feed.stale_threshold_hit_count ?? 0,
         accounts: accounts.accounts,
+        accountAlertHitCount: accounts.account_alert_hit_count ?? 0,
+        accountStaleThresholdHitCount: accounts.stale_threshold_hit_count ?? 0,
         vendorsWithAccounts: accounts.vendors_with_accounts,
         freshestAccountsReportDate: accounts.freshest_report_date,
       }
@@ -261,6 +396,9 @@ export default function Watchlists() {
       selectedSourceFilter,
       selectedMinUrgency,
       freshOnly,
+      vendorAlertThreshold,
+      accountAlertThreshold,
+      staleDaysThreshold,
     ],
   )
 
@@ -277,10 +415,15 @@ export default function Watchlists() {
   )
 
   const trackedVendors = data?.vendors ?? []
+  const watchlistViews = data?.watchlistViews ?? []
   const competitiveSets = data?.competitiveSets ?? []
   const competitiveSetDefaults = data?.competitiveSetDefaults ?? null
   const feed = data?.feed ?? []
+  const vendorAlertHitCountFromApi = data?.vendorAlertHitCount ?? 0
+  const feedStaleThresholdHitCountFromApi = data?.feedStaleThresholdHitCount ?? 0
   const accounts = data?.accounts ?? []
+  const accountAlertHitCountFromApi = data?.accountAlertHitCount ?? 0
+  const accountStaleThresholdHitCountFromApi = data?.accountStaleThresholdHitCount ?? 0
   const vendorsWithAccounts = data?.vendorsWithAccounts ?? 0
   const trackedNames = useMemo(
     () => new Set(trackedVendors.map((vendor) => vendor.vendor_name.toLowerCase())),
@@ -316,6 +459,72 @@ export default function Watchlists() {
     ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [accounts, selectedSourceFilter],
   )
+  const currentViewFilters = useMemo(
+    () => ({
+      vendor_name: selectedVendorFilter,
+      category: selectedCategoryFilter,
+      source: selectedSourceFilter,
+      min_urgency: selectedMinUrgency,
+      fresh_only: freshOnly,
+      named_accounts_only: namedAccountsOnly,
+      changed_wedges_only: changedWedgesOnly,
+      vendor_alert_threshold: vendorAlertThreshold,
+      account_alert_threshold: accountAlertThreshold,
+      stale_days_threshold: staleDaysThreshold,
+    }),
+    [
+      selectedVendorFilter,
+      selectedCategoryFilter,
+      selectedSourceFilter,
+      selectedMinUrgency,
+      freshOnly,
+      namedAccountsOnly,
+      changedWedgesOnly,
+      vendorAlertThreshold,
+      accountAlertThreshold,
+      staleDaysThreshold,
+    ],
+  )
+  const activeVendorAlertThreshold = parseOptionalNumber(vendorAlertThreshold)
+  const activeAccountAlertThreshold = parseOptionalNumber(accountAlertThreshold)
+  const activeStaleDaysThreshold = parseOptionalNumber(staleDaysThreshold)
+  const activeWatchlistView = useMemo(
+    () => watchlistViews.find((view) => watchlistViewMatchesState(view, currentViewFilters)) ?? null,
+    [currentViewFilters, watchlistViews],
+  )
+  const {
+    data: activeAlertEventsData,
+    refresh: refreshAlertEvents,
+    refreshing: refreshingAlertEvents,
+  } = useApiData(
+    async () => {
+      if (!activeWatchlistView) {
+        return {
+          watchlist_view_id: '',
+          watchlist_view_name: '',
+          status: 'open' as const,
+          events: [] as WatchlistAlertEvent[],
+          count: 0,
+        }
+      }
+      return listWatchlistAlertEvents(activeWatchlistView.id, {
+        status: 'open',
+        limit: 25,
+      })
+    },
+    [activeWatchlistView?.id],
+    { refreshOnFocus: false, refreshOnReconnect: false },
+  )
+  const filteredFeed = useMemo(
+    () => (changedWedgesOnly ? feed.filter((row) => Boolean(row.reasoning_delta?.wedge_changed)) : feed),
+    [changedWedgesOnly, feed],
+  )
+  const vendorAlertHitCount = useMemo(
+    () => filteredFeed.some((row) => row.vendor_alert_hit !== undefined)
+      ? filteredFeed.filter((row) => Boolean(row.vendor_alert_hit)).length
+      : vendorAlertHitCountFromApi || filteredFeed.filter((row) => vendorAlertTriggered(row, activeVendorAlertThreshold)).length,
+    [activeVendorAlertThreshold, filteredFeed, vendorAlertHitCountFromApi],
+  )
   const accountBuckets = useMemo(() => {
     const high: AccountsInMotionFeedItem[] = []
     const medium: AccountsInMotionFeedItem[] = []
@@ -342,6 +551,38 @@ export default function Watchlists() {
     () => [...accountBuckets.primary, ...visibleReviewAccounts],
     [accountBuckets.primary, visibleReviewAccounts],
   )
+  const accountAlertHitCount = useMemo(
+    () => visibleAccounts.some((row) => row.account_alert_hit !== undefined)
+      ? visibleAccounts.filter((row) => Boolean(row.account_alert_hit)).length
+      : accountAlertHitCountFromApi || visibleAccounts.filter((row) => accountAlertTriggered(row, activeAccountAlertThreshold)).length,
+    [activeAccountAlertThreshold, accountAlertHitCountFromApi, visibleAccounts],
+  )
+  const vendorStaleThresholdHitCount = useMemo(
+    () => filteredFeed.some((row) => row.stale_threshold_hit !== undefined)
+      ? filteredFeed.filter((row) => Boolean(row.stale_threshold_hit)).length
+      : feedStaleThresholdHitCountFromApi || filteredFeed.filter((row) => staleThresholdTriggered(activeStaleDaysThreshold, {
+        freshnessTimestamp: row.freshness_timestamp,
+        fallbackTimestamp: row.last_computed_at,
+      })).length,
+    [activeStaleDaysThreshold, feedStaleThresholdHitCountFromApi, filteredFeed],
+  )
+  const accountStaleThresholdHitCount = useMemo(
+    () => visibleAccounts.some((row) => row.stale_threshold_hit !== undefined)
+      ? visibleAccounts.filter((row) => Boolean(row.stale_threshold_hit)).length
+      : accountStaleThresholdHitCountFromApi || visibleAccounts.filter((row) => staleThresholdTriggered(activeStaleDaysThreshold, {
+        staleDays: row.stale_days,
+        freshnessTimestamp: row.freshness_timestamp,
+        fallbackTimestamp: row.report_date,
+      })).length,
+    [accountStaleThresholdHitCountFromApi, activeStaleDaysThreshold, visibleAccounts],
+  )
+  const staleThresholdHitCount = vendorStaleThresholdHitCount + accountStaleThresholdHitCount
+  const activeAlertEvents = activeAlertEventsData?.events ?? []
+  const hasActiveAlertPolicy = (
+    activeVendorAlertThreshold != null
+    || activeAccountAlertThreshold != null
+    || activeStaleDaysThreshold != null
+  )
   const hasActiveFeedFilters = [
     selectedVendorFilter,
     selectedCategoryFilter,
@@ -350,6 +591,9 @@ export default function Watchlists() {
     freshOnly,
     namedAccountsOnly,
     changedWedgesOnly,
+    vendorAlertThreshold,
+    accountAlertThreshold,
+    staleDaysThreshold,
   ].some(Boolean)
 
   useEffect(() => {
@@ -388,6 +632,101 @@ export default function Watchlists() {
     setCompetitiveSetPairwiseEnabled(true)
     setCompetitiveSetCategoryEnabled(false)
     setCompetitiveSetAsymmetryEnabled(false)
+  }
+
+  function applyWatchlistView(view: WatchlistView) {
+    setSelectedVendorFilter(view.vendor_name || '')
+    setSelectedCategoryFilter(view.category || '')
+    setSelectedSourceFilter(view.source || '')
+    setSelectedMinUrgency(view.min_urgency != null ? String(view.min_urgency) : '')
+    setFreshOnly(!view.include_stale)
+    setNamedAccountsOnly(view.named_accounts_only)
+    setChangedWedgesOnly(view.changed_wedges_only)
+    setVendorAlertThreshold(view.vendor_alert_threshold != null ? String(view.vendor_alert_threshold) : '')
+    setAccountAlertThreshold(view.account_alert_threshold != null ? String(view.account_alert_threshold) : '')
+    setStaleDaysThreshold(view.stale_days_threshold != null ? String(view.stale_days_threshold) : '')
+    setSavedViewName(view.name)
+  }
+
+  async function handleSaveWatchlistView() {
+    const nextName = savedViewName.trim() || activeWatchlistView?.name || ''
+    if (!nextName) {
+      setActionError('Saved view name is required')
+      setActionMessage(null)
+      return
+    }
+    setSavingWatchlistView(true)
+    setActionError(null)
+    setActionMessage(null)
+    const payload = {
+      name: nextName,
+      vendor_name: selectedVendorFilter || undefined,
+      category: selectedCategoryFilter || undefined,
+      source: selectedSourceFilter || undefined,
+      min_urgency: selectedMinUrgency ? Number(selectedMinUrgency) : undefined,
+      include_stale: !freshOnly,
+      named_accounts_only: namedAccountsOnly,
+      changed_wedges_only: changedWedgesOnly,
+      vendor_alert_threshold: vendorAlertThreshold ? Number(vendorAlertThreshold) : undefined,
+      account_alert_threshold: accountAlertThreshold ? Number(accountAlertThreshold) : undefined,
+      stale_days_threshold: staleDaysThreshold ? Number(staleDaysThreshold) : undefined,
+    }
+    try {
+      if (activeWatchlistView) {
+        await updateWatchlistView(activeWatchlistView.id, payload)
+        setActionMessage(`Updated saved view ${nextName}`)
+      } else {
+        await createWatchlistView(payload)
+        setActionMessage(`Saved view ${nextName} created`)
+      }
+      refresh()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to save watchlist view')
+    } finally {
+      setSavingWatchlistView(false)
+    }
+  }
+
+  async function handleDeleteWatchlistView(view: WatchlistView) {
+    if (!confirm(`Delete saved view ${view.name}?`)) return
+    setDeletingWatchlistViewId(view.id)
+    setActionError(null)
+    setActionMessage(null)
+    try {
+      await deleteWatchlistView(view.id)
+      if (activeWatchlistView?.id === view.id) {
+        setSavedViewName('')
+      }
+      setActionMessage(`Deleted saved view ${view.name}`)
+      refresh()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to delete saved view')
+    } finally {
+      setDeletingWatchlistViewId(null)
+    }
+  }
+
+  async function handleEvaluateWatchlistAlerts() {
+    if (!activeWatchlistView) {
+      setActionError('Save or apply a watchlist view before evaluating alerts')
+      setActionMessage(null)
+      return
+    }
+    setEvaluatingWatchlistViewId(activeWatchlistView.id)
+    setActionError(null)
+    setActionMessage(null)
+    try {
+      const result = await evaluateWatchlistAlertEvents(activeWatchlistView.id)
+      setActionMessage(
+        `Evaluated ${activeWatchlistView.name}: ${result.new_open_event_count} new open, ${result.resolved_event_count} resolved`,
+      )
+      refresh()
+      refreshAlertEvents()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to evaluate watchlist alerts')
+    } finally {
+      setEvaluatingWatchlistViewId(null)
+    }
   }
 
   async function handleAddVendor(vendorName: string) {
@@ -585,6 +924,22 @@ export default function Watchlists() {
       sortValue: (row) => row.nps_proxy ?? -999,
     },
     {
+      key: 'freshness',
+      header: 'Freshness',
+      render: (row) => (
+        <div className="text-xs">
+          <div className={clsx(freshnessTone(row.freshness_status, row.freshness_timestamp))}>
+            {formatTs(row.freshness_timestamp || row.last_computed_at || row.latest_snapshot_date || row.latest_accounts_report_date)}
+          </div>
+          <div className="text-slate-500" title={row.freshness_reason || undefined}>
+            {freshnessLabel(row.freshness_status, row.freshness_timestamp)}
+          </div>
+        </div>
+      ),
+      sortable: true,
+      sortValue: (row) => toTimestamp(row.freshness_timestamp || row.last_computed_at || row.latest_snapshot_date || row.latest_accounts_report_date) ?? 0,
+    },
+    {
       key: 'actions',
       header: 'Actions',
       render: (row) => (
@@ -624,6 +979,21 @@ export default function Watchlists() {
         <div>
           <div className="font-medium text-white">{row.vendor_name}</div>
           <div className="text-xs text-slate-500">{row.product_category ?? 'Uncategorized'}</div>
+          <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
+            {(row.vendor_alert_hit ?? vendorAlertTriggered(row, activeVendorAlertThreshold)) ? (
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
+                vendor alert hit
+              </span>
+            ) : null}
+            {(row.stale_threshold_hit ?? staleThresholdTriggered(activeStaleDaysThreshold, {
+              freshnessTimestamp: row.freshness_timestamp,
+              fallbackTimestamp: row.last_computed_at,
+            })) ? (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-300">
+                stale policy hit
+              </span>
+            ) : null}
+          </div>
           {row.synthesis_wedge_label && (
             <div className="mt-1 text-[11px] text-cyan-300">{row.synthesis_wedge_label}</div>
           )}
@@ -695,12 +1065,17 @@ export default function Watchlists() {
       key: 'freshness',
       header: 'Last Updated',
       render: (row) => (
-        <span className={clsx('text-xs', freshnessTone(row.last_computed_at))}>
-          {formatTs(row.last_computed_at)}
-        </span>
+        <div className="text-xs">
+          <div className={clsx(freshnessTone(row.freshness_status, row.freshness_timestamp || row.last_computed_at))}>
+            {formatTs(row.freshness_timestamp || row.last_computed_at)}
+          </div>
+          <div className="text-slate-500" title={row.freshness_reason || undefined}>
+            {freshnessLabel(row.freshness_status, row.freshness_timestamp || row.last_computed_at)}
+          </div>
+        </div>
       ),
       sortable: true,
-      sortValue: (row) => toTimestamp(row.last_computed_at) ?? 0,
+      sortValue: (row) => toTimestamp(row.freshness_timestamp || row.last_computed_at) ?? 0,
     },
   ]
 
@@ -719,6 +1094,20 @@ export default function Watchlists() {
               <span className={clsx('rounded-full border px-2 py-0.5', confidence.tone)}>
                 {confidence.label}
               </span>
+              {(row.account_alert_hit ?? accountAlertTriggered(row, activeAccountAlertThreshold)) ? (
+                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-300">
+                  account alert hit
+                </span>
+              ) : null}
+              {(row.stale_threshold_hit ?? staleThresholdTriggered(activeStaleDaysThreshold, {
+                staleDays: row.stale_days,
+                freshnessTimestamp: row.freshness_timestamp,
+                fallbackTimestamp: row.report_date,
+              })) ? (
+                <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-300">
+                  stale policy hit
+                </span>
+              ) : null}
             </div>
           </div>
         )
@@ -764,12 +1153,16 @@ export default function Watchlists() {
       header: 'Freshness',
       render: (row) => (
         <div className="text-xs">
-          <div className={clsx(freshnessTone(row.report_date))}>{formatTs(row.report_date)}</div>
-          <div className="text-slate-500">{row.is_stale ? 'stale report' : 'persisted report'}</div>
+          <div className={clsx(freshnessTone(row.freshness_status ?? null, row.freshness_timestamp || row.report_date))}>
+            {formatTs(row.freshness_timestamp || row.report_date)}
+          </div>
+          <div className="text-slate-500" title={row.freshness_reason || undefined}>
+            {freshnessLabel(row.freshness_status ?? (row.is_stale ? 'stale' : 'fresh'), row.freshness_timestamp || row.report_date)}
+          </div>
         </div>
       ),
       sortable: true,
-      sortValue: (row) => toTimestamp(row.report_date) ?? 0,
+      sortValue: (row) => toTimestamp(row.freshness_timestamp || row.report_date) ?? 0,
     },
     {
       key: 'actions',
@@ -824,7 +1217,10 @@ export default function Watchlists() {
         />
         <StatCard
           label="Feed Rows"
-          value={feed.length}
+          value={filteredFeed.length}
+          sub={hasActiveAlertPolicy
+            ? `${vendorAlertHitCount} vendor alert hit${vendorAlertHitCount === 1 ? '' : 's'}`
+            : undefined}
           icon={<Activity className="h-5 w-5" />}
           skeleton={loading}
         />
@@ -832,11 +1228,225 @@ export default function Watchlists() {
           label="Accounts In Motion"
           value={accountBuckets.primary.length}
           sub={vendorsWithAccounts > 0
-            ? `${accountBuckets.review.length} review-needed cluster${accountBuckets.review.length === 1 ? '' : 's'} across ${vendorsWithAccounts} vendors`
+            ? hasActiveAlertPolicy
+              ? `${accountAlertHitCount} account alert hit${accountAlertHitCount === 1 ? '' : 's'} - ${staleThresholdHitCount} stale policy hit${staleThresholdHitCount === 1 ? '' : 's'}`
+              : `${visibleReviewAccounts.length} review-needed cluster${visibleReviewAccounts.length === 1 ? '' : 's'} across ${vendorsWithAccounts} vendors`
             : 'No persisted account movement yet'}
           icon={<RefreshCw className="h-5 w-5" />}
           skeleton={loading}
         />
+      </div>
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-4">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <h2 className="text-sm font-medium text-white">Saved Views</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Persist your current filters, review rules, and alert policy so the watchlists surface supports repeat monitoring instead of one transient default.
+            </p>
+          </div>
+          <div className="flex w-full max-w-xl flex-col gap-2 sm:flex-row">
+            <input
+              aria-label="Saved view name"
+              type="text"
+              value={savedViewName}
+              onChange={(event) => setSavedViewName(event.target.value)}
+              placeholder={activeWatchlistView ? activeWatchlistView.name : 'Name this view'}
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+            />
+            <button
+              className="rounded-md bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+              onClick={handleSaveWatchlistView}
+              disabled={savingWatchlistView}
+            >
+              {savingWatchlistView ? 'Saving...' : activeWatchlistView ? 'Update active view' : 'Save current view'}
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Vendor Alert Threshold</span>
+            <input
+              aria-label="Vendor alert threshold"
+              type="number"
+              min="0"
+              max="10"
+              step="0.1"
+              value={vendorAlertThreshold}
+              onChange={(event) => setVendorAlertThreshold(event.target.value)}
+              placeholder="Optional"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Account Alert Threshold</span>
+            <input
+              aria-label="Account alert threshold"
+              type="number"
+              min="0"
+              max="10"
+              step="0.1"
+              value={accountAlertThreshold}
+              onChange={(event) => setAccountAlertThreshold(event.target.value)}
+              placeholder="Optional"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Stale Days Threshold</span>
+            <input
+              aria-label="Stale days threshold"
+              type="number"
+              min="0"
+              max="365"
+              step="1"
+              value={staleDaysThreshold}
+              onChange={(event) => setStaleDaysThreshold(event.target.value)}
+              placeholder="Optional"
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-cyan-500/50 focus:outline-none"
+            />
+          </label>
+        </div>
+        <p className="mt-2 text-[11px] text-slate-500">
+          These values are persisted with the saved view and evaluated in this monitoring surface now. Delivery and notification automation will use the same stored policy in the next alerting slice.
+        </p>
+        {hasActiveAlertPolicy ? (
+          <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+            {activeVendorAlertThreshold != null ? (
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
+                Vendor alerts at {activeVendorAlertThreshold}+ urgency: {vendorAlertHitCount} hit{vendorAlertHitCount === 1 ? '' : 's'}
+              </span>
+            ) : null}
+            {activeAccountAlertThreshold != null ? (
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-300">
+                Account alerts at {activeAccountAlertThreshold}+ urgency: {accountAlertHitCount} hit{accountAlertHitCount === 1 ? '' : 's'}
+              </span>
+            ) : null}
+            {activeStaleDaysThreshold != null ? (
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-300">
+                Stale policy after {activeStaleDaysThreshold} day{activeStaleDaysThreshold === 1 ? '' : 's'}: {staleThresholdHitCount} hit{staleThresholdHitCount === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {watchlistViews.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-700/50 px-3 py-4 text-sm text-slate-500">
+              No saved views yet. Save the current controls once you have a monitoring slice worth revisiting.
+            </div>
+          ) : watchlistViews.map((view) => {
+            const isActive = activeWatchlistView?.id === view.id
+            return (
+              <div
+                key={view.id}
+                className={clsx(
+                  'flex items-center gap-2 rounded-lg border px-3 py-2',
+                  isActive
+                    ? 'border-cyan-500/40 bg-cyan-500/10'
+                    : 'border-slate-700/50 bg-slate-950/40',
+                )}
+              >
+                <button
+                  className="text-left"
+                  onClick={() => applyWatchlistView(view)}
+                >
+                  <div className={clsx('text-sm font-medium', isActive ? 'text-cyan-200' : 'text-white')}>
+                    {view.name}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-slate-400">
+                    {summarizeWatchlistView(view)}
+                  </div>
+                </button>
+                <button
+                  aria-label={`Delete saved view ${view.name}`}
+                  className="rounded-md bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
+                  onClick={() => handleDeleteWatchlistView(view)}
+                  disabled={deletingWatchlistViewId === view.id}
+                >
+                  Delete
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-sm font-medium text-white">Saved View Alert Events</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Persisted alert hits are tied to saved views so the same policy can drive UI review now and scheduled delivery later.
+            </p>
+          </div>
+          <button
+            className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+            onClick={handleEvaluateWatchlistAlerts}
+            disabled={!activeWatchlistView || evaluatingWatchlistViewId === activeWatchlistView?.id}
+          >
+            {evaluatingWatchlistViewId === activeWatchlistView?.id ? 'Evaluating...' : 'Evaluate alerts'}
+          </button>
+        </div>
+        {!activeWatchlistView ? (
+          <div className="mt-4 rounded-lg border border-dashed border-slate-700/50 px-3 py-4 text-sm text-slate-500">
+            Apply a saved view to evaluate and review persisted alert events.
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-300">
+                Active view: {activeWatchlistView.name}
+              </span>
+              <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-300">
+                {activeAlertEvents.length} open event{activeAlertEvents.length === 1 ? '' : 's'}
+              </span>
+              {refreshingAlertEvents ? (
+                <span className="rounded-full border border-slate-700/60 bg-slate-800/60 px-2 py-0.5 text-slate-400">
+                  refreshing
+                </span>
+              ) : null}
+            </div>
+            {activeAlertEvents.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-700/50 px-3 py-4 text-sm text-slate-500">
+                No open persisted alert events for this saved view yet.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {activeAlertEvents.map((event) => (
+                  <div
+                    key={event.id}
+                    className={clsx('rounded-lg border px-3 py-3', alertEventTone(event))}
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="rounded-full border border-current/30 px-2 py-0.5">
+                            {alertEventLabel(event)}
+                          </span>
+                          {event.vendor_name ? (
+                            <span className="text-slate-100">{event.vendor_name}</span>
+                          ) : null}
+                          {event.company_name ? (
+                            <span className="text-slate-300">- {event.company_name}</span>
+                          ) : null}
+                        </div>
+                        <div className="mt-1 text-sm font-medium text-white">{event.summary}</div>
+                        <div className="mt-1 flex flex-wrap gap-3 text-[11px] text-slate-400">
+                          {event.category ? <span>Category: {event.category}</span> : null}
+                          {event.source ? <span>Source: {event.source}</span> : null}
+                          {event.threshold_value != null ? <span>Threshold: {event.threshold_value}</span> : null}
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Last seen {formatTs(event.last_seen_at)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div
@@ -848,7 +1458,7 @@ export default function Watchlists() {
           <div>
             <h2 className="text-sm font-medium text-white">Feed Controls</h2>
             <p className="mt-1 text-xs text-slate-500">
-              Vendor and category apply to both feeds. Source, urgency, and fresh-only apply to Accounts In Motion.
+              Vendor and category apply to both feeds. Source, urgency floor, freshness, and named-account review rules apply to Accounts In Motion. Changed-wedge review applies to the vendor feed.
             </p>
           </div>
           {hasActiveFeedFilters ? (
@@ -860,13 +1470,19 @@ export default function Watchlists() {
                 setSelectedSourceFilter('')
                 setSelectedMinUrgency('')
                 setFreshOnly(false)
+                setNamedAccountsOnly(false)
+                setChangedWedgesOnly(false)
+                setVendorAlertThreshold('')
+                setAccountAlertThreshold('')
+                setStaleDaysThreshold('')
+                setSavedViewName('')
               }}
             >
               Clear filters
             </button>
           ) : null}
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
           <label className="space-y-1">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Vendor</span>
             <select
@@ -919,7 +1535,7 @@ export default function Watchlists() {
               value={selectedMinUrgency}
               onChange={(event) => setSelectedMinUrgency(event.target.value)}
             >
-              <option value="">Default threshold</option>
+              <option value="">Default urgency floor</option>
               {ACCOUNT_URGENCY_FILTER_OPTIONS.map((score) => (
                 <option key={score} value={String(score)}>
                   {score}+
@@ -935,6 +1551,24 @@ export default function Watchlists() {
               type="checkbox"
             />
             Fresh only
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2 text-sm text-slate-300 xl:mt-6">
+            <input
+              checked={namedAccountsOnly}
+              className="rounded border-slate-600 bg-slate-900 text-cyan-400 focus:ring-cyan-500"
+              onChange={(event) => setNamedAccountsOnly(event.target.checked)}
+              type="checkbox"
+            />
+            Named accounts only
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border border-slate-700/50 bg-slate-800/30 px-3 py-2 text-sm text-slate-300 xl:mt-6">
+            <input
+              checked={changedWedgesOnly}
+              className="rounded border-slate-600 bg-slate-900 text-cyan-400 focus:ring-cyan-500"
+              onChange={(event) => setChangedWedgesOnly(event.target.checked)}
+              type="checkbox"
+            />
+            Changed wedges only
           </label>
         </div>
       </div>
@@ -972,7 +1606,7 @@ export default function Watchlists() {
             </div>
             <DataTable
               columns={feedColumns}
-              data={feed}
+              data={filteredFeed}
               onRowClick={(row) => navigate(`/vendors/${encodeURIComponent(row.vendor_name)}`)}
               emptyMessage={hasActiveFeedFilters
                 ? 'No vendor movement matches the current filters.'
@@ -1011,14 +1645,14 @@ export default function Watchlists() {
                 <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-amber-300">
                   {accountBuckets.medium.length} named moderate confidence
                 </span>
-                {accountBuckets.review.length > 0 ? (
+                {visibleReviewAccounts.length > 0 ? (
                   <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-rose-300">
-                    {accountBuckets.review.length} review-needed cluster{accountBuckets.review.length === 1 ? '' : 's'}
+                    {visibleReviewAccounts.length} review-needed cluster{visibleReviewAccounts.length === 1 ? '' : 's'}
                   </span>
                 ) : null}
               </div>
               {freshestAccountsReportDate ? (
-                <p className={clsx('mt-1 text-[11px]', freshnessTone(freshestAccountsReportDate))}>
+                <p className={clsx('mt-1 text-[11px]', freshnessTone('fresh', freshestAccountsReportDate))}>
                   Freshest report {formatTs(freshestAccountsReportDate)}
                 </p>
               ) : null}
@@ -1027,7 +1661,7 @@ export default function Watchlists() {
               columns={accountColumns}
               data={accountBuckets.primary}
               onRowClick={(row) => setSelectedAccount(row)}
-              emptyMessage={accountBuckets.review.length > 0
+              emptyMessage={visibleReviewAccounts.length > 0
                 ? 'No named higher-confidence account rows yet. Review the lower-confidence cluster section below.'
                 : hasActiveFeedFilters
                   ? 'No accounts-in-motion rows match the current filters.'
@@ -1036,7 +1670,7 @@ export default function Watchlists() {
             />
           </div>
 
-          {accountBuckets.review.length > 0 && (
+          {visibleReviewAccounts.length > 0 && (
             <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 overflow-hidden">
               <div className="border-b border-amber-500/20 px-4 py-3">
                 <div className="flex items-start justify-between gap-3">
@@ -1050,14 +1684,14 @@ export default function Watchlists() {
                     className="rounded-md bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-200 hover:bg-amber-500/20"
                     onClick={() => setShowReviewAccounts((current) => !current)}
                   >
-                    {showReviewAccounts ? 'Hide clusters' : `Show ${accountBuckets.review.length} cluster${accountBuckets.review.length === 1 ? '' : 's'}`}
+                    {showReviewAccounts ? 'Hide clusters' : `Show ${visibleReviewAccounts.length} cluster${visibleReviewAccounts.length === 1 ? '' : 's'}`}
                   </button>
                 </div>
               </div>
               {showReviewAccounts ? (
                 <DataTable
                   columns={accountColumns}
-                  data={accountBuckets.review}
+                  data={visibleReviewAccounts}
                   onRowClick={(row) => setSelectedAccount(row)}
                   emptyMessage="No review-needed signal clusters."
                 />
@@ -1565,7 +2199,7 @@ export default function Watchlists() {
           <div className="rounded-xl border border-slate-700/50 bg-slate-900/50 p-4">
             <h2 className="text-sm font-medium text-white">Phase 1 Boundary</h2>
             <p className="mt-2 text-sm text-slate-400">
-              This slice now includes tenant-wide persisted accounts-in-motion aggregation plus an inline account evidence drawer. The next major trust layer is saved views, thresholding, and confidence-tiered suppression for weaker rows.
+              This slice now includes tenant-wide persisted accounts-in-motion aggregation, inline account evidence drilldown, saved monitoring views, and confidence-tiered suppression for weaker rows.
             </p>
           </div>
         </div>

@@ -9,6 +9,7 @@ import json
 import logging
 import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,11 +20,14 @@ from ..auth.dependencies import AuthUser, require_auth, require_b2b_plan
 from ..autonomous.tasks.b2b_campaign_generation import (
     generate_campaigns as _generate_campaigns,
 )
+from ..autonomous.tasks.campaign_send import _unsub_headers, _wrap_with_footer
+from ..autonomous.tasks.campaign_suppression import is_suppressed
 from ..autonomous.scheduler import get_task_scheduler
 from ..config import settings
 from ..services.scraping.target_provisioning import (
     provision_vendor_onboarding_targets,
 )
+from ..services.campaign_sender import get_campaign_sender
 from ..services.b2b_competitive_sets import (
     build_competitive_set_plan,
     estimate_competitive_set_plan,
@@ -40,6 +44,9 @@ from ..services.vendor_registry import resolve_vendor_name
 from ..storage.repositories.competitive_set import get_competitive_set_repo
 from ..storage.repositories.scheduled_task import get_scheduled_task_repo
 from ..storage.database import get_db_pool
+from ..templates.email.watchlist_alert_delivery import (
+    render_watchlist_alert_delivery_html,
+)
 from .b2b_dashboard import (
     _list_accounts_in_motion_from_report,
     _load_reasoning_views_for_vendors,
@@ -118,6 +125,65 @@ def _clean_optional_text(value: Any) -> str | None:
     return text or None
 
 
+def _threshold_hit_numeric(value: Any, threshold: float | None) -> bool:
+    numeric_threshold = _safe_float(threshold)
+    if numeric_threshold is None:
+        return False
+    numeric_value = _safe_float(value)
+    if numeric_value is None:
+        return False
+    return numeric_value >= numeric_threshold
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_timestamp_value(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _threshold_hit_stale(
+    threshold_days: int | None,
+    *,
+    stale_days: Any = None,
+    freshness_timestamp: Any = None,
+    fallback_timestamp: Any = None,
+) -> bool:
+    if threshold_days is None:
+        return False
+    if stale_days is not None:
+        try:
+            return int(stale_days) > int(threshold_days)
+        except (TypeError, ValueError):
+            pass
+    timestamp = _parse_timestamp_value(freshness_timestamp) or _parse_timestamp_value(fallback_timestamp)
+    if timestamp is None:
+        return False
+    age_days = (datetime.now(timezone.utc) - timestamp).total_seconds() / 86400.0
+    return age_days > int(threshold_days)
+
+
 async def _resolve_tracked_vendor_for_view(
     pool,
     account_id: _uuid.UUID,
@@ -153,6 +219,9 @@ def _watchlist_view_payload(row: Any) -> dict[str, Any]:
         "include_stale": bool(row["include_stale"]),
         "named_accounts_only": bool(row["named_accounts_only"]),
         "changed_wedges_only": bool(row["changed_wedges_only"]),
+        "vendor_alert_threshold": _safe_float(row.get("vendor_alert_threshold")),
+        "account_alert_threshold": _safe_float(row.get("account_alert_threshold")),
+        "stale_days_threshold": int(row["stale_days_threshold"]) if row.get("stale_days_threshold") is not None else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
         "updated_at": str(row["updated_at"]) if row["updated_at"] else None,
     }
@@ -190,6 +259,366 @@ def _watchlist_vendor_freshness_status(signal: dict[str, Any]) -> tuple[str, str
         "Vendor movement row is missing a computed timestamp",
         str(timestamp) if timestamp else None,
     )
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except Exception:
+        return default
+
+
+def _serialize_watchlist_alert_event(row: Any) -> dict[str, Any]:
+    payload = _row_value(row, "payload")
+    return {
+        "id": str(_row_value(row, "id")),
+        "watchlist_view_id": str(_row_value(row, "watchlist_view_id")),
+        "event_type": _row_value(row, "event_type"),
+        "threshold_field": _row_value(row, "threshold_field"),
+        "entity_type": _row_value(row, "entity_type"),
+        "entity_key": _row_value(row, "entity_key"),
+        "vendor_name": _row_value(row, "vendor_name"),
+        "company_name": _row_value(row, "company_name"),
+        "category": _row_value(row, "category"),
+        "source": _row_value(row, "source"),
+        "threshold_value": _safe_float(_row_value(row, "threshold_value")),
+        "summary": _row_value(row, "summary"),
+        "payload": _safe_json(payload) if payload is not None else {},
+        "status": _row_value(row, "status"),
+        "first_seen_at": str(_row_value(row, "first_seen_at")) if _row_value(row, "first_seen_at") else None,
+        "last_seen_at": str(_row_value(row, "last_seen_at")) if _row_value(row, "last_seen_at") else None,
+        "resolved_at": str(_row_value(row, "resolved_at")) if _row_value(row, "resolved_at") else None,
+        "created_at": str(_row_value(row, "created_at")) if _row_value(row, "created_at") else None,
+        "updated_at": str(_row_value(row, "updated_at")) if _row_value(row, "updated_at") else None,
+    }
+
+
+async def _fetch_watchlist_view_row(
+    pool,
+    *,
+    account_id: _uuid.UUID,
+    view_id: _uuid.UUID,
+):
+    return await pool.fetchrow(
+        """
+        SELECT id, account_id, name, vendor_name, category, source, min_urgency,
+               include_stale, named_accounts_only, changed_wedges_only,
+               vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
+               created_at, updated_at
+        FROM b2b_watchlist_views
+        WHERE id = $1
+          AND account_id = $2
+        """,
+        view_id,
+        account_id,
+    )
+
+
+def _watchlist_alert_source_name(row: dict[str, Any]) -> str | None:
+    distribution = row.get("source_distribution")
+    if isinstance(distribution, dict) and distribution:
+        ranked = sorted(
+            (
+                (str(key).strip(), int(value or 0))
+                for key, value in distribution.items()
+                if str(key).strip()
+            ),
+            key=lambda item: (-item[1], item[0].lower()),
+        )
+        if ranked:
+            return ranked[0][0]
+    reviews = row.get("source_reviews") or []
+    for review in reviews:
+        if isinstance(review, dict):
+            source_name = _clean_optional_text(review.get("source"))
+            if source_name:
+                return source_name
+    return None
+
+
+def _watchlist_alert_entity_key(
+    *,
+    event_type: str,
+    entity_type: str,
+    vendor_name: str | None,
+    company_name: str | None = None,
+    category: str | None = None,
+    source: str | None = None,
+    report_date: str | None = None,
+) -> str:
+    parts = [event_type, entity_type, _normalize_vendor_name(vendor_name)]
+    if company_name:
+        parts.append(company_name.strip().lower())
+    if category:
+        parts.append(category.strip().lower())
+    if source:
+        parts.append(source.strip().lower())
+    if report_date:
+        parts.append(report_date.strip().lower())
+    return ":".join(part for part in parts if part)
+
+
+def _build_watchlist_alert_candidates(
+    *,
+    watchlist_view: dict[str, Any],
+    feed: dict[str, Any],
+    accounts_feed: dict[str, Any],
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    vendor_threshold = _safe_float(watchlist_view.get("vendor_alert_threshold"))
+    account_threshold = _safe_float(watchlist_view.get("account_alert_threshold"))
+    stale_threshold = _coerce_optional_int(watchlist_view.get("stale_days_threshold"))
+
+    for signal in feed.get("signals") or []:
+        vendor_name = _clean_optional_text(signal.get("vendor_name"))
+        category = _clean_optional_text(signal.get("product_category"))
+        if signal.get("vendor_alert_hit") and vendor_threshold is not None:
+            candidates.append({
+                "event_type": "vendor_alert",
+                "threshold_field": "vendor_alert_threshold",
+                "entity_type": "vendor",
+                "entity_key": _watchlist_alert_entity_key(
+                    event_type="vendor_alert",
+                    entity_type="vendor",
+                    vendor_name=vendor_name,
+                ),
+                "vendor_name": vendor_name,
+                "company_name": None,
+                "category": category,
+                "source": None,
+                "threshold_value": vendor_threshold,
+                "summary": (
+                    f"{vendor_name} crossed the vendor alert threshold at "
+                    f"{_safe_float(signal.get('avg_urgency_score'), 0.0):.1f}"
+                ),
+                "payload": {
+                    "avg_urgency_score": signal.get("avg_urgency_score"),
+                    "freshness_status": signal.get("freshness_status"),
+                    "freshness_timestamp": signal.get("freshness_timestamp"),
+                    "synthesis_wedge_label": signal.get("synthesis_wedge_label"),
+                },
+            })
+        if signal.get("stale_threshold_hit") and stale_threshold is not None:
+            candidates.append({
+                "event_type": "stale_data",
+                "threshold_field": "stale_days_threshold",
+                "entity_type": "vendor",
+                "entity_key": _watchlist_alert_entity_key(
+                    event_type="stale_data",
+                    entity_type="vendor",
+                    vendor_name=vendor_name,
+                ),
+                "vendor_name": vendor_name,
+                "company_name": None,
+                "category": category,
+                "source": None,
+                "threshold_value": stale_threshold,
+                "summary": f"{vendor_name} is older than the stale-data policy",
+                "payload": {
+                    "freshness_status": signal.get("freshness_status"),
+                    "freshness_reason": signal.get("freshness_reason"),
+                    "freshness_timestamp": signal.get("freshness_timestamp"),
+                },
+            })
+
+    for account in accounts_feed.get("accounts") or []:
+        vendor_name = _clean_optional_text(account.get("vendor"))
+        company_name = _clean_optional_text(account.get("company"))
+        category = _clean_optional_text(account.get("category"))
+        source_name = _watchlist_alert_source_name(account)
+        entity_type = "account" if company_name else "signal_cluster"
+        entity_key = _watchlist_alert_entity_key(
+            event_type="account_alert",
+            entity_type=entity_type,
+            vendor_name=vendor_name,
+            company_name=company_name,
+            category=category,
+            source=source_name,
+            report_date=_clean_optional_text(account.get("report_date")),
+        )
+        subject = company_name or f"{vendor_name} signal cluster"
+        if account.get("account_alert_hit") and account_threshold is not None:
+            candidates.append({
+                "event_type": "account_alert",
+                "threshold_field": "account_alert_threshold",
+                "entity_type": entity_type,
+                "entity_key": entity_key,
+                "vendor_name": vendor_name,
+                "company_name": company_name,
+                "category": category,
+                "source": source_name,
+                "threshold_value": account_threshold,
+                "summary": (
+                    f"{subject} crossed the account alert threshold at "
+                    f"{_safe_float(account.get('urgency'), 0.0):.1f}"
+                ),
+                "payload": {
+                    "urgency": account.get("urgency"),
+                    "confidence": account.get("confidence"),
+                    "report_date": account.get("report_date"),
+                    "freshness_status": account.get("freshness_status"),
+                    "reasoning_reference_ids": account.get("reasoning_reference_ids"),
+                    "source_review_ids": account.get("source_review_ids"),
+                },
+            })
+        if account.get("stale_threshold_hit") and stale_threshold is not None:
+            candidates.append({
+                "event_type": "stale_data",
+                "threshold_field": "stale_days_threshold",
+                "entity_type": entity_type,
+                "entity_key": _watchlist_alert_entity_key(
+                    event_type="stale_data",
+                    entity_type=entity_type,
+                    vendor_name=vendor_name,
+                    company_name=company_name,
+                    category=category,
+                    source=source_name,
+                    report_date=_clean_optional_text(account.get("report_date")),
+                ),
+                "vendor_name": vendor_name,
+                "company_name": company_name,
+                "category": category,
+                "source": source_name,
+                "threshold_value": stale_threshold,
+                "summary": f"{subject} is older than the stale-data policy",
+                "payload": {
+                    "stale_days": account.get("stale_days"),
+                    "report_date": account.get("report_date"),
+                    "freshness_status": account.get("freshness_status"),
+                    "freshness_reason": account.get("freshness_reason"),
+                },
+            })
+    return candidates
+
+
+def _watchlist_alert_sender_configured() -> bool:
+    if not settings.b2b_alert.email_enabled:
+        return False
+    campaign_cfg = settings.campaign_sequence
+    if campaign_cfg.sender_type == "ses":
+        return bool(campaign_cfg.ses_from_email)
+    return bool(campaign_cfg.resend_api_key and campaign_cfg.resend_from_email)
+
+
+def _watchlist_alert_from_email() -> str:
+    campaign_cfg = settings.campaign_sequence
+    sender_name = settings.b2b_alert.sender_name.strip()
+    from_email = (
+        str(campaign_cfg.ses_from_email or "").strip()
+        if campaign_cfg.sender_type == "ses"
+        else str(campaign_cfg.resend_from_email or "").strip()
+    )
+    if not from_email:
+        return ""
+    return f"{sender_name} <{from_email}>" if sender_name else from_email
+
+
+def _watchlist_manage_url() -> str | None:
+    configured = str(settings.b2b_alert.dashboard_base_url or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    frontend = str(settings.saas_auth.frontend_base_url or "").strip()
+    if not frontend:
+        return None
+    return f"{frontend.rstrip('/')}/watchlists"
+
+
+async def _resolve_watchlist_alert_recipients(
+    pool,
+    *,
+    account_id: _uuid.UUID,
+) -> list[dict[str, str]]:
+    rows = await pool.fetch(
+        """
+        SELECT email, full_name
+        FROM saas_users
+        WHERE account_id = $1
+          AND is_active = TRUE
+          AND role = 'owner'
+          AND email IS NOT NULL
+          AND BTRIM(email) <> ''
+        ORDER BY created_at ASC, email ASC
+        """,
+        account_id,
+    )
+    recipients: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in rows:
+        email = str(_row_value(row, "email") or "").strip().lower()
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        recipients.append({
+            "email": email,
+            "full_name": str(_row_value(row, "full_name") or "").strip(),
+        })
+    return recipients
+
+
+def _watchlist_alert_event_email_rows(events: list[dict[str, Any]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for event in events[:12]:
+        vendor_name = str(event.get("vendor_name") or "").strip()
+        company_name = str(event.get("company_name") or "").strip()
+        label_parts = [str(event.get("event_type") or "").replace("_", " ").strip()]
+        if vendor_name:
+            label_parts.append(vendor_name)
+        summary = str(event.get("summary") or "").strip() or "Watchlist alert"
+        detail_parts: list[str] = []
+        if company_name:
+            detail_parts.append(f"Account: {company_name}")
+        category = str(event.get("category") or "").strip()
+        if category:
+            detail_parts.append(f"Category: {category}")
+        source = str(event.get("source") or "").strip()
+        if source:
+            detail_parts.append(f"Source: {source}")
+        threshold_value = event.get("threshold_value")
+        if threshold_value is not None:
+            detail_parts.append(f"Threshold: {threshold_value}")
+        rows.append({
+            "label": " - ".join(part.title() for part in label_parts if part),
+            "summary": summary,
+            "detail": " | ".join(detail_parts),
+        })
+    return rows
+
+
+async def _send_watchlist_alert_email(
+    pool,
+    sender,
+    *,
+    recipient: str,
+    from_addr: str,
+    subject: str,
+    html_body: str,
+    view_name: str,
+) -> tuple[bool, str | None, str | None, bool]:
+    suppression = await is_suppressed(pool, email=recipient)
+    if suppression:
+        reason = str(suppression.get("reason") or "suppressed").strip() or "suppressed"
+        return False, None, f"{recipient}: suppressed ({reason})", True
+
+    body = _wrap_with_footer(html_body, recipient, settings.campaign_sequence)
+    headers = _unsub_headers(settings.campaign_sequence.unsubscribe_base_url, recipient)
+    try:
+        result = await sender.send(
+            to=recipient,
+            from_email=from_addr,
+            subject=subject,
+            body=body,
+            headers=headers or None,
+            tags=[
+                {"name": "task", "value": "watchlist_alert_email"},
+                {"name": "view", "value": view_name[:64] or "watchlist"},
+            ],
+        )
+        message_id = str(result.get("id") or "").strip() or None
+        return True, message_id, None, False
+    except Exception as exc:
+        return False, None, f"{recipient}: {exc}", False
 
 
 def _pool_or_503():
@@ -615,6 +1044,45 @@ class WatchlistViewRequest(BaseModel):
     include_stale: bool = True
     named_accounts_only: bool = False
     changed_wedges_only: bool = False
+    vendor_alert_threshold: float | None = Field(default=None, ge=0, le=10)
+    account_alert_threshold: float | None = Field(default=None, ge=0, le=10)
+    stale_days_threshold: int | None = Field(default=None, ge=0, le=365)
+
+
+class WatchlistAlertEmailRequest(BaseModel):
+    evaluate_before_send: bool = True
+
+
+_VALID_DISPOSITIONS = {"snoozed", "dismissed", "saved"}
+
+
+class SetDispositionRequest(BaseModel):
+    opportunity_key: str = Field(..., min_length=1, max_length=600)
+    company: str = Field(..., min_length=1, max_length=200)
+    vendor: str = Field(..., min_length=1, max_length=200)
+    review_id: str | None = Field(default=None, max_length=200)
+    disposition: str = Field(..., min_length=1, max_length=20)
+    snoozed_until: str | None = Field(
+        default=None,
+        description="ISO 8601 timestamp, required when disposition=snoozed",
+    )
+
+
+class BulkDispositionItem(BaseModel):
+    opportunity_key: str = Field(..., min_length=1, max_length=600)
+    company: str = Field(..., min_length=1, max_length=200)
+    vendor: str = Field(..., min_length=1, max_length=200)
+    review_id: str | None = Field(default=None, max_length=200)
+
+
+class BulkSetDispositionRequest(BaseModel):
+    items: list[BulkDispositionItem] = Field(..., min_length=1, max_length=100)
+    disposition: str = Field(..., min_length=1, max_length=20)
+    snoozed_until: str | None = Field(default=None)
+
+
+class RemoveDispositionsRequest(BaseModel):
+    opportunity_keys: list[str] = Field(..., min_length=1, max_length=100)
 
 
 # ---------------------------------------------------------------------------
@@ -1384,12 +1852,19 @@ async def list_tenant_signals(
 async def list_tenant_slow_burn_watchlist(
     vendor_name: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
+    vendor_alert_threshold: float | None = Query(None, ge=0, le=10),
+    stale_days_threshold: int | None = Query(None, ge=0, le=365),
     limit: int = Query(10, ge=1, le=100),
     user: AuthUser = Depends(require_auth),
 ):
     """Slow-burn watchlist for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
+    vendor_name = vendor_name if isinstance(vendor_name, str) else None
+    category = category if isinstance(category, str) else None
+    vendor_alert_threshold = _safe_float(vendor_alert_threshold)
+    stale_days_threshold = _coerce_optional_int(stale_days_threshold)
+    limit = _coerce_optional_int(limit) or 10
 
     conditions = [
         "("
@@ -1511,10 +1986,23 @@ async def list_tenant_slow_burn_watchlist(
         signal["freshness_status"] = freshness_status
         signal["freshness_reason"] = freshness_reason
         signal["freshness_timestamp"] = freshness_timestamp
+        signal["vendor_alert_hit"] = _threshold_hit_numeric(
+            signal.get("avg_urgency_score"),
+            vendor_alert_threshold,
+        )
+        signal["stale_threshold_hit"] = _threshold_hit_stale(
+            stale_days_threshold,
+            freshness_timestamp=freshness_timestamp,
+            fallback_timestamp=signal.get("last_computed_at"),
+        )
 
     return {
         "signals": signals,
         "count": len(rows),
+        "vendor_alert_threshold": vendor_alert_threshold,
+        "vendor_alert_hit_count": sum(1 for signal in signals if signal.get("vendor_alert_hit")),
+        "stale_days_threshold": stale_days_threshold,
+        "stale_threshold_hit_count": sum(1 for signal in signals if signal.get("stale_threshold_hit")),
     }
 
 
@@ -1663,6 +2151,8 @@ async def list_tenant_accounts_in_motion_feed(
     source: Optional[str] = Query(None),
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
     include_stale: bool = Query(True),
+    account_alert_threshold: float | None = Query(None, ge=0, le=10),
+    stale_days_threshold: int | None = Query(None, ge=0, le=365),
     per_vendor_limit: int = Query(settings.b2b_churn.accounts_in_motion_max_per_vendor, ge=1, le=100),
     limit: int = Query(settings.b2b_churn.accounts_in_motion_feed_max_total, ge=1, le=200),
     user: AuthUser = Depends(require_auth),
@@ -1675,6 +2165,11 @@ async def list_tenant_accounts_in_motion_feed(
     category = category if isinstance(category, str) else None
     source = source if isinstance(source, str) else None
     include_stale = include_stale if isinstance(include_stale, bool) else True
+    min_urgency = _safe_float(min_urgency, settings.b2b_churn.accounts_in_motion_min_urgency)
+    account_alert_threshold = _safe_float(account_alert_threshold)
+    stale_days_threshold = _coerce_optional_int(stale_days_threshold)
+    per_vendor_limit = _coerce_optional_int(per_vendor_limit) or settings.b2b_churn.accounts_in_motion_max_per_vendor
+    limit = _coerce_optional_int(limit) or settings.b2b_churn.accounts_in_motion_feed_max_total
 
     tracked_rows = await pool.fetch(
         """
@@ -1692,6 +2187,10 @@ async def list_tenant_accounts_in_motion_feed(
             "tracked_vendor_count": 0,
             "vendors_with_accounts": 0,
             "min_urgency": min_urgency,
+            "account_alert_threshold": account_alert_threshold,
+            "account_alert_hit_count": 0,
+            "stale_days_threshold": stale_days_threshold,
+            "stale_threshold_hit_count": 0,
             "per_vendor_limit": per_vendor_limit,
             "freshest_report_date": None,
         }
@@ -1742,6 +2241,16 @@ async def list_tenant_accounts_in_motion_feed(
                     "freshness_status": report.get("freshness_status"),
                     "freshness_reason": report.get("freshness_reason"),
                     "freshness_timestamp": report.get("freshness_timestamp"),
+                    "account_alert_hit": _threshold_hit_numeric(
+                        account.get("urgency"),
+                        account_alert_threshold,
+                    ),
+                    "stale_threshold_hit": _threshold_hit_stale(
+                        stale_days_threshold,
+                        stale_days=report.get("stale_days"),
+                        freshness_timestamp=report.get("freshness_timestamp"),
+                        fallback_timestamp=report_date,
+                    ),
                 }
             )
         if not filtered_accounts:
@@ -1769,6 +2278,10 @@ async def list_tenant_accounts_in_motion_feed(
         "tracked_vendor_count": len(tracked_rows),
         "vendors_with_accounts": vendors_with_accounts,
         "min_urgency": min_urgency,
+        "account_alert_threshold": account_alert_threshold,
+        "account_alert_hit_count": sum(1 for account in limited_accounts if account.get("account_alert_hit")),
+        "stale_days_threshold": stale_days_threshold,
+        "stale_threshold_hit_count": sum(1 for account in limited_accounts if account.get("stale_threshold_hit")),
         "per_vendor_limit": per_vendor_limit,
         "freshest_report_date": freshest_report_date,
     }
@@ -1782,6 +2295,7 @@ async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
         """
         SELECT id, name, vendor_name, category, source, min_urgency,
                include_stale, named_accounts_only, changed_wedges_only,
+               vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                created_at, updated_at
         FROM b2b_watchlist_views
         WHERE account_id = $1
@@ -1824,11 +2338,13 @@ async def create_watchlist_view(
         INSERT INTO b2b_watchlist_views (
             id, account_id, name, vendor_name, category, source, min_urgency,
             include_stale, named_accounts_only, changed_wedges_only,
+            vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
             created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
         RETURNING id, name, vendor_name, category, source, min_urgency,
                   include_stale, named_accounts_only, changed_wedges_only,
+                  vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                   created_at, updated_at
         """,
         _uuid.uuid4(),
@@ -1841,6 +2357,9 @@ async def create_watchlist_view(
         req.include_stale,
         req.named_accounts_only,
         req.changed_wedges_only,
+        req.vendor_alert_threshold,
+        req.account_alert_threshold,
+        req.stale_days_threshold,
         now,
     )
     return _watchlist_view_payload(row)
@@ -1897,11 +2416,15 @@ async def update_watchlist_view(
             include_stale = $8,
             named_accounts_only = $9,
             changed_wedges_only = $10,
-            updated_at = $11
+            vendor_alert_threshold = $11,
+            account_alert_threshold = $12,
+            stale_days_threshold = $13,
+            updated_at = $14
         WHERE id = $1
           AND account_id = $2
         RETURNING id, name, vendor_name, category, source, min_urgency,
                   include_stale, named_accounts_only, changed_wedges_only,
+                  vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                   created_at, updated_at
         """,
         view_id,
@@ -1914,6 +2437,9 @@ async def update_watchlist_view(
         req.include_stale,
         req.named_accounts_only,
         req.changed_wedges_only,
+        req.vendor_alert_threshold,
+        req.account_alert_threshold,
+        req.stale_days_threshold,
         datetime.now(timezone.utc),
     )
     return _watchlist_view_payload(row)
@@ -1939,6 +2465,188 @@ async def delete_watchlist_view(
     if not deleted_row:
         raise HTTPException(status_code=404, detail="Saved view not found")
     return {"deleted": True, "watchlist_view_id": str(view_id)}
+
+
+@router.get("/watchlist-views/{view_id}/alert-events")
+async def list_watchlist_alert_events(
+    view_id: _uuid.UUID,
+    status: str = Query("open"),
+    limit: int = Query(25, ge=1, le=200),
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    view_row = await _fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
+    if not view_row:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+
+    status_value = str(status or "open").strip().lower()
+    if status_value not in {"open", "resolved", "all"}:
+        raise HTTPException(status_code=422, detail="status must be one of: open, resolved, all")
+
+    params: list[Any] = [account_id, view_id]
+    status_clause = ""
+    if status_value != "all":
+        params.append(status_value)
+        status_clause = f"AND status = ${len(params)}"
+    params.append(limit)
+    rows = await pool.fetch(
+        f"""
+        SELECT id, watchlist_view_id, event_type, threshold_field, entity_type, entity_key,
+               vendor_name, company_name, category, source, threshold_value, summary,
+               payload, status, first_seen_at, last_seen_at, resolved_at, created_at, updated_at
+        FROM b2b_watchlist_alert_events
+        WHERE account_id = $1
+          AND watchlist_view_id = $2
+          {status_clause}
+        ORDER BY CASE WHEN status = 'open' THEN 0 ELSE 1 END,
+                 last_seen_at DESC,
+                 created_at DESC
+        LIMIT ${len(params)}
+        """,
+        *params,
+    )
+    events = [_serialize_watchlist_alert_event(row) for row in rows]
+    return {
+        "watchlist_view_id": str(view_id),
+        "watchlist_view_name": view_row["name"],
+        "status": status_value,
+        "events": events,
+        "count": len(events),
+    }
+
+
+@router.post("/watchlist-views/{view_id}/alert-events/evaluate")
+async def evaluate_watchlist_alert_events(
+    view_id: _uuid.UUID,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    view_row = await _fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
+    if not view_row:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+
+    feed = await list_tenant_slow_burn_watchlist(
+        vendor_name=view_row["vendor_name"],
+        category=view_row["category"],
+        vendor_alert_threshold=_safe_float(view_row["vendor_alert_threshold"]),
+        stale_days_threshold=_coerce_optional_int(view_row["stale_days_threshold"]),
+        user=user,
+    )
+    accounts_feed = await list_tenant_accounts_in_motion_feed(
+        vendor_name=view_row["vendor_name"],
+        category=view_row["category"],
+        source=view_row["source"],
+        min_urgency=_safe_float(view_row["min_urgency"], settings.b2b_churn.accounts_in_motion_min_urgency),
+        include_stale=bool(view_row["include_stale"]),
+        account_alert_threshold=_safe_float(view_row["account_alert_threshold"]),
+        stale_days_threshold=_coerce_optional_int(view_row["stale_days_threshold"]),
+        per_vendor_limit=settings.b2b_churn.accounts_in_motion_max_per_vendor,
+        limit=settings.b2b_churn.accounts_in_motion_feed_max_total,
+        user=user,
+    )
+    candidates = _build_watchlist_alert_candidates(
+        watchlist_view=_watchlist_view_payload(view_row),
+        feed=feed,
+        accounts_feed=accounts_feed,
+    )
+    now = datetime.now(timezone.utc)
+    existing_open_rows = await pool.fetch(
+        """
+        SELECT id, event_type, entity_key
+        FROM b2b_watchlist_alert_events
+        WHERE account_id = $1
+          AND watchlist_view_id = $2
+          AND status = 'open'
+        """,
+        account_id,
+        view_id,
+    )
+    existing_open = {
+        (str(row["event_type"]), str(row["entity_key"])): row["id"]
+        for row in existing_open_rows
+    }
+    current_keys = {(str(item["event_type"]), str(item["entity_key"])) for item in candidates}
+    new_open_count = sum(1 for key in current_keys if key not in existing_open)
+
+    persisted_rows = []
+    for item in candidates:
+        row = await pool.fetchrow(
+            """
+            INSERT INTO b2b_watchlist_alert_events (
+                id, account_id, watchlist_view_id, event_type, threshold_field, entity_type,
+                entity_key, vendor_name, company_name, category, source, threshold_value,
+                summary, payload, status, first_seen_at, last_seen_at, resolved_at, created_at, updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6,
+                $7, $8, $9, $10, $11, $12,
+                $13, $14::jsonb, 'open', $15, $15, NULL, $15, $15
+            )
+            ON CONFLICT (watchlist_view_id, event_type, entity_key)
+            DO UPDATE SET
+                threshold_field = EXCLUDED.threshold_field,
+                entity_type = EXCLUDED.entity_type,
+                vendor_name = EXCLUDED.vendor_name,
+                company_name = EXCLUDED.company_name,
+                category = EXCLUDED.category,
+                source = EXCLUDED.source,
+                threshold_value = EXCLUDED.threshold_value,
+                summary = EXCLUDED.summary,
+                payload = EXCLUDED.payload,
+                status = 'open',
+                last_seen_at = EXCLUDED.last_seen_at,
+                resolved_at = NULL,
+                updated_at = EXCLUDED.updated_at
+            RETURNING id, watchlist_view_id, event_type, threshold_field, entity_type, entity_key,
+                      vendor_name, company_name, category, source, threshold_value, summary,
+                      payload, status, first_seen_at, last_seen_at, resolved_at, created_at, updated_at
+            """,
+            _uuid.uuid4(),
+            account_id,
+            view_id,
+            item["event_type"],
+            item["threshold_field"],
+            item["entity_type"],
+            item["entity_key"],
+            item["vendor_name"],
+            item["company_name"],
+            item["category"],
+            item["source"],
+            item["threshold_value"],
+            item["summary"],
+            json.dumps(item["payload"] or {}),
+            now,
+        )
+        persisted_rows.append(row)
+
+    resolved_ids = [event_id for key, event_id in existing_open.items() if key not in current_keys]
+    if resolved_ids:
+        await pool.execute(
+            """
+            UPDATE b2b_watchlist_alert_events
+            SET status = 'resolved',
+                resolved_at = $2,
+                updated_at = $2
+            WHERE id = ANY($1::uuid[])
+            """,
+            resolved_ids,
+            now,
+        )
+
+    events = [_serialize_watchlist_alert_event(row) for row in persisted_rows]
+    return {
+        "watchlist_view_id": str(view_id),
+        "watchlist_view_name": view_row["name"],
+        "evaluated_at": now.isoformat(),
+        "events": events,
+        "count": len(events),
+        "new_open_event_count": new_open_count,
+        "resolved_event_count": len(resolved_ids),
+    }
 
 
 @router.get("/vendor-history")
@@ -3165,6 +3873,196 @@ async def update_campaign(
     )
 
     return {"status": "ok", "campaign_id": str(cid), "new_status": req.status}
+
+
+# ---------------------------------------------------------------------------
+# Opportunity dispositions (4 endpoints)
+# ---------------------------------------------------------------------------
+
+
+def _disposition_payload(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "opportunity_key": row["opportunity_key"],
+        "company": row["company"],
+        "vendor": row["vendor"],
+        "review_id": row["review_id"],
+        "disposition": row["disposition"],
+        "snoozed_until": row["snoozed_until"].isoformat() if row["snoozed_until"] else None,
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+def _validate_disposition(disposition: str, snoozed_until: str | None) -> datetime | None:
+    if disposition not in _VALID_DISPOSITIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"disposition must be one of: {', '.join(sorted(_VALID_DISPOSITIONS))}",
+        )
+    parsed_snooze: datetime | None = None
+    if disposition == "snoozed":
+        if not snoozed_until:
+            raise HTTPException(status_code=422, detail="snoozed_until is required when disposition=snoozed")
+        try:
+            parsed_snooze = datetime.fromisoformat(snoozed_until)
+            if parsed_snooze.tzinfo is None:
+                parsed_snooze = parsed_snooze.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="snoozed_until must be a valid ISO 8601 timestamp")
+    return parsed_snooze
+
+
+@router.get("/opportunity-dispositions")
+async def list_opportunity_dispositions(
+    disposition: str | None = Query(None, description="Filter: snoozed, dismissed, saved"),
+    user: AuthUser = Depends(require_auth),
+):
+    """List persisted opportunity dispositions for this account."""
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
+
+    # Expire stale snoozes
+    await pool.execute(
+        "DELETE FROM b2b_opportunity_dispositions WHERE account_id = $1 AND disposition = 'snoozed' AND snoozed_until <= NOW()",
+        acct,
+    )
+
+    if disposition:
+        if disposition not in _VALID_DISPOSITIONS:
+            raise HTTPException(status_code=422, detail=f"disposition must be one of: {', '.join(sorted(_VALID_DISPOSITIONS))}")
+        rows = await pool.fetch(
+            """
+            SELECT id, opportunity_key, company, vendor, review_id,
+                   disposition, snoozed_until, created_at, updated_at
+            FROM b2b_opportunity_dispositions
+            WHERE account_id = $1 AND disposition = $2
+            ORDER BY updated_at DESC
+            """,
+            acct,
+            disposition,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, opportunity_key, company, vendor, review_id,
+                   disposition, snoozed_until, created_at, updated_at
+            FROM b2b_opportunity_dispositions
+            WHERE account_id = $1
+            ORDER BY updated_at DESC
+            """,
+            acct,
+        )
+
+    dispositions = [_disposition_payload(r) for r in rows]
+    return {"dispositions": dispositions, "count": len(dispositions)}
+
+
+@router.post("/opportunity-dispositions", status_code=200)
+async def set_opportunity_disposition(
+    req: SetDispositionRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    """Upsert a single opportunity disposition (save, snooze, or dismiss)."""
+    _require_b2b_product(user)
+    parsed_snooze = _validate_disposition(req.disposition, req.snoozed_until)
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
+    now = datetime.now(timezone.utc)
+
+    row = await pool.fetchrow(
+        """
+        INSERT INTO b2b_opportunity_dispositions
+            (id, account_id, opportunity_key, company, vendor, review_id,
+             disposition, snoozed_until, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+        ON CONFLICT (account_id, opportunity_key) DO UPDATE SET
+            disposition = EXCLUDED.disposition,
+            snoozed_until = EXCLUDED.snoozed_until,
+            updated_at = NOW()
+        RETURNING id, opportunity_key, company, vendor, review_id,
+                  disposition, snoozed_until, created_at, updated_at
+        """,
+        _uuid.uuid4(),
+        acct,
+        req.opportunity_key.strip(),
+        req.company.strip(),
+        req.vendor.strip(),
+        _clean_optional_text(req.review_id),
+        req.disposition,
+        parsed_snooze,
+        now,
+    )
+    return _disposition_payload(row)
+
+
+@router.post("/opportunity-dispositions/bulk", status_code=200)
+async def bulk_set_opportunity_dispositions(
+    req: BulkSetDispositionRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    """Bulk upsert opportunity dispositions."""
+    _require_b2b_product(user)
+    parsed_snooze = _validate_disposition(req.disposition, req.snoozed_until)
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
+    now = datetime.now(timezone.utc)
+
+    updated = 0
+    for item in req.items:
+        await pool.execute(
+            """
+            INSERT INTO b2b_opportunity_dispositions
+                (id, account_id, opportunity_key, company, vendor, review_id,
+                 disposition, snoozed_until, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+            ON CONFLICT (account_id, opportunity_key) DO UPDATE SET
+                disposition = EXCLUDED.disposition,
+                snoozed_until = EXCLUDED.snoozed_until,
+                updated_at = NOW()
+            """,
+            _uuid.uuid4(),
+            acct,
+            item.opportunity_key.strip(),
+            item.company.strip(),
+            item.vendor.strip(),
+            _clean_optional_text(item.review_id),
+            req.disposition,
+            parsed_snooze,
+            now,
+        )
+        updated += 1
+
+    return {"updated": updated}
+
+
+@router.post("/opportunity-dispositions/remove", status_code=200)
+async def remove_opportunity_dispositions(
+    req: RemoveDispositionsRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    """Remove dispositions (restore opportunities to active)."""
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
+
+    keys = [k.strip() for k in req.opportunity_keys if k.strip()]
+    if not keys:
+        return {"removed": 0}
+
+    result = await pool.execute(
+        """
+        DELETE FROM b2b_opportunity_dispositions
+        WHERE account_id = $1
+          AND opportunity_key = ANY($2::text[])
+        """,
+        acct,
+        keys,
+    )
+    # asyncpg returns "DELETE N"
+    removed = int(result.split()[-1]) if result else 0
+    return {"removed": removed}
 
 
 def _register_legacy_dashboard_aliases() -> None:

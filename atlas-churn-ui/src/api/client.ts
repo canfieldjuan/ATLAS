@@ -225,9 +225,18 @@ export async function fetchSignals(params?: {
 export async function fetchSlowBurnWatchlist(params?: {
   vendor_name?: string
   category?: string
+  vendor_alert_threshold?: number
+  stale_days_threshold?: number
   limit?: number
 }) {
-  return get<{ signals: ChurnSignal[]; count: number }>(TENANT_BASE, '/slow-burn-watchlist', params)
+  return get<{
+    signals: ChurnSignal[]
+    count: number
+    vendor_alert_threshold?: number | null
+    vendor_alert_hit_count?: number
+    stale_days_threshold?: number | null
+    stale_threshold_hit_count?: number
+  }>(TENANT_BASE, '/slow-burn-watchlist', params)
 }
 
 export async function fetchSignal(vendorName: string, productCategory?: string) {
@@ -525,6 +534,58 @@ export async function generateVendorReport(id: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Opportunity Dispositions
+// ---------------------------------------------------------------------------
+
+export interface OpportunityDisposition {
+  id: string
+  opportunity_key: string
+  company: string
+  vendor: string
+  review_id: string | null
+  disposition: 'snoozed' | 'dismissed' | 'saved'
+  snoozed_until: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchDispositions(params?: { disposition?: string }) {
+  return get<{ dispositions: OpportunityDisposition[]; count: number }>(
+    TENANT_BASE,
+    '/opportunity-dispositions',
+    params,
+  )
+}
+
+export async function setDisposition(body: {
+  opportunity_key: string
+  company: string
+  vendor: string
+  review_id?: string | null
+  disposition: 'snoozed' | 'dismissed' | 'saved'
+  snoozed_until?: string | null
+}) {
+  return post<OpportunityDisposition>(TENANT_BASE, '/opportunity-dispositions', body)
+}
+
+export async function bulkSetDisposition(body: {
+  items: {
+    opportunity_key: string
+    company: string
+    vendor: string
+    review_id?: string | null
+  }[]
+  disposition: 'snoozed' | 'dismissed' | 'saved'
+  snoozed_until?: string | null
+}) {
+  return post<{ updated: number }>(TENANT_BASE, '/opportunity-dispositions/bulk', body)
+}
+
+export async function removeDispositions(body: { opportunity_keys: string[] }) {
+  return post<{ removed: number }>(TENANT_BASE, '/opportunity-dispositions/remove', body)
+}
+
+// ---------------------------------------------------------------------------
 // Blog Admin (drafts, evidence, publish)
 // ---------------------------------------------------------------------------
 
@@ -640,6 +701,12 @@ export interface TrackedVendor {
   churn_intent_count: number | null
   total_reviews: number | null
   nps_proxy: number | null
+  last_computed_at: string | null
+  latest_snapshot_date: string | null
+  latest_accounts_report_date: string | null
+  freshness_status: string | null
+  freshness_reason: string | null
+  freshness_timestamp: string | null
 }
 
 export interface CompetitiveSet {
@@ -745,6 +812,45 @@ export interface VendorSearchResult {
   avg_urgency: number | null
 }
 
+export interface WatchlistView {
+  id: string
+  name: string
+  vendor_name: string | null
+  category: string | null
+  source: string | null
+  min_urgency: number | null
+  include_stale: boolean
+  named_accounts_only: boolean
+  changed_wedges_only: boolean
+  vendor_alert_threshold: number | null
+  account_alert_threshold: number | null
+  stale_days_threshold: number | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface WatchlistAlertEvent {
+  id: string
+  watchlist_view_id: string
+  event_type: 'vendor_alert' | 'account_alert' | 'stale_data'
+  threshold_field: 'vendor_alert_threshold' | 'account_alert_threshold' | 'stale_days_threshold'
+  entity_type: 'vendor' | 'account' | 'signal_cluster'
+  entity_key: string
+  vendor_name: string | null
+  company_name: string | null
+  category: string | null
+  source: string | null
+  threshold_value: number | null
+  summary: string
+  payload: Record<string, unknown>
+  status: 'open' | 'resolved'
+  first_seen_at: string | null
+  last_seen_at: string | null
+  resolved_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
 export async function searchAvailableVendors(q: string) {
   return get<{ vendors: VendorSearchResult[]; count: number }>(TENANT_BASE, '/vendors/search', { q })
 }
@@ -759,6 +865,84 @@ export async function removeTrackedVendor(vendor_name: string) {
 
 export async function listTrackedVendors() {
   return get<{ vendors: TrackedVendor[]; count: number }>(TENANT_BASE, '/vendors')
+}
+
+export async function listWatchlistViews() {
+  return get<{ views: WatchlistView[]; count: number }>(TENANT_BASE, '/watchlist-views')
+}
+
+export async function createWatchlistView(body: {
+  name: string
+  vendor_name?: string
+  category?: string
+  source?: string
+  min_urgency?: number
+  include_stale?: boolean
+  named_accounts_only?: boolean
+  changed_wedges_only?: boolean
+  vendor_alert_threshold?: number
+  account_alert_threshold?: number
+  stale_days_threshold?: number
+}) {
+  return post<WatchlistView>(TENANT_BASE, '/watchlist-views', body)
+}
+
+export async function updateWatchlistView(
+  watchlistViewId: string,
+  body: {
+    name: string
+    vendor_name?: string
+    category?: string
+    source?: string
+    min_urgency?: number
+    include_stale?: boolean
+    named_accounts_only?: boolean
+    changed_wedges_only?: boolean
+    vendor_alert_threshold?: number
+    account_alert_threshold?: number
+    stale_days_threshold?: number
+  },
+) {
+  return put<WatchlistView>(TENANT_BASE, `/watchlist-views/${encodeURIComponent(watchlistViewId)}`, body)
+}
+
+export async function deleteWatchlistView(watchlistViewId: string) {
+  return del<{ deleted: boolean; watchlist_view_id: string }>(
+    TENANT_BASE,
+    `/watchlist-views/${encodeURIComponent(watchlistViewId)}`,
+  )
+}
+
+export async function listWatchlistAlertEvents(
+  watchlistViewId: string,
+  params?: { status?: 'open' | 'resolved' | 'all'; limit?: number },
+) {
+  return get<{
+    watchlist_view_id: string
+    watchlist_view_name: string
+    status: 'open' | 'resolved' | 'all'
+    events: WatchlistAlertEvent[]
+    count: number
+  }>(
+    TENANT_BASE,
+    `/watchlist-views/${encodeURIComponent(watchlistViewId)}/alert-events`,
+    params,
+  )
+}
+
+export async function evaluateWatchlistAlertEvents(watchlistViewId: string) {
+  return post<{
+    watchlist_view_id: string
+    watchlist_view_name: string
+    evaluated_at: string
+    events: WatchlistAlertEvent[]
+    count: number
+    new_open_event_count: number
+    resolved_event_count: number
+  }>(
+    TENANT_BASE,
+    `/watchlist-views/${encodeURIComponent(watchlistViewId)}/alert-events/evaluate`,
+  )
 }
 
 export async function listCompetitiveSets(include_inactive: boolean = false) {
@@ -867,6 +1051,11 @@ export interface AccountsInMotionFeedItem {
   stale_days: number | null
   is_stale: boolean
   data_source: string | null
+  freshness_status?: string | null
+  freshness_reason?: string | null
+  freshness_timestamp?: string | null
+  account_alert_hit?: boolean
+  stale_threshold_hit?: boolean
 }
 
 export async function fetchAccountsInMotionFeed(params?: {
@@ -875,6 +1064,8 @@ export async function fetchAccountsInMotionFeed(params?: {
   source?: string
   min_urgency?: number
   include_stale?: boolean
+  account_alert_threshold?: number
+  stale_days_threshold?: number
   per_vendor_limit?: number
   limit?: number
 }) {
@@ -884,6 +1075,10 @@ export async function fetchAccountsInMotionFeed(params?: {
     tracked_vendor_count: number
     vendors_with_accounts: number
     min_urgency: number
+    account_alert_threshold?: number | null
+    account_alert_hit_count?: number
+    stale_days_threshold?: number | null
+    stale_threshold_hit_count?: number
     per_vendor_limit: number
     freshest_report_date: string | null
   }>(TENANT_BASE, '/accounts-in-motion-feed', params)

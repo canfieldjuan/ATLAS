@@ -21,6 +21,18 @@ def _parse_migration_identity(filename: str) -> tuple[int, str]:
     return version, filename.removesuffix(".sql")
 
 
+def _find_duplicate_migration_prefixes(migration_files: list[Path]) -> dict[int, list[str]]:
+    duplicates: dict[int, list[str]] = {}
+    seen: dict[int, list[str]] = {}
+    for migration_file in migration_files:
+        version, _ = _parse_migration_identity(migration_file.name)
+        seen.setdefault(version, []).append(migration_file.name)
+    for version, names in seen.items():
+        if version > 0 and len(names) > 1:
+            duplicates[version] = sorted(names)
+    return duplicates
+
+
 async def _ensure_migrations_table(pool) -> None:
     """Create the migrations tracking table if it doesn't exist."""
     await pool.execute("""
@@ -101,6 +113,14 @@ async def run_migrations(pool) -> None:
     if not migration_files:
         logger.info("No migration files found")
         return
+
+    duplicate_prefixes = _find_duplicate_migration_prefixes(migration_files)
+    if duplicate_prefixes:
+        formatted = ", ".join(
+            f"{version}: {', '.join(names)}"
+            for version, names in sorted(duplicate_prefixes.items())
+        )
+        raise RuntimeError(f"Duplicate migration prefixes detected: {formatted}")
 
     pending = [f for f in migration_files if f.stem not in applied]
 
