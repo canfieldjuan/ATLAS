@@ -113,6 +113,85 @@ def _matches_source_filter(account: dict[str, Any], source: str | None) -> bool:
     return False
 
 
+def _clean_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+async def _resolve_tracked_vendor_for_view(
+    pool,
+    account_id: _uuid.UUID,
+    vendor_name: str | None,
+) -> str | None:
+    cleaned = _clean_optional_text(vendor_name)
+    if not cleaned:
+        return None
+    resolved = await pool.fetchval(
+        """
+        SELECT vendor_name
+        FROM tracked_vendors
+        WHERE account_id = $1
+          AND vendor_name ILIKE $2
+        LIMIT 1
+        """,
+        account_id,
+        cleaned,
+    )
+    if not resolved:
+        raise HTTPException(status_code=422, detail="Saved view vendor must be one of your tracked vendors")
+    return str(resolved)
+
+
+def _watchlist_view_payload(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "vendor_name": row["vendor_name"],
+        "category": row["category"],
+        "source": row["source"],
+        "min_urgency": _safe_float(row["min_urgency"]),
+        "include_stale": bool(row["include_stale"]),
+        "named_accounts_only": bool(row["named_accounts_only"]),
+        "changed_wedges_only": bool(row["changed_wedges_only"]),
+        "created_at": str(row["created_at"]) if row["created_at"] else None,
+        "updated_at": str(row["updated_at"]) if row["updated_at"] else None,
+    }
+
+
+def _watchlist_vendor_freshness_status(signal: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    last_computed_at = signal.get("last_computed_at")
+    if not signal.get("reasoning_source"):
+        return (
+            "synthesis_pending",
+            "Reasoning synthesis has not been materialized for this vendor yet",
+            str(last_computed_at) if last_computed_at else None,
+        )
+    if bool(signal.get("data_stale")):
+        timestamp = signal.get("data_as_of_date") or last_computed_at
+        return (
+            "stale",
+            "Reasoning synthesis is older than the current watchlist data window",
+            str(timestamp) if timestamp else None,
+        )
+    ts = last_computed_at
+    if isinstance(ts, str):
+        try:
+            parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            age_hours = (datetime.now(timezone.utc) - parsed).total_seconds() / 3600
+            if age_hours > 24:
+                return "stale", "Vendor movement snapshot is older than 24 hours", ts
+        except ValueError:
+            pass
+    if last_computed_at:
+        return "fresh", None, str(last_computed_at)
+    timestamp = signal.get("data_as_of_date")
+    return (
+        "artifact_missing",
+        "Vendor movement row is missing a computed timestamp",
+        str(timestamp) if timestamp else None,
+    )
+
+
 def _pool_or_503():
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -527,6 +606,17 @@ class PushToCrmBody(BaseModel):
     opportunities: list[PushToCrmOpportunity] = Field(..., min_length=1, max_length=50)
 
 
+class WatchlistViewRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    vendor_name: str | None = Field(default=None, max_length=255)
+    category: str | None = Field(default=None, max_length=255)
+    source: str | None = Field(default=None, max_length=255)
+    min_urgency: float | None = Field(default=None, ge=0, le=10)
+    include_stale: bool = True
+    named_accounts_only: bool = False
+    changed_wedges_only: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Vendor tracking (4 endpoints)
 # ---------------------------------------------------------------------------
@@ -541,18 +631,49 @@ async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
     rows = await pool.fetch(
         """
         SELECT tv.id, tv.vendor_name, tv.track_mode, tv.label, tv.added_at,
-               cs.avg_urgency_score, cs.churn_intent_count, cs.total_reviews,
-               cs.nps_proxy
+               sig.avg_urgency_score, sig.churn_intent_count, sig.total_reviews,
+               sig.nps_proxy, sig.last_computed_at,
+               snap.snapshot_date AS latest_snapshot_date,
+               rpt.report_date AS latest_accounts_report_date
         FROM tracked_vendors tv
-        LEFT JOIN b2b_churn_signals cs ON cs.vendor_name = tv.vendor_name
+        LEFT JOIN LATERAL (
+            SELECT avg_urgency_score, churn_intent_count, total_reviews,
+                   nps_proxy, last_computed_at
+            FROM b2b_churn_signals sig
+            WHERE sig.vendor_name = tv.vendor_name
+            ORDER BY avg_urgency_score DESC NULLS LAST,
+                     total_reviews DESC NULLS LAST,
+                     last_computed_at DESC NULLS LAST
+            LIMIT 1
+        ) sig ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT snapshot_date
+            FROM b2b_vendor_snapshots snap
+            WHERE snap.vendor_name = tv.vendor_name
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+        ) snap ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT report_date
+            FROM b2b_intelligence bi
+            WHERE bi.report_type = 'accounts_in_motion'
+              AND LOWER(COALESCE(bi.vendor_filter, '')) = LOWER(tv.vendor_name)
+            ORDER BY bi.report_date DESC NULLS LAST, bi.created_at DESC NULLS LAST
+            LIMIT 1
+        ) rpt ON TRUE
         WHERE tv.account_id = $1
         ORDER BY tv.added_at
         """,
         acct,
     )
 
-    vendors = [
-        {
+    vendors = []
+    reasoning_views = await _load_reasoning_views_for_vendors(
+        pool,
+        [row["vendor_name"] for row in rows],
+    )
+    for r in rows:
+        vendor = {
             "id": str(r["id"]),
             "vendor_name": r["vendor_name"],
             "track_mode": r["track_mode"],
@@ -562,9 +683,28 @@ async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
             "churn_intent_count": r["churn_intent_count"],
             "total_reviews": r["total_reviews"],
             "nps_proxy": _safe_float(r["nps_proxy"]),
+            "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
+            "latest_snapshot_date": str(r["latest_snapshot_date"]) if r["latest_snapshot_date"] else None,
+            "latest_accounts_report_date": str(r["latest_accounts_report_date"]) if r["latest_accounts_report_date"] else None,
+            "freshness_status": None,
+            "freshness_reason": None,
+            "freshness_timestamp": None,
         }
-        for r in rows
-    ]
+        view = reasoning_views.get(_normalize_vendor_name(vendor["vendor_name"]))
+        if view is not None:
+            _overlay_reasoning_summary_from_view(vendor, view)
+            from ..autonomous.tasks._b2b_synthesis_reader import inject_synthesis_freshness
+
+            inject_synthesis_freshness(
+                vendor,
+                view,
+                requested_as_of=date.today(),
+            )
+        freshness_status, freshness_reason, freshness_timestamp = _watchlist_vendor_freshness_status(vendor)
+        vendor["freshness_status"] = freshness_status
+        vendor["freshness_reason"] = freshness_reason
+        vendor["freshness_timestamp"] = freshness_timestamp
+        vendors.append(vendor)
 
     return {"vendors": vendors, "count": len(vendors)}
 
@@ -1360,6 +1500,17 @@ async def list_tenant_slow_burn_watchlist(
         view = reasoning_views.get(_normalize_vendor_name(signal.get("vendor_name")))
         if view is not None:
             _overlay_reasoning_summary_from_view(signal, view)
+            from ..autonomous.tasks._b2b_synthesis_reader import inject_synthesis_freshness
+
+            inject_synthesis_freshness(
+                signal,
+                view,
+                requested_as_of=date.today(),
+            )
+        freshness_status, freshness_reason, freshness_timestamp = _watchlist_vendor_freshness_status(signal)
+        signal["freshness_status"] = freshness_status
+        signal["freshness_reason"] = freshness_reason
+        signal["freshness_timestamp"] = freshness_timestamp
 
     return {
         "signals": signals,
@@ -1588,6 +1739,9 @@ async def list_tenant_accounts_in_motion_feed(
                     "stale_days": report.get("stale_days"),
                     "is_stale": bool(report.get("is_stale")),
                     "data_source": report.get("data_source"),
+                    "freshness_status": report.get("freshness_status"),
+                    "freshness_reason": report.get("freshness_reason"),
+                    "freshness_timestamp": report.get("freshness_timestamp"),
                 }
             )
         if not filtered_accounts:
@@ -1618,6 +1772,173 @@ async def list_tenant_accounts_in_motion_feed(
         "per_vendor_limit": per_vendor_limit,
         "freshest_report_date": freshest_report_date,
     }
+
+
+@router.get("/watchlist-views")
+async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    rows = await pool.fetch(
+        """
+        SELECT id, name, vendor_name, category, source, min_urgency,
+               include_stale, named_accounts_only, changed_wedges_only,
+               created_at, updated_at
+        FROM b2b_watchlist_views
+        WHERE account_id = $1
+        ORDER BY updated_at DESC, created_at DESC, name ASC
+        """,
+        _uuid.UUID(user.account_id),
+    )
+    views = [_watchlist_view_payload(row) for row in rows]
+    return {"views": views, "count": len(views)}
+
+
+@router.post("/watchlist-views", status_code=201)
+async def create_watchlist_view(
+    req: WatchlistViewRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    name = str(req.name).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Saved view name is required")
+    existing = await pool.fetchval(
+        """
+        SELECT 1
+        FROM b2b_watchlist_views
+        WHERE account_id = $1
+          AND LOWER(name) = LOWER($2)
+        LIMIT 1
+        """,
+        account_id,
+        name,
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Saved view name already exists")
+    vendor_name = await _resolve_tracked_vendor_for_view(pool, account_id, req.vendor_name)
+    now = datetime.now(timezone.utc)
+    row = await pool.fetchrow(
+        """
+        INSERT INTO b2b_watchlist_views (
+            id, account_id, name, vendor_name, category, source, min_urgency,
+            include_stale, named_accounts_only, changed_wedges_only,
+            created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+        RETURNING id, name, vendor_name, category, source, min_urgency,
+                  include_stale, named_accounts_only, changed_wedges_only,
+                  created_at, updated_at
+        """,
+        _uuid.uuid4(),
+        account_id,
+        name,
+        vendor_name,
+        _clean_optional_text(req.category),
+        _clean_optional_text(req.source),
+        req.min_urgency,
+        req.include_stale,
+        req.named_accounts_only,
+        req.changed_wedges_only,
+        now,
+    )
+    return _watchlist_view_payload(row)
+
+
+@router.put("/watchlist-views/{view_id}")
+async def update_watchlist_view(
+    view_id: _uuid.UUID,
+    req: WatchlistViewRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    account_id = _uuid.UUID(user.account_id)
+    existing = await pool.fetchrow(
+        """
+        SELECT id
+        FROM b2b_watchlist_views
+        WHERE id = $1
+          AND account_id = $2
+        """,
+        view_id,
+        account_id,
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+    name = str(req.name).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Saved view name is required")
+    duplicate = await pool.fetchval(
+        """
+        SELECT 1
+        FROM b2b_watchlist_views
+        WHERE account_id = $1
+          AND LOWER(name) = LOWER($2)
+          AND id <> $3
+        LIMIT 1
+        """,
+        account_id,
+        name,
+        view_id,
+    )
+    if duplicate:
+        raise HTTPException(status_code=409, detail="Saved view name already exists")
+    vendor_name = await _resolve_tracked_vendor_for_view(pool, account_id, req.vendor_name)
+    row = await pool.fetchrow(
+        """
+        UPDATE b2b_watchlist_views
+        SET name = $3,
+            vendor_name = $4,
+            category = $5,
+            source = $6,
+            min_urgency = $7,
+            include_stale = $8,
+            named_accounts_only = $9,
+            changed_wedges_only = $10,
+            updated_at = $11
+        WHERE id = $1
+          AND account_id = $2
+        RETURNING id, name, vendor_name, category, source, min_urgency,
+                  include_stale, named_accounts_only, changed_wedges_only,
+                  created_at, updated_at
+        """,
+        view_id,
+        account_id,
+        name,
+        vendor_name,
+        _clean_optional_text(req.category),
+        _clean_optional_text(req.source),
+        req.min_urgency,
+        req.include_stale,
+        req.named_accounts_only,
+        req.changed_wedges_only,
+        datetime.now(timezone.utc),
+    )
+    return _watchlist_view_payload(row)
+
+
+@router.delete("/watchlist-views/{view_id}")
+async def delete_watchlist_view(
+    view_id: _uuid.UUID,
+    user: AuthUser = Depends(require_auth),
+):
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    deleted_row = await pool.fetchrow(
+        """
+        DELETE FROM b2b_watchlist_views
+        WHERE id = $1
+          AND account_id = $2
+        RETURNING id
+        """,
+        view_id,
+        _uuid.UUID(user.account_id),
+    )
+    if not deleted_row:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+    return {"deleted": True, "watchlist_view_id": str(view_id)}
 
 
 @router.get("/vendor-history")

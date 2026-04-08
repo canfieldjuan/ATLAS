@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -448,6 +448,187 @@ async def test_accounts_in_motion_feed_handles_empty_watchlist(monkeypatch):
         "per_vendor_limit": mod.settings.b2b_churn.accounts_in_motion_max_per_vendor,
         "freshest_report_date": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    view_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "id": view_id,
+                    "name": "Fresh named accounts",
+                    "vendor_name": "Intercom",
+                    "category": "Helpdesk",
+                    "source": "reddit",
+                    "min_urgency": 8.0,
+                    "include_stale": False,
+                    "named_accounts_only": True,
+                    "changed_wedges_only": True,
+                    "created_at": None,
+                    "updated_at": None,
+                }
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_watchlist_views(user=user)
+
+    assert result["count"] == 1
+    assert result["views"][0]["id"] == str(view_id)
+    assert result["views"][0]["named_accounts_only"] is True
+    assert result["views"][0]["changed_wedges_only"] is True
+    assert "is_default" not in result["views"][0]
+    assert "vendor_alert_threshold" not in result["views"][0]
+    assert "FROM b2b_watchlist_views" in pool.fetch.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_list_tracked_vendors_includes_backend_freshness_fields(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "id": uuid4(),
+                    "vendor_name": "Intercom",
+                    "track_mode": "competitor",
+                    "label": "Messaging",
+                    "added_at": None,
+                    "avg_urgency_score": 7.4,
+                    "churn_intent_count": 14,
+                    "total_reviews": 220,
+                    "nps_proxy": 21.5,
+                    "last_computed_at": datetime(2026, 4, 7, 15, 0, tzinfo=timezone.utc),
+                    "latest_snapshot_date": date(2026, 4, 7),
+                    "latest_accounts_report_date": date(2026, 4, 6),
+                },
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_load_reasoning_views_for_vendors", AsyncMock(return_value={}))
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tracked_vendors(user=user)
+
+    assert result["count"] == 1
+    assert result["vendors"][0]["latest_snapshot_date"] == "2026-04-07"
+    assert result["vendors"][0]["latest_accounts_report_date"] == "2026-04-06"
+    assert result["vendors"][0]["freshness_status"] == "synthesis_pending"
+    assert result["vendors"][0]["freshness_timestamp"] == "2026-04-07 15:00:00+00:00"
+    sql = pool.fetch.await_args.args[0]
+    assert "FROM b2b_vendor_snapshots" in sql
+    assert "FROM b2b_intelligence bi" in sql
+
+
+@pytest.mark.asyncio
+async def test_create_watchlist_view_persists_filters_and_validates_vendor(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    view_id = uuid4()
+    account_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(side_effect=[None, "Intercom"]),
+        fetchrow=AsyncMock(
+            return_value={
+                "id": view_id,
+                "name": "Intercom named only",
+                "vendor_name": "Intercom",
+                "category": "Helpdesk",
+                "source": "reddit",
+                "min_urgency": 8.0,
+                "include_stale": False,
+                "named_accounts_only": True,
+                "changed_wedges_only": True,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.create_watchlist_view(
+        req=mod.WatchlistViewRequest(
+            name="Intercom named only",
+            vendor_name="intercom",
+            category="Helpdesk",
+            source="reddit",
+            min_urgency=8,
+            include_stale=False,
+            named_accounts_only=True,
+            changed_wedges_only=True,
+        ),
+        user=user,
+    )
+
+    assert result["vendor_name"] == "Intercom"
+    assert result["include_stale"] is False
+    assert result["named_accounts_only"] is True
+    assert result["changed_wedges_only"] is True
+    vendor_lookup_sql = pool.fetchval.await_args_list[1].args[0]
+    assert "FROM tracked_vendors" in vendor_lookup_sql
+    insert_sql = pool.fetchrow.await_args.args[0]
+    assert "INSERT INTO b2b_watchlist_views" in insert_sql
+
+
+@pytest.mark.asyncio
+async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    view_id = uuid4()
+    account_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            side_effect=[
+                {"id": view_id},
+                {
+                    "id": view_id,
+                    "name": "Changed wedges only",
+                    "vendor_name": None,
+                    "category": None,
+                    "source": None,
+                    "min_urgency": None,
+                    "include_stale": True,
+                    "named_accounts_only": False,
+                    "changed_wedges_only": True,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+                {"id": view_id},
+            ]
+        ),
+        fetchval=AsyncMock(return_value=None),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    updated = await mod.update_watchlist_view(
+        view_id=view_id,
+        req=mod.WatchlistViewRequest(name="Changed wedges only", changed_wedges_only=True),
+        user=user,
+    )
+    deleted = await mod.delete_watchlist_view(view_id=view_id, user=user)
+
+    assert updated["changed_wedges_only"] is True
+    assert "UPDATE b2b_watchlist_views" in pool.fetchrow.await_args_list[1].args[0]
+    assert deleted == {"deleted": True, "watchlist_view_id": str(view_id)}
+    assert "DELETE FROM b2b_watchlist_views" in pool.fetchrow.await_args_list[-1].args[0]
 
 
 @pytest.mark.asyncio
