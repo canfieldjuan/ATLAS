@@ -3478,6 +3478,20 @@ class B2BAlertConfig(BaseSettings):
     interval_seconds: int = Field(default=3600, description="Alert check interval (1 hour)")
 
 
+class B2BWatchlistDeliveryConfig(BaseSettings):
+    """Recurring email delivery for saved-view watchlist alerts."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_WATCHLIST_DELIVERY_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable recurring saved-view watchlist alert delivery")
+    interval_seconds: int = Field(default=3600, ge=60, le=86400, description="How often to check for due watchlist alert deliveries")
+    max_views_per_run: int = Field(default=25, ge=1, le=250, description="Max saved views processed in a single watchlist alert delivery run")
+    stale_claim_seconds: int = Field(default=900, ge=60, le=86400, description="How long a scheduled watchlist delivery claim can remain processing before another worker may reclaim it")
+    failed_retry_seconds: int = Field(default=3600, ge=60, le=86400 * 7, description="Delay before retrying a failed scheduled watchlist delivery")
+
+
 class B2BReportDeliveryConfig(BaseSettings):
     """Recurring report-subscription delivery configuration."""
 
@@ -4710,6 +4724,7 @@ class Settings(BaseSettings):
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
+    b2b_watchlist_delivery: B2BWatchlistDeliveryConfig = Field(default_factory=B2BWatchlistDeliveryConfig)
     b2b_report_delivery: B2BReportDeliveryConfig = Field(default_factory=B2BReportDeliveryConfig)
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)

@@ -570,6 +570,12 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
                     "vendor_alert_threshold": 7.5,
                     "account_alert_threshold": 8.5,
                     "stale_days_threshold": 3,
+                    "alert_email_enabled": True,
+                    "alert_delivery_frequency": "weekly",
+                    "next_alert_delivery_at": datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc),
+                    "last_alert_delivery_at": datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc),
+                    "last_alert_delivery_status": "sent",
+                    "last_alert_delivery_summary": "1 alert delivered",
                     "created_at": None,
                     "updated_at": None,
                 }
@@ -589,6 +595,10 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
     assert result["views"][0]["vendor_alert_threshold"] == 7.5
     assert result["views"][0]["account_alert_threshold"] == 8.5
     assert result["views"][0]["stale_days_threshold"] == 3
+    assert result["views"][0]["alert_email_enabled"] is True
+    assert result["views"][0]["alert_delivery_frequency"] == "weekly"
+    assert result["views"][0]["next_alert_delivery_at"] == "2026-04-10 12:00:00+00:00"
+    assert result["views"][0]["last_alert_delivery_status"] == "sent"
     assert "is_default" not in result["views"][0]
     assert "FROM b2b_watchlist_views" in pool.fetch.await_args.args[0]
 
@@ -658,6 +668,12 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
                 "vendor_alert_threshold": 7.0,
                 "account_alert_threshold": 8.0,
                 "stale_days_threshold": 2,
+                "alert_email_enabled": True,
+                "alert_delivery_frequency": "weekly",
+                "next_alert_delivery_at": datetime(2026, 4, 14, 12, 0, tzinfo=timezone.utc),
+                "last_alert_delivery_at": None,
+                "last_alert_delivery_status": None,
+                "last_alert_delivery_summary": None,
                 "created_at": None,
                 "updated_at": None,
             }
@@ -680,6 +696,8 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
             vendor_alert_threshold=7,
             account_alert_threshold=8,
             stale_days_threshold=2,
+            alert_email_enabled=True,
+            alert_delivery_frequency="weekly",
         ),
         user=user,
     )
@@ -691,10 +709,17 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
     assert result["vendor_alert_threshold"] == 7.0
     assert result["account_alert_threshold"] == 8.0
     assert result["stale_days_threshold"] == 2
+    assert result["alert_email_enabled"] is True
+    assert result["alert_delivery_frequency"] == "weekly"
+    assert result["next_alert_delivery_at"] == "2026-04-14 12:00:00+00:00"
     vendor_lookup_sql = pool.fetchval.await_args_list[1].args[0]
     assert "FROM tracked_vendors" in vendor_lookup_sql
     insert_sql = pool.fetchrow.await_args.args[0]
     assert "INSERT INTO b2b_watchlist_views" in insert_sql
+    assert "alert_email_enabled" in insert_sql
+    assert pool.fetchrow.await_args.args[14] is True
+    assert pool.fetchrow.await_args.args[15] == "weekly"
+    assert pool.fetchrow.await_args.args[16] is not None
 
 
 @pytest.mark.asyncio
@@ -703,11 +728,28 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
 
     view_id = uuid4()
     account_id = uuid4()
+    existing_next_delivery_at = datetime(2026, 4, 12, 9, 0, tzinfo=timezone.utc)
     pool = SimpleNamespace(
         is_initialized=True,
         fetchrow=AsyncMock(
-            side_effect=[
-                {"id": view_id},
+                side_effect=[
+                    {
+                        "id": view_id,
+                        "name": "Changed wedges only",
+                        "vendor_name": None,
+                        "category": None,
+                        "source": None,
+                        "min_urgency": None,
+                        "include_stale": True,
+                        "named_accounts_only": False,
+                        "changed_wedges_only": True,
+                        "vendor_alert_threshold": 6.5,
+                        "account_alert_threshold": 7.5,
+                        "stale_days_threshold": 5,
+                        "alert_email_enabled": True,
+                        "alert_delivery_frequency": "weekly",
+                        "next_alert_delivery_at": existing_next_delivery_at,
+                    },
                 {
                     "id": view_id,
                     "name": "Changed wedges only",
@@ -721,6 +763,12 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
                     "vendor_alert_threshold": 6.5,
                     "account_alert_threshold": 7.5,
                     "stale_days_threshold": 5,
+                    "alert_email_enabled": True,
+                    "alert_delivery_frequency": "weekly",
+                    "next_alert_delivery_at": existing_next_delivery_at,
+                    "last_alert_delivery_at": None,
+                    "last_alert_delivery_status": None,
+                    "last_alert_delivery_summary": None,
                     "created_at": None,
                     "updated_at": None,
                 },
@@ -744,7 +792,12 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
     assert updated["vendor_alert_threshold"] == 6.5
     assert updated["account_alert_threshold"] == 7.5
     assert updated["stale_days_threshold"] == 5
+    assert updated["alert_email_enabled"] is True
+    assert updated["alert_delivery_frequency"] == "weekly"
+    assert updated["next_alert_delivery_at"] == "2026-04-12 09:00:00+00:00"
     assert "UPDATE b2b_watchlist_views" in pool.fetchrow.await_args_list[1].args[0]
+    assert pool.fetchrow.await_args_list[1].args[15] == "weekly"
+    assert pool.fetchrow.await_args_list[1].args[16] == existing_next_delivery_at
     assert deleted == {"deleted": True, "watchlist_view_id": str(view_id)}
     assert "DELETE FROM b2b_watchlist_views" in pool.fetchrow.await_args_list[-1].args[0]
 
@@ -1150,8 +1203,10 @@ async def test_deliver_watchlist_alert_email_sends_to_owner_and_logs(monkeypatch
     assert result["recipient_emails"] == ["owner@example.com"]
     assert result["message_ids"] == ["msg-1"]
     sender.send.assert_awaited()
-    insert_sql = pool.execute.await_args.args[0]
-    assert "INSERT INTO b2b_watchlist_alert_email_log" in insert_sql
+    assert any(
+        "INSERT INTO b2b_watchlist_alert_email_log" in call.args[0]
+        for call in pool.execute.await_args_list
+    )
 
 
 @pytest.mark.asyncio
