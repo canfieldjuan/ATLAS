@@ -147,6 +147,76 @@ def test_trusted_repair_sources_filters_deprecated_sources(monkeypatch):
     assert b2b_enrichment._trusted_repair_sources() == {"g2", "gartner", "peerspot"}
 
 
+def test_tier2_system_prompt_trims_insider_section_for_non_insider_content():
+    prompt = (
+        "## Intro\n"
+        "Keep output grounded.\n\n"
+        "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)\n"
+        "Insider-only instructions.\n\n"
+        "## Output\n"
+        "Return JSON."
+    )
+
+    trimmed = b2b_enrichment._tier2_system_prompt_for_content_type(prompt, "review")
+
+    assert "Insider-only instructions." not in trimmed
+    assert "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)" not in trimmed
+    assert trimmed == "## Intro\nKeep output grounded.\n\n## Output\nReturn JSON."
+
+
+def test_tier2_system_prompt_keeps_insider_section_for_insider_accounts():
+    prompt = (
+        "## Intro\n"
+        "Keep output grounded.\n\n"
+        "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)\n"
+        "Insider-only instructions.\n\n"
+        "## Output\n"
+        "Return JSON."
+    )
+
+    preserved = b2b_enrichment._tier2_system_prompt_for_content_type(prompt, "insider_account")
+
+    assert preserved == prompt
+
+
+def test_build_classify_payload_omits_empty_optional_fields():
+    payload = b2b_enrichment._build_classify_payload(
+        {
+            "vendor_name": "Zendesk",
+            "product_name": "",
+            "product_category": "",
+            "source": "g2",
+            "raw_metadata": {},
+            "content_type": "review",
+            "rating": None,
+            "rating_max": 5,
+            "summary": "",
+            "review_text": "",
+            "pros": "",
+            "cons": "",
+            "reviewer_title": " ",
+            "reviewer_company": None,
+            "company_size_raw": "",
+            "reviewer_industry": "",
+        }
+    )
+
+    assert payload["vendor_name"] == "Zendesk"
+    assert payload["content_type"] == "review"
+    assert payload["rating_max"] == 5
+    assert "product_name" not in payload
+    assert "product_category" not in payload
+    assert "rating" not in payload
+    assert "summary" not in payload
+    assert "review_text" not in payload
+    assert "pros" not in payload
+    assert "cons" not in payload
+    assert "reviewer_title" not in payload
+    assert "reviewer_company" not in payload
+    assert "company_size_raw" not in payload
+    assert "reviewer_industry" not in payload
+
+
 def test_tier1_has_extraction_gaps_keeps_default_behavior_for_non_strict_sources(monkeypatch):
     monkeypatch.setattr(
         b2b_enrichment.settings.b2b_churn,
@@ -471,23 +541,29 @@ async def test_call_vllm_tier1_uses_exact_cache_hit(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_call_openrouter_tier2_uses_exact_cache_hit(monkeypatch):
+    prompt = (
+        "## Intro\n"
+        "Base instructions.\n\n"
+        "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)\n"
+        "Insider-only instructions.\n\n"
+        "## Output\n"
+        "Return JSON."
+    )
+
     class _Registry:
         def get(self, name):
             if name == "digest/b2b_churn_extraction_tier2":
-                return SimpleNamespace(content="tier2")
+                return SimpleNamespace(content=prompt)
             return None
 
-    monkeypatch.setattr("atlas_brain.skills.get_skill_registry", lambda: _Registry())
-    monkeypatch.setattr(
-        b2b_enrichment,
-        "_lookup_cached_json_response",
-        AsyncMock(
-            return_value=(
-                {"pain_categories": [{"category": "pricing", "severity": "primary"}]},
-                {"messages": [{"role": "user", "content": "cached"}]},
-            )
-        ),
+    cache_lookup = AsyncMock(
+        return_value=(
+            {"pain_categories": [{"category": "pricing", "severity": "primary"}]},
+            {"messages": [{"role": "user", "content": "cached"}]},
+        )
     )
+    monkeypatch.setattr("atlas_brain.skills.get_skill_registry", lambda: _Registry())
+    monkeypatch.setattr(b2b_enrichment, "_lookup_cached_json_response", cache_lookup)
     cfg = SimpleNamespace(
         openrouter_api_key="test-key",
         enrichment_tier2_openrouter_model="anthropic/claude-haiku-4-5",
@@ -527,6 +603,11 @@ async def test_call_openrouter_tier2_uses_exact_cache_hit(monkeypatch):
 
     assert parsed["pain_categories"] == [{"category": "pricing", "severity": "primary"}]
     assert model == "anthropic/claude-haiku-4-5"
+    assert cache_lookup.await_count == 1
+    assert (
+        cache_lookup.await_args.kwargs["system_prompt"]
+        == "## Intro\nBase instructions.\n\n## Output\nReturn JSON."
+    )
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,8 @@ _TIER1_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": True,
 }
+_TIER2_INSIDER_SECTION_HEADER = "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)"
+_TIER2_OUTPUT_SECTION_HEADER = "## Output"
 
 def _get_base_enrichment_llm(local_only: bool):
     """Resolve the deterministic local enrichment model from vLLM only."""
@@ -53,6 +55,19 @@ def _get_base_enrichment_llm(local_only: bool):
         try_openrouter=False,
         auto_activate_ollama=False,
     )
+
+
+def _tier2_system_prompt_for_content_type(prompt: str, content_type: str | None) -> str:
+    """Skip insider-account instructions for non-insider rows to save tokens."""
+    if str(content_type or "").strip().lower() == "insider_account":
+        return prompt
+    before, marker, after = prompt.partition(_TIER2_INSIDER_SECTION_HEADER)
+    if not marker:
+        return prompt
+    _insider_body, output_marker, output_tail = after.partition(_TIER2_OUTPUT_SECTION_HEADER)
+    if not output_marker:
+        return prompt
+    return f"{before.rstrip()}\n\n{_TIER2_OUTPUT_SECTION_HEADER}{output_tail}"
 
 
 _tier1_client = None
@@ -524,8 +539,12 @@ async def _call_vllm_tier2(
     payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
     payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
     payload_json = json.dumps(payload)
+    system_prompt = _tier2_system_prompt_for_content_type(
+        skill.content,
+        payload.get("content_type"),
+    )
     messages = [
-        {"role": "system", "content": skill.content},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": payload_json},
     ]
 
@@ -536,7 +555,7 @@ async def _call_vllm_tier2(
             "b2b_enrichment.tier2",
             provider="vllm",
             model=tier2_model,
-            system_prompt=skill.content,
+            system_prompt=system_prompt,
             user_content=payload_json,
             max_tokens=cfg.enrichment_tier2_max_tokens,
             temperature=0.0,
@@ -641,8 +660,12 @@ async def _call_openrouter_tier2(
     payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
     payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
     payload_json = json.dumps(payload)
+    system_prompt = _tier2_system_prompt_for_content_type(
+        skill.content,
+        payload.get("content_type"),
+    )
     messages = [
-        {"role": "system", "content": skill.content},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": payload_json},
     ]
 
@@ -653,7 +676,7 @@ async def _call_openrouter_tier2(
             "b2b_enrichment.tier2",
             provider="openrouter",
             model=model_id,
-            system_prompt=skill.content,
+            system_prompt=system_prompt,
             user_content=payload_json,
             max_tokens=cfg.enrichment_tier2_max_tokens,
             temperature=0.0,
@@ -3017,7 +3040,7 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
         except (json.JSONDecodeError, TypeError):
             raw_meta = {}
 
-    return {
+    payload: dict[str, Any] = {
         "vendor_name": row["vendor_name"],
         "product_name": row["product_name"] or "",
         "product_category": row["product_category"] or "",
@@ -3029,13 +3052,28 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
         "rating_max": int(row["rating_max"]),
         "summary": row["summary"] or "",
         "review_text": review_text,
-        "pros": row["pros"] or "",
-        "cons": row["cons"] or "",
-        "reviewer_title": row["reviewer_title"] or "",
-        "reviewer_company": row["reviewer_company"] or "",
-        "company_size_raw": row["company_size_raw"] or "",
-        "reviewer_industry": row["reviewer_industry"] or "",
     }
+    for key, value in (
+        ("pros", row["pros"]),
+        ("cons", row["cons"]),
+        ("reviewer_title", row["reviewer_title"]),
+        ("reviewer_company", row["reviewer_company"]),
+        ("company_size_raw", row["company_size_raw"]),
+        ("reviewer_industry", row["reviewer_industry"]),
+    ):
+        if isinstance(value, str) and value.strip():
+            payload[key] = value
+    if not payload["product_name"]:
+        payload.pop("product_name", None)
+    if not payload["product_category"]:
+        payload.pop("product_category", None)
+    if payload.get("rating") is None:
+        payload.pop("rating", None)
+    if not payload["summary"]:
+        payload.pop("summary", None)
+    if not payload["review_text"]:
+        payload.pop("review_text", None)
+    return payload
 
 
 _LOW_FIDELITY_TOKEN_STOPWORDS = {
