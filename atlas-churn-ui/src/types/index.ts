@@ -576,6 +576,16 @@ export interface Prospect {
   status: string
   created_at: string
   updated_at: string
+  churning_from?: string | null
+  target_persona?: string | null
+  related_sequence_id?: string | null
+  related_sequence_status?: string | null
+  related_sequence_current_step?: number | null
+  related_sequence_max_steps?: number | null
+  related_sequence_last_sent_at?: string | null
+  reasoning_scope_summary?: CampaignReasoningScopeSummary
+  reasoning_atom_context?: CampaignReasoningAtomContext
+  reasoning_delta_summary?: CampaignReasoningDeltaSummary
 }
 
 export interface ProspectStats {

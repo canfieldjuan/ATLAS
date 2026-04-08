@@ -2,12 +2,17 @@
 
 import re
 
+_LEGAL_SUFFIX_PATTERN = (
+    r"\b(inc|incorporated|llc|ltd|limited|corp|corporation|co|company|plc|gmbh|ag|sa|srl|pty|nv|bv)\b\.?"
+)
 _LEGAL_SUFFIXES = re.compile(
-    r"\b(inc|incorporated|llc|ltd|limited|corp|corporation|co|company|plc|gmbh|ag|sa|srl|pty|nv|bv)\b\.?",
+    _LEGAL_SUFFIX_PATTERN,
     re.IGNORECASE,
 )
-_MULTI_SPACE = re.compile(r"\s+")
-_TRAILING_PUNCT = re.compile(r"[,.\-;:]+$")
+_MULTI_SPACE_PATTERN = r"\s+"
+_MULTI_SPACE = re.compile(_MULTI_SPACE_PATTERN)
+_TRAILING_PUNCT_PATTERN = r"[,.\-;:]+$"
+_TRAILING_PUNCT = re.compile(_TRAILING_PUNCT_PATTERN)
 
 
 def normalize_company_name(name: str) -> str:
@@ -17,3 +22,17 @@ def normalize_company_name(name: str) -> str:
     n = _MULTI_SPACE.sub(" ", n).strip()
     n = _TRAILING_PUNCT.sub("", n).strip()
     return n
+
+
+def normalized_company_name_sql(column_sql: str) -> str:
+    """Return a SQL expression that mirrors normalize_company_name() for a column."""
+    return (
+        "TRIM("
+        "REGEXP_REPLACE("
+        "REGEXP_REPLACE("
+        f"REGEXP_REPLACE(LOWER(COALESCE({column_sql}, '')), $${_LEGAL_SUFFIX_PATTERN}$$, '', 'gi'), "
+        f"$${_MULTI_SPACE_PATTERN}$$, ' ', 'g'), "
+        f"$${_TRAILING_PUNCT_PATTERN}$$, '', 'g'"
+        ")"
+        ")"
+    )

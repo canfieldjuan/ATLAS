@@ -2,6 +2,7 @@
 REST endpoints for Prospect audit: list enriched prospects and aggregate stats.
 """
 
+import json
 import logging
 import re
 from typing import Literal
@@ -18,6 +19,8 @@ from ..services.apollo_company_overrides import (
     fetch_company_override_map,
     upsert_company_override,
 )
+from ..services.campaign_reasoning_context import campaign_review_reasoning_context
+from ..services.company_normalization import normalize_company_name, normalized_company_name_sql
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.prospects")
@@ -64,6 +67,118 @@ def _row_to_dict(row) -> dict:
     return d
 
 
+def _clean_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _coerce_context_blob(value: object) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _normalized_company_key(*values: object) -> str | None:
+    for value in values:
+        normalized = normalize_company_name(str(value or ""))
+        if normalized:
+            return normalized
+    return None
+
+
+def _prospect_sequence_summary(row: dict) -> dict:
+    company_context = _coerce_context_blob(row.get("company_context"))
+    summary = campaign_review_reasoning_context(company_context)
+    return {
+        "churning_from": _clean_text(company_context.get("churning_from")),
+        "target_persona": _clean_text(company_context.get("target_persona")),
+        "related_sequence_id": str(row["id"]) if row.get("id") else None,
+        "related_sequence_status": _clean_text(row.get("status")),
+        "related_sequence_current_step": row.get("current_step"),
+        "related_sequence_max_steps": row.get("max_steps"),
+        "related_sequence_last_sent_at": (
+            row["last_sent_at"].isoformat() if getattr(row.get("last_sent_at"), "isoformat", None) else None
+        ),
+        **summary,
+    }
+
+
+async def _load_prospect_sequence_summaries(
+    pool,
+    prospects: list[dict],
+) -> dict[str, dict]:
+    emails = sorted({
+        str(item.get("email") or "").strip().lower()
+        for item in prospects
+        if str(item.get("email") or "").strip()
+    })
+    company_names = sorted({
+        company_name
+        for item in prospects
+        if (company_name := _normalized_company_key(
+            item.get("company_name_norm"),
+            item.get("company_name"),
+        ))
+    })
+    if not emails and not company_names:
+        return {}
+
+    normalized_company_name_expr = normalized_company_name_sql("company_name")
+    normalized_context_company_expr = normalized_company_name_sql("company_context ->> 'company'")
+    rows = await pool.fetch(
+        f"""
+        SELECT id, company_name, recipient_email, status, current_step, max_steps,
+               last_sent_at, updated_at, created_at, company_context
+        FROM campaign_sequences
+        WHERE (
+            recipient_email IS NOT NULL
+            AND LOWER(recipient_email) = ANY($1::text[])
+        ) OR (
+            {normalized_company_name_expr} = ANY($2::text[])
+            OR {normalized_context_company_expr} = ANY($2::text[])
+        )
+        ORDER BY updated_at DESC, created_at DESC
+        """,
+        emails,
+        company_names,
+    )
+
+    by_email: dict[str, dict] = {}
+    by_company: dict[str, dict] = {}
+    for row in rows:
+        record = _row_to_dict(row)
+        email_key = str(record.get("recipient_email") or "").strip().lower()
+        if email_key and email_key not in by_email:
+            by_email[email_key] = record
+        company_key = _normalized_company_key(
+            _coerce_context_blob(record.get("company_context")).get("company"),
+            record.get("company_name"),
+        )
+        if company_key and company_key not in by_company:
+            by_company[company_key] = record
+
+    summaries: dict[str, dict] = {}
+    for prospect in prospects:
+        prospect_id = str(prospect.get("id") or "")
+        email_key = str(prospect.get("email") or "").strip().lower()
+        company_key = _normalized_company_key(
+            prospect.get("company_name_norm"),
+            prospect.get("company_name"),
+        )
+        match = by_email.get(email_key) if email_key else None
+        if match is None and company_key:
+            match = by_company.get(company_key)
+        if match is not None and prospect_id:
+            summaries[prospect_id] = _prospect_sequence_summary(match)
+    return summaries
+
+
 @router.get("")
 async def list_prospects(
     company: Optional[str] = Query(None),
@@ -102,7 +217,8 @@ async def list_prospects(
         f"""
         SELECT id, first_name, last_name, email, email_status, title,
                seniority, department, company_name, company_domain,
-               linkedin_url, city, state, country, status, created_at, updated_at
+               linkedin_url, city, state, country, company_name_norm,
+               status, created_at, updated_at
         FROM prospects
         {where}
         ORDER BY created_at DESC
@@ -110,6 +226,14 @@ async def list_prospects(
         """,
         *params,
     )
+
+    prospect_rows = [_row_to_dict(r) for r in rows]
+    sequence_summaries = await _load_prospect_sequence_summaries(pool, prospect_rows)
+    for prospect in prospect_rows:
+        summary = sequence_summaries.get(str(prospect.get("id") or ""))
+        if summary:
+            prospect.update(summary)
+        prospect.pop("company_name_norm", None)
 
     # Get total count with same filters
     count_params = params[:-2]  # exclude limit/offset
@@ -119,7 +243,7 @@ async def list_prospects(
     )
 
     return {
-        "prospects": [_row_to_dict(r) for r in rows],
+        "prospects": prospect_rows,
         "count": count_row["total"] if count_row else 0,
     }
 

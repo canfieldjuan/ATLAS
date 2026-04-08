@@ -62,6 +62,23 @@ function SeniorityBadge({ seniority }: { seniority: string | null }) {
   )
 }
 
+function SequenceStatusBadge({ status }: { status: string | null | undefined }) {
+  if (!status) return <span className="text-xs text-slate-500">--</span>
+  const styles: Record<string, string> = {
+    active: 'bg-cyan-500/20 text-cyan-400',
+    paused: 'bg-amber-500/20 text-amber-400',
+    completed: 'bg-green-500/20 text-green-400',
+    replied: 'bg-green-500/20 text-green-400',
+    bounced: 'bg-red-500/20 text-red-400',
+    unsubscribed: 'bg-slate-500/20 text-slate-400',
+  }
+  return (
+    <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', styles[status] || 'bg-slate-500/20 text-slate-400')}>
+      {status.replace(/_/g, ' ')}
+    </span>
+  )
+}
+
 export default function ProspectsPage() {
   const [companySearch, setCompanySearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -96,7 +113,24 @@ export default function ProspectsPage() {
       key: 'company',
       header: 'Company',
       render: (r) => (
-        <span className="text-white font-medium">{r.company_name || '--'}</span>
+        <div className="min-w-0">
+          <span className="text-white font-medium">{r.company_name || '--'}</span>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {r.company_domain && (
+              <span className="text-xs text-slate-500">{r.company_domain}</span>
+            )}
+            {r.churning_from && (
+              <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-300">
+                from {r.churning_from}
+              </span>
+            )}
+            {r.target_persona && (
+              <span className="rounded-full bg-slate-700/50 px-2 py-0.5 text-[10px] font-medium text-slate-300">
+                {r.target_persona}
+              </span>
+            )}
+          </div>
+        </div>
       ),
       sortable: true,
       sortValue: (r) => r.company_name || '',
@@ -124,6 +158,29 @@ export default function ProspectsPage() {
       sortValue: (r) => r.title || '',
     },
     {
+      key: 'signal',
+      header: 'Buying Signal',
+      render: (r) => {
+        const signal = r.reasoning_atom_context?.account_signals?.[0]
+        if (!signal) return <span className="text-xs text-slate-500">--</span>
+        return (
+          <div className="min-w-0 max-w-[260px] text-xs">
+            <p className="text-slate-200 line-clamp-1">
+              {[signal.buying_stage, signal.primary_pain].filter(Boolean).join(' | ')}
+            </p>
+            <p className="text-slate-400 line-clamp-1">
+              {[signal.competitor_context, signal.contract_end || signal.decision_timeline].filter(Boolean).join(' | ')}
+            </p>
+            {signal.quote && (
+              <p className="mt-1 text-[11px] italic text-slate-500 line-clamp-2">
+                "{signal.quote}"
+              </p>
+            )}
+          </div>
+        )
+      },
+    },
+    {
       key: 'email',
       header: 'Email',
       render: (r) => (
@@ -143,6 +200,30 @@ export default function ProspectsPage() {
       render: (r) => <ProspectStatusBadge status={r.status} />,
       sortable: true,
       sortValue: (r) => r.status,
+    },
+    {
+      key: 'sequence',
+      header: 'Sequence',
+      render: (r) => (
+        <div className="min-w-0 text-xs">
+          <SequenceStatusBadge status={r.related_sequence_status} />
+          {(r.related_sequence_current_step != null || r.related_sequence_last_sent_at) && (
+            <div className="mt-1 text-slate-500">
+              {r.related_sequence_current_step != null && (
+                <span>
+                  step {r.related_sequence_current_step}
+                  {r.related_sequence_max_steps ? `/${r.related_sequence_max_steps}` : ''}
+                </span>
+              )}
+              {r.related_sequence_last_sent_at && (
+                <span className="block">
+                  sent {new Date(r.related_sequence_last_sent_at).toLocaleDateString()}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      ),
     },
     {
       key: 'email_status',
