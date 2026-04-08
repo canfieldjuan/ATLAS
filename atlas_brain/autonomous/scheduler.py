@@ -702,6 +702,19 @@ class TaskScheduler:
             },
         },
         {
+            "name": "b2b_watchlist_alert_delivery",
+            "description": "Evaluate due saved-view watchlist alerts and deliver scheduled email digests",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.b2b_watchlist_delivery.interval_seconds
+            "timeout_seconds": 300,
+            "enabled": False,  # opt-in via ATLAS_B2B_WATCHLIST_DELIVERY_ENABLED
+            "metadata": {
+                "builtin_handler": "b2b_watchlist_alert_delivery",
+                "notify_tags": "bell,email,b2b",
+            },
+        },
+        {
             "name": "b2b_scrape_target_pruning",
             "description": "Disable low-yield scrape targets based on recent scrape outcomes",
             "task_type": "builtin",
@@ -850,6 +863,7 @@ class TaskScheduler:
                 "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
                 "b2b_churn_alert": settings.b2b_alert.interval_seconds,
                 "b2b_report_subscription_delivery": settings.b2b_report_delivery.interval_seconds,
+                "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
                 "llm_provider_cost_sync": settings.provider_cost.interval_seconds,
             }
@@ -983,6 +997,7 @@ class TaskScheduler:
                 "campaign_sequence_progression": settings.campaign_sequence.check_interval_seconds,
                 "b2b_churn_alert": settings.b2b_alert.interval_seconds,
                 "b2b_report_subscription_delivery": settings.b2b_report_delivery.interval_seconds,
+                "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
             }
 

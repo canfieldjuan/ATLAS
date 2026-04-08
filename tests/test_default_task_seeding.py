@@ -36,6 +36,19 @@ _DEFAULT_TASKS = [
         "timeout_seconds": 120,
         "metadata": {"builtin_handler": "cleanup_old_executions"},
     },
+    {
+        "name": "b2b_watchlist_alert_delivery",
+        "description": "Evaluate due saved-view watchlist alerts and deliver scheduled email digests",
+        "task_type": "builtin",
+        "schedule_type": "interval",
+        "interval_seconds": 3600,
+        "timeout_seconds": 300,
+        "enabled": False,
+        "metadata": {
+            "builtin_handler": "b2b_watchlist_alert_delivery",
+            "notify_tags": "bell,email,b2b",
+        },
+    },
 ]
 
 
@@ -52,8 +65,10 @@ async def _seed_defaults(repo):
             task_type=task_def["task_type"],
             schedule_type=task_def["schedule_type"],
             cron_expression=task_def.get("cron_expression"),
+            interval_seconds=task_def.get("interval_seconds"),
             timeout_seconds=task_def.get("timeout_seconds", 120),
             metadata=task_def.get("metadata"),
+            enabled=task_def.get("enabled", True),
         )
         created.append(task)
     return created
@@ -66,7 +81,7 @@ class TestDefaultTaskSeeding:
     @pytest_asyncio.fixture(autouse=True)
     async def _cleanup_seeded_tasks(self, db_pool):
         """Remove seeded tasks before and after each test."""
-        names = ("nightly_memory_sync", "cleanup_old_executions")
+        names = ("nightly_memory_sync", "cleanup_old_executions", "b2b_watchlist_alert_delivery")
         for name in names:
             await db_pool.execute(
                 "DELETE FROM scheduled_tasks WHERE name = $1", name
@@ -179,10 +194,33 @@ class TestDefaultTaskSeeding:
         await _seed_defaults(task_repo)
 
         rows = await db_pool.fetch(
-            "SELECT id FROM scheduled_tasks WHERE name IN ($1, $2)",
+            "SELECT id FROM scheduled_tasks WHERE name IN ($1, $2, $3)",
             "nightly_memory_sync",
             "cleanup_old_executions",
+            "b2b_watchlist_alert_delivery",
         )
 
         for row in rows:
             assert isinstance(row["id"], UUID)
+
+    @pytest.mark.asyncio
+    async def test_seeds_watchlist_alert_delivery_with_interval_defaults(self, db_pool, task_repo):
+        """watchlist alert delivery is seeded as a disabled interval task with default metadata."""
+        await _seed_defaults(task_repo)
+
+        row = await db_pool.fetchrow(
+            "SELECT * FROM scheduled_tasks WHERE name = $1",
+            "b2b_watchlist_alert_delivery",
+        )
+
+        assert row is not None
+        assert row["task_type"] == "builtin"
+        assert row["schedule_type"] == "interval"
+        assert row["interval_seconds"] == 3600
+        assert row["enabled"] is False
+        assert row["timeout_seconds"] == 300
+        meta = row["metadata"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        assert meta["builtin_handler"] == "b2b_watchlist_alert_delivery"
+        assert meta["notify_tags"] == "bell,email,b2b"
