@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
+import CampaignReasoningSummary from '../components/CampaignReasoningSummary'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
@@ -129,7 +130,7 @@ export default function Opportunities() {
 
   // -- Campaign status lookup --
   const { data: campaignData, refresh: refreshCampaigns } = useApiData(
-    () => fetchCampaigns({ limit: 500 }),
+    () => fetchCampaigns({ limit: 200 }),
     [],
   )
   const campaignMap = useMemo(() => {
@@ -794,6 +795,7 @@ function CampaignQueue({ company, vendor }: { company: string; vendor: string })
                 )}
               </div>
               {c.subject && <p className="text-sm font-medium text-white mb-1">{c.subject}</p>}
+              <CampaignReasoningSummary item={c} />
               {c.body && (
                 <div
                   className="text-xs text-slate-300 line-clamp-3 prose prose-invert prose-xs max-w-none mb-2"
