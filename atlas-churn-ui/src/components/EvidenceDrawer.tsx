@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import {
   X, ExternalLink, Quote, User, Building2, Calendar,
   Star, Tag, Fingerprint, FileText, ChevronRight, Loader2,
+  Pin, Flag, EyeOff, RotateCcw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { fetchWitness } from '../api/client'
-import type { EvidenceWitnessDetail } from '../api/client'
+import { fetchWitness, fetchAnnotations, setAnnotation, removeAnnotations } from '../api/client'
+import type { EvidenceWitnessDetail, EvidenceAnnotation } from '../api/client'
 
 // Inject keyframes once at module load (not per-render)
 if (typeof document !== 'undefined' && !document.getElementById('evidence-drawer-keyframes')) {
@@ -100,20 +101,60 @@ export default function EvidenceDrawer({
   const [witness, setWitness] = useState<EvidenceWitnessDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [annotation, setAnnotationState] = useState<EvidenceAnnotation | null>(null)
+  const [annotating, setAnnotating] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open || !witnessId || !vendorName) return
     setLoading(true)
     setError('')
-    fetchWitness(witnessId, vendorName, {
-      as_of_date: asOfDate || undefined,
-      window_days: windowDays,
-    })
-      .then(res => setWitness(res.witness))
+    setAnnotationState(null)
+    Promise.all([
+      fetchWitness(witnessId, vendorName, {
+        as_of_date: asOfDate || undefined,
+        window_days: windowDays,
+      }),
+      fetchAnnotations({ vendor_name: vendorName }).catch(() => ({ annotations: [] })),
+    ])
+      .then(([witnessRes, annotRes]) => {
+        setWitness(witnessRes.witness)
+        const match = annotRes.annotations.find((a: EvidenceAnnotation) => a.witness_id === witnessId)
+        setAnnotationState(match || null)
+      })
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load witness'))
       .finally(() => setLoading(false))
   }, [open, witnessId, vendorName, asOfDate, windowDays])
+
+  async function handleAnnotate(type: 'pin' | 'flag' | 'suppress') {
+    if (!witnessId || !vendorName) return
+    setAnnotating(true)
+    try {
+      const result = await setAnnotation({
+        witness_id: witnessId,
+        vendor_name: vendorName,
+        annotation_type: type,
+      })
+      setAnnotationState(result)
+    } catch {
+      // keep current state
+    } finally {
+      setAnnotating(false)
+    }
+  }
+
+  async function handleRemoveAnnotation() {
+    if (!witnessId) return
+    setAnnotating(true)
+    try {
+      await removeAnnotations({ witness_ids: [witnessId] })
+      setAnnotationState(null)
+    } catch {
+      // keep current state
+    } finally {
+      setAnnotating(false)
+    }
+  }
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
@@ -138,14 +179,73 @@ export default function EvidenceDrawer({
         style={{ animation: 'slideInRight 0.2s ease-out' }}
       >
         {/* Header */}
-        <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm border-b border-slate-700/50 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Fingerprint className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-lg font-semibold text-white">Witness Detail</h2>
+        <div className="sticky top-0 z-10 bg-slate-900/95 backdrop-blur-sm border-b border-slate-700/50 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Fingerprint className="w-5 h-5 text-cyan-400" />
+              <h2 className="text-lg font-semibold text-white">Witness Detail</h2>
+              {annotation && (
+                <span className={clsx(
+                  'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium',
+                  annotation.annotation_type === 'pin' && 'bg-amber-500/20 text-amber-300',
+                  annotation.annotation_type === 'flag' && 'bg-red-500/20 text-red-300',
+                  annotation.annotation_type === 'suppress' && 'bg-slate-500/20 text-slate-400',
+                )}>
+                  {annotation.annotation_type === 'pin' && <Pin className="h-3 w-3" />}
+                  {annotation.annotation_type === 'flag' && <Flag className="h-3 w-3" />}
+                  {annotation.annotation_type === 'suppress' && <EyeOff className="h-3 w-3" />}
+                  {annotation.annotation_type}
+                </span>
+              )}
+            </div>
+            <button onClick={onClose} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors">
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors">
-            <X className="w-5 h-5" />
-          </button>
+          {witness && (
+            <div className="mt-3 flex items-center gap-2">
+              {annotation ? (
+                <button
+                  onClick={handleRemoveAnnotation}
+                  disabled={annotating}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-700/50 text-slate-300 hover:bg-slate-600/50 disabled:opacity-50 transition-colors"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Remove {annotation.annotation_type}
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => handleAnnotate('pin')}
+                    disabled={annotating}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+                    title="Pin: prioritize in campaign generation"
+                  >
+                    <Pin className="h-3 w-3" />
+                    Pin
+                  </button>
+                  <button
+                    onClick={() => handleAnnotate('flag')}
+                    disabled={annotating}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
+                    title="Flag: mark for quality review"
+                  >
+                    <Flag className="h-3 w-3" />
+                    Flag
+                  </button>
+                  <button
+                    onClick={() => handleAnnotate('suppress')}
+                    disabled={annotating}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 disabled:opacity-50 transition-colors"
+                    title="Suppress: exclude from campaign generation"
+                  >
+                    <EyeOff className="h-3 w-3" />
+                    Suppress
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {loading && (

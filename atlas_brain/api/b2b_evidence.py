@@ -14,10 +14,11 @@ Endpoints:
 
 import json
 import uuid as _uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..services.vendor_registry import resolve_vendor_name
@@ -96,6 +97,18 @@ async def _latest_witness_snapshot_date(pool, vendor_name: str, window_days: int
     return row["as_of_date"] if row and row["as_of_date"] else None
 
 
+def _annotation_join_parts(account_id: _uuid.UUID | None, param_idx: int) -> tuple[str, str, str, str, list]:
+    if account_id is None:
+        return "", "", "", "", []
+    return (
+        f"LEFT JOIN b2b_evidence_annotations ea ON ea.witness_id = w.witness_id AND ea.account_id = ${param_idx}",
+        ", ea.annotation_type",
+        " AND (ea.annotation_type IS NULL OR ea.annotation_type <> 'suppress')",
+        "CASE WHEN ea.annotation_type = 'pin' THEN 0 ELSE 1 END,",
+        [account_id],
+    )
+
+
 # -- 1. List witnesses --------------------------------------------------------
 
 @router.get("/witnesses")
@@ -168,9 +181,22 @@ async def list_witnesses(
 
     where = " AND ".join(conditions)
 
-    # Count total
+    acct_uuid: _uuid.UUID | None = None
+    try:
+        acct_uuid = _uuid.UUID(str(user.account_id))
+    except (ValueError, TypeError):
+        acct_uuid = None
+
+    annotation_join, annotation_select, annotation_exclude, annotation_order, annotation_params = (
+        _annotation_join_parts(acct_uuid, idx)
+    )
+    if annotation_params:
+        params.extend(annotation_params)
+        idx += len(annotation_params)
+
+    # Count total (excluding suppressed)
     count_row = await pool.fetchrow(
-        f"SELECT COUNT(*) AS total FROM b2b_vendor_witnesses WHERE {where}",
+        f"SELECT COUNT(*) AS total FROM b2b_vendor_witnesses w {annotation_join} WHERE {where}{annotation_exclude}",
         *params,
     )
     total = count_row["total"] if count_row else 0
@@ -180,36 +206,45 @@ async def list_witnesses(
     params.append(offset)
     rows = await pool.fetch(
         f"""
-        SELECT witness_id, review_id, witness_type, excerpt_text, source,
-               reviewed_at, reviewer_company, reviewer_title,
-               pain_category, competitor, salience_score, specificity_score,
-               selection_reason, signal_tags, as_of_date
-        FROM b2b_vendor_witnesses
-        WHERE {where}
-        ORDER BY salience_score DESC NULLS LAST, reviewed_at DESC NULLS LAST
+        SELECT w.witness_id, w.review_id, w.witness_type, w.excerpt_text, w.source,
+               w.reviewed_at, w.reviewer_company, w.reviewer_title,
+               w.pain_category, w.competitor, w.salience_score, w.specificity_score,
+               w.selection_reason, w.signal_tags, w.as_of_date
+               {annotation_select}
+        FROM b2b_vendor_witnesses w
+        {annotation_join}
+        WHERE {where}{annotation_exclude}
+        ORDER BY {annotation_order} w.salience_score DESC NULLS LAST, w.reviewed_at DESC NULLS LAST
         LIMIT ${idx} OFFSET ${idx + 1}
         """,
         *params,
     )
 
     # Fetch filter facets (for the UI filter sidebar)
+    facet_params: list = [vendor_name, window_days, snapshot_date]
+    facet_join = ""
+    facet_exclude = ""
+    if acct_uuid is not None:
+        facet_join = "LEFT JOIN b2b_evidence_annotations ea ON ea.witness_id = w.witness_id AND ea.account_id = $4"
+        facet_exclude = " AND (ea.annotation_type IS NULL OR ea.annotation_type <> 'suppress')"
+        facet_params.append(acct_uuid)
     facets_rows = await pool.fetch(
-        """
+        f"""
         SELECT
-            pain_category,
-            source,
-            witness_type,
+            w.pain_category,
+            w.source,
+            w.witness_type,
             COUNT(*) AS cnt
-        FROM b2b_vendor_witnesses
-        WHERE vendor_name = $1
-          AND analysis_window_days = $2
-          AND as_of_date = $3
-        GROUP BY pain_category, source, witness_type
+        FROM b2b_vendor_witnesses w
+        {facet_join}
+        WHERE w.vendor_name = $1
+          AND w.analysis_window_days = $2
+          AND w.as_of_date = $3
+          {facet_exclude}
+        GROUP BY w.pain_category, w.source, w.witness_type
         ORDER BY cnt DESC
         """,
-        vendor_name,
-        window_days,
-        snapshot_date,
+        *facet_params,
     )
 
     pain_cats = sorted({r["pain_category"] for r in facets_rows if r["pain_category"]})
@@ -518,3 +553,161 @@ async def get_trace(
             "has_diff": evidence_diff is not None,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Evidence Annotations (pin / flag / suppress)
+# ---------------------------------------------------------------------------
+
+_VALID_ANNOTATION_TYPES = {"pin", "flag", "suppress"}
+
+
+class SetAnnotationRequest(BaseModel):
+    witness_id: str = Field(..., min_length=1, max_length=600)
+    vendor_name: str = Field(..., min_length=1, max_length=200)
+    annotation_type: str = Field(..., min_length=1, max_length=20)
+    note_text: str | None = Field(default=None, max_length=2000)
+
+
+class RemoveAnnotationRequest(BaseModel):
+    witness_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+
+def _annotation_payload(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "witness_id": row["witness_id"],
+        "vendor_name": row["vendor_name"],
+        "annotation_type": row["annotation_type"],
+        "note_text": row["note_text"],
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+@router.get("/annotations")
+async def list_annotations(
+    vendor_name: str | None = Query(None),
+    annotation_type: str | None = Query(None),
+    user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
+):
+    """List evidence annotations for this account."""
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
+
+    conditions = ["account_id = $1"]
+    params: list = [acct]
+    idx = 2
+
+    if vendor_name:
+        resolved = await resolve_vendor_name(vendor_name)
+        vendor_name = resolved or vendor_name
+        conditions.append(f"vendor_name = ${idx}")
+        params.append(vendor_name)
+        idx += 1
+    if annotation_type:
+        if annotation_type not in _VALID_ANNOTATION_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"annotation_type must be one of: {', '.join(sorted(_VALID_ANNOTATION_TYPES))}",
+            )
+        conditions.append(f"annotation_type = ${idx}")
+        params.append(annotation_type)
+        idx += 1
+
+    where = " AND ".join(conditions)
+    rows = await pool.fetch(
+        f"""
+        SELECT id, witness_id, vendor_name, annotation_type, note_text,
+               created_at, updated_at
+        FROM b2b_evidence_annotations
+        WHERE {where}
+        ORDER BY updated_at DESC
+        """,
+        *params,
+    )
+    annotations = [_annotation_payload(r) for r in rows]
+    return {"annotations": annotations, "count": len(annotations)}
+
+
+@router.post("/annotations", status_code=200)
+async def set_annotation(
+    req: SetAnnotationRequest,
+    user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
+):
+    """Upsert an evidence annotation (pin, flag, or suppress a witness)."""
+    pool = _pool_or_503()
+
+    if req.annotation_type not in _VALID_ANNOTATION_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"annotation_type must be one of: {', '.join(sorted(_VALID_ANNOTATION_TYPES))}",
+        )
+
+    acct = _uuid.UUID(user.account_id)
+    now = datetime.now(timezone.utc)
+    resolved_vendor = await resolve_vendor_name(req.vendor_name.strip())
+    vendor_name = resolved_vendor or req.vendor_name.strip()
+
+    witness_exists = await pool.fetchval(
+        """
+        SELECT 1
+        FROM b2b_vendor_witnesses
+        WHERE witness_id = $1
+          AND vendor_name = $2
+        LIMIT 1
+        """,
+        req.witness_id.strip(),
+        vendor_name,
+    )
+    if not witness_exists:
+        raise HTTPException(status_code=404, detail="Witness not found for vendor")
+
+    row = await pool.fetchrow(
+        """
+        INSERT INTO b2b_evidence_annotations
+            (id, account_id, witness_id, vendor_name, annotation_type, note_text,
+             created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        ON CONFLICT (account_id, witness_id) DO UPDATE SET
+            annotation_type = EXCLUDED.annotation_type,
+            note_text = EXCLUDED.note_text,
+            updated_at = NOW()
+        RETURNING id, witness_id, vendor_name, annotation_type, note_text,
+                  created_at, updated_at
+        """,
+        _uuid.uuid4(),
+        acct,
+        req.witness_id.strip(),
+        vendor_name,
+        req.annotation_type,
+        req.note_text.strip() if req.note_text else None,
+        now,
+    )
+    return _annotation_payload(row)
+
+
+@router.post("/annotations/remove", status_code=200)
+async def remove_annotations(
+    req: RemoveAnnotationRequest,
+    user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
+):
+    """Remove annotations (restore witnesses to default state)."""
+    pool = _pool_or_503()
+    acct = _uuid.UUID(user.account_id)
+
+    ids = [w.strip() for w in req.witness_ids if w.strip()]
+    if not ids:
+        return {"removed": 0}
+
+    result = await pool.execute(
+        """
+        DELETE FROM b2b_evidence_annotations
+        WHERE account_id = $1
+          AND witness_id = ANY($2::text[])
+        """,
+        acct,
+        ids,
+    )
+    removed = int(result.split()[-1]) if result else 0
+    return {"removed": removed}

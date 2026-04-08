@@ -1756,6 +1756,42 @@ export async function fetchEvidenceTrace(params: {
   )
 }
 
+// -- Evidence Annotations -----------------------------------------------------
+
+export interface EvidenceAnnotation {
+  id: string
+  witness_id: string
+  vendor_name: string
+  annotation_type: 'pin' | 'flag' | 'suppress'
+  note_text: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchAnnotations(params?: {
+  vendor_name?: string
+  annotation_type?: string
+}) {
+  return get<{ annotations: EvidenceAnnotation[]; count: number }>(
+    EVIDENCE_BASE,
+    '/annotations',
+    params,
+  )
+}
+
+export async function setAnnotation(body: {
+  witness_id: string
+  vendor_name: string
+  annotation_type: 'pin' | 'flag' | 'suppress'
+  note_text?: string | null
+}) {
+  return post<EvidenceAnnotation>(EVIDENCE_BASE, '/annotations', body)
+}
+
+export async function removeAnnotations(body: { witness_ids: string[] }) {
+  return post<{ removed: number }>(EVIDENCE_BASE, '/annotations/remove', body)
+}
+
 // -- Report PDF Export --------------------------------------------------------
 
 export function downloadReportPdf(reportId: string) {

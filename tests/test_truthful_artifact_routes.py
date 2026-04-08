@@ -226,7 +226,8 @@ def test_blog_quality_trends_returns_daily_rollups(monkeypatch):
 def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
     app = FastAPI()
     app.include_router(evidence_api.router)
-    app.dependency_overrides[require_auth] = _auth_user
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
 
     class Pool:
         is_initialized = True
@@ -236,13 +237,25 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
                 assert args == ("Salesforce", 90, date.today())
                 return {"as_of_date": date(2026, 4, 1)}
             if "COUNT(*) AS total FROM b2b_vendor_witnesses" in query:
-                assert args == ("Salesforce", 90, date(2026, 4, 1))
+                assert args == (
+                    "Salesforce",
+                    90,
+                    date(2026, 4, 1),
+                    evidence_api._uuid.UUID(user.account_id),
+                )
                 return {"total": 1}
             return None
 
         async def fetch(self, query, *args):
-            if "FROM b2b_vendor_witnesses" in query and "GROUP BY pain_category" not in query:
-                assert args == ("Salesforce", 90, date(2026, 4, 1), 50, 0)
+            if "LIMIT $5 OFFSET $6" in query:
+                assert args == (
+                    "Salesforce",
+                    90,
+                    date(2026, 4, 1),
+                    evidence_api._uuid.UUID(user.account_id),
+                    50,
+                    0,
+                )
                 return [
                     {
                         "witness_id": "w1",
@@ -262,8 +275,13 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
                         "as_of_date": datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
                     }
                 ]
-            if "GROUP BY pain_category, source, witness_type" in query:
-                assert args == ("Salesforce", 90, date(2026, 4, 1))
+            if "GROUP BY w.pain_category, w.source, w.witness_type" in query:
+                assert args == (
+                    "Salesforce",
+                    90,
+                    date(2026, 4, 1),
+                    evidence_api._uuid.UUID(user.account_id),
+                )
             return []
 
     monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
@@ -282,6 +300,139 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
     assert body["analysis_window_days"] == 90
     assert body["total"] == 1
     assert body["witnesses"][0]["witness_id"] == "w1"
+
+
+def test_b2b_evidence_annotations_list_uses_b2b_gate_and_canonical_vendor(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            assert "FROM b2b_evidence_annotations" in query
+            assert args == (
+                evidence_api._uuid.UUID(user.account_id),
+                "Salesforce",
+                "pin",
+            )
+            return [
+                {
+                    "id": uuid4(),
+                    "witness_id": "w1",
+                    "vendor_name": "Salesforce",
+                    "annotation_type": "pin",
+                    "note_text": None,
+                    "created_at": datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc),
+                    "updated_at": datetime(2026, 4, 8, 12, 5, tzinfo=timezone.utc),
+                }
+            ]
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/evidence/annotations?vendor_name=salesforce&annotation_type=pin")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["annotations"][0]["vendor_name"] == "Salesforce"
+    assert body["annotations"][0]["annotation_type"] == "pin"
+
+
+def test_b2b_evidence_set_annotation_validates_witness_and_upserts(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchval(self, query, *args):
+            assert "FROM b2b_vendor_witnesses" in query
+            assert args == ("w1", "Salesforce")
+            return 1
+
+        async def fetchrow(self, query, *args):
+            assert "INSERT INTO b2b_evidence_annotations" in query
+            assert args[1] == evidence_api._uuid.UUID(user.account_id)
+            assert args[2] == "w1"
+            assert args[3] == "Salesforce"
+            assert args[4] == "pin"
+            return {
+                "id": uuid4(),
+                "witness_id": "w1",
+                "vendor_name": "Salesforce",
+                "annotation_type": "pin",
+                "note_text": None,
+                "created_at": datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc),
+                "updated_at": datetime(2026, 4, 8, 12, 0, tzinfo=timezone.utc),
+            }
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/evidence/annotations",
+            json={
+                "witness_id": "w1",
+                "vendor_name": "salesforce",
+                "annotation_type": "pin",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["witness_id"] == "w1"
+    assert body["vendor_name"] == "Salesforce"
+    assert body["annotation_type"] == "pin"
+
+
+def test_b2b_evidence_set_annotation_rejects_unknown_witness(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchval(self, query, *args):
+            assert "FROM b2b_vendor_witnesses" in query
+            assert args == ("missing", "Salesforce")
+            return None
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/evidence/annotations",
+            json={
+                "witness_id": "missing",
+                "vendor_name": "salesforce",
+                "annotation_type": "flag",
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Witness not found for vendor"
 
 
 def test_b2b_evidence_witness_detail_uses_requested_snapshot(monkeypatch):
