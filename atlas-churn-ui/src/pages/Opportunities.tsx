@@ -699,7 +699,7 @@ export default function Opportunities() {
       </div>
 
       {/* Signal effectiveness */}
-      <SignalEffectivenessPanel />
+      {canAccessCampaigns && <SignalEffectivenessPanel />}
 
       {/* Disposition tabs */}
       <div className="flex items-center gap-1 border-b border-slate-700/40 pb-1">
@@ -890,6 +890,7 @@ export default function Opportunities() {
         <EvidencePanel
           row={expandedRow}
           disposition={dispositionMap.get(rowKey(expandedRow)) ?? null}
+          canAccessCampaigns={canAccessCampaigns}
           onClose={() => setExpandedId(null)}
           onGenerate={canAccessCampaigns ? handleGenerate : undefined}
           onDisposition={handleDisposition}
@@ -1057,6 +1058,7 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
 function EvidencePanel({
   row,
   disposition,
+  canAccessCampaigns,
   onClose,
   onGenerate,
   onDisposition,
@@ -1067,6 +1069,7 @@ function EvidencePanel({
 }: {
   row: HighIntentCompany
   disposition: OpportunityDisposition | null
+  canAccessCampaigns: boolean
   onClose: () => void
   onGenerate?: (row: HighIntentCompany) => void
   onDisposition?: (row: HighIntentCompany, disposition: 'snoozed' | 'dismissed' | 'saved') => void
@@ -1254,22 +1257,26 @@ function EvidencePanel({
       </div>
 
       {/* Campaign Queue */}
-      <div className="border-t border-slate-700/40 pt-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Mail className="h-4 w-4 text-cyan-400" />
-          <h4 className="text-sm font-medium text-white">Generated Campaigns</h4>
+      {canAccessCampaigns && (
+        <div className="border-t border-slate-700/40 pt-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Mail className="h-4 w-4 text-cyan-400" />
+            <h4 className="text-sm font-medium text-white">Generated Campaigns</h4>
+          </div>
+          <CampaignQueue company={row.company} vendor={row.vendor} refreshKey={campaignRefreshKey} onAction={onCampaignAction} />
         </div>
-        <CampaignQueue company={row.company} vendor={row.vendor} refreshKey={campaignRefreshKey} onAction={onCampaignAction} />
-      </div>
+      )}
 
       {/* Deal timeline */}
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <Activity className="h-4 w-4 text-cyan-400" />
-          <h4 className="text-sm font-medium text-white">Deal Timeline</h4>
+      {canAccessCampaigns && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <Activity className="h-4 w-4 text-cyan-400" />
+            <h4 className="text-sm font-medium text-white">Deal Timeline</h4>
+          </div>
+          <CompanyTimeline company={row.company} vendor={row.vendor} />
         </div>
-        <CompanyTimeline company={row.company} vendor={row.vendor} />
-      </div>
+      )}
 
       {/* Actions */}
       <div className="flex items-center gap-3 pt-2 border-t border-slate-700/40">

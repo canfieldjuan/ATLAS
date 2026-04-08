@@ -152,6 +152,28 @@ def _coerce_json_dict(value: Any) -> dict[str, Any]:
     return coerce_json_dict(value)
 
 
+async def _fetch_scoped_sequence_row(pool, sequence_id: UUID, account_id: str, select_fields: str):
+    return await pool.fetchrow(
+        f"""
+        SELECT {select_fields}
+        FROM campaign_sequences cs
+        WHERE cs.id = $1
+          AND EXISTS (
+              SELECT 1
+              FROM b2b_campaigns bc
+              WHERE bc.sequence_id = cs.id
+                AND bc.vendor_name IN (
+                    SELECT vendor_name
+                    FROM tracked_vendors
+                    WHERE account_id = $2::uuid
+                )
+          )
+        """,
+        sequence_id,
+        account_id,
+    )
+
+
 def _campaign_response_quality(metadata: Any) -> dict[str, Any]:
     resolved_metadata = _coerce_json_dict(metadata)
     summary = specificity_quality_summary(resolved_metadata)
@@ -1798,7 +1820,7 @@ async def resume_sequence(sequence_id: UUID):
 async def record_outcome(
     sequence_id: UUID,
     body: RecordOutcomeBody,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Record a business outcome for a campaign sequence."""
     if body.outcome not in VALID_OUTCOMES:
@@ -1809,15 +1831,17 @@ async def record_outcome(
 
     pool = _pool_or_503()
 
-    row = await pool.fetchrow(
-        "SELECT id, outcome, outcome_history FROM campaign_sequences WHERE id = $1",
+    row = await _fetch_scoped_sequence_row(
+        pool,
         sequence_id,
+        user.account_id,
+        "cs.id, cs.outcome, cs.outcome_history",
     )
     if not row:
         raise HTTPException(status_code=404, detail="Sequence not found")
 
     previous = row["outcome"]
-    recorded_by = f"api:{user.user_id}" if user else "api"
+    recorded_by = f"api:{user.user_id}"
     now = datetime.now(timezone.utc)
 
     # Build history entry and append to existing array
@@ -1877,20 +1901,20 @@ async def record_outcome(
 @router.get("/sequences/{sequence_id}/outcome")
 async def get_outcome(
     sequence_id: UUID,
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Get the current outcome for a campaign sequence."""
     pool = _pool_or_503()
 
-    row = await pool.fetchrow(
-        """
-        SELECT cs.id, cs.company_name, cs.outcome, cs.outcome_recorded_at,
-               cs.outcome_recorded_by, cs.outcome_notes, cs.outcome_revenue,
-               cs.outcome_history
-        FROM campaign_sequences cs
-        WHERE cs.id = $1
-        """,
+    row = await _fetch_scoped_sequence_row(
+        pool,
         sequence_id,
+        user.account_id,
+        """
+        cs.id, cs.company_name, cs.outcome, cs.outcome_recorded_at,
+        cs.outcome_recorded_by, cs.outcome_notes, cs.outcome_revenue,
+        cs.outcome_history
+        """,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Sequence not found")
@@ -1991,7 +2015,7 @@ async def _send_campaign_notification(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{campaign_id}")
+@router.get("/{campaign_id:uuid}")
 async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optional_auth)):
     try:
         cid = _uuid.UUID(campaign_id)
@@ -2027,7 +2051,7 @@ async def get_campaign(campaign_id: str, user: AuthUser | None = Depends(optiona
     return r
 
 
-@router.patch("/{campaign_id}")
+@router.patch("/{campaign_id:uuid}")
 async def update_campaign(
     campaign_id: str,
     body: CampaignUpdate,
@@ -2069,7 +2093,7 @@ async def update_campaign(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{campaign_id}/approve")
+@router.post("/{campaign_id:uuid}/approve")
 async def approve_campaign(
     campaign_id: str,
     user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
@@ -2129,7 +2153,7 @@ async def approve_campaign(
     return {"ok": True, "approved_at": now.isoformat()}
 
 
-@router.post("/{campaign_id}/queue-send")
+@router.post("/{campaign_id:uuid}/queue-send")
 async def queue_campaign_for_send(
     campaign_id: str,
     body: ApproveQueueBody | None = None,
@@ -2259,7 +2283,7 @@ async def queue_campaign_for_send(
     }
 
 
-@router.post("/{campaign_id}/cancel")
+@router.post("/{campaign_id:uuid}/cancel")
 async def cancel_campaign(
     campaign_id: str,
     user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
@@ -2301,7 +2325,7 @@ async def cancel_campaign(
     return {"status": "cancelled", "campaign_id": str(cid)}
 
 
-@router.get("/{campaign_id}/audit-log")
+@router.get("/{campaign_id:uuid}/audit-log")
 async def campaign_audit_log(
     campaign_id: str,
     limit: int = Query(default=100, ge=1, le=500),
@@ -2449,7 +2473,7 @@ _TIMELINE_LIMIT = 200
 async def company_timeline(
     company: str = Query(..., min_length=1),
     vendor: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Unified chronological timeline for a company's opportunity lifecycle.
 
@@ -2461,16 +2485,19 @@ async def company_timeline(
     company_lower = company.lower()
     vendor_lower = vendor.lower() if vendor else None
 
-    # Build reusable vendor filter clause
-    base_params: list = [company_lower]
-    vendor_clause = ""
-    if vendor_lower:
-        base_params.append(vendor_lower)
-        vendor_clause = " AND LOWER(bc.vendor_name) = $2"
-
     # 1. Campaign lifecycle events from audit log
-    audit_params = list(base_params) + [_TIMELINE_LIMIT]
-    limit_idx = len(base_params) + 1
+    audit_conditions = ["LOWER(bc.company_name) = $1"]
+    audit_params: list[Any] = [company_lower]
+    if vendor_lower:
+        audit_conditions.append(f"LOWER(bc.vendor_name) = ${len(audit_params) + 1}")
+        audit_params.append(vendor_lower)
+    audit_conditions.append(
+        f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${len(audit_params) + 1}::uuid)"
+    )
+    audit_params.append(user.account_id)
+    audit_params.append(_TIMELINE_LIMIT)
+    audit_where = " AND ".join(audit_conditions)
+    limit_idx = len(audit_params)
     audit_rows = await pool.fetch(
         f"""
         SELECT cal.event_type, cal.step_number, cal.subject,
@@ -2480,7 +2507,7 @@ async def company_timeline(
                bc.opportunity_score, bc.urgency_score
         FROM campaign_audit_log cal
         JOIN b2b_campaigns bc ON bc.id = cal.campaign_id
-        WHERE LOWER(bc.company_name) = $1{vendor_clause}
+        WHERE {audit_where}
         ORDER BY cal.created_at DESC
         LIMIT ${limit_idx}
         """,
@@ -2505,7 +2532,16 @@ async def company_timeline(
     # 2. Sequence state + engagement
     #    Use DISTINCT ON to get one row per sequence (a sequence may link
     #    to multiple campaign steps, all sharing the same vendor_name).
-    seq_vendor_clause = f" AND LOWER(bc.vendor_name) = $2" if vendor_lower else ""
+    seq_conditions = ["LOWER(cs.company_name) = $1"]
+    seq_params: list[Any] = [company_lower]
+    if vendor_lower:
+        seq_conditions.append(f"LOWER(bc.vendor_name) = ${len(seq_params) + 1}")
+        seq_params.append(vendor_lower)
+    seq_conditions.append(
+        f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${len(seq_params) + 1}::uuid)"
+    )
+    seq_params.append(user.account_id)
+    seq_where = " AND ".join(seq_conditions)
     seq_rows = await pool.fetch(
         f"""
         SELECT DISTINCT ON (cs.id)
@@ -2519,10 +2555,10 @@ async def company_timeline(
                bc.vendor_name
         FROM campaign_sequences cs
         JOIN b2b_campaigns bc ON bc.sequence_id = cs.id
-        WHERE LOWER(cs.company_name) = $1{seq_vendor_clause}
+        WHERE {seq_where}
         ORDER BY cs.id, bc.created_at DESC
         """,
-        *base_params,
+        *seq_params,
     )
     for r in seq_rows:
         events.append({
@@ -2549,17 +2585,27 @@ async def company_timeline(
         })
 
     # 3. Signal detection (first appearance in high-intent)
+    signal_conditions = ["LOWER(bc.company_name) = $1"]
+    signal_params: list[Any] = [company_lower]
+    if vendor_lower:
+        signal_conditions.append(f"LOWER(bc.vendor_name) = ${len(signal_params) + 1}")
+        signal_params.append(vendor_lower)
+    signal_conditions.append(
+        f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${len(signal_params) + 1}::uuid)"
+    )
+    signal_params.append(user.account_id)
+    signal_where = " AND ".join(signal_conditions)
     signal_rows = await pool.fetch(
         f"""
         SELECT bc.vendor_name, bc.urgency_score, bc.buying_stage,
                bc.role_type, bc.pain_categories, bc.seat_count,
                bc.contract_end, bc.created_at
         FROM b2b_campaigns bc
-        WHERE LOWER(bc.company_name) = $1{vendor_clause}
+        WHERE {signal_where}
         ORDER BY bc.created_at ASC
         LIMIT 1
         """,
-        *base_params,
+        *signal_params,
     )
     for r in signal_rows:
         pains = r["pain_categories"]

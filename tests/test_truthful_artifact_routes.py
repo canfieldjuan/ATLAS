@@ -9,17 +9,19 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import atlas_brain.api.b2b_tenant_dashboard as tenant_dashboard_api
+import atlas_brain.api.b2b_campaigns as campaigns_api
+import atlas_brain.api.b2b_dashboard as dashboard_api
 import atlas_brain.api.b2b_evidence as evidence_api
 import atlas_brain.api.blog_admin as blog_admin_api
 from atlas_brain.auth.dependencies import AuthUser, require_auth
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
 
 
-def _auth_user() -> AuthUser:
+def _auth_user(plan: str = "b2b_pro") -> AuthUser:
     return AuthUser(
         user_id=str(uuid4()),
         account_id=str(uuid4()),
-        plan="b2b_pro",
+        plan=plan,
         plan_status="active",
         role="owner",
         product="b2b_retention",
@@ -560,6 +562,99 @@ def test_b2b_evidence_trace_bounds_diff_lookup_to_target_date(monkeypatch):
     assert body["stats"]["has_diff"] is True
     assert body["trace"]["evidence_diff"]["decision"] == "stable"
     assert body["trace"]["evidence_diff"]["computed_date"] == "2026-03-30"
+
+
+def test_campaign_outcome_routes_require_growth_plan():
+    app = FastAPI()
+    app.include_router(campaigns_api.router)
+    app.dependency_overrides[require_auth] = lambda: _auth_user(plan="b2b_trial")
+    sequence_id = uuid4()
+
+    with TestClient(app) as client:
+        post_response = client.post(
+            f"/b2b/campaigns/sequences/{sequence_id}/outcome",
+            json={"outcome": "meeting_booked"},
+        )
+        get_response = client.get(f"/b2b/campaigns/sequences/{sequence_id}/outcome")
+
+    assert post_response.status_code == 403
+    assert "b2b_growth" in post_response.json()["detail"]
+    assert get_response.status_code == 403
+    assert "b2b_growth" in get_response.json()["detail"]
+
+
+def test_company_timeline_scopes_to_tracked_vendors(monkeypatch):
+    app = FastAPI()
+    app.include_router(campaigns_api.router)
+    user = _auth_user(plan="b2b_growth")
+    app.dependency_overrides[require_auth] = lambda: user
+    captured_queries: list[tuple[str, tuple]] = []
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            captured_queries.append((query, args))
+            return []
+
+    monkeypatch.setattr(campaigns_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/campaigns/company-timeline?company=Acme&vendor=Salesforce")
+
+    assert response.status_code == 200
+    assert len(captured_queries) == 3
+    assert all("tracked_vendors" in query for query, _ in captured_queries)
+    assert all(args[-1] == user.account_id or args[-2] == user.account_id for _, args in captured_queries)
+
+
+def test_dashboard_signal_effectiveness_requires_growth_plan():
+    app = FastAPI()
+    app.include_router(dashboard_api.router)
+    app.dependency_overrides[require_auth] = lambda: _auth_user(plan="b2b_trial")
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/dashboard/signal-effectiveness")
+
+    assert response.status_code == 403
+    assert "b2b_growth" in response.json()["detail"]
+
+
+def test_dashboard_outcome_distribution_scopes_by_vendor(monkeypatch):
+    app = FastAPI()
+    app.include_router(dashboard_api.router)
+    user = _auth_user(plan="b2b_growth")
+    app.dependency_overrides[require_auth] = lambda: user
+    captured = {}
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *args):
+            captured["query"] = query
+            captured["args"] = args
+            return [
+                {
+                    "outcome": "deal_won",
+                    "count": 2,
+                    "total_revenue": 10000,
+                    "first_recorded": datetime(2026, 4, 1, tzinfo=timezone.utc),
+                    "last_recorded": datetime(2026, 4, 7, tzinfo=timezone.utc),
+                }
+            ]
+
+    monkeypatch.setattr(dashboard_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/dashboard/outcome-distribution?vendor_name=Salesforce")
+
+    assert response.status_code == 200
+    assert "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in captured["query"]
+    assert "cs.company_name IN" not in captured["query"]
+    assert captured["args"] == (user.account_id, "Salesforce")
+    body = response.json()
+    assert body["total_sequences"] == 2
+    assert body["buckets"][0]["outcome"] == "deal_won"
 
 
 def test_push_to_crm_routes_high_intent_payload(monkeypatch):

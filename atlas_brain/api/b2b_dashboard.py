@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from ..auth.dependencies import AuthUser, optional_auth
+from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
 from ..config import settings
 from ..services.tracing import (
     build_business_trace_context,
@@ -3213,7 +3213,7 @@ async def signal_effectiveness(
     vendor_name: Optional[str] = Query(None),
     min_sequences: int = Query(5, ge=1, le=100),
     group_by: str = Query("buying_stage"),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Correlate signal dimensions with campaign outcomes."""
     if group_by not in _SIGNAL_GROUP_EXPRESSIONS:
@@ -3228,16 +3228,10 @@ async def signal_effectiveness(
     conditions: list[str] = [
         "bc.sequence_id IS NOT NULL",
         "cs.outcome != 'pending'",
+        "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $2::uuid)",
     ]
-    params: list = [min_sequences]
-    idx = 2
-
-    if _should_scope(user):
-        conditions.append(
-            f"bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
-        )
-        params.append(user.account_id)
-        idx += 1
+    params: list = [min_sequences, user.account_id]
+    idx = 3
 
     if vendor_name:
         conditions.append(f"bc.vendor_name ILIKE '%' || ${idx} || '%'")
@@ -3456,21 +3450,16 @@ async def get_calibration_weights(
 @router.get("/outcome-distribution")
 async def get_outcome_distribution(
     vendor_name: Optional[str] = Query(None),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """System-wide campaign outcome distribution (funnel view)."""
     pool = _pool_or_503()
 
-    conditions: list[str] = []
-    params: list = []
-    idx = 1
-
-    if _should_scope(user):
-        conditions.append(
-            f"cs.company_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
-        )
-        params.append(str(user.account_id))
-        idx += 1
+    conditions: list[str] = [
+        "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
+    ]
+    params: list = [str(user.account_id)]
+    idx = 2
 
     if vendor_name:
         conditions.append(f"bc.vendor_name ILIKE '%' || ${idx} || '%'")
