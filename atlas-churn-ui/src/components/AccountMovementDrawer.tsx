@@ -9,10 +9,13 @@ import {
   Fingerprint,
   Globe,
   Layers,
+  Loader2,
   Quote,
   ShieldAlert,
+  Telescope,
   User,
   X,
+  Zap,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import UrgencyBadge from './UrgencyBadge'
@@ -24,6 +27,9 @@ interface AccountMovementDrawerProps {
   open: boolean
   onClose: () => void
   onViewVendor: (vendorName: string) => void
+  onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
+  onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
+  generating?: boolean
 }
 
 function formatDate(value: string | null | undefined) {
@@ -67,6 +73,9 @@ export default function AccountMovementDrawer({
   open,
   onClose,
   onViewVendor,
+  onGenerateCampaign,
+  onViewOpportunity,
+  generating,
 }: AccountMovementDrawerProps) {
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
     if (event.key === 'Escape') onClose()
@@ -148,6 +157,25 @@ export default function AccountMovementDrawer({
               View vendor
               <ArrowUpRight className="h-3.5 w-3.5" />
             </button>
+            {onViewOpportunity && (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
+                onClick={() => onViewOpportunity(item)}
+              >
+                <Telescope className="h-3.5 w-3.5" />
+                View opportunities
+              </button>
+            )}
+            {onGenerateCampaign && (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-green-500/10 px-2.5 py-1.5 text-xs font-medium text-green-300 hover:bg-green-500/20 disabled:opacity-50"
+                onClick={() => onGenerateCampaign(item)}
+                disabled={generating}
+              >
+                {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+                {generating ? 'Generating...' : 'Generate campaigns'}
+              </button>
+            )}
           </div>
         </div>
 

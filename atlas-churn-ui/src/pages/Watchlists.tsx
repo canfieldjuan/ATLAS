@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   Activity,
   BellRing,
@@ -8,8 +8,10 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Telescope,
   Trash2,
   X,
+  Zap,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -50,6 +52,7 @@ import {
   updateCompetitiveSet,
   type VendorSearchResult,
   downloadCsv,
+  generateCampaigns,
 } from '../api/client'
 import type { ChurnSignal } from '../types'
 
@@ -337,6 +340,26 @@ export default function Watchlists() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [selectedAccount, setSelectedAccount] = useState<AccountsInMotionFeedItem | null>(null)
   const [showReviewAccounts, setShowReviewAccounts] = useState(false)
+  const [generatingCampaignFor, setGeneratingCampaignFor] = useState<string | null>(null)
+
+  async function handleGenerateCampaign(item: AccountsInMotionFeedItem) {
+    const key = `${item.company}::${item.vendor}`
+    setGeneratingCampaignFor(key)
+    setActionMessage(null)
+    setActionError(null)
+    try {
+      const result = await generateCampaigns({
+        company_name: item.company ?? undefined,
+        vendor_name: item.vendor,
+        limit: 5,
+      })
+      setActionMessage(`Generated ${result.generated ?? 0} campaign(s) for ${item.company ?? item.vendor}`)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Campaign generation failed')
+    } finally {
+      setGeneratingCampaignFor(null)
+    }
+  }
   const [competitiveSetName, setCompetitiveSetName] = useState('')
   const [competitiveSetFocal, setCompetitiveSetFocal] = useState('')
   const [competitiveSetCompetitors, setCompetitiveSetCompetitors] = useState<string[]>([])
@@ -1231,17 +1254,46 @@ export default function Watchlists() {
     {
       key: 'actions',
       header: 'Actions',
-      render: (row) => (
-        <button
-          className="rounded-md bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
-          onClick={(event) => {
-            event.stopPropagation()
-            navigate(`/vendors/${encodeURIComponent(row.vendor)}`)
-          }}
-        >
-          View vendor
-        </button>
-      ),
+      render: (row) => {
+        const genKey = `${row.company}::${row.vendor}`
+        const isGenerating = generatingCampaignFor === genKey
+        return (
+          <div className="flex items-center gap-1">
+            <button
+              className="rounded-md bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
+              onClick={(event) => {
+                event.stopPropagation()
+                navigate(`/vendors/${encodeURIComponent(row.vendor)}`)
+              }}
+            >
+              View vendor
+            </button>
+            {row.company && (
+              <Link
+                to={`/opportunities?vendor=${encodeURIComponent(row.vendor)}`}
+                onClick={(e) => e.stopPropagation()}
+                className="rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
+                title="View opportunities"
+              >
+                <Telescope className="inline h-3 w-3" />
+              </Link>
+            )}
+            {row.company && (
+              <button
+                className="rounded-md bg-green-500/10 px-2 py-1 text-xs font-medium text-green-300 hover:bg-green-500/20 disabled:opacity-50"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleGenerateCampaign(row)
+                }}
+                disabled={isGenerating}
+                title="Generate campaigns"
+              >
+                <Zap className={`inline h-3 w-3 ${isGenerating ? 'animate-pulse' : ''}`} />
+              </button>
+            )}
+          </div>
+        )
+      },
     },
   ]
 
@@ -2360,6 +2412,9 @@ export default function Watchlists() {
         open={selectedAccount != null}
         onClose={() => setSelectedAccount(null)}
         onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
+        onGenerateCampaign={handleGenerateCampaign}
+        onViewOpportunity={(item) => navigate(`/opportunities?vendor=${encodeURIComponent(item.vendor)}`)}
+        generating={selectedAccount ? generatingCampaignFor === `${selectedAccount.company}::${selectedAccount.vendor}` : false}
       />
     </div>
   )

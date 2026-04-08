@@ -731,10 +731,6 @@ class WatchlistViewRequest(BaseModel):
     alert_delivery_frequency: str = Field(default="daily", min_length=1, max_length=20)
 
 
-class WatchlistAlertEmailRequest(BaseModel):
-    evaluate_before_send: bool = True
-
-
 _VALID_DISPOSITIONS = {"snoozed", "dismissed", "saved"}
 
 
@@ -765,6 +761,10 @@ class BulkSetDispositionRequest(BaseModel):
 
 class RemoveDispositionsRequest(BaseModel):
     opportunity_keys: list[str] = Field(..., min_length=1, max_length=100)
+
+
+class WatchlistAlertEmailRequest(BaseModel):
+    evaluate_before_send: bool = True
 
 
 # ---------------------------------------------------------------------------
