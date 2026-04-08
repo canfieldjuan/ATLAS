@@ -25,12 +25,16 @@ class _FakeTransaction:
 
 
 class _FakePool:
-    def __init__(self):
+    def __init__(self, fetch_rows=None):
         self.is_initialized = True
         self.inserted_rows = []
+        self.fetch_rows = list(fetch_rows or [])
 
     def transaction(self):
         return _FakeTransaction(self)
+
+    async def fetch(self, _sql, *_args):
+        return list(self.fetch_rows)
 
     async def fetchrow(self, _sql, _batch_id):
         return {"cnt": len(self.inserted_rows)}
@@ -135,6 +139,53 @@ async def test_import_b2b_reviews_dedupes_same_text_with_different_ids(monkeypat
     assert len(pool.inserted_rows) == 1
     assert result["imported"] == 1
     assert result["duplicates"] == 1
+
+
+@pytest.mark.asyncio
+async def test_import_b2b_reviews_marks_cross_source_duplicates(monkeypatch):
+    from atlas_brain.api.b2b_reviews import B2BReviewInput, import_b2b_reviews
+
+    pool = _FakePool()
+    monkeypatch.setattr("atlas_brain.api.b2b_reviews.get_db_pool", lambda: pool)
+    monkeypatch.setattr(
+        "atlas_brain.api.b2b_reviews.resolve_vendor_name",
+        AsyncMock(side_effect=lambda vendor: vendor),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.api.b2b_reviews._load_existing_review_identity_sets",
+        AsyncMock(return_value=(set(), set())),
+    )
+
+    reviews = [
+        B2BReviewInput(
+            source="g2",
+            vendor_name="HubSpot",
+            review_text="same syndicated review " * 10,
+            source_review_id="g2-1",
+            reviewer_name="Alex P",
+            reviewed_at="2026-03-20T00:00:00Z",
+            rating=2.0,
+        ),
+        B2BReviewInput(
+            source="capterra",
+            vendor_name="HubSpot",
+            review_text="same syndicated review " * 10,
+            source_review_id="cap-1",
+            reviewer_name="Alex P.",
+            reviewed_at="2026-03-20T00:00:00Z",
+            rating=2.0,
+        ),
+    ]
+
+    result = await import_b2b_reviews(reviews)
+
+    assert len(pool.inserted_rows) == 2
+    assert result["imported"] == 2
+    assert result["duplicates"] == 1
+    assert pool.inserted_rows[0][28] == "pending"
+    assert pool.inserted_rows[1][28] == "duplicate"
+    assert pool.inserted_rows[1][25] == pool.inserted_rows[0][29]
+    assert pool.inserted_rows[1][26] == "cross_source_exact_content"
 
 
 @pytest.mark.asyncio
