@@ -704,6 +704,55 @@ def test_upsert_report_subscription_recomputes_next_delivery_when_frequency_chan
     assert recomputed_next > datetime.now(timezone.utc)
 
 
+def test_get_report_subscription_uses_latest_delivery_attempt_not_live_preference(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    latest_attempt_at = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *_args):
+            if "FROM b2b_report_subscriptions s" in query:
+                assert "ORDER BY delivered_at DESC NULLS LAST" in query
+                assert "CASE WHEN delivery_mode = 'live'" not in query
+                return {
+                    "id": uuid4(),
+                    "scope_type": "library",
+                    "scope_key": "library",
+                    "scope_label": "Recurring brief library",
+                    "report_id": None,
+                    "delivery_frequency": "weekly",
+                    "deliverable_focus": "all",
+                    "freshness_policy": "fresh_or_monitor",
+                    "recipient_emails": ["ops@example.com"],
+                    "delivery_note": "Review recent state",
+                    "enabled": True,
+                    "next_delivery_at": latest_attempt_at + timedelta(days=7),
+                    "created_at": latest_attempt_at - timedelta(days=14),
+                    "updated_at": latest_attempt_at,
+                    "last_delivery_status": "dry_run",
+                    "last_delivery_at": latest_attempt_at,
+                    "last_delivery_summary": "Dry run preview completed",
+                    "last_delivery_error": "",
+                    "last_delivery_report_count": 1,
+                }
+            return None
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/tenant/report-subscriptions/library/library")
+
+    assert response.status_code == 200
+    subscription = response.json()["subscription"]
+    assert subscription["last_delivery_status"] == "dry_run"
+    assert subscription["last_delivery_summary"] == "Dry run preview completed"
+    assert subscription["last_delivery_at"] == latest_attempt_at.isoformat()
+
+
 def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)

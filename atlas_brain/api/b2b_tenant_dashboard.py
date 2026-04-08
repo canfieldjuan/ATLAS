@@ -27,6 +27,7 @@ from ..services.scraping.target_provisioning import (
     provision_vendor_onboarding_targets,
 )
 from ..services.campaign_sender import get_campaign_sender
+from ..services.b2b import watchlist_alerts as watchlist_alert_service
 from ..services.b2b_competitive_sets import (
     build_competitive_set_plan,
     estimate_competitive_set_plan,
@@ -235,64 +236,6 @@ def _watchlist_view_payload(row: Any) -> dict[str, Any]:
         "updated_at": str(row["updated_at"]) if row["updated_at"] else None,
     }
 
-
-def _clean_watchlist_alert_delivery_frequency(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    if not text:
-        return "daily"
-    if text not in _WATCHLIST_ALERT_DELIVERY_FREQUENCIES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"alert_delivery_frequency must be one of: {', '.join(sorted(_WATCHLIST_ALERT_DELIVERY_FREQUENCIES))}",
-        )
-    return text
-
-
-def _watchlist_alert_delivery_interval(frequency: str) -> timedelta:
-    return timedelta(days=_WATCHLIST_ALERT_DELIVERY_FREQUENCIES.get(str(frequency or "daily"), 1))
-
-
-def _next_watchlist_alert_delivery_at(
-    frequency: str,
-    *,
-    anchor: datetime | None = None,
-    from_now: datetime | None = None,
-) -> datetime:
-    next_due = _parse_timestamp_value(anchor) or _parse_timestamp_value(from_now) or datetime.now(timezone.utc)
-    interval = _watchlist_alert_delivery_interval(frequency)
-    now = datetime.now(timezone.utc)
-    while next_due <= now:
-        next_due += interval
-    return next_due.replace(microsecond=0)
-
-
-def _resolve_watchlist_alert_next_delivery_at(
-    *,
-    existing_row,
-    alert_email_enabled: bool,
-    alert_delivery_frequency: str,
-    now: datetime | None = None,
-) -> datetime | None:
-    if not alert_email_enabled:
-        return None
-    if not existing_row:
-        return _next_watchlist_alert_delivery_at(
-            alert_delivery_frequency,
-            from_now=now,
-        )
-    previous_frequency = _clean_watchlist_alert_delivery_frequency(
-        existing_row.get("alert_delivery_frequency")
-    )
-    previous_next_delivery_at = _parse_timestamp_value(existing_row.get("next_alert_delivery_at"))
-    if not bool(existing_row.get("alert_email_enabled")):
-        return _next_watchlist_alert_delivery_at(alert_delivery_frequency, from_now=now)
-    if previous_frequency != alert_delivery_frequency:
-        return _next_watchlist_alert_delivery_at(alert_delivery_frequency, from_now=now)
-    if previous_next_delivery_at is not None:
-        return previous_next_delivery_at
-    return _next_watchlist_alert_delivery_at(alert_delivery_frequency, from_now=now)
-
-
 def _watchlist_vendor_freshness_status(signal: dict[str, Any]) -> tuple[str, str | None, str | None]:
     last_computed_at = signal.get("last_computed_at")
     if not signal.get("reasoning_source"):
@@ -335,32 +278,6 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
     except Exception:
         return default
 
-
-def _serialize_watchlist_alert_event(row: Any) -> dict[str, Any]:
-    payload = _row_value(row, "payload")
-    return {
-        "id": str(_row_value(row, "id")),
-        "watchlist_view_id": str(_row_value(row, "watchlist_view_id")),
-        "event_type": _row_value(row, "event_type"),
-        "threshold_field": _row_value(row, "threshold_field"),
-        "entity_type": _row_value(row, "entity_type"),
-        "entity_key": _row_value(row, "entity_key"),
-        "vendor_name": _row_value(row, "vendor_name"),
-        "company_name": _row_value(row, "company_name"),
-        "category": _row_value(row, "category"),
-        "source": _row_value(row, "source"),
-        "threshold_value": _safe_float(_row_value(row, "threshold_value")),
-        "summary": _row_value(row, "summary"),
-        "payload": _safe_json(payload) if payload is not None else {},
-        "status": _row_value(row, "status"),
-        "first_seen_at": str(_row_value(row, "first_seen_at")) if _row_value(row, "first_seen_at") else None,
-        "last_seen_at": str(_row_value(row, "last_seen_at")) if _row_value(row, "last_seen_at") else None,
-        "resolved_at": str(_row_value(row, "resolved_at")) if _row_value(row, "resolved_at") else None,
-        "created_at": str(_row_value(row, "created_at")) if _row_value(row, "created_at") else None,
-        "updated_at": str(_row_value(row, "updated_at")) if _row_value(row, "updated_at") else None,
-    }
-
-
 async def _fetch_watchlist_view_row(
     pool,
     *,
@@ -380,430 +297,6 @@ async def _fetch_watchlist_view_row(
           AND account_id = $2
         """,
         view_id,
-        account_id,
-    )
-
-
-def _watchlist_alert_source_name(row: dict[str, Any]) -> str | None:
-    distribution = row.get("source_distribution")
-    if isinstance(distribution, dict) and distribution:
-        ranked = sorted(
-            (
-                (str(key).strip(), int(value or 0))
-                for key, value in distribution.items()
-                if str(key).strip()
-            ),
-            key=lambda item: (-item[1], item[0].lower()),
-        )
-        if ranked:
-            return ranked[0][0]
-    reviews = row.get("source_reviews") or []
-    for review in reviews:
-        if isinstance(review, dict):
-            source_name = _clean_optional_text(review.get("source"))
-            if source_name:
-                return source_name
-    return None
-
-
-def _watchlist_alert_entity_key(
-    *,
-    event_type: str,
-    entity_type: str,
-    vendor_name: str | None,
-    company_name: str | None = None,
-    category: str | None = None,
-    source: str | None = None,
-    report_date: str | None = None,
-) -> str:
-    parts = [event_type, entity_type, _normalize_vendor_name(vendor_name)]
-    if company_name:
-        parts.append(company_name.strip().lower())
-    if category:
-        parts.append(category.strip().lower())
-    if source:
-        parts.append(source.strip().lower())
-    if report_date:
-        parts.append(report_date.strip().lower())
-    return ":".join(part for part in parts if part)
-
-
-def _build_watchlist_alert_candidates(
-    *,
-    watchlist_view: dict[str, Any],
-    feed: dict[str, Any],
-    accounts_feed: dict[str, Any],
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    vendor_threshold = _safe_float(watchlist_view.get("vendor_alert_threshold"))
-    account_threshold = _safe_float(watchlist_view.get("account_alert_threshold"))
-    stale_threshold = _coerce_optional_int(watchlist_view.get("stale_days_threshold"))
-
-    for signal in feed.get("signals") or []:
-        vendor_name = _clean_optional_text(signal.get("vendor_name"))
-        category = _clean_optional_text(signal.get("product_category"))
-        if signal.get("vendor_alert_hit") and vendor_threshold is not None:
-            candidates.append({
-                "event_type": "vendor_alert",
-                "threshold_field": "vendor_alert_threshold",
-                "entity_type": "vendor",
-                "entity_key": _watchlist_alert_entity_key(
-                    event_type="vendor_alert",
-                    entity_type="vendor",
-                    vendor_name=vendor_name,
-                ),
-                "vendor_name": vendor_name,
-                "company_name": None,
-                "category": category,
-                "source": None,
-                "threshold_value": vendor_threshold,
-                "summary": (
-                    f"{vendor_name} crossed the vendor alert threshold at "
-                    f"{_safe_float(signal.get('avg_urgency_score'), 0.0):.1f}"
-                ),
-                "payload": {
-                    "avg_urgency_score": signal.get("avg_urgency_score"),
-                    "freshness_status": signal.get("freshness_status"),
-                    "freshness_timestamp": signal.get("freshness_timestamp"),
-                    "synthesis_wedge_label": signal.get("synthesis_wedge_label"),
-                },
-            })
-        if signal.get("stale_threshold_hit") and stale_threshold is not None:
-            candidates.append({
-                "event_type": "stale_data",
-                "threshold_field": "stale_days_threshold",
-                "entity_type": "vendor",
-                "entity_key": _watchlist_alert_entity_key(
-                    event_type="stale_data",
-                    entity_type="vendor",
-                    vendor_name=vendor_name,
-                ),
-                "vendor_name": vendor_name,
-                "company_name": None,
-                "category": category,
-                "source": None,
-                "threshold_value": stale_threshold,
-                "summary": f"{vendor_name} is older than the stale-data policy",
-                "payload": {
-                    "freshness_status": signal.get("freshness_status"),
-                    "freshness_reason": signal.get("freshness_reason"),
-                    "freshness_timestamp": signal.get("freshness_timestamp"),
-                },
-            })
-
-    for account in accounts_feed.get("accounts") or []:
-        vendor_name = _clean_optional_text(account.get("vendor"))
-        company_name = _clean_optional_text(account.get("company"))
-        category = _clean_optional_text(account.get("category"))
-        source_name = _watchlist_alert_source_name(account)
-        entity_type = "account" if company_name else "signal_cluster"
-        entity_key = _watchlist_alert_entity_key(
-            event_type="account_alert",
-            entity_type=entity_type,
-            vendor_name=vendor_name,
-            company_name=company_name,
-            category=category,
-            source=source_name,
-            report_date=_clean_optional_text(account.get("report_date")),
-        )
-        subject = company_name or f"{vendor_name} signal cluster"
-        if account.get("account_alert_hit") and account_threshold is not None:
-            candidates.append({
-                "event_type": "account_alert",
-                "threshold_field": "account_alert_threshold",
-                "entity_type": entity_type,
-                "entity_key": entity_key,
-                "vendor_name": vendor_name,
-                "company_name": company_name,
-                "category": category,
-                "source": source_name,
-                "threshold_value": account_threshold,
-                "summary": (
-                    f"{subject} crossed the account alert threshold at "
-                    f"{_safe_float(account.get('urgency'), 0.0):.1f}"
-                ),
-                "payload": {
-                    "urgency": account.get("urgency"),
-                    "confidence": account.get("confidence"),
-                    "report_date": account.get("report_date"),
-                    "freshness_status": account.get("freshness_status"),
-                    "reasoning_reference_ids": account.get("reasoning_reference_ids"),
-                    "source_review_ids": account.get("source_review_ids"),
-                },
-            })
-        if account.get("stale_threshold_hit") and stale_threshold is not None:
-            candidates.append({
-                "event_type": "stale_data",
-                "threshold_field": "stale_days_threshold",
-                "entity_type": entity_type,
-                "entity_key": _watchlist_alert_entity_key(
-                    event_type="stale_data",
-                    entity_type=entity_type,
-                    vendor_name=vendor_name,
-                    company_name=company_name,
-                    category=category,
-                    source=source_name,
-                    report_date=_clean_optional_text(account.get("report_date")),
-                ),
-                "vendor_name": vendor_name,
-                "company_name": company_name,
-                "category": category,
-                "source": source_name,
-                "threshold_value": stale_threshold,
-                "summary": f"{subject} is older than the stale-data policy",
-                "payload": {
-                    "stale_days": account.get("stale_days"),
-                    "report_date": account.get("report_date"),
-                    "freshness_status": account.get("freshness_status"),
-                    "freshness_reason": account.get("freshness_reason"),
-                },
-            })
-    return candidates
-
-
-def _watchlist_alert_sender_configured() -> bool:
-    if not settings.b2b_alert.email_enabled:
-        return False
-    campaign_cfg = settings.campaign_sequence
-    if campaign_cfg.sender_type == "ses":
-        return bool(campaign_cfg.ses_from_email)
-    return bool(campaign_cfg.resend_api_key and campaign_cfg.resend_from_email)
-
-
-def _watchlist_alert_from_email() -> str:
-    campaign_cfg = settings.campaign_sequence
-    sender_name = settings.b2b_alert.sender_name.strip()
-    from_email = (
-        str(campaign_cfg.ses_from_email or "").strip()
-        if campaign_cfg.sender_type == "ses"
-        else str(campaign_cfg.resend_from_email or "").strip()
-    )
-    if not from_email:
-        return ""
-    return f"{sender_name} <{from_email}>" if sender_name else from_email
-
-
-def _watchlist_manage_url() -> str | None:
-    configured = str(settings.b2b_alert.dashboard_base_url or "").strip()
-    if configured:
-        return configured.rstrip("/")
-    frontend = str(settings.saas_auth.frontend_base_url or "").strip()
-    if not frontend:
-        return None
-    return f"{frontend.rstrip('/')}/watchlists"
-
-
-async def _resolve_watchlist_alert_recipients(
-    pool,
-    *,
-    account_id: _uuid.UUID,
-) -> list[dict[str, str]]:
-    rows = await pool.fetch(
-        """
-        SELECT email, full_name
-        FROM saas_users
-        WHERE account_id = $1
-          AND is_active = TRUE
-          AND role = 'owner'
-          AND email IS NOT NULL
-          AND BTRIM(email) <> ''
-        ORDER BY created_at ASC, email ASC
-        """,
-        account_id,
-    )
-    recipients: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for row in rows:
-        email = str(_row_value(row, "email") or "").strip().lower()
-        if not email or email in seen:
-            continue
-        seen.add(email)
-        recipients.append({
-            "email": email,
-            "full_name": str(_row_value(row, "full_name") or "").strip(),
-        })
-    return recipients
-
-
-def _watchlist_alert_event_email_rows(events: list[dict[str, Any]]) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for event in events[:12]:
-        vendor_name = str(event.get("vendor_name") or "").strip()
-        company_name = str(event.get("company_name") or "").strip()
-        label_parts = [str(event.get("event_type") or "").replace("_", " ").strip()]
-        if vendor_name:
-            label_parts.append(vendor_name)
-        summary = str(event.get("summary") or "").strip() or "Watchlist alert"
-        detail_parts: list[str] = []
-        if company_name:
-            detail_parts.append(f"Account: {company_name}")
-        category = str(event.get("category") or "").strip()
-        if category:
-            detail_parts.append(f"Category: {category}")
-        source = str(event.get("source") or "").strip()
-        if source:
-            detail_parts.append(f"Source: {source}")
-        threshold_value = event.get("threshold_value")
-        if threshold_value is not None:
-            detail_parts.append(f"Threshold: {threshold_value}")
-        rows.append({
-            "label": " - ".join(part.title() for part in label_parts if part),
-            "summary": summary,
-            "detail": " | ".join(detail_parts),
-        })
-    return rows
-
-
-async def _send_watchlist_alert_email(
-    pool,
-    sender,
-    *,
-    recipient: str,
-    from_addr: str,
-    subject: str,
-    html_body: str,
-    view_name: str,
-) -> tuple[bool, str | None, str | None, bool]:
-    suppression = await is_suppressed(pool, email=recipient)
-    if suppression:
-        reason = str(suppression.get("reason") or "suppressed").strip() or "suppressed"
-        return False, None, f"{recipient}: suppressed ({reason})", True
-
-    body = _wrap_with_footer(html_body, recipient, settings.campaign_sequence)
-    headers = _unsub_headers(settings.campaign_sequence.unsubscribe_base_url, recipient)
-    try:
-        result = await sender.send(
-            to=recipient,
-            from_email=from_addr,
-            subject=subject,
-            body=body,
-            headers=headers or None,
-            tags=[
-                {"name": "task", "value": "watchlist_alert_email"},
-                {"name": "view", "value": view_name[:64] or "watchlist"},
-            ],
-        )
-        message_id = str(result.get("id") or "").strip() or None
-        return True, message_id, None, False
-    except Exception as exc:
-        return False, None, f"{recipient}: {exc}", False
-
-
-async def _record_watchlist_alert_email_log(
-    pool,
-    *,
-    log_id: _uuid.UUID,
-    account_id: _uuid.UUID,
-    view_id: _uuid.UUID,
-    event_ids: list[_uuid.UUID],
-    recipient_emails: list[str],
-    message_ids: list[str],
-    event_count: int,
-    status: str,
-    summary: str,
-    error: str | None,
-    delivered_at: datetime | None,
-    recorded_at: datetime,
-    scheduled_for: datetime | None = None,
-    delivery_frequency: str | None = None,
-    delivery_mode: str = "live",
-) -> None:
-    await pool.execute(
-        """
-        INSERT INTO b2b_watchlist_alert_email_log (
-            id, account_id, watchlist_view_id, event_ids, recipient_emails, message_ids,
-            event_count, status, summary, error, delivered_at, created_at, updated_at,
-            scheduled_for, delivery_frequency, delivery_mode
-        )
-        VALUES (
-            $1, $2, $3, $4::uuid[], $5::text[], $6::text[], $7, $8, $9, $10, $11, $12, $12,
-            $13, $14, $15
-        )
-        """,
-        log_id,
-        account_id,
-        view_id,
-        event_ids,
-        recipient_emails,
-        message_ids,
-        event_count,
-        status,
-        summary,
-        error,
-        delivered_at,
-        recorded_at,
-        scheduled_for,
-        delivery_frequency,
-        delivery_mode,
-    )
-
-
-async def _update_watchlist_alert_email_log(
-    pool,
-    *,
-    log_id: _uuid.UUID,
-    event_ids: list[_uuid.UUID],
-    recipient_emails: list[str],
-    message_ids: list[str],
-    event_count: int,
-    status: str,
-    summary: str,
-    error: str | None,
-    delivered_at: datetime | None,
-    recorded_at: datetime,
-) -> None:
-    await pool.execute(
-        """
-        UPDATE b2b_watchlist_alert_email_log
-        SET event_ids = $2::uuid[],
-            recipient_emails = $3::text[],
-            message_ids = $4::text[],
-            event_count = $5,
-            status = $6,
-            summary = $7,
-            error = $8,
-            delivered_at = $9,
-            updated_at = $10
-        WHERE id = $1
-        """,
-        log_id,
-        event_ids,
-        recipient_emails,
-        message_ids,
-        event_count,
-        status,
-        summary,
-        error,
-        delivered_at,
-        recorded_at,
-    )
-
-
-async def _update_watchlist_view_delivery_state(
-    pool,
-    *,
-    view_id: _uuid.UUID,
-    account_id: _uuid.UUID,
-    delivered_at: datetime | None,
-    status: str,
-    summary: str,
-    recorded_at: datetime,
-) -> None:
-    await pool.execute(
-        """
-        UPDATE b2b_watchlist_views
-        SET last_alert_delivery_at = $2,
-            last_alert_delivery_status = $3,
-            last_alert_delivery_summary = $4,
-            updated_at = $5
-        WHERE id = $1
-          AND account_id = $6
-        """,
-        view_id,
-        delivered_at,
-        status,
-        summary[:1000],
-        recorded_at,
         account_id,
     )
 
@@ -947,8 +440,8 @@ async def _fetch_report_subscription_row(
             FROM b2b_report_subscription_delivery_log
             WHERE subscription_id = s.id
               AND status <> 'processing'
-            ORDER BY CASE WHEN delivery_mode = 'live' THEN 0 ELSE 1 END,
-                     delivered_at DESC
+            ORDER BY delivered_at DESC NULLS LAST,
+                     id DESC
             LIMIT 1
         ) dl ON TRUE
         WHERE s.account_id = $1::uuid
@@ -2524,8 +2017,8 @@ async def create_watchlist_view(
         raise HTTPException(status_code=409, detail="Saved view name already exists")
     vendor_name = await _resolve_tracked_vendor_for_view(pool, account_id, req.vendor_name)
     now = datetime.now(timezone.utc)
-    alert_delivery_frequency = _clean_watchlist_alert_delivery_frequency(req.alert_delivery_frequency)
-    next_alert_delivery_at = _resolve_watchlist_alert_next_delivery_at(
+    alert_delivery_frequency = watchlist_alert_service.clean_watchlist_alert_delivery_frequency(req.alert_delivery_frequency)
+    next_alert_delivery_at = watchlist_alert_service.resolve_watchlist_alert_next_delivery_at(
         existing_row=None,
         alert_email_enabled=req.alert_email_enabled,
         alert_delivery_frequency=alert_delivery_frequency,
@@ -2663,12 +2156,12 @@ async def update_watchlist_view(
         if "alert_email_enabled" in request_fields
         else bool(existing["alert_email_enabled"])
     )
-    alert_delivery_frequency = _clean_watchlist_alert_delivery_frequency(
+    alert_delivery_frequency = watchlist_alert_service.clean_watchlist_alert_delivery_frequency(
         req.alert_delivery_frequency
         if "alert_delivery_frequency" in request_fields
         else existing["alert_delivery_frequency"]
     )
-    next_alert_delivery_at = _resolve_watchlist_alert_next_delivery_at(
+    next_alert_delivery_at = watchlist_alert_service.resolve_watchlist_alert_next_delivery_at(
         existing_row=existing,
         alert_email_enabled=alert_delivery_enabled,
         alert_delivery_frequency=alert_delivery_frequency,
@@ -2784,7 +2277,7 @@ async def list_watchlist_alert_events(
         """,
         *params,
     )
-    events = [_serialize_watchlist_alert_event(row) for row in rows]
+    events = [watchlist_alert_service.serialize_watchlist_alert_event(row) for row in rows]
     return {
         "watchlist_view_id": str(view_id),
         "watchlist_view_name": view_row["name"],
@@ -2792,135 +2285,6 @@ async def list_watchlist_alert_events(
         "events": events,
         "count": len(events),
     }
-
-
-async def _evaluate_watchlist_alert_events_for_view(
-    pool,
-    *,
-    account_id: _uuid.UUID,
-    view_id: _uuid.UUID,
-    view_row: Any,
-    user: AuthUser,
-) -> dict[str, Any]:
-    feed = await list_tenant_slow_burn_watchlist(
-        vendor_name=view_row["vendor_name"],
-        category=view_row["category"],
-        vendor_alert_threshold=_safe_float(view_row["vendor_alert_threshold"]),
-        stale_days_threshold=_coerce_optional_int(view_row["stale_days_threshold"]),
-        user=user,
-    )
-    accounts_feed = await list_tenant_accounts_in_motion_feed(
-        vendor_name=view_row["vendor_name"],
-        category=view_row["category"],
-        source=view_row["source"],
-        min_urgency=_safe_float(view_row["min_urgency"], settings.b2b_churn.accounts_in_motion_min_urgency),
-        include_stale=bool(view_row["include_stale"]),
-        account_alert_threshold=_safe_float(view_row["account_alert_threshold"]),
-        stale_days_threshold=_coerce_optional_int(view_row["stale_days_threshold"]),
-        per_vendor_limit=settings.b2b_churn.accounts_in_motion_max_per_vendor,
-        limit=settings.b2b_churn.accounts_in_motion_feed_max_total,
-        user=user,
-    )
-    candidates = _build_watchlist_alert_candidates(
-        watchlist_view=_watchlist_view_payload(view_row),
-        feed=feed,
-        accounts_feed=accounts_feed,
-    )
-    now = datetime.now(timezone.utc)
-    existing_open_rows = await pool.fetch(
-        """
-        SELECT id, event_type, entity_key
-        FROM b2b_watchlist_alert_events
-        WHERE account_id = $1
-          AND watchlist_view_id = $2
-          AND status = 'open'
-        """,
-        account_id,
-        view_id,
-    )
-    existing_open = {
-        (str(row["event_type"]), str(row["entity_key"])): row["id"]
-        for row in existing_open_rows
-    }
-    current_keys = {(str(item["event_type"]), str(item["entity_key"])) for item in candidates}
-    new_open_count = sum(1 for key in current_keys if key not in existing_open)
-
-    persisted_rows = []
-    for item in candidates:
-        row = await pool.fetchrow(
-            """
-            INSERT INTO b2b_watchlist_alert_events (
-                id, account_id, watchlist_view_id, event_type, threshold_field, entity_type,
-                entity_key, vendor_name, company_name, category, source, threshold_value,
-                summary, payload, status, first_seen_at, last_seen_at, resolved_at, created_at, updated_at
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10, $11, $12,
-                $13, $14::jsonb, 'open', $15, $15, NULL, $15, $15
-            )
-            ON CONFLICT (watchlist_view_id, event_type, entity_key)
-            DO UPDATE SET
-                threshold_field = EXCLUDED.threshold_field,
-                entity_type = EXCLUDED.entity_type,
-                vendor_name = EXCLUDED.vendor_name,
-                company_name = EXCLUDED.company_name,
-                category = EXCLUDED.category,
-                source = EXCLUDED.source,
-                threshold_value = EXCLUDED.threshold_value,
-                summary = EXCLUDED.summary,
-                payload = EXCLUDED.payload,
-                status = 'open',
-                last_seen_at = EXCLUDED.last_seen_at,
-                resolved_at = NULL,
-                updated_at = EXCLUDED.updated_at
-            RETURNING id, watchlist_view_id, event_type, threshold_field, entity_type, entity_key,
-                      vendor_name, company_name, category, source, threshold_value, summary,
-                      payload, status, first_seen_at, last_seen_at, resolved_at, created_at, updated_at
-            """,
-            _uuid.uuid4(),
-            account_id,
-            view_id,
-            item["event_type"],
-            item["threshold_field"],
-            item["entity_type"],
-            item["entity_key"],
-            item["vendor_name"],
-            item["company_name"],
-            item["category"],
-            item["source"],
-            item["threshold_value"],
-            item["summary"],
-            json.dumps(item["payload"] or {}),
-            now,
-        )
-        persisted_rows.append(row)
-
-    resolved_ids = [event_id for key, event_id in existing_open.items() if key not in current_keys]
-    if resolved_ids:
-        await pool.execute(
-            """
-            UPDATE b2b_watchlist_alert_events
-            SET status = 'resolved',
-                resolved_at = $2,
-                updated_at = $2
-            WHERE id = ANY($1::uuid[])
-            """,
-            resolved_ids,
-            now,
-        )
-
-    events = [_serialize_watchlist_alert_event(row) for row in persisted_rows]
-    return {
-        "watchlist_view_id": str(view_id),
-        "watchlist_view_name": view_row["name"],
-        "evaluated_at": now.isoformat(),
-        "events": events,
-        "count": len(events),
-        "new_open_event_count": new_open_count,
-        "resolved_event_count": len(resolved_ids),
-    }
-
 
 @router.post("/watchlist-views/{view_id}/alert-events/evaluate")
 async def evaluate_watchlist_alert_events(
@@ -2933,12 +2297,14 @@ async def evaluate_watchlist_alert_events(
     view_row = await _fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
     if not view_row:
         raise HTTPException(status_code=404, detail="Saved view not found")
-    return await _evaluate_watchlist_alert_events_for_view(
+    return await watchlist_alert_service.evaluate_watchlist_alert_events_for_view(
         pool,
         account_id=account_id,
         view_id=view_id,
         view_row=view_row,
         user=user,
+        slow_burn_loader=list_tenant_slow_burn_watchlist,
+        accounts_loader=list_tenant_accounts_in_motion_feed,
     )
 
 
@@ -3017,7 +2383,7 @@ async def deliver_watchlist_alert_email(
     now = datetime.now(timezone.utc)
     event_ids = [_uuid.UUID(str(event["id"])) for event in events]
     event_count = len(events)
-    recipients = await _resolve_watchlist_alert_recipients(pool, account_id=account_id)
+    recipients = await watchlist_alert_service.resolve_watchlist_alert_recipients(pool, account_id=account_id)
     recipient_emails = [item["email"] for item in recipients]
     account_name = await pool.fetchval(
         "SELECT name FROM saas_accounts WHERE id = $1",
@@ -3027,7 +2393,7 @@ async def deliver_watchlist_alert_email(
     if not events:
         summary = "No open alert events to deliver"
         log_id = _uuid.uuid4()
-        await _record_watchlist_alert_email_log(
+        await watchlist_alert_service.record_watchlist_alert_email_log(
             pool,
             log_id=log_id,
             account_id=account_id,
@@ -3042,7 +2408,7 @@ async def deliver_watchlist_alert_email(
             delivered_at=now,
             recorded_at=now,
         )
-        await _update_watchlist_view_delivery_state(
+        await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
             view_id=view_id,
             account_id=account_id,
@@ -3062,7 +2428,7 @@ async def deliver_watchlist_alert_email(
 
     if not recipient_emails:
         summary = "Watchlist alert email delivery failed before send"
-        await _record_watchlist_alert_email_log(
+        await watchlist_alert_service.record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
             account_id=account_id,
@@ -3077,7 +2443,7 @@ async def deliver_watchlist_alert_email(
             delivered_at=None,
             recorded_at=now,
         )
-        await _update_watchlist_view_delivery_state(
+        await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
             view_id=view_id,
             account_id=account_id,
@@ -3087,9 +2453,9 @@ async def deliver_watchlist_alert_email(
             recorded_at=now,
         )
         raise HTTPException(status_code=422, detail="No active owner email is configured for this account")
-    if not _watchlist_alert_sender_configured():
+    if not watchlist_alert_service.watchlist_alert_sender_configured():
         summary = "Watchlist alert email delivery failed before send"
-        await _record_watchlist_alert_email_log(
+        await watchlist_alert_service.record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
             account_id=account_id,
@@ -3104,7 +2470,7 @@ async def deliver_watchlist_alert_email(
             delivered_at=None,
             recorded_at=now,
         )
-        await _update_watchlist_view_delivery_state(
+        await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
             view_id=view_id,
             account_id=account_id,
@@ -3119,7 +2485,7 @@ async def deliver_watchlist_alert_email(
         sender = get_campaign_sender()
     except Exception as exc:
         summary = "Watchlist alert email delivery failed before send"
-        await _record_watchlist_alert_email_log(
+        await watchlist_alert_service.record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
             account_id=account_id,
@@ -3134,7 +2500,7 @@ async def deliver_watchlist_alert_email(
             delivered_at=None,
             recorded_at=now,
         )
-        await _update_watchlist_view_delivery_state(
+        await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
             view_id=view_id,
             account_id=account_id,
@@ -3145,10 +2511,10 @@ async def deliver_watchlist_alert_email(
         )
         raise HTTPException(status_code=503, detail=f"Campaign sender unavailable: {exc}")
 
-    from_addr = _watchlist_alert_from_email()
+    from_addr = watchlist_alert_service.watchlist_alert_from_email()
     if not from_addr:
         summary = "Watchlist alert email delivery failed before send"
-        await _record_watchlist_alert_email_log(
+        await watchlist_alert_service.record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
             account_id=account_id,
@@ -3163,7 +2529,7 @@ async def deliver_watchlist_alert_email(
             delivered_at=None,
             recorded_at=now,
         )
-        await _update_watchlist_view_delivery_state(
+        await watchlist_alert_service.update_watchlist_view_delivery_state(
             pool,
             view_id=view_id,
             account_id=account_id,
@@ -3174,14 +2540,12 @@ async def deliver_watchlist_alert_email(
         )
         raise HTTPException(status_code=503, detail="Campaign sender from-address is not configured")
 
-    manage_url = _watchlist_manage_url()
     summary_line = f"{event_count} open saved-view alert{'s' if event_count != 1 else ''} are ready for review."
-    html_body = render_watchlist_alert_delivery_html(
+    html_body = watchlist_alert_service.render_watchlist_alert_email_html(
         account_name=str(account_name),
         view_name=str(view_row["name"]),
         summary_line=summary_line,
-        manage_url=manage_url,
-        events=_watchlist_alert_event_email_rows(events),
+        events=events,
     )
     subject = f"Watchlist alerts: {view_row['name']}"
 
@@ -3190,7 +2554,7 @@ async def deliver_watchlist_alert_email(
     message_ids: list[str] = []
     errors: list[str] = []
     for recipient in recipient_emails:
-        sent, message_id, send_error, suppressed = await _send_watchlist_alert_email(
+        sent, message_id, send_error, suppressed = await watchlist_alert_service.send_watchlist_alert_email(
             pool,
             sender,
             recipient=recipient,
@@ -3223,7 +2587,7 @@ async def deliver_watchlist_alert_email(
         summary += f" ({suppressed_count} suppressed)"
     error_text = "; ".join(errors) if errors else None
     delivered_at = now if delivered_count > 0 else None
-    await _record_watchlist_alert_email_log(
+    await watchlist_alert_service.record_watchlist_alert_email_log(
         pool,
         log_id=_uuid.uuid4(),
         account_id=account_id,
@@ -3238,7 +2602,7 @@ async def deliver_watchlist_alert_email(
         delivered_at=delivered_at,
         recorded_at=now,
     )
-    await _update_watchlist_view_delivery_state(
+    await watchlist_alert_service.update_watchlist_view_delivery_state(
         pool,
         view_id=view_id,
         account_id=account_id,
