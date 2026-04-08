@@ -511,6 +511,16 @@ class _FakePool:
                     "created_at": datetime(2026, 3, 31, 21, 55, tzinfo=timezone.utc),
                 },
                 {
+                    "span_name": "task.b2b_enrichment.tier2",
+                    "cost_usd": Decimal("0.02"),
+                    "billable_input_tokens": 600,
+                    "output_tokens": 90,
+                    "vendor_name": "Slack",
+                    "run_id": "run-enrich-1",
+                    "metadata": {"vendor_name": "Slack", "source": "reddit"},
+                    "created_at": datetime(2026, 3, 31, 21, 56, tzinfo=timezone.utc),
+                },
+                {
                     "span_name": "task.b2b_enrichment_repair.extraction",
                     "cost_usd": Decimal("0.05"),
                     "billable_input_tokens": 500,
@@ -553,6 +563,43 @@ class _FakePool:
                     "run_id": "run-enrich-2",
                     "metadata": {"vendor_name": "Zoom", "source": "g2"},
                     "created_at": datetime(2026, 3, 31, 21, 57, tzinfo=timezone.utc),
+                },
+                {
+                    "span_name": "task.b2b_enrichment.tier2",
+                    "cost_usd": Decimal("0.01"),
+                    "billable_input_tokens": 450,
+                    "output_tokens": 70,
+                    "vendor_name": None,
+                    "run_id": "run-enrich-2",
+                    "metadata": {"vendor_name": "Zoom", "source": "g2"},
+                    "created_at": datetime(2026, 3, 31, 21, 58, tzinfo=timezone.utc),
+                },
+            ]
+        if "SELECT\n          e.id AS execution_id," in query and "JOIN scheduled_tasks t ON t.id = e.task_id" in query:
+            return [
+                {
+                    "execution_id": "run-enrich-1",
+                    "task_name": "b2b_enrichment",
+                    "started_at": datetime(2026, 3, 31, 21, 55, tzinfo=timezone.utc),
+                    "result_text": '{"reviews_processed": 10, "witness_rows": 8, "witness_count": 15, "generated": 8, "strict_discussion_candidates_kept": 4}',
+                },
+                {
+                    "execution_id": "run-repair-1",
+                    "task_name": "b2b_enrichment_repair",
+                    "started_at": datetime(2026, 3, 31, 22, 5, tzinfo=timezone.utc),
+                    "result_text": '{"promoted": 3, "shadowed": 1, "failed": 0, "witness_count": 8, "secondary_write_hits": 1, "strict_discussion_candidates_dropped": 3, "low_signal_discussion_skipped": 3, "generated": 4}',
+                },
+                {
+                    "execution_id": "run-reason-1",
+                    "task_name": "b2b_reasoning_synthesis",
+                    "started_at": datetime(2026, 3, 31, 22, 10, tzinfo=timezone.utc),
+                    "result_text": '{"vendors_reasoned": 2, "vendors_skipped": 4, "cross_vendor_succeeded": 1, "witness_count": 12, "generated": 3}',
+                },
+                {
+                    "execution_id": "run-battle-1",
+                    "task_name": "b2b_battle_cards",
+                    "started_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
+                    "result_text": '{"cards_built": 2, "cards_llm_updated": 1, "cache_hits": 1, "llm_failures": 1}',
                 },
             ]
         if "FROM b2b_reviews" in query and "GROUP BY source" in query:
@@ -1085,14 +1132,15 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     assert body["run_limit"] == 5
     assert body["summary"]["measured_runs"] == 3
     assert body["summary"]["tracked_witness_count"] == 35
-    assert body["summary"]["tracked_cost_usd"] == 0.35
-    assert body["summary"]["cost_per_witness_usd"] == pytest.approx(0.01)
-    assert body["token_summary"]["total_billable_input_tokens"] == 3700
-    assert body["token_summary"]["total_output_tokens"] == 890
+    assert body["summary"]["tracked_cost_usd"] == 0.37
+    assert body["summary"]["cost_per_witness_usd"] == pytest.approx(0.010571, rel=1e-3)
+    assert body["token_summary"]["total_billable_input_tokens"] == 4750
+    assert body["token_summary"]["total_output_tokens"] == 1050
 
     by_pass = {row["key"]: row for row in body["token_summary"]["by_pass"]}
-    assert by_pass["extraction"]["calls"] == 2
-    assert by_pass["extraction"]["billable_input_tokens"] == 1050
+    assert by_pass["extraction"]["calls"] == 4
+    assert by_pass["extraction"]["billable_input_tokens"] == 2100
+    assert by_pass["extraction"]["output_tokens"] == 390
     assert by_pass["repair"]["billable_input_tokens"] == 500
     assert by_pass["reasoning"]["billable_input_tokens"] == 1200
     assert by_pass["battle_card_overlay"]["billable_input_tokens"] == 950
@@ -1101,34 +1149,39 @@ def test_b2b_efficiency_rolls_up_vendor_source_and_run_metrics(monkeypatch):
     assert by_tier["tier1"]["calls"] == 2
     assert by_tier["tier1"]["billable_input_tokens"] == 1050
     assert by_tier["tier1"]["output_tokens"] == 230
+    assert by_tier["tier2"]["calls"] == 2
+    assert by_tier["tier2"]["billable_input_tokens"] == 1050
+    assert by_tier["tier2"]["output_tokens"] == 160
 
     vendor_row = body["vendor_passes"][0]
     assert vendor_row["vendor_name"] == "Slack"
-    assert vendor_row["extraction_cost_usd"] == 0.1
+    assert vendor_row["extraction_cost_usd"] == pytest.approx(0.12)
     assert vendor_row["repair_cost_usd"] == 0.05
     assert vendor_row["reasoning_cost_usd"] == 0.2
     assert vendor_row["battle_card_overlay_cost_usd"] == 0.07
     assert vendor_row["battle_card_overlay_calls"] == 1
-    assert vendor_row["total_cost_usd"] == pytest.approx(0.42)
+    assert vendor_row["total_cost_usd"] == pytest.approx(0.44)
 
     source_rows = {row["source"]: row for row in body["source_efficiency"]}
-    assert source_rows["reddit"]["total_cost_usd"] == pytest.approx(0.15)
+    assert source_rows["reddit"]["total_cost_usd"] == pytest.approx(0.17)
     assert source_rows["reddit"]["witness_yield_rate"] == pytest.approx(1.8)
     assert source_rows["reddit"]["repair_trigger_rate"] == pytest.approx(0.2)
-    assert source_rows["reddit"]["cost_per_witness_usd"] == pytest.approx(0.000833, rel=1e-3)
+    assert source_rows["reddit"]["cost_per_witness_usd"] == pytest.approx(0.000944, rel=1e-3)
     assert source_rows["reddit"]["strict_discussion_candidates_kept_rows"] == 18
     assert source_rows["reddit"]["low_signal_discussion_skipped_rows"] == 12
-    assert source_rows["g2"]["total_cost_usd"] == pytest.approx(0.08)
+    assert source_rows["g2"]["total_cost_usd"] == pytest.approx(0.09)
 
     run_rows = {row["run_id"]: row for row in body["recent_runs"]}
     assert run_rows["run-enrich-1"]["task_name"] == "b2b_enrichment"
-    assert run_rows["run-enrich-1"]["total_cost_usd"] == 0.1
-    assert run_rows["run-enrich-1"]["total_billable_input_tokens"] == 700
-    assert run_rows["run-enrich-1"]["total_output_tokens"] == 120
+    assert run_rows["run-enrich-1"]["total_cost_usd"] == 0.12
+    assert run_rows["run-enrich-1"]["total_billable_input_tokens"] == 1300
+    assert run_rows["run-enrich-1"]["total_output_tokens"] == 210
     assert run_rows["run-enrich-1"]["witness_count"] == 15
     assert run_rows["run-enrich-1"]["strict_discussion_candidates_kept"] == 4
     assert run_rows["run-enrich-1"]["enrichment_tier1_billable_input_tokens"] == 700
     assert run_rows["run-enrich-1"]["enrichment_tier1_output_tokens"] == 120
+    assert run_rows["run-enrich-1"]["enrichment_tier2_billable_input_tokens"] == 600
+    assert run_rows["run-enrich-1"]["enrichment_tier2_output_tokens"] == 90
     assert run_rows["run-repair-1"]["secondary_write_hits"] == 1
     assert run_rows["run-repair-1"]["strict_discussion_candidates_dropped"] == 3
     assert run_rows["run-repair-1"]["repair_billable_input_tokens"] == 500

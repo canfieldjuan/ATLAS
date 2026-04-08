@@ -42,6 +42,231 @@ describe('PipelineReview watchlist delivery ops', () => {
       recovered_validation_retries_period: 0,
     })
     api.fetchVisibilityQueue.mockResolvedValue({ items: [], limit: 100, offset: 0 })
+    api.fetchVisibilityEvents.mockResolvedValue({ events: [], limit: 100, offset: 0 })
+    api.fetchArtifactAttempts.mockResolvedValue({ attempts: [], limit: 100, offset: 0 })
+    api.fetchEnrichmentQuarantines.mockResolvedValue({ quarantines: [], unreleased_only: true, limit: 100 })
+    api.fetchExtractionHealth.mockResolvedValue({
+      period_days: 30,
+      current_snapshot: null,
+      daily_trend: [],
+      top_vendors: [],
+      top_sources: [],
+      recent_runs: [],
+    })
+    api.fetchSynthesisValidationResults.mockResolvedValue({ results: [], total: 0, limit: 100, offset: 0 })
+    api.resolveVisibilityReview.mockResolvedValue({ status: 'ok' })
+    api.fetchAdminCostSummary.mockResolvedValue({
+      period_days: 30,
+      total_cost_usd: 1.23,
+      total_calls: 4,
+      total_billable_input_tokens: 2200,
+      total_cached_tokens: 300,
+      total_cache_write_tokens: 100,
+      total_output_tokens: 450,
+      total_tokens: 2650,
+      total_input_tokens: 2500,
+      cache_hit_calls: 1,
+      cache_write_calls: 1,
+      avg_duration_ms: 420,
+      avg_tokens_per_second: 25,
+      today_cost_usd: 0.12,
+      today_calls: 1,
+    })
+    api.fetchAdminCostByOperation.mockResolvedValue({ period_days: 30, operations: [] })
+    api.fetchAdminCostByVendor.mockResolvedValue({ period_days: 30, vendors: [] })
+    api.fetchAdminCostB2bEfficiency.mockResolvedValue({
+      period_days: 30,
+      top_n: 5,
+      run_limit: 5,
+      summary: {
+        measured_runs: 3,
+        tracked_cost_usd: 0.37,
+        tracked_witness_count: 35,
+        cost_per_witness_usd: 0.010571,
+      },
+      token_summary: {
+        total_billable_input_tokens: 4750,
+        total_output_tokens: 1050,
+        by_pass: [
+          { key: 'extraction', label: 'Extraction', calls: 4, cost_usd: 0.21, billable_input_tokens: 2100, output_tokens: 390 },
+          { key: 'repair', label: 'Repair', calls: 1, cost_usd: 0.05, billable_input_tokens: 500, output_tokens: 100 },
+          { key: 'reasoning', label: 'Reasoning', calls: 1, cost_usd: 0.2, billable_input_tokens: 1200, output_tokens: 300 },
+          { key: 'battle_card_overlay', label: 'Battle Cards', calls: 1, cost_usd: 0.07, billable_input_tokens: 950, output_tokens: 260 },
+        ],
+        enrichment_tiers: [
+          { key: 'tier1', label: 'Tier 1', calls: 2, cost_usd: 0.18, billable_input_tokens: 1050, output_tokens: 230 },
+          { key: 'tier2', label: 'Tier 2', calls: 2, cost_usd: 0.03, billable_input_tokens: 1050, output_tokens: 160 },
+        ],
+      },
+      vendor_passes: [],
+      source_efficiency: [],
+      recent_runs: [
+        {
+          run_id: 'run-enrich-1',
+          task_name: 'b2b_enrichment',
+          started_at: '2026-04-07T18:00:00Z',
+          total_cost_usd: 0.12,
+          calls: 2,
+          total_billable_input_tokens: 1300,
+          total_output_tokens: 210,
+          reviews_processed: 10,
+          witness_rows: 8,
+          witness_count: 15,
+          witness_yield_rate: 1.5,
+          cost_per_witness_usd: 0.008,
+          secondary_write_hits: 0,
+          strict_discussion_candidates_kept: 4,
+          strict_discussion_candidates_dropped: 0,
+          low_signal_discussion_skipped: 0,
+          exact_cache_hits: 0,
+          generated: 8,
+          extraction_cost_usd: 0.12,
+          extraction_billable_input_tokens: 1300,
+          extraction_output_tokens: 210,
+          repair_cost_usd: 0,
+          repair_billable_input_tokens: 0,
+          repair_output_tokens: 0,
+          reasoning_cost_usd: 0,
+          reasoning_billable_input_tokens: 0,
+          reasoning_output_tokens: 0,
+          battle_card_overlay_cost_usd: 0,
+          battle_card_overlay_calls: 0,
+          battle_card_overlay_billable_input_tokens: 0,
+          battle_card_overlay_output_tokens: 0,
+          enrichment_tier1_cost_usd: 0.1,
+          enrichment_tier1_calls: 1,
+          enrichment_tier1_billable_input_tokens: 700,
+          enrichment_tier1_output_tokens: 120,
+          enrichment_tier2_cost_usd: 0.02,
+          enrichment_tier2_calls: 1,
+          enrichment_tier2_billable_input_tokens: 600,
+          enrichment_tier2_output_tokens: 90,
+          battle_card_cache_hits: 0,
+          battle_card_llm_updated: 0,
+          battle_card_llm_failures: 0,
+        },
+        {
+          run_id: 'run-noop-1',
+          task_name: 'b2b_enrichment_repair',
+          started_at: '2026-04-07T17:30:00Z',
+          total_cost_usd: 0,
+          calls: 0,
+          total_billable_input_tokens: 0,
+          total_output_tokens: 0,
+          reviews_processed: 0,
+          witness_rows: 0,
+          witness_count: 0,
+          witness_yield_rate: null,
+          cost_per_witness_usd: null,
+          secondary_write_hits: 0,
+          strict_discussion_candidates_kept: 0,
+          strict_discussion_candidates_dropped: 0,
+          low_signal_discussion_skipped: 0,
+          exact_cache_hits: 0,
+          generated: 0,
+          extraction_cost_usd: 0,
+          extraction_billable_input_tokens: 0,
+          extraction_output_tokens: 0,
+          repair_cost_usd: 0,
+          repair_billable_input_tokens: 0,
+          repair_output_tokens: 0,
+          reasoning_cost_usd: 0,
+          reasoning_billable_input_tokens: 0,
+          reasoning_output_tokens: 0,
+          battle_card_overlay_cost_usd: 0,
+          battle_card_overlay_calls: 0,
+          battle_card_overlay_billable_input_tokens: 0,
+          battle_card_overlay_output_tokens: 0,
+          enrichment_tier1_cost_usd: 0,
+          enrichment_tier1_calls: 0,
+          enrichment_tier1_billable_input_tokens: 0,
+          enrichment_tier1_output_tokens: 0,
+          enrichment_tier2_cost_usd: 0,
+          enrichment_tier2_calls: 0,
+          enrichment_tier2_billable_input_tokens: 0,
+          enrichment_tier2_output_tokens: 0,
+          battle_card_cache_hits: 0,
+          battle_card_llm_updated: 0,
+          battle_card_llm_failures: 0,
+        },
+      ],
+    })
+    api.fetchAdminCostBurnDashboard.mockResolvedValue({
+      period_days: 30,
+      top_n: 5,
+      summary: { tracked_cost_usd: 0, model_call_count: 0, recent_runs: 0, rows_processed: null, rows_reprocessed: null, reprocess_pct: null },
+      reasoning_budget_pressure: {
+        vendor_rejections: 0,
+        cross_vendor_rejections: 0,
+        last_rejection_at: null,
+        max_vendor_estimated_input_tokens: null,
+        max_vendor_cap: null,
+        max_cross_vendor_estimated_input_tokens: null,
+        max_cross_vendor_cap: null,
+        rows: [],
+      },
+      rows: [],
+    })
+    api.fetchAdminCostGenericReasoning.mockResolvedValue({
+      period_days: 30,
+      top_n: 5,
+      summary: { total_cost_usd: 0, total_calls: 0, total_billable_input_tokens: 0, total_output_tokens: 0, top_source_name: null, top_event_type: null },
+      by_source: [],
+      by_event_type: [],
+      top_source_events: [],
+      top_entities: [],
+    })
+    api.fetchAdminCostReconciliation.mockResolvedValue({
+      period_days: 30,
+      status: 'ok',
+      message: null,
+      summary: { tracked_cost_usd: 0, provider_cost_usd: 0, delta_cost_usd: 0, delta_pct: 0 },
+      daily_rows: [],
+    })
+    api.fetchAdminCostRecent.mockResolvedValue({ period_days: 30, limit: 25, recent: [] })
+    api.fetchAdminCostCacheHealth.mockResolvedValue({
+      period_days: 30,
+      exact_cache: { enabled: true, total_rows: 0, total_hits: 0, writes_in_window: 0, rows_hit_in_window: 0, stages: [] },
+      provider_prompt_cache: { total_calls: 0, cache_hit_calls: 0, cache_write_calls: 0, cached_tokens: 0, cache_write_tokens: 0, billable_input_tokens: 0, top_spans: [] },
+      anthropic_batching: {
+        enabled: false,
+        total_jobs: 0,
+        submitted_jobs: 0,
+        total_items: 0,
+        submitted_items: 0,
+        cache_prefiltered_items: 0,
+        fallback_single_call_items: 0,
+        completed_items: 0,
+        failed_items: 0,
+        estimated_sequential_cost_usd: 0,
+        estimated_batch_cost_usd: 0,
+        estimated_savings_usd: 0,
+        stages: [],
+        stale_job_threshold_minutes: 30,
+        stale_jobs_count: 0,
+        stale_claims_count: 0,
+        stale_jobs: [],
+        stale_claims: [],
+      },
+      semantic_cache: { active_entries: 0, invalidated_entries: 0, recent_validations: 0, pattern_classes: [] },
+      task_reuse: { tasks: [] },
+      evidence_hash_reuse: {
+        vendor_packet_rows: 0,
+        vendor_packet_writes_in_window: 0,
+        unique_vendors: 0,
+        unique_hashes: 0,
+        cross_vendor_rows: 0,
+        cross_vendor_cached_rows: 0,
+        cross_vendor_cached_rows_in_window: 0,
+      },
+    })
+    api.fetchAdminCostReasoningActivity.mockResolvedValue({
+      period_days: 30,
+      phases: [],
+      summary: { total_cost_usd: 0, total_tokens: 0, total_calls: 0 },
+    })
+    api.fetchAdminCostRun.mockResolvedValue(null)
+    api.fetchAdminTaskHealth.mockResolvedValue({ tasks: [] })
     api.fetchWatchlistDeliveryOps.mockResolvedValue({
       period_days: 30,
       summary: {
@@ -126,5 +351,33 @@ describe('PipelineReview watchlist delivery ops', () => {
       expect(api.runAutonomousTask).toHaveBeenCalledWith('b2b_watchlist_alert_delivery')
     })
     expect(await screen.findByText('Triggered delivery run')).toBeInTheDocument()
+  })
+
+  it('renders B2B token cards and run-level tier splits', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    const costTabs = await screen.findAllByRole('button', { name: 'Costs' })
+    await user.click(costTabs[0])
+
+    expect(await screen.findByText('B2B Tokens By Pass')).toBeInTheDocument()
+    expect(screen.getByText('Enrichment Tier Tokens')).toBeInTheDocument()
+    expect(screen.getByText('Tier 1 Billable In')).toBeInTheDocument()
+    expect(screen.getByText('Tier 2 Billable In')).toBeInTheDocument()
+    expect(screen.getByText('Show No-Op Runs (1)')).toBeInTheDocument()
+    expect(screen.getByText('All 1.3K in / 210 out')).toBeInTheDocument()
+    expect(screen.getByText('T1 700 / 120')).toBeInTheDocument()
+    expect(screen.getByText('T2 600 / 90')).toBeInTheDocument()
+    expect(screen.queryByText('b2b_enrichment_repair')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Show No-Op Runs (1)' }))
+
+    expect(await screen.findByText('b2b_enrichment_repair')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Hide No-Op Runs' })).toBeInTheDocument()
   })
 })

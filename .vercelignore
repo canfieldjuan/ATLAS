@@ -9,6 +9,8 @@ node_distributions/
 .venv-*/
 .venv-openwebui/
 .pytest_cache/
+*.ts.net.key
+*.ts.net.crt
 atlas-admin-ui/
 atlas-intel-next/
 atlas-intel-ui/

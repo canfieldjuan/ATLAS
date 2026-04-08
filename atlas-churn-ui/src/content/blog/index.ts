@@ -1,4 +1,3 @@
-import microsoftTeamsVsSalesforce202604 from './microsoft-teams-vs-salesforce-2026-04'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -72,8 +71,7 @@ const postCache = new Map<string, Promise<BlogPost | null>>()
 let allPostsPromise: Promise<BlogPost[]> | null = null
 
 function sortPosts(posts: BlogPost[]): BlogPost[] {
-  return [...posts  microsoftTeamsVsSalesforce202604,
-].sort((left, right) => {
+  return [...posts].sort((left, right) => {
     if (left.date === right.date) return left.slug.localeCompare(right.slug)
     return right.date.localeCompare(left.date)
   })

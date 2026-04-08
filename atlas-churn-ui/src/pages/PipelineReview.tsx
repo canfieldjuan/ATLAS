@@ -1860,6 +1860,7 @@ function CostsTab() {
   const [runIdInput, setRunIdInput] = useState('')
   const [activeRunId, setActiveRunId] = useState('')
   const [runDetailPreset, setRunDetailPreset] = useState<'all' | 'battle_card_overlay'>('all')
+  const [hideNoOpB2bRuns, setHideNoOpB2bRuns] = useState(true)
   const [reconcileTriggering, setReconcileTriggering] = useState(false)
   const [reconcileMessage, setReconcileMessage] = useState<string | null>(null)
   const [reconcileError, setReconcileError] = useState<string | null>(null)
@@ -2038,7 +2039,18 @@ function CostsTab() {
   const b2bEnrichmentTierTokens = b2bTokenSummary?.enrichment_tiers ?? []
   const tier1TokenSummary = b2bEnrichmentTierTokens.find((row) => row.key === 'tier1') ?? null
   const tier2TokenSummary = b2bEnrichmentTierTokens.find((row) => row.key === 'tier2') ?? null
-  const recentPipelineRuns = b2bEfficiency?.recent_runs ?? []
+  const rawRecentPipelineRuns = b2bEfficiency?.recent_runs ?? []
+  const isNoOpB2bRun = (row: AdminCostB2bRunRow) =>
+    row.total_cost_usd <= 0
+    && row.total_billable_input_tokens <= 0
+    && row.total_output_tokens <= 0
+    && row.calls <= 0
+    && row.reviews_processed <= 0
+    && row.witness_count <= 0
+  const hiddenNoOpB2bRunCount = rawRecentPipelineRuns.filter(isNoOpB2bRun).length
+  const recentPipelineRuns = hideNoOpB2bRuns
+    ? rawRecentPipelineRuns.filter((row) => !isNoOpB2bRun(row))
+    : rawRecentPipelineRuns
   const burnRows = burnDashboard?.rows ?? []
   const burnBudgetRows = burnDashboard?.reasoning_budget_pressure.rows ?? []
   const genericReasoningSources = genericReasoning?.by_source ?? []
@@ -4905,9 +4917,33 @@ function CostsTab() {
       </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-700/50">
-          <h2 className="text-sm font-medium text-white">Recent Pipeline Run Efficiency</h2>
-          <p className="text-xs text-slate-500">Per-run cost, token split, witness yield, strict-gate keep/drop counts, and secondary-write activity. Window-only rollup; provider/model filters do not change this section.</p>
+        <div className="flex items-start justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+          <div>
+            <h2 className="text-sm font-medium text-white">Recent Pipeline Run Efficiency</h2>
+            <p className="text-xs text-slate-500">
+              Per-run cost, token split, witness yield, strict-gate keep/drop counts, and secondary-write activity. Window-only rollup; provider/model filters do not change this section.
+            </p>
+            {hideNoOpB2bRuns && hiddenNoOpB2bRunCount > 0 ? (
+              <p className="mt-1 text-[11px] text-amber-300">
+                Hiding {formatNumber(hiddenNoOpB2bRunCount)} zero-activity scheduler run{hiddenNoOpB2bRunCount === 1 ? '' : 's'}.
+              </p>
+            ) : null}
+          </div>
+          {hiddenNoOpB2bRunCount > 0 ? (
+            <button
+              onClick={() => setHideNoOpB2bRuns((current) => !current)}
+              className={clsx(
+                'inline-flex items-center rounded border px-2.5 py-1 text-xs transition',
+                hideNoOpB2bRuns
+                  ? 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400/60 hover:text-white'
+                  : 'border-slate-700/60 text-slate-400 hover:border-cyan-500/60 hover:text-white',
+              )}
+            >
+              {hideNoOpB2bRuns
+                ? `Show No-Op Runs (${formatNumber(hiddenNoOpB2bRunCount)})`
+                : 'Hide No-Op Runs'}
+            </button>
+          ) : null}
         </div>
         {b2bEfficiencyLoading ? (
           <DataTable columns={b2bRunColumns} data={[]} skeletonRows={6} />
@@ -4915,7 +4951,11 @@ function CostsTab() {
           <DataTable
             columns={b2bRunColumns}
             data={recentPipelineRuns}
-            emptyMessage="No recent B2B pipeline runs in the selected window"
+            emptyMessage={
+              hideNoOpB2bRuns && hiddenNoOpB2bRunCount > 0
+                ? 'No non-empty B2B pipeline runs in the selected window. Show no-op runs to inspect scheduler activity.'
+                : 'No recent B2B pipeline runs in the selected window'
+            }
           />
         )}
       </div>
