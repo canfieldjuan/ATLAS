@@ -33,10 +33,18 @@ logger = logging.getLogger("atlas.api.admin_costs")
 router = APIRouter(prefix="/admin/costs", tags=["admin-costs"])
 
 _GENERIC_REASONING_SOURCE_EXCLUDES = {"b2b_churn_intelligence"}
+_REVIEW_BASIS_CANONICAL = "canonical_reviews"
+_REVIEW_BASIS_RAW_PROVENANCE = "raw_source_provenance"
+_SCRAPE_LOG_BASIS_RAW = "raw_scrape_log"
 
 
 def _campaign_batch_stale_minutes() -> int:
     return int(getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30) or 30)
+
+
+def _canonical_review_predicate(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}duplicate_of_review_id IS NULL"
 
 def _recent_metadata_value(metadata: dict, key: str) -> str | None:
     value = metadata.get(key)
@@ -3546,7 +3554,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
 
     # -- Signal quality from b2b_reviews (imported in period) --
     quality_rows = await pool.fetch(
-        """
+        f"""
         SELECT
             source,
             COUNT(*)                                                                           AS total_reviews,
@@ -3557,6 +3565,7 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
             COUNT(*) FILTER (WHERE author_churn_score >= 7)       AS high_value_authors
         FROM b2b_reviews
         WHERE imported_at >= $1
+          AND {_canonical_review_predicate()}
         GROUP BY source
         ORDER BY total_reviews DESC
         """,
@@ -3615,6 +3624,8 @@ async def scraping_summary(days: int = Query(default=7, ge=1, le=30)):
 
     return {
         "period_days": days,
+        "throughput_basis": _SCRAPE_LOG_BASIS_RAW,
+        "quality_basis": _REVIEW_BASIS_CANONICAL,
         "today": {
             "runs": int(today_row["runs_today"]),
             "reviews_inserted": int(today_row["inserted_today"]),
@@ -3878,6 +3889,7 @@ async def scraping_top_posts(
     return {
         "source": source,
         "min_weight": min_weight,
+        "basis": _REVIEW_BASIS_RAW_PROVENANCE,
         "posts": [
             {
                 "id": str(r["id"]),
@@ -4015,6 +4027,7 @@ async def reddit_overview(days: int = Query(default=7, ge=1, le=30)):
 
     return {
         "period_days": days,
+        "basis": _REVIEW_BASIS_RAW_PROVENANCE,
         "auth_mode": auth_mode,
         "runs": {
             "total":     int(log_row["total_runs"]),
@@ -4124,6 +4137,7 @@ async def reddit_by_subreddit(days: int = Query(default=30, ge=1, le=90)):
 
     return {
         "period_days": days,
+        "basis": _REVIEW_BASIS_RAW_PROVENANCE,
         "subreddits": [_sub(dict(r)) for r in rows],
     }
 
@@ -4311,6 +4325,7 @@ async def reddit_signal_breakdown(days: int = Query(default=30, ge=1, le=90)):
 
     return {
         "period_days": days,
+        "basis": _REVIEW_BASIS_RAW_PROVENANCE,
         "flair_analysis": [_flair(dict(r)) for r in flair_rows],
         "edit_stats": {
             "edited_posts":         edited,
@@ -4495,6 +4510,7 @@ async def reddit_per_vendor(
 
     return {
         "period_days": days,
+        "basis": _REVIEW_BASIS_RAW_PROVENANCE,
         "vendors": [_vendor(dict(r)) for r in rows],
     }
 

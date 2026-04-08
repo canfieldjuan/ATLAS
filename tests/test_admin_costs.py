@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -1001,6 +1002,90 @@ def test_recent_calls_returns_granular_cache_fields(monkeypatch):
     assert "(cached_tokens > 0 OR cache_write_tokens > 0)" in pool.last_fetch_query
     assert row["run_id"] == "run-blog-1"
     assert row["vendor_name"] == "HubSpot"
+
+
+def test_scraping_summary_quality_uses_canonical_reviews(monkeypatch):
+    client, pool = _client(monkeypatch)
+    async def _fetch(query, *args):
+        pool.last_fetch_query = query
+        pool.last_fetch_args = args
+        if "JOIN b2b_scrape_targets t ON t.id = l.target_id" in query:
+            return [{
+                "source": "g2",
+                "vendor_name": "Zendesk",
+                "total_runs": 3,
+                "successes": 2,
+                "failures": 0,
+                "blocked": 1,
+                "partial": 0,
+                "reviews_found": 15,
+                "reviews_inserted": 9,
+                "avg_duration_ms": Decimal("420.5"),
+                "captcha_attempts": 0,
+                "blocked_requests": 1,
+            }]
+        if "FROM b2b_reviews" in query and "GROUP BY source" in query:
+            return [{
+                "source": "g2",
+                "total_reviews": 9,
+                "high_signal_reviews": 6,
+                "enriched_reviews": 7,
+                "failed_enrichments": 1,
+                "avg_source_weight": Decimal("0.812"),
+                "high_value_authors": 2,
+            }]
+        return []
+
+    pool.fetch = _fetch
+    pool.fetchrow = AsyncMock(return_value={
+        "runs_today": 4,
+        "inserted_today": 17,
+        "errors_today": 1,
+    })
+    with client:
+        res = client.get("/admin/costs/scraping/summary?days=7")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["throughput_basis"] == "raw_scrape_log"
+    assert body["quality_basis"] == "canonical_reviews"
+    assert "duplicate_of_review_id IS NULL" in pool.last_fetch_query
+
+
+def test_reddit_overview_is_labeled_raw_source_provenance(monkeypatch):
+    client, pool = _client(monkeypatch)
+    pool.fetch = AsyncMock(return_value=[
+        {"enrichment_status": "enriched", "cnt": 6},
+        {"enrichment_status": "no_signal", "cnt": 4},
+    ])
+    pool.fetchrow = AsyncMock(side_effect=[
+        {
+            "total_runs": 3,
+            "completed": 2,
+            "failed": 0,
+            "blocked": 1,
+            "partial": 0,
+            "reviews_found": 20,
+            "reviews_inserted": 10,
+            "avg_duration_ms": Decimal("420.5"),
+            "pages_scraped_total": 12,
+            "dominant_parser": "reddit:3",
+            "runs_with_429s": 1,
+            "total_429_events": 2,
+        },
+        {
+            "intent_to_leave": 3,
+            "high_urgency": 4,
+            "actionable": 5,
+        },
+    ])
+    with client:
+        res = client.get("/admin/costs/scraping/reddit/overview?days=7")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["basis"] == "raw_source_provenance"
+    assert "duplicate_of_review_id IS NULL" not in pool.last_fetch_query
 
 
 def test_recent_calls_filters_and_surfaces_battle_card_context(monkeypatch):
