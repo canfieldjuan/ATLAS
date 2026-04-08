@@ -1,4 +1,5 @@
 import shopifyDeepDive202604 from './shopify-deep-dive-2026-04'
+import whyTeamsLeaveAzure202604 from './why-teams-leave-azure-2026-04'
 type ChartValue = string | number | null | undefined
 type ChartDatum = Record<string, ChartValue>
 
@@ -73,6 +74,7 @@ let allPostsPromise: Promise<BlogPost[]> | null = null
 
 function sortPosts(posts: BlogPost[]): BlogPost[] {
   return [...posts  shopifyDeepDive202604,
+  whyTeamsLeaveAzure202604,
 ].sort((left, right) => {
     if (left.date === right.date) return left.slug.localeCompare(right.slug)
     return right.date.localeCompare(left.date)
