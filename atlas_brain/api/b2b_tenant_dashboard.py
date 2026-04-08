@@ -105,6 +105,11 @@ def _matches_text_filter(candidate: Any, needle: str | None) -> bool:
     return needle_text in candidate_text
 
 
+def _canonical_review_predicate(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}duplicate_of_review_id IS NULL"
+
+
 def _matches_source_filter(account: dict[str, Any], source: str | None) -> bool:
     if not source:
         return True
@@ -1733,6 +1738,7 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
                COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
+          AND {_canonical_review_predicate()}
         """,
         vname,
     )
@@ -1745,6 +1751,7 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
           AND enrichment_status = 'enriched'
+          AND {_canonical_review_predicate()}
           AND enrichment->>'pain_category' IS NOT NULL
         GROUP BY enrichment->>'pain_category'
         ORDER BY cnt DESC LIMIT 50
@@ -2796,6 +2803,7 @@ async def pain_trends(
         idx += 1
 
     conditions.append("enrichment_status = 'enriched'")
+    conditions.append(_canonical_review_predicate())
     conditions.append(f"enriched_at > NOW() - make_interval(days => ${idx})")
     params.append(window_days)
     idx += 1
@@ -2841,7 +2849,7 @@ async def competitor_displacement(
 
     t_params = _tenant_params(user)
     idx = 1
-    conditions = ["enrichment_status = 'enriched'"]
+    conditions = ["enrichment_status = 'enriched'", _canonical_review_predicate()]
     params: list = []
 
     scope = _vendor_scope_sql(idx, user)
@@ -2899,9 +2907,14 @@ async def get_tenant_pipeline_status(user: AuthUser = Depends(require_auth)):
     scrape_scope = ""
     scope_params: list = []
     if t_params:
-        review_scope = "WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)"
+        review_scope = (
+            "WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)"
+            f" AND {_canonical_review_predicate()}"
+        )
         scrape_scope = "WHERE vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)"
         scope_params = t_params
+    else:
+        review_scope = f"WHERE {_canonical_review_predicate()}"
 
     status_rows = await pool.fetch(
         f"""

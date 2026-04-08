@@ -752,6 +752,14 @@ export async function bulkRejectCampaigns(ids: string[], reason?: string) {
 // Outcome Recording & Calibration
 // ---------------------------------------------------------------------------
 
+export async function setSequenceRecipient(sequenceId: string, recipientEmail: string) {
+  return post<{ status: string; recipient_email: string }>(
+    CAMPAIGNS_BASE,
+    `/sequences/${sequenceId}/set-recipient`,
+    { recipient_email: recipientEmail },
+  )
+}
+
 export async function recordSequenceOutcome(sequenceId: string, body: {
   outcome: string
   notes?: string

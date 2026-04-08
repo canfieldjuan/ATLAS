@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Users,
   RefreshCw,
@@ -8,6 +9,9 @@ import {
   Mail,
   Loader2,
   Download,
+  Zap,
+  Send,
+  ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -15,7 +19,13 @@ import DataTable from '../components/DataTable'
 import StatCard from '../components/StatCard'
 import type { Column } from '../components/DataTable'
 import type { Prospect } from '../types'
-import { fetchProspects, fetchProspectStats, downloadProspectsCsv } from '../api/client'
+import {
+  fetchProspects,
+  fetchProspectStats,
+  downloadProspectsCsv,
+  setSequenceRecipient,
+  generateCampaigns,
+} from '../api/client'
 
 function ProspectStatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
@@ -85,6 +95,18 @@ export default function ProspectsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [seniorityFilter, setSeniorityFilter] = useState('')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [enrolling, setEnrolling] = useState<string | null>(null)
+  const [actionResult, setActionResult] = useState<string | null>(null)
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(companySearch), 300)
@@ -109,7 +131,82 @@ export default function ProspectsPage() {
 
   const prospects = data?.prospects ?? []
 
+  // Clear selection when data changes
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [debouncedSearch, statusFilter, seniorityFilter])
+
+  async function handleEnroll(prospect: Prospect) {
+    if (!prospect.email || !prospect.related_sequence_id) return
+    setEnrolling(prospect.id)
+    setActionResult(null)
+    try {
+      await setSequenceRecipient(prospect.related_sequence_id, prospect.email)
+      setActionResult(`Enrolled ${prospect.first_name || prospect.email} into sequence`)
+      refresh()
+    } catch (err) {
+      setActionResult(err instanceof Error ? err.message : 'Enrollment failed')
+    } finally {
+      setEnrolling(null)
+    }
+  }
+
+  async function handleGenerateCampaign(prospect: Prospect) {
+    if (!prospect.company_name || !prospect.churning_from) return
+    setEnrolling(prospect.id)
+    setActionResult(null)
+    try {
+      const result = await generateCampaigns({
+        company_name: prospect.company_name,
+        vendor_name: prospect.churning_from,
+        min_score: 50,
+        limit: 5,
+      })
+      setActionResult(`Generated ${result.generated ?? 0} campaign(s) for ${prospect.company_name}`)
+      refresh()
+    } catch (err) {
+      setActionResult(err instanceof Error ? err.message : 'Campaign generation failed')
+    } finally {
+      setEnrolling(null)
+    }
+  }
+
+  async function handleBulkGenerate() {
+    const selected = prospects.filter((p) => selectedIds.has(p.id) && p.company_name && p.churning_from && !p.related_sequence_id)
+    if (selected.length === 0) return
+    setActionResult(null)
+    let generated = 0
+    for (const p of selected) {
+      try {
+        const result = await generateCampaigns({
+          company_name: p.company_name!,
+          vendor_name: p.churning_from!,
+          min_score: 50,
+          limit: 5,
+        })
+        generated += result.generated ?? 0
+      } catch {
+        // continue with next
+      }
+    }
+    setActionResult(`Generated ${generated} campaign(s) for ${selected.length} prospects`)
+    setSelectedIds(new Set())
+    refresh()
+  }
+
   const columns: Column<Prospect>[] = [
+    {
+      key: 'select',
+      header: '',
+      render: (r) => (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(r.id)}
+          onChange={() => toggleSelect(r.id)}
+          className="accent-cyan-500"
+        />
+      ),
+    },
     {
       key: 'company',
       header: 'Company',
@@ -242,6 +339,53 @@ export default function ProspectsPage() {
       sortable: true,
       sortValue: (r) => r.created_at || '',
     },
+    {
+      key: 'actions',
+      header: '',
+      render: (r) => {
+        const isProcessing = enrolling === r.id
+        // Has sequence but no recipient assigned yet -> Enroll
+        if (r.related_sequence_id && r.email && !r.related_sequence_status) {
+          return (
+            <button
+              onClick={() => handleEnroll(r)}
+              disabled={isProcessing}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-300 hover:bg-green-500/20 disabled:opacity-50"
+              title="Assign as sequence recipient"
+            >
+              {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+              Enroll
+            </button>
+          )
+        }
+        // Has sequence and already enrolled -> show link to campaign review
+        if (r.related_sequence_id && r.related_sequence_status) {
+          return (
+            <Link
+              to={`/campaign-review?company=${encodeURIComponent(r.company_name || '')}`}
+              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              Review <ExternalLink className="h-3 w-3" />
+            </Link>
+          )
+        }
+        // No sequence -> Generate Campaign (needs company + vendor)
+        if (r.company_name && r.churning_from) {
+          return (
+            <button
+              onClick={() => handleGenerateCampaign(r)}
+              disabled={isProcessing}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+              title="Generate campaign for this company"
+            >
+              {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+              Generate
+            </button>
+          )
+        }
+        return null
+      },
+    },
   ]
 
   const hasFilters = !!companySearch || !!statusFilter || !!seniorityFilter
@@ -358,6 +502,35 @@ export default function ProspectsPage() {
           </button>
         )}
       </div>
+
+      {/* Action result */}
+      {actionResult && (
+        <div className="flex items-center justify-between bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-3">
+          <span className="text-sm text-cyan-400">{actionResult}</span>
+          <button onClick={() => setActionResult(null)} className="text-cyan-400 hover:text-white ml-3">
+            <span className="text-lg leading-none">&times;</span>
+          </button>
+        </div>
+      )}
+
+      {/* Bulk actions */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 bg-slate-800/50 border border-slate-700/50 rounded-lg px-4 py-2">
+          <span className="text-xs text-slate-400">{selectedIds.size} selected</span>
+          <button
+            onClick={handleBulkGenerate}
+            className="px-3 py-1.5 text-xs font-medium bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg"
+          >
+            Generate Campaigns
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="px-2 py-1.5 text-xs text-slate-400 hover:text-white"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       {/* Count */}
       <div className="text-sm text-slate-400">
