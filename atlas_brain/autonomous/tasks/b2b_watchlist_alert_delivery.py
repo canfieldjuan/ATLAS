@@ -7,11 +7,16 @@ import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from ...api.b2b_tenant_dashboard import (
+    list_tenant_accounts_in_motion_feed,
+    list_tenant_slow_burn_watchlist,
+)
 from ...auth.dependencies import AuthUser
 from ...config import settings
+from ...services.b2b import watchlist_alerts as watchlist_alert_service
+from ...services.campaign_sender import get_campaign_sender
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
-from ...api import b2b_tenant_dashboard as tenant_mod
 
 logger = logging.getLogger("atlas.tasks.b2b_watchlist_alert_delivery")
 
@@ -69,7 +74,9 @@ async def _claim_delivery_attempt(pool, row) -> Any | None:
             0, 'processing', 'Processing scheduled watchlist alert delivery', NULL, NULL, $4, $4,
             $5, $6, 'scheduled'
         )
-        ON CONFLICT (watchlist_view_id, scheduled_for, delivery_mode) DO UPDATE
+        ON CONFLICT (watchlist_view_id, scheduled_for, delivery_mode)
+        WHERE scheduled_for IS NOT NULL
+        DO UPDATE
         SET status = 'processing',
             summary = EXCLUDED.summary,
             error = NULL,
@@ -105,7 +112,7 @@ async def _advance_view_schedule(
     if status == "failed":
         next_due = now + timedelta(seconds=int(settings.b2b_watchlist_delivery.failed_retry_seconds))
     else:
-        next_due = tenant_mod._next_watchlist_alert_delivery_at(
+        next_due = watchlist_alert_service.next_watchlist_alert_delivery_at(
             frequency,
             anchor=scheduled_for,
             from_now=now,
@@ -138,22 +145,24 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
     account_name = str(row["account_name"] or "your account")
     user = _synthetic_account_user(account_id=account_id, product=str(row["product"] or "b2b_retention"))
 
-    evaluation = await tenant_mod._evaluate_watchlist_alert_events_for_view(
+    evaluation = await watchlist_alert_service.evaluate_watchlist_alert_events_for_view(
         pool,
         account_id=account_id,
         view_id=view_id,
         view_row=row,
         user=user,
+        slow_burn_loader=list_tenant_slow_burn_watchlist,
+        accounts_loader=list_tenant_accounts_in_motion_feed,
     )
     events = evaluation["events"]
     event_ids = [_uuid.UUID(str(event["id"])) for event in events]
-    recipients = await tenant_mod._resolve_watchlist_alert_recipients(pool, account_id=account_id)
+    recipients = await watchlist_alert_service.resolve_watchlist_alert_recipients(pool, account_id=account_id)
     recipient_emails = [item["email"] for item in recipients]
     now = datetime.now(timezone.utc)
 
     if not events:
         summary = "No open alert events to deliver"
-        await tenant_mod._update_watchlist_alert_email_log(
+        await watchlist_alert_service.update_watchlist_alert_email_log(
             pool,
             log_id=delivery_log_id,
             event_ids=event_ids,
@@ -180,7 +189,7 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
     if not recipient_emails:
         summary = "Watchlist alert email delivery failed before send"
         error = "No active owner email is configured for this account"
-        await tenant_mod._update_watchlist_alert_email_log(
+        await watchlist_alert_service.update_watchlist_alert_email_log(
             pool,
             log_id=delivery_log_id,
             event_ids=event_ids,
@@ -204,11 +213,11 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
         )
         return "failed"
 
-    from_addr = tenant_mod._watchlist_alert_from_email()
+    from_addr = watchlist_alert_service.watchlist_alert_from_email()
     if not from_addr:
         summary = "Watchlist alert email delivery failed before send"
         error = "Campaign sender from-address is not configured"
-        await tenant_mod._update_watchlist_alert_email_log(
+        await watchlist_alert_service.update_watchlist_alert_email_log(
             pool,
             log_id=delivery_log_id,
             event_ids=event_ids,
@@ -232,12 +241,11 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
         )
         return "failed"
 
-    html_body = tenant_mod.render_watchlist_alert_delivery_html(
+    html_body = watchlist_alert_service.render_watchlist_alert_email_html(
         account_name=account_name,
         view_name=str(row["name"]),
         summary_line=f"{len(events)} open saved-view alert{'s' if len(events) != 1 else ''} are ready for review.",
-        manage_url=tenant_mod._watchlist_manage_url(),
-        events=tenant_mod._watchlist_alert_event_email_rows(events),
+        events=events,
     )
     subject = f"Watchlist alerts: {row['name']}"
 
@@ -246,7 +254,7 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
     message_ids: list[str] = []
     errors: list[str] = []
     for recipient in recipient_emails:
-        sent, message_id, send_error, suppressed = await tenant_mod._send_watchlist_alert_email(
+        sent, message_id, send_error, suppressed = await watchlist_alert_service.send_watchlist_alert_email(
             pool,
             sender,
             recipient=recipient,
@@ -286,7 +294,7 @@ async def _send_scheduled_watchlist_email(pool, sender, row, delivery_log_id: _u
         error_text = "; ".join(errors) if errors else None
         delivered_at = now if delivered_count > 0 else None
 
-    await tenant_mod._update_watchlist_alert_email_log(
+    await watchlist_alert_service.update_watchlist_alert_email_log(
         pool,
         log_id=delivery_log_id,
         event_ids=event_ids,
@@ -320,11 +328,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    if not tenant_mod._watchlist_alert_sender_configured():
+    if not watchlist_alert_service.watchlist_alert_sender_configured():
         return {"_skip_synthesis": "Campaign sender not configured for watchlist alert delivery"}
 
     try:
-        sender = tenant_mod.get_campaign_sender()
+        sender = get_campaign_sender()
     except Exception as exc:
         logger.warning("Watchlist alert delivery sender unavailable: %s", exc)
         return {"_skip_synthesis": "Campaign sender unavailable"}
@@ -349,7 +357,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             status = await _send_scheduled_watchlist_email(pool, sender, row, claim["id"])
         except Exception as exc:
             logger.exception("Scheduled watchlist alert delivery failed for view %s", row["id"])
-            await tenant_mod._update_watchlist_alert_email_log(
+            await watchlist_alert_service.update_watchlist_alert_email_log(
                 pool,
                 log_id=claim["id"],
                 event_ids=[],

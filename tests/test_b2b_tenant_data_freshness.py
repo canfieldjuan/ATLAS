@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from atlas_brain.services.b2b import watchlist_alerts as watchlist_alert_service
 
 
 def test_api_router_exposes_only_tenant_b2b_paths():
@@ -1102,7 +1103,11 @@ async def test_deliver_watchlist_alert_email_logs_pre_send_failure(monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr(mod, "_resolve_watchlist_alert_recipients", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        watchlist_alert_service,
+        "resolve_watchlist_alert_recipients",
+        AsyncMock(return_value=[]),
+    )
 
     with pytest.raises(mod.HTTPException) as exc_info:
         await mod.deliver_watchlist_alert_email(
@@ -1167,7 +1172,7 @@ async def test_deliver_watchlist_alert_email_sends_to_owner_and_logs(monkeypatch
     monkeypatch.setattr(mod.settings.campaign_sequence, "resend_from_email", "alerts@example.com", raising=False)
     monkeypatch.setattr(mod.settings.b2b_alert, "dashboard_base_url", "https://churnsignals.co/watchlists", raising=False)
     monkeypatch.setattr(mod, "get_campaign_sender", lambda: sender)
-    monkeypatch.setattr(mod, "is_suppressed", AsyncMock(return_value=None))
+    monkeypatch.setattr(watchlist_alert_service, "is_suppressed", AsyncMock(return_value=None))
     monkeypatch.setattr(
         mod,
         "evaluate_watchlist_alert_events",
