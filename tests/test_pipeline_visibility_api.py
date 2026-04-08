@@ -306,6 +306,123 @@ def test_watchlist_delivery_ops_returns_summary_views_and_logs(monkeypatch):
     assert "FROM b2b_watchlist_alert_email_log l" in pool.fetch.await_args_list[1].args[0]
 
 
+def test_watchlist_delivery_view_detail_proxies_tenant_routes(monkeypatch):
+    app = _make_app()
+    app.dependency_overrides[require_auth] = _auth_user
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
+
+    view_id = uuid4()
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value="Effingham Office Maids")
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    import atlas_brain.api.b2b_tenant_dashboard as tenant_api
+
+    monkeypatch.setattr(tenant_api, "_require_b2b_product", lambda _user: None)
+    monkeypatch.setattr(
+        tenant_api,
+        "_fetch_watchlist_view_row",
+        AsyncMock(return_value={
+            "id": view_id,
+            "name": "Daily CRM Watch",
+            "vendor_name": "Salesforce",
+            "category": "CRM",
+            "source": "g2",
+            "min_urgency": 7.2,
+            "include_stale": False,
+            "named_accounts_only": True,
+            "changed_wedges_only": False,
+            "vendor_alert_threshold": 6.8,
+            "account_alert_threshold": 7.2,
+            "stale_days_threshold": 5,
+            "alert_email_enabled": True,
+            "alert_delivery_frequency": "daily",
+            "next_alert_delivery_at": datetime(2026, 4, 7, 19, 0, tzinfo=timezone.utc),
+            "last_alert_delivery_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+            "last_alert_delivery_status": "sent",
+            "last_alert_delivery_summary": "Delivered watchlist alert email to 1 of 1 recipient",
+            "created_at": datetime(2026, 4, 6, 18, 0, tzinfo=timezone.utc),
+            "updated_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+        }),
+    )
+    monkeypatch.setattr(
+        tenant_api,
+        "list_watchlist_alert_events",
+        AsyncMock(return_value={
+            "watchlist_view_id": str(view_id),
+            "watchlist_view_name": "Daily CRM Watch",
+            "status": "all",
+            "events": [{"id": "event-1", "summary": "Acme crossed threshold"}],
+            "count": 1,
+        }),
+    )
+    monkeypatch.setattr(
+        tenant_api,
+        "list_watchlist_alert_email_log",
+        AsyncMock(return_value={
+            "watchlist_view_id": str(view_id),
+            "watchlist_view_name": "Daily CRM Watch",
+            "deliveries": [{"id": "log-1", "status": "sent"}],
+            "count": 1,
+        }),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"/pipeline/visibility/watchlist-delivery/views/{view_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["view"]["id"] == str(view_id)
+    assert body["view"]["account_name"] == "Effingham Office Maids"
+    assert body["event_count"] == 1
+    assert body["delivery_count"] == 1
+
+
+def test_watchlist_delivery_view_actions_proxy_tenant_or_disable(monkeypatch):
+    app = _make_app()
+    user = _auth_user()
+    app.dependency_overrides[require_auth] = lambda: user
+    view_id = uuid4()
+
+    import atlas_brain.api.b2b_tenant_dashboard as tenant_api
+
+    monkeypatch.setattr(tenant_api, "_require_b2b_product", lambda _user: None)
+    monkeypatch.setattr(
+        tenant_api,
+        "deliver_watchlist_alert_email",
+        AsyncMock(return_value={
+            "watchlist_view_id": str(view_id),
+            "watchlist_view_name": "Daily CRM Watch",
+            "status": "sent",
+            "recipient_emails": ["owner@example.com"],
+            "event_count": 1,
+            "message_ids": ["msg_1"],
+            "summary": "Delivered watchlist alert email to 1 of 1 recipient",
+            "error": None,
+        }),
+    )
+
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(return_value={
+        "id": view_id,
+        "alert_email_enabled": False,
+        "next_alert_delivery_at": None,
+        "last_alert_delivery_status": "sent",
+        "last_alert_delivery_summary": "Delivered watchlist alert email to 1 of 1 recipient",
+    })
+    monkeypatch.setattr(visibility_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        deliver = client.post(f"/pipeline/visibility/watchlist-delivery/views/{view_id}/deliver-now")
+        disable = client.post(f"/pipeline/visibility/watchlist-delivery/views/{view_id}/disable-email")
+
+    assert deliver.status_code == 200
+    assert deliver.json()["status"] == "sent"
+    assert disable.status_code == 200
+    assert disable.json()["disabled"] is True
+
+
 @pytest.mark.asyncio
 async def test_sync_detached_batch_health_emits_stale_batch_and_scheduler_events(monkeypatch):
     class _Pool:

@@ -1402,6 +1402,51 @@ export interface WatchlistDeliveryOpsSummary {
   deliveries: WatchlistDeliveryOpsLog[]
 }
 
+export interface WatchlistDeliveryOpsEvent {
+  id: string
+  watchlist_view_id: string
+  event_type: string
+  threshold_field: string | null
+  entity_type: string
+  entity_key: string
+  vendor_name: string | null
+  company_name: string | null
+  category: string | null
+  source: string | null
+  threshold_value: number | null
+  summary: string | null
+  payload: Record<string, unknown>
+  status: string
+  first_seen_at: string | null
+  last_seen_at: string | null
+  resolved_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface WatchlistDeliveryOpsDetail {
+  view: WatchlistDeliveryOpsView & {
+    vendor_name: string | null
+    category: string | null
+    source: string | null
+    min_urgency: number | null
+    include_stale: boolean
+    named_accounts_only: boolean
+    changed_wedges_only: boolean
+    vendor_alert_threshold: number | null
+    account_alert_threshold: number | null
+    stale_days_threshold: number | null
+    alert_email_enabled: boolean
+    created_at: string | null
+    updated_at: string | null
+  }
+  event_status: string
+  events: WatchlistDeliveryOpsEvent[]
+  event_count: number
+  deliveries: WatchlistDeliveryOpsLog[]
+  delivery_count: number
+}
+
 export interface AdminCostCacheHealth {
   period_days: number
   top_n: number

@@ -52,6 +52,7 @@ import type {
   PipelineReviewAction,
   ReasoningReferenceIds,
   WatchlistDeliveryOpsSummary,
+  WatchlistDeliveryOpsDetail,
 } from '../types'
 import { normalizeReportDetail, normalizeVendorProfile } from '../lib/reportNormalization'
 
@@ -1287,6 +1288,49 @@ export async function fetchWatchlistDeliveryOps(params?: {
     VISIBILITY_BASE,
     '/watchlist-delivery',
     params as Record<string, string | number>,
+  )
+}
+
+export async function fetchWatchlistDeliveryViewDetail(
+  watchlistViewId: string,
+  params?: { event_status?: 'open' | 'resolved' | 'all'; event_limit?: number; log_limit?: number },
+) {
+  return get<WatchlistDeliveryOpsDetail>(
+    VISIBILITY_BASE,
+    `/watchlist-delivery/views/${encodeURIComponent(watchlistViewId)}`,
+    params as Record<string, string | number>,
+  )
+}
+
+export async function runWatchlistDeliveryForView(watchlistViewId: string) {
+  return post<{
+    watchlist_view_id: string
+    watchlist_view_name: string
+    status: string
+    recipient_emails: string[]
+    event_count: number
+    message_ids: string[]
+    summary: string
+    error: string | null
+  }>(
+    VISIBILITY_BASE,
+    `/watchlist-delivery/views/${encodeURIComponent(watchlistViewId)}/deliver-now`,
+  )
+}
+
+export async function disableWatchlistDeliveryForView(watchlistViewId: string) {
+  return post<{
+    disabled: boolean
+    view: {
+      id: string
+      alert_email_enabled: boolean
+      next_alert_delivery_at: string | null
+      last_alert_delivery_status: string | null
+      last_alert_delivery_summary: string | null
+    }
+  }>(
+    VISIBILITY_BASE,
+    `/watchlist-delivery/views/${encodeURIComponent(watchlistViewId)}/disable-email`,
   )
 }
 

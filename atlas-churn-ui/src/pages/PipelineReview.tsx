@@ -7,6 +7,8 @@ import {
   Filter,
   RefreshCw,
   XCircle,
+  Bell,
+  Ban,
   ChevronRight,
   DollarSign,
   Database,
@@ -65,6 +67,7 @@ import type {
   AdminCostRunBatchItem,
   AdminTaskHealthRow,
   WatchlistDeliveryOpsSummary,
+  WatchlistDeliveryOpsDetail,
 } from '../types'
 import {
   fetchVisibilitySummary,
@@ -88,6 +91,9 @@ import {
   fetchAdminCostRun,
   fetchAdminTaskHealth,
   fetchWatchlistDeliveryOps,
+  fetchWatchlistDeliveryViewDetail,
+  runWatchlistDeliveryForView,
+  disableWatchlistDeliveryForView,
   runAutonomousTask,
 } from '../api/client'
 
@@ -379,6 +385,172 @@ function FilterSelect({
   )
 }
 
+function WatchlistDeliveryDetailDrawer({
+  detail,
+  loading,
+  actionLoading,
+  actionMessage,
+  actionError,
+  onClose,
+  onRunNow,
+  onDisableEmail,
+}: {
+  detail: WatchlistDeliveryOpsDetail | null
+  loading: boolean
+  actionLoading: boolean
+  actionMessage: string | null
+  actionError: string | null
+  onClose: () => void
+  onRunNow: () => void
+  onDisableEmail: () => void
+}) {
+  const view = detail?.view
+
+  return (
+    <div className="rounded-xl border border-cyan-500/20 bg-slate-950/40">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-700/50 px-4 py-3">
+        <div>
+          <h3 className="text-sm font-medium text-white">
+            {view ? view.view_name : 'Saved View Detail'}
+          </h3>
+          <p className="text-xs text-slate-500">
+            {view
+              ? `${view.account_name} | ${view.alert_delivery_frequency || 'manual only'}`
+              : 'Loading saved view policy and delivery history'}
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-400 transition hover:border-slate-500 hover:text-white"
+        >
+          Close
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="px-4 py-6 text-sm text-slate-400">Loading saved view detail...</div>
+      ) : !view ? (
+        <div className="px-4 py-6 text-sm text-slate-400">Saved view detail unavailable.</div>
+      ) : (
+        <div className="space-y-4 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={view.last_alert_delivery_status || (view.alert_email_enabled ? 'enabled' : 'idle')} />
+            {view.vendor_name ? <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{view.vendor_name}</span> : null}
+            {view.category ? <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{view.category}</span> : null}
+            {view.source ? <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">{view.source}</span> : null}
+            {view.named_accounts_only ? <span className="rounded bg-cyan-500/10 px-2 py-1 text-xs text-cyan-300">Named only</span> : null}
+            {view.changed_wedges_only ? <span className="rounded bg-cyan-500/10 px-2 py-1 text-xs text-cyan-300">Changed wedges</span> : null}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Thresholds</p>
+              <div className="mt-2 space-y-1 text-xs text-slate-300">
+                <p>Vendor alert: {view.vendor_alert_threshold ?? '--'}</p>
+                <p>Account alert: {view.account_alert_threshold ?? '--'}</p>
+                <p>Stale days: {view.stale_days_threshold ?? '--'}</p>
+              </div>
+            </div>
+            <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Schedule</p>
+              <div className="mt-2 space-y-1 text-xs text-slate-300">
+                <p>Enabled: {view.alert_email_enabled ? 'Yes' : 'No'}</p>
+                <p>Next due: {formatTs(view.next_alert_delivery_at)}</p>
+                <p>Last sent: {formatTs(view.last_alert_delivery_at)}</p>
+              </div>
+            </div>
+            <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
+              <p className="text-[11px] uppercase tracking-wide text-slate-500">Events</p>
+              <div className="mt-2 space-y-1 text-xs text-slate-300">
+                <p>Open events: {formatNumber(detail.event_count)}</p>
+                <p>Recent deliveries: {formatNumber(detail.delivery_count)}</p>
+                <p>Min urgency: {view.min_urgency ?? '--'}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={onRunNow}
+              disabled={actionLoading}
+              className="inline-flex items-center gap-1.5 rounded border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-300 transition hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Bell className="h-3 w-3" />
+              {actionLoading ? 'Working...' : 'Deliver Now'}
+            </button>
+            <button
+              onClick={onDisableEmail}
+              disabled={actionLoading || !view.alert_email_enabled}
+              className="inline-flex items-center gap-1.5 rounded border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Ban className="h-3 w-3" />
+              Disable Email
+            </button>
+            {actionMessage ? <span className="text-xs text-cyan-300">{actionMessage}</span> : null}
+            {actionError ? <span className="text-xs text-rose-300">{actionError}</span> : null}
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[0.95fr,1.05fr]">
+            <div className="rounded border border-slate-700/50 bg-slate-900/40">
+              <div className="border-b border-slate-700/50 px-4 py-3">
+                <h4 className="text-sm font-medium text-white">Current Alert Events</h4>
+                <p className="text-xs text-slate-500">Latest open or recent resolved threshold hits for this saved view.</p>
+              </div>
+              <div className="divide-y divide-slate-800/80">
+                {detail.events.length === 0 ? (
+                  <div className="px-4 py-4 text-xs text-slate-500">No alert events for this saved view.</div>
+                ) : (
+                  detail.events.map((event) => (
+                    <div key={event.id} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge status={event.status} />
+                        <span className="text-xs text-slate-300">{event.event_type.replace(/_/g, ' ')}</span>
+                        {event.vendor_name ? <span className="text-xs text-slate-500">{event.vendor_name}</span> : null}
+                        {event.company_name ? <span className="text-xs text-slate-500">{event.company_name}</span> : null}
+                      </div>
+                      <p className="mt-2 text-sm text-white">{event.summary || '--'}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Last seen {formatTs(event.last_seen_at)} | Threshold {event.threshold_value ?? '--'}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded border border-slate-700/50 bg-slate-900/40">
+              <div className="border-b border-slate-700/50 px-4 py-3">
+                <h4 className="text-sm font-medium text-white">Recent Delivery Attempts</h4>
+                <p className="text-xs text-slate-500">Manual and scheduled sends for this saved view.</p>
+              </div>
+              <div className="divide-y divide-slate-800/80">
+                {detail.deliveries.length === 0 ? (
+                  <div className="px-4 py-4 text-xs text-slate-500">No delivery attempts recorded for this saved view.</div>
+                ) : (
+                  detail.deliveries.map((delivery) => (
+                    <div key={delivery.id} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge status={delivery.status} />
+                        <span className="text-xs text-slate-500">{delivery.delivery_mode || '--'}</span>
+                        <span className="text-xs text-slate-500">{formatTs(delivery.delivered_at || delivery.created_at)}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-white">{delivery.summary}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        {formatNumber(delivery.event_count)} events | {formatNumber(delivery.recipient_count)} recipients
+                        {delivery.error ? ` | ${delivery.error}` : ''}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Tab: Queue
 // ---------------------------------------------------------------------------
@@ -386,9 +558,15 @@ function FilterSelect({
 function QueueTab({ onRefresh }: { onRefresh: () => void }) {
   const [stageFilter, setStageFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
+  const [viewStatusFilter, setViewStatusFilter] = useState('')
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState('')
   const [deliveryMessage, setDeliveryMessage] = useState<string | null>(null)
   const [deliveryError, setDeliveryError] = useState<string | null>(null)
   const [deliveryTriggering, setDeliveryTriggering] = useState(false)
+  const [selectedWatchlistViewId, setSelectedWatchlistViewId] = useState<string | null>(null)
+  const [viewActionLoading, setViewActionLoading] = useState(false)
+  const [viewActionMessage, setViewActionMessage] = useState<string | null>(null)
+  const [viewActionError, setViewActionError] = useState<string | null>(null)
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
@@ -409,6 +587,21 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
     () => fetchWatchlistDeliveryOps({ days: 30, limit: 8 }),
     [],
   )
+  const {
+    data: selectedWatchlistViewDetail,
+    loading: selectedWatchlistViewLoading,
+    refresh: refreshSelectedWatchlistViewDetail,
+  } = useApiData<WatchlistDeliveryOpsDetail | null>(
+    () =>
+      selectedWatchlistViewId
+        ? fetchWatchlistDeliveryViewDetail(selectedWatchlistViewId, {
+            event_status: 'all',
+            event_limit: 20,
+            log_limit: 8,
+          })
+        : Promise.resolve(null),
+    [selectedWatchlistViewId],
+  )
 
   const handleResolved = () => {
     refresh()
@@ -427,6 +620,38 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
       setDeliveryError(err instanceof Error ? err.message : 'Failed to trigger watchlist delivery task')
     } finally {
       setDeliveryTriggering(false)
+    }
+  }
+
+  async function handleRunWatchlistDeliveryForView() {
+    if (!selectedWatchlistViewId) return
+    setViewActionMessage(null)
+    setViewActionError(null)
+    setViewActionLoading(true)
+    try {
+      const result = await runWatchlistDeliveryForView(selectedWatchlistViewId)
+      setViewActionMessage(result.summary || result.status || 'Delivery triggered')
+      await Promise.all([refreshWatchlistDelivery(), refreshSelectedWatchlistViewDetail()])
+    } catch (err) {
+      setViewActionError(err instanceof Error ? err.message : 'Failed to deliver saved view alert')
+    } finally {
+      setViewActionLoading(false)
+    }
+  }
+
+  async function handleDisableWatchlistDeliveryForView() {
+    if (!selectedWatchlistViewId) return
+    setViewActionMessage(null)
+    setViewActionError(null)
+    setViewActionLoading(true)
+    try {
+      const result = await disableWatchlistDeliveryForView(selectedWatchlistViewId)
+      setViewActionMessage(result.disabled ? 'Scheduled email disabled for this saved view' : 'No change')
+      await Promise.all([refreshWatchlistDelivery(), refreshSelectedWatchlistViewDetail()])
+    } catch (err) {
+      setViewActionError(err instanceof Error ? err.message : 'Failed to disable saved view email')
+    } finally {
+      setViewActionLoading(false)
     }
   }
 
@@ -500,8 +725,18 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
 
   const items = data?.items ?? []
   const watchlistTask = watchlistDelivery?.task ?? null
-  const watchlistViews = watchlistDelivery?.views ?? []
-  const watchlistLogs = watchlistDelivery?.deliveries ?? []
+  const watchlistViews = (watchlistDelivery?.views ?? []).filter((row) => {
+    if (!viewStatusFilter) return true
+    if (viewStatusFilter === 'due_now') return row.due_now
+    if (viewStatusFilter === 'failed') return row.last_alert_delivery_status === 'failed'
+    if (viewStatusFilter === 'no_events') return row.last_alert_delivery_status === 'no_events'
+    if (viewStatusFilter === 'enabled') return !!row.alert_delivery_frequency
+    return true
+  })
+  const watchlistLogs = (watchlistDelivery?.deliveries ?? []).filter((row) => {
+    if (!deliveryStatusFilter) return true
+    return row.status === deliveryStatusFilter
+  })
   const watchlistSummary = watchlistDelivery?.summary
 
   const watchlistViewColumns: Column<WatchlistDeliveryOpsSummary['views'][number]>[] = [
@@ -564,6 +799,24 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
       sortable: true,
       sortValue: (row) => row.last_alert_delivery_at || '',
     },
+    {
+      key: 'inspect',
+      header: 'Inspect',
+      render: (row) => (
+        <button
+          aria-label={`Inspect saved view ${row.view_name}`}
+          onClick={() => {
+            setSelectedWatchlistViewId(row.view_id)
+            setViewActionMessage(null)
+            setViewActionError(null)
+          }}
+          className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+        >
+          Inspect
+        </button>
+      ),
+      sortable: false,
+    },
   ]
 
   const watchlistLogColumns: Column<WatchlistDeliveryOpsSummary['deliveries'][number]>[] = [
@@ -617,6 +870,24 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
       sortable: true,
       sortValue: (row) => row.summary,
     },
+    {
+      key: 'inspect',
+      header: 'Inspect',
+      render: (row) => (
+        <button
+          aria-label={`Inspect delivery ${row.view_name}`}
+          onClick={() => {
+            setSelectedWatchlistViewId(row.watchlist_view_id)
+            setViewActionMessage(null)
+            setViewActionError(null)
+          }}
+          className="rounded border border-slate-700/60 px-2 py-1 text-xs text-slate-300 transition hover:border-cyan-500/60 hover:text-white"
+        >
+          Inspect
+        </button>
+      ),
+      sortable: false,
+    },
   ]
 
   return (
@@ -657,6 +928,31 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
           <RefreshCw className={clsx('h-3 w-3', (refreshing || watchlistDeliveryRefreshing) && 'animate-spin')} />
           Refresh
         </button>
+        <FilterSelect
+          label="Views"
+          value={viewStatusFilter}
+          onChange={setViewStatusFilter}
+          options={[
+            { value: '', label: 'All views' },
+            { value: 'due_now', label: 'Due now' },
+            { value: 'failed', label: 'Last failed' },
+            { value: 'no_events', label: 'No events' },
+            { value: 'enabled', label: 'Scheduled only' },
+          ]}
+        />
+        <FilterSelect
+          label="Deliveries"
+          value={deliveryStatusFilter}
+          onChange={setDeliveryStatusFilter}
+          options={[
+            { value: '', label: 'All deliveries' },
+            { value: 'sent', label: 'Sent' },
+            { value: 'failed', label: 'Failed' },
+            { value: 'no_events', label: 'No events' },
+            { value: 'partial', label: 'Partial' },
+            { value: 'skipped', label: 'Skipped' },
+          ]}
+        />
       </div>
 
       {error && (
@@ -790,6 +1086,25 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
             />
           )}
         </div>
+
+        {selectedWatchlistViewId ? (
+          <div className="border-t border-slate-700/50 p-4">
+            <WatchlistDeliveryDetailDrawer
+              detail={selectedWatchlistViewDetail}
+              loading={selectedWatchlistViewLoading}
+              actionLoading={viewActionLoading}
+              actionMessage={viewActionMessage}
+              actionError={viewActionError}
+              onClose={() => {
+                setSelectedWatchlistViewId(null)
+                setViewActionMessage(null)
+                setViewActionError(null)
+              }}
+              onRunNow={handleRunWatchlistDeliveryForView}
+              onDisableEmail={handleDisableWatchlistDeliveryForView}
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl overflow-hidden">

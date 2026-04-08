@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ..autonomous.visibility import emit_event, record_review_action
 from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
+from ..services.b2b import watchlist_alerts as watchlist_alert_service
 from ..services.extraction_health_audit import summarize_extraction_health
 from ..storage.database import get_db_pool
 
@@ -738,6 +739,110 @@ async def get_watchlist_delivery_ops(
             }
             for row in delivery_rows
         ],
+    }
+
+
+@router.get("/watchlist-delivery/views/{view_id}")
+async def get_watchlist_delivery_view_detail(
+    view_id: UUID,
+    event_status: str = Query("all"),
+    event_limit: int = Query(20, ge=1, le=200),
+    log_limit: int = Query(10, ge=1, le=100),
+    user: AuthUser = Depends(require_auth),
+):
+    """Inspect one saved-view watchlist delivery configuration and history."""
+    from . import b2b_tenant_dashboard as tenant_dashboard_api
+
+    tenant_dashboard_api._require_b2b_product(user)
+    pool = get_db_pool()
+    account_id = UUID(user.account_id)
+    view_row = await tenant_dashboard_api._fetch_watchlist_view_row(pool, account_id=account_id, view_id=view_id)
+    if not view_row:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+
+    account_name = await pool.fetchval(
+        "SELECT name FROM saas_accounts WHERE id = $1",
+        account_id,
+    )
+    events = await tenant_dashboard_api.list_watchlist_alert_events(
+        view_id=view_id,
+        status=event_status,
+        limit=event_limit,
+        user=user,
+    )
+    deliveries = await tenant_dashboard_api.list_watchlist_alert_email_log(
+        view_id=view_id,
+        limit=log_limit,
+        user=user,
+    )
+
+    view = watchlist_alert_service.watchlist_view_payload(view_row)
+    view["account_id"] = user.account_id
+    view["account_name"] = account_name
+
+    return {
+        "view": view,
+        "event_status": events["status"],
+        "events": events["events"],
+        "event_count": events["count"],
+        "deliveries": deliveries["deliveries"],
+        "delivery_count": deliveries["count"],
+    }
+
+
+@router.post("/watchlist-delivery/views/{view_id}/deliver-now")
+async def deliver_watchlist_view_now(
+    view_id: UUID,
+    user: AuthUser = Depends(require_auth),
+):
+    """Trigger immediate delivery for one saved view."""
+    from . import b2b_tenant_dashboard as tenant_dashboard_api
+
+    tenant_dashboard_api._require_b2b_product(user)
+    body = tenant_dashboard_api.WatchlistAlertEmailRequest(evaluate_before_send=True)
+    return await tenant_dashboard_api.deliver_watchlist_alert_email(
+        view_id=view_id,
+        body=body,
+        user=user,
+    )
+
+
+@router.post("/watchlist-delivery/views/{view_id}/disable-email")
+async def disable_watchlist_view_email(
+    view_id: UUID,
+    user: AuthUser = Depends(require_auth),
+):
+    """Disable scheduled email delivery for one saved view."""
+    from . import b2b_tenant_dashboard as tenant_dashboard_api
+
+    tenant_dashboard_api._require_b2b_product(user)
+    pool = get_db_pool()
+    account_id = UUID(user.account_id)
+    row = await pool.fetchrow(
+        """
+        UPDATE b2b_watchlist_views
+        SET alert_email_enabled = FALSE,
+            next_alert_delivery_at = NULL,
+            updated_at = NOW()
+        WHERE id = $1
+          AND account_id = $2
+        RETURNING id, alert_email_enabled, next_alert_delivery_at,
+                  last_alert_delivery_status, last_alert_delivery_summary
+        """,
+        view_id,
+        account_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Saved view not found")
+    return {
+        "disabled": True,
+        "view": {
+            "id": str(row["id"]),
+            "alert_email_enabled": bool(row["alert_email_enabled"]),
+            "next_alert_delivery_at": row["next_alert_delivery_at"].isoformat() if row["next_alert_delivery_at"] else None,
+            "last_alert_delivery_status": row["last_alert_delivery_status"],
+            "last_alert_delivery_summary": row["last_alert_delivery_summary"],
+        },
     }
 
 

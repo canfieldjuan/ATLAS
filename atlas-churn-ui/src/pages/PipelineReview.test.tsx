@@ -26,6 +26,9 @@ const api = vi.hoisted(() => ({
   fetchAdminCostRun: vi.fn(),
   fetchAdminTaskHealth: vi.fn(),
   fetchWatchlistDeliveryOps: vi.fn(),
+  fetchWatchlistDeliveryViewDetail: vi.fn(),
+  runWatchlistDeliveryForView: vi.fn(),
+  disableWatchlistDeliveryForView: vi.fn(),
   runAutonomousTask: vi.fn(),
 }))
 
@@ -329,6 +332,98 @@ describe('PipelineReview watchlist delivery ops', () => {
         },
       ],
     })
+    api.fetchWatchlistDeliveryViewDetail.mockResolvedValue({
+      view: {
+        view_id: 'view-1',
+        view_name: 'Daily CRM Watch',
+        account_id: 'acct-1',
+        account_name: 'Effingham Office Maids',
+        alert_delivery_frequency: 'daily',
+        next_alert_delivery_at: '2026-04-07T19:00:00Z',
+        last_alert_delivery_at: '2026-04-07T18:00:00Z',
+        last_alert_delivery_status: 'sent',
+        last_alert_delivery_summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+        open_event_count: 17,
+        due_now: true,
+        vendor_name: 'Salesforce',
+        category: 'CRM',
+        source: 'g2',
+        min_urgency: 7,
+        include_stale: false,
+        named_accounts_only: true,
+        changed_wedges_only: false,
+        vendor_alert_threshold: 8,
+        account_alert_threshold: 7,
+        stale_days_threshold: 3,
+        alert_email_enabled: true,
+        created_at: '2026-04-07T17:00:00Z',
+        updated_at: '2026-04-07T18:00:00Z',
+      },
+      event_status: 'all',
+      events: [
+        {
+          id: 'event-1',
+          watchlist_view_id: 'view-1',
+          event_type: 'vendor_alert',
+          threshold_field: 'vendor_alert_threshold',
+          entity_type: 'vendor',
+          entity_key: 'Salesforce',
+          vendor_name: 'Salesforce',
+          company_name: null,
+          category: 'CRM',
+          source: 'g2',
+          threshold_value: 8,
+          summary: 'Salesforce urgency breached the saved view threshold.',
+          payload: {},
+          status: 'open',
+          first_seen_at: '2026-04-07T18:00:00Z',
+          last_seen_at: '2026-04-07T18:00:00Z',
+          resolved_at: null,
+          created_at: '2026-04-07T18:00:00Z',
+          updated_at: '2026-04-07T18:00:00Z',
+        },
+      ],
+      event_count: 1,
+      deliveries: [
+        {
+          id: 'log-1',
+          watchlist_view_id: 'view-1',
+          view_name: 'Daily CRM Watch',
+          account_id: 'acct-1',
+          account_name: 'Effingham Office Maids',
+          status: 'sent',
+          summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+          error: null,
+          event_count: 17,
+          recipient_count: 1,
+          delivered_at: '2026-04-07T18:00:00Z',
+          created_at: '2026-04-07T18:00:00Z',
+          scheduled_for: '2026-04-07T18:00:00Z',
+          delivery_mode: 'scheduled',
+        },
+      ],
+      delivery_count: 1,
+    })
+    api.runWatchlistDeliveryForView.mockResolvedValue({
+      watchlist_view_id: 'view-1',
+      watchlist_view_name: 'Daily CRM Watch',
+      status: 'sent',
+      recipient_emails: ['ops@example.com'],
+      event_count: 1,
+      message_ids: ['msg-1'],
+      summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+      error: null,
+    })
+    api.disableWatchlistDeliveryForView.mockResolvedValue({
+      disabled: true,
+      view: {
+        id: 'view-1',
+        alert_email_enabled: false,
+        next_alert_delivery_at: null,
+        last_alert_delivery_status: 'sent',
+        last_alert_delivery_summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+      },
+    })
     api.runAutonomousTask.mockResolvedValue({ status: 'started', message: 'Triggered delivery run' })
   })
 
@@ -379,5 +474,44 @@ describe('PipelineReview watchlist delivery ops', () => {
 
     expect(await screen.findByText('b2b_enrichment_repair')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Hide No-Op Runs' })).toBeInTheDocument()
+  })
+
+  it('opens the saved-view drawer and runs per-view delivery actions', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    await screen.findAllByText('Watchlist Alert Delivery')
+
+    const queueTabs = screen.getAllByRole('button', { name: 'Queue' })
+    await user.click(queueTabs[0])
+
+    const inspectButtons = screen.getAllByRole('button', { name: 'Inspect saved view Daily CRM Watch' })
+    await user.click(inspectButtons[0])
+
+    await waitFor(() => {
+      expect(api.fetchWatchlistDeliveryViewDetail).toHaveBeenCalledWith('view-1', {
+        event_status: 'all',
+        event_limit: 20,
+        log_limit: 8,
+      })
+    })
+
+    expect(await screen.findByText('Current Alert Events')).toBeInTheDocument()
+    expect(screen.getByText('Salesforce urgency breached the saved view threshold.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Deliver Now' }))
+    await waitFor(() => {
+      expect(api.runWatchlistDeliveryForView).toHaveBeenCalledWith('view-1')
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Disable Email' }))
+    await waitFor(() => {
+      expect(api.disableWatchlistDeliveryForView).toHaveBeenCalledWith('view-1')
+    })
   })
 })
