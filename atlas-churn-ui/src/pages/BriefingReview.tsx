@@ -95,11 +95,13 @@ export default function BriefingReview() {
   const { data: summaryData, loading: summaryLoading, refresh: refreshSummary } = useApiData(
     fetchBriefingReviewSummary,
     [],
+    { pollIntervalMs: 30_000 },
   )
 
   const { data: queueData, loading, error, refresh, refreshing } = useApiData(
     () => fetchBriefingReviewQueue({ status: statusTab, limit: 100 }),
     [statusTab],
+    { pollIntervalMs: 30_000 },
   )
 
   const groups = useMemo<VendorGroup[]>(() => {
@@ -175,6 +177,10 @@ export default function BriefingReview() {
             <Download className="h-4 w-4" />
             Export
           </button>
+          <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+            Live
+          </span>
           <button
             onClick={refreshAll}
             disabled={refreshing}

@@ -12,6 +12,8 @@ interface UseApiDataOptions {
   refreshOnFocus?: boolean
   refreshOnReconnect?: boolean
   minRefreshIntervalMs?: number
+  /** When set, poll for fresh data at this interval (ms). Pauses when tab is hidden. */
+  pollIntervalMs?: number
 }
 
 export default function useApiData<T>(
@@ -37,6 +39,7 @@ export default function useApiData<T>(
     refreshOnFocus = true,
     refreshOnReconnect = true,
     minRefreshIntervalMs = 30000,
+    pollIntervalMs,
   } = options
 
   const load = useCallback(
@@ -104,6 +107,18 @@ export default function useApiData<T>(
       window.removeEventListener('online', onReconnect)
     }
   }, [load, minRefreshIntervalMs, refreshOnFocus, refreshOnReconnect])
+
+  // Interval-based polling (pauses when tab is hidden)
+  useEffect(() => {
+    if (!pollIntervalMs || pollIntervalMs <= 0) return
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - lastLoadedAtRef.current < minRefreshIntervalMs) return
+      load(true)
+    }
+    const id = setInterval(tick, pollIntervalMs)
+    return () => clearInterval(id)
+  }, [load, pollIntervalMs, minRefreshIntervalMs])
 
   const refresh = useCallback(() => {
     load(true)

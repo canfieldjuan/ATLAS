@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS b2b_opportunity_dispositions (
     CONSTRAINT chk_snooze_coherence
         CHECK (
             (disposition = 'snoozed' AND snoozed_until IS NOT NULL)
-            OR (disposition <> 'snoozed')
+            OR (disposition <> 'snoozed' AND snoozed_until IS NULL)
         )
 );
 

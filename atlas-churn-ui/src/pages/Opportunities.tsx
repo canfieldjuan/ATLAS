@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
+  Activity,
   Telescope,
   Target,
   TrendingUp,
@@ -26,6 +27,8 @@ import {
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
 import CampaignReasoningSummary from '../components/CampaignReasoningSummary'
+import CompanyTimeline from '../components/CompanyTimeline'
+import SignalEffectivenessPanel from '../components/SignalEffectivenessPanel'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
@@ -682,6 +685,9 @@ export default function Opportunities() {
         <StatCard label="Contract Known" value={stats.withContract} icon={<Target className="h-4 w-4 text-red-400" />} skeleton={loading} />
       </div>
 
+      {/* Signal effectiveness */}
+      <SignalEffectivenessPanel />
+
       {/* Disposition tabs */}
       <div className="flex items-center gap-1 border-b border-slate-700/40 pb-1">
         {DISPOSITION_TABS.map((tab) => {
@@ -1241,6 +1247,15 @@ function EvidencePanel({
           <h4 className="text-sm font-medium text-white">Generated Campaigns</h4>
         </div>
         <CampaignQueue company={row.company} vendor={row.vendor} refreshKey={campaignRefreshKey} onAction={onCampaignAction} />
+      </div>
+
+      {/* Deal timeline */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <Activity className="h-4 w-4 text-cyan-400" />
+          <h4 className="text-sm font-medium text-white">Deal Timeline</h4>
+        </div>
+        <CompanyTimeline company={row.company} vendor={row.vendor} />
       </div>
 
       {/* Actions */}

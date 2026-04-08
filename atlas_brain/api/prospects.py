@@ -466,14 +466,19 @@ async def export_prospects(
                p.title, p.seniority, p.department, p.company_name,
                p.company_domain, p.linkedin_url, p.city, p.state,
                p.country, p.status, p.created_at,
-               cs.status AS seq_status,
-               cs.current_step AS seq_step,
-               cs.max_steps AS seq_max_steps,
-               cs.last_sent_at AS seq_last_sent
+               latest_seq.status AS seq_status,
+               latest_seq.current_step AS seq_step,
+               latest_seq.max_steps AS seq_max_steps,
+               latest_seq.last_sent_at AS seq_last_sent
         FROM prospects p
-        LEFT JOIN campaign_sequences cs
-            ON cs.recipient_email = p.email
-            AND cs.status IN ('active', 'paused', 'completed', 'replied')
+        LEFT JOIN LATERAL (
+            SELECT cs.status, cs.current_step, cs.max_steps, cs.last_sent_at
+            FROM campaign_sequences cs
+            WHERE cs.recipient_email = p.email
+              AND cs.status IN ('active', 'paused', 'completed', 'replied')
+            ORDER BY cs.updated_at DESC NULLS LAST
+            LIMIT 1
+        ) latest_seq ON true
         {where}
         ORDER BY p.created_at DESC
         LIMIT {_EXPORT_LIMIT}

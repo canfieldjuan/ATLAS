@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   MailSearch,
@@ -32,6 +32,7 @@ import {
   bulkRejectCampaigns,
   updateCampaign,
   downloadCampaignsCsv,
+  recordSequenceOutcome,
 } from '../api/client'
 
 type StatusTab = 'draft' | 'approved' | 'sent' | 'all'
@@ -157,6 +158,9 @@ export default function CampaignReview() {
   const [editFields, setEditFields] = useState({ subject: '', body: '', cta: '' })
   const [editSaving, setEditSaving] = useState(false)
   const [editedIds, setEditedIds] = useState<Set<string>>(new Set())
+  const [pollNotice, setPollNotice] = useState<string | null>(null)
+  const [outcomeLoading, setOutcomeLoading] = useState<string | null>(null)
+  const prevPendingRef = useRef<number | null>(null)
 
   const {
     data: summaryData,
@@ -166,7 +170,27 @@ export default function CampaignReview() {
   } = useApiData(
     fetchReviewQueueSummary,
     [],
+    { pollIntervalMs: 30_000 },
   )
+
+  // Detect queue changes from polling and show a transient notice
+  useEffect(() => {
+    if (summaryData == null) return
+    const current = summaryData.pending_review ?? 0
+    const prev = prevPendingRef.current
+    if (prev !== null && current !== prev) {
+      const diff = current - prev
+      if (diff > 0) {
+        setPollNotice(`${diff} new campaign${diff > 1 ? 's' : ''} arrived for review`)
+      } else if (diff < 0) {
+        setPollNotice(`${Math.abs(diff)} campaign${Math.abs(diff) > 1 ? 's' : ''} moved out of review`)
+      }
+      const timer = setTimeout(() => setPollNotice(null), 8000)
+      return () => clearTimeout(timer)
+    }
+    prevPendingRef.current = current
+  }, [summaryData])
+
   const {
     data: trendData,
     loading: trendLoading,
@@ -186,6 +210,7 @@ export default function CampaignReview() {
   } = useApiData(
     () => fetchReviewQueue({ status: statusTab, include_prospects: true, limit: 100 }),
     [statusTab],
+    { pollIntervalMs: 30_000 },
   )
 
   const groups = useMemo<CompanyGroup[]>(() => {
@@ -274,6 +299,18 @@ export default function CampaignReview() {
     }
   }
 
+  async function handleOutcome(sequenceId: string, outcome: string) {
+    setOutcomeLoading(sequenceId)
+    try {
+      await recordSequenceOutcome(sequenceId, { outcome })
+      refreshQueue()
+    } catch {
+      // silent - outcome select will still show previous value
+    } finally {
+      setOutcomeLoading(null)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -313,6 +350,10 @@ export default function CampaignReview() {
             <AlertTriangle className="h-4 w-4" />
             Diagnostics
           </Link>
+          <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+            Live
+          </span>
           <button
             onClick={() => {
               refreshQueue()
@@ -415,6 +456,16 @@ export default function CampaignReview() {
         loading={trendLoading}
         title="Campaign Blocker Trends"
       />
+
+      {/* Poll notice */}
+      {pollNotice && (
+        <div className="flex items-center justify-between rounded-lg border border-cyan-700/40 bg-cyan-900/20 px-4 py-2 text-sm text-cyan-300 animate-in fade-in">
+          <span>{pollNotice}</span>
+          <button onClick={() => setPollNotice(null)} className="text-cyan-500 hover:text-white ml-3">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Status tabs */}
       <div className="flex items-center justify-between">
@@ -688,6 +739,30 @@ export default function CampaignReview() {
                             </button>
                             {selectedCampaign === draft.id && (
                               <AuditTimeline campaignId={draft.id} />
+                            )}
+
+                            {/* Outcome recording for sent campaigns */}
+                            {draft.status === 'sent' && draft.sequence_id && (
+                              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-700/30">
+                                <span className="text-xs text-slate-500">Outcome:</span>
+                                <select
+                                  value={draft.seq_outcome || 'pending'}
+                                  onChange={(e) => handleOutcome(draft.sequence_id!, e.target.value)}
+                                  disabled={outcomeLoading === draft.sequence_id}
+                                  className="bg-slate-800/50 border border-slate-700/50 rounded px-2 py-0.5 text-xs text-white"
+                                >
+                                  <option value="pending">Pending</option>
+                                  <option value="meeting_booked">Meeting Booked</option>
+                                  <option value="deal_opened">Deal Opened</option>
+                                  <option value="deal_won">Deal Won</option>
+                                  <option value="deal_lost">Deal Lost</option>
+                                  <option value="no_opportunity">No Opportunity</option>
+                                  <option value="disqualified">Disqualified</option>
+                                </select>
+                                {outcomeLoading === draft.sequence_id && (
+                                  <Loader2 className="h-3 w-3 animate-spin text-slate-500" />
+                                )}
+                              </div>
                             )}
                           </div>
                         </div>

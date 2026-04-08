@@ -694,12 +694,133 @@ export async function fetchCampaignAuditLog(campaignId: string) {
   return get<{ count: number; audit_log: AuditEvent[] }>(CAMPAIGNS_BASE, `/${campaignId}/audit-log`)
 }
 
+export interface TimelineEvent {
+  type: 'campaign_event' | 'sequence_state' | 'signal_detected'
+  timestamp: string | null
+  vendor?: string
+  event?: string
+  channel?: string
+  step?: number | null
+  max_steps?: number | null
+  subject?: string | null
+  recipient?: string | null
+  source?: string | null
+  error?: string | null
+  opportunity_score?: number | null
+  urgency_score?: number | null
+  sequence_id?: string
+  status?: string
+  open_count?: number
+  click_count?: number
+  last_sent_at?: string | null
+  last_opened_at?: string | null
+  last_clicked_at?: string | null
+  reply_received_at?: string | null
+  bounced_at?: string | null
+  bounce_type?: string | null
+  outcome?: string | null
+  outcome_recorded_at?: string | null
+  outcome_notes?: string | null
+  outcome_revenue?: number | null
+  buying_stage?: string | null
+  role_type?: string | null
+  pain_categories?: string[]
+  seat_count?: number | null
+  contract_end?: string | null
+}
+
+export async function fetchCompanyTimeline(params: {
+  company: string
+  vendor?: string
+}) {
+  return get<{ company: string; vendor: string | null; events: TimelineEvent[]; count: number }>(
+    CAMPAIGNS_BASE,
+    '/company-timeline',
+    params,
+  )
+}
+
 export async function bulkApproveCampaigns(ids: string[], action: 'approve' | 'queue-send' | 'reject') {
   return post<{ processed: number; failed: { id: string; reason: string }[] }>(CAMPAIGNS_BASE, '/bulk-approve', { campaign_ids: ids, action })
 }
 
 export async function bulkRejectCampaigns(ids: string[], reason?: string) {
   return post<{ rejected: number; failed: { id: string; reason: string }[] }>(CAMPAIGNS_BASE, '/bulk-reject', { campaign_ids: ids, reason })
+}
+
+// ---------------------------------------------------------------------------
+// Outcome Recording & Calibration
+// ---------------------------------------------------------------------------
+
+export async function recordSequenceOutcome(sequenceId: string, body: {
+  outcome: string
+  notes?: string
+  revenue?: number
+}) {
+  return post<{
+    status: string
+    sequence_id: string
+    outcome: string
+    previous_outcome: string
+    recorded_at: string
+  }>(CAMPAIGNS_BASE, `/sequences/${sequenceId}/outcome`, body)
+}
+
+export async function fetchSequenceOutcome(sequenceId: string) {
+  return get<{
+    sequence_id: string
+    company_name: string
+    outcome: string
+    outcome_recorded_at: string | null
+    outcome_recorded_by: string | null
+    outcome_notes: string | null
+    outcome_revenue: number | null
+    outcome_history: { stage: string; recorded_at: string; previous: string; revenue: number | null; recorded_by: string }[]
+  }>(CAMPAIGNS_BASE, `/sequences/${sequenceId}/outcome`)
+}
+
+export interface SignalEffectivenessGroup {
+  signal_group: string
+  total_sequences: number
+  meetings: number
+  deals_opened: number
+  deals_won: number
+  deals_lost: number
+  no_opportunity: number
+  disqualified: number
+  positive_outcome_rate: number
+  total_revenue: number
+}
+
+export async function fetchSignalEffectiveness(params?: {
+  vendor_name?: string
+  min_sequences?: number
+  group_by?: string
+}) {
+  return get<{
+    group_by: string
+    vendor_filter: string | null
+    min_sequences: number
+    groups: SignalEffectivenessGroup[]
+    total_groups: number
+  }>(TENANT_BASE, '/signal-effectiveness', params)
+}
+
+export async function fetchOutcomeDistribution(params?: {
+  vendor_name?: string
+}) {
+  return get<{
+    total_sequences: number
+    vendor_filter: string | null
+    buckets: {
+      outcome: string
+      count: number
+      pct: number
+      total_revenue: number
+      first_recorded: string | null
+      last_recorded: string | null
+    }[]
+  }>(TENANT_BASE, '/outcome-distribution', params)
 }
 
 // ---------------------------------------------------------------------------

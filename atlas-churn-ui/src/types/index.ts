@@ -619,7 +619,9 @@ export interface ReviewQueueDraft {
   partner_name: string | null
   product_name: string | null
   is_suppressed: number
+  sequence_id: string | null
   seq_status: string | null
+  seq_outcome: string | null
   current_step: number | null
   max_steps: number | null
   open_count: number | null

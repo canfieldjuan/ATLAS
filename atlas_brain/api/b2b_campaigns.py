@@ -1189,9 +1189,11 @@ async def review_queue(
         SELECT bc.id, bc.company_name, bc.vendor_name, bc.channel,
                bc.subject, bc.body, bc.cta, bc.status, bc.step_number,
                bc.recipient_email, bc.partner_id, bc.created_at, bc.metadata,
+               bc.sequence_id,
                cs.recipient_email AS seq_recipient, cs.open_count, cs.click_count,
                cs.status AS seq_status, cs.current_step, cs.max_steps,
                cs.company_context,
+               cs.outcome AS seq_outcome,
                ap.name AS partner_name, ap.product_name,
                (SELECT COUNT(*) FROM campaign_suppressions sup
                 WHERE (sup.expires_at IS NULL OR sup.expires_at > NOW())
@@ -2434,3 +2436,156 @@ async def export_campaigns(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="campaigns.csv"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Company timeline (unified deal-room view)
+# ---------------------------------------------------------------------------
+
+_TIMELINE_LIMIT = 200
+
+
+@router.get("/company-timeline")
+async def company_timeline(
+    company: str = Query(..., min_length=1),
+    vendor: Optional[str] = Query(None),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Unified chronological timeline for a company's opportunity lifecycle.
+
+    Returns events from: signal detection, campaign generation, approval,
+    send, engagement (open/click/reply), and business outcome recording.
+    """
+    pool = _pool_or_503()
+    events: list[dict] = []
+    company_lower = company.lower()
+    vendor_lower = vendor.lower() if vendor else None
+
+    # Build reusable vendor filter clause
+    base_params: list = [company_lower]
+    vendor_clause = ""
+    if vendor_lower:
+        base_params.append(vendor_lower)
+        vendor_clause = " AND LOWER(bc.vendor_name) = $2"
+
+    # 1. Campaign lifecycle events from audit log
+    audit_params = list(base_params) + [_TIMELINE_LIMIT]
+    limit_idx = len(base_params) + 1
+    audit_rows = await pool.fetch(
+        f"""
+        SELECT cal.event_type, cal.step_number, cal.subject,
+               cal.recipient_email, cal.error_detail, cal.source,
+               cal.created_at,
+               bc.company_name, bc.vendor_name, bc.channel,
+               bc.opportunity_score, bc.urgency_score
+        FROM campaign_audit_log cal
+        JOIN b2b_campaigns bc ON bc.id = cal.campaign_id
+        WHERE LOWER(bc.company_name) = $1{vendor_clause}
+        ORDER BY cal.created_at DESC
+        LIMIT ${limit_idx}
+        """,
+        *audit_params,
+    )
+    for r in audit_rows:
+        events.append({
+            "type": "campaign_event",
+            "event": r["event_type"],
+            "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+            "vendor": r["vendor_name"],
+            "channel": r["channel"],
+            "step": r["step_number"],
+            "subject": r["subject"],
+            "recipient": r["recipient_email"],
+            "source": r["source"],
+            "error": r["error_detail"],
+            "opportunity_score": r["opportunity_score"],
+            "urgency_score": float(r["urgency_score"]) if r["urgency_score"] is not None else None,
+        })
+
+    # 2. Sequence state + engagement
+    #    Use DISTINCT ON to get one row per sequence (a sequence may link
+    #    to multiple campaign steps, all sharing the same vendor_name).
+    seq_vendor_clause = f" AND LOWER(bc.vendor_name) = $2" if vendor_lower else ""
+    seq_rows = await pool.fetch(
+        f"""
+        SELECT DISTINCT ON (cs.id)
+               cs.id, cs.company_name, cs.status,
+               cs.recipient_email, cs.current_step, cs.max_steps,
+               cs.open_count, cs.click_count,
+               cs.last_sent_at, cs.last_opened_at, cs.last_clicked_at,
+               cs.reply_received_at, cs.bounced_at, cs.bounce_type,
+               cs.outcome, cs.outcome_recorded_at, cs.outcome_notes,
+               cs.outcome_revenue, cs.created_at,
+               bc.vendor_name
+        FROM campaign_sequences cs
+        JOIN b2b_campaigns bc ON bc.sequence_id = cs.id
+        WHERE LOWER(cs.company_name) = $1{seq_vendor_clause}
+        ORDER BY cs.id, bc.created_at DESC
+        """,
+        *base_params,
+    )
+    for r in seq_rows:
+        events.append({
+            "type": "sequence_state",
+            "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+            "vendor": r["vendor_name"],
+            "sequence_id": str(r["id"]),
+            "status": r["status"],
+            "recipient": r["recipient_email"],
+            "step": r["current_step"],
+            "max_steps": r["max_steps"],
+            "open_count": r["open_count"] or 0,
+            "click_count": r["click_count"] or 0,
+            "last_sent_at": r["last_sent_at"].isoformat() if r["last_sent_at"] else None,
+            "last_opened_at": r["last_opened_at"].isoformat() if r["last_opened_at"] else None,
+            "last_clicked_at": r["last_clicked_at"].isoformat() if r["last_clicked_at"] else None,
+            "reply_received_at": r["reply_received_at"].isoformat() if r["reply_received_at"] else None,
+            "bounced_at": r["bounced_at"].isoformat() if r["bounced_at"] else None,
+            "bounce_type": r["bounce_type"],
+            "outcome": r["outcome"],
+            "outcome_recorded_at": r["outcome_recorded_at"].isoformat() if r["outcome_recorded_at"] else None,
+            "outcome_notes": r["outcome_notes"],
+            "outcome_revenue": float(r["outcome_revenue"]) if r["outcome_revenue"] is not None else None,
+        })
+
+    # 3. Signal detection (first appearance in high-intent)
+    signal_rows = await pool.fetch(
+        f"""
+        SELECT bc.vendor_name, bc.urgency_score, bc.buying_stage,
+               bc.role_type, bc.pain_categories, bc.seat_count,
+               bc.contract_end, bc.created_at
+        FROM b2b_campaigns bc
+        WHERE LOWER(bc.company_name) = $1{vendor_clause}
+        ORDER BY bc.created_at ASC
+        LIMIT 1
+        """,
+        *base_params,
+    )
+    for r in signal_rows:
+        pains = r["pain_categories"]
+        if isinstance(pains, str):
+            try:
+                pains = json.loads(pains)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        events.append({
+            "type": "signal_detected",
+            "timestamp": r["created_at"].isoformat() if r["created_at"] else None,
+            "vendor": r["vendor_name"],
+            "urgency_score": float(r["urgency_score"]) if r["urgency_score"] is not None else None,
+            "buying_stage": r["buying_stage"],
+            "role_type": r["role_type"],
+            "pain_categories": pains if isinstance(pains, list) else [],
+            "seat_count": r["seat_count"],
+            "contract_end": r["contract_end"],
+        })
+
+    # Sort all events chronologically (newest first)
+    events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+
+    return {
+        "company": company,
+        "vendor": vendor,
+        "events": events,
+        "count": len(events),
+    }
