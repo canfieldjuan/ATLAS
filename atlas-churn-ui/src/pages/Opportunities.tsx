@@ -164,7 +164,7 @@ export default function Opportunities() {
     [minUrgency, debouncedVendor, windowDays],
   )
 
-  const opportunities = data ?? []
+  const opportunities = useMemo(() => data ?? [], [data])
 
   // -- Campaign status lookup --
   const { data: campaignData, refresh: refreshCampaigns } = useApiData(
@@ -243,7 +243,7 @@ export default function Opportunities() {
   }, [filtered])
 
   // -- Generate single --
-  async function handleGenerate(row: HighIntentCompany) {
+  const handleGenerate = useCallback(async (row: HighIntentCompany) => {
     const key = rowKey(row)
     setGenerating(key)
     setGenResult(null)
@@ -263,7 +263,7 @@ export default function Opportunities() {
     } finally {
       setGenerating(null)
     }
-  }
+  }, [refresh, refreshCampaigns])
 
   // -- Bulk generate --
   async function handleBulkGenerate() {
@@ -356,7 +356,10 @@ export default function Opportunities() {
     }
   }
 
-  async function handleDisposition(row: HighIntentCompany, disposition: 'snoozed' | 'dismissed' | 'saved') {
+  const handleDisposition = useCallback(async (
+    row: HighIntentCompany,
+    disposition: 'snoozed' | 'dismissed' | 'saved',
+  ) => {
     const key = rowKey(row)
     setGenResult(null)
     const snoozedUntil = disposition === 'snoozed'
@@ -376,7 +379,7 @@ export default function Opportunities() {
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Disposition update failed')
     }
-  }
+  }, [refreshDispositions])
 
   async function handleBulkDisposition(disposition: 'snoozed' | 'dismissed' | 'saved') {
     if (selectedIds.size === 0) return
@@ -403,7 +406,7 @@ export default function Opportunities() {
     }
   }
 
-  async function handleRemoveDisposition(key: string) {
+  const handleRemoveDisposition = useCallback(async (key: string) => {
     setGenResult(null)
     try {
       await removeDispositions({ opportunity_keys: [key] })
@@ -411,7 +414,7 @@ export default function Opportunities() {
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Failed to restore opportunity')
     }
-  }
+  }, [refreshDispositions])
 
   // -- Table columns --
   const columns: Column<HighIntentCompany>[] = useMemo(() => [
@@ -617,7 +620,17 @@ export default function Opportunities() {
         )
       },
     },
-  ], [selectedIds, toggleSelect, canAccessCampaigns, generating, campaignMap, dispositionMap])
+  ], [
+    selectedIds,
+    toggleSelect,
+    canAccessCampaigns,
+    generating,
+    campaignMap,
+    dispositionMap,
+    handleDisposition,
+    handleGenerate,
+    handleRemoveDisposition,
+  ])
 
   // -- Expanded row --
   const expandedRow = useMemo(

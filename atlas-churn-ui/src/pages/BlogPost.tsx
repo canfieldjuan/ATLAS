@@ -1,42 +1,31 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import BlogArticleView from '../components/BlogArticleView'
+import useApiData from '../hooks/useApiData'
 import { loadPostBySlug, loadPostsBySlugs } from '../content/blog'
 import type { BlogPost as BlogPostType } from '../content/blog'
 
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
-  const [post, setPost] = useState<BlogPostType | null | undefined>(undefined)
-  const [relatedPosts, setRelatedPosts] = useState<BlogPostType[]>([])
-
-  useEffect(() => {
-    let cancelled = false
-    setPost(undefined)
-    setRelatedPosts([])
-
-    if (!slug) {
-      setPost(null)
-      return () => {
-        cancelled = true
+  const { data } = useApiData(
+    async (): Promise<{ post: BlogPostType | null; relatedPosts: BlogPostType[] }> => {
+      if (!slug) {
+        return { post: null, relatedPosts: [] }
       }
-    }
-
-    loadPostBySlug(slug).then((loadedPost) => {
-      if (cancelled) return
-      setPost(loadedPost)
-      if (!loadedPost?.related_slugs?.length) return
-      loadPostsBySlugs(loadedPost.related_slugs).then((loadedRelatedPosts) => {
-        if (cancelled) return
-        setRelatedPosts(loadedRelatedPosts)
-      })
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [slug])
+      const post = await loadPostBySlug(slug)
+      if (!post?.related_slugs?.length) {
+        return { post, relatedPosts: [] }
+      }
+      const relatedPosts = await loadPostsBySlugs(post.related_slugs)
+      return { post, relatedPosts }
+    },
+    [slug],
+    { refreshOnFocus: false, refreshOnReconnect: false },
+  )
+  const post = data?.post
+  const relatedPosts = data?.relatedPosts ?? []
 
   const seoKeywords = useMemo(() => {
     if (!post) return undefined

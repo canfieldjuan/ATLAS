@@ -449,14 +449,14 @@ export default function Watchlists() {
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
 
-  const trackedVendors = data?.vendors ?? []
-  const watchlistViews = data?.watchlistViews ?? []
+  const trackedVendors = useMemo(() => data?.vendors ?? [], [data?.vendors])
+  const watchlistViews = useMemo(() => data?.watchlistViews ?? [], [data?.watchlistViews])
   const competitiveSets = data?.competitiveSets ?? []
   const competitiveSetDefaults = data?.competitiveSetDefaults ?? null
-  const feed = data?.feed ?? []
+  const feed = useMemo(() => data?.feed ?? [], [data?.feed])
   const vendorAlertHitCountFromApi = data?.vendorAlertHitCount ?? 0
   const feedStaleThresholdHitCountFromApi = data?.feedStaleThresholdHitCount ?? 0
-  const accounts = data?.accounts ?? []
+  const accounts = useMemo(() => data?.accounts ?? [], [data?.accounts])
   const accountAlertHitCountFromApi = data?.accountAlertHitCount ?? 0
   const accountStaleThresholdHitCountFromApi = data?.accountStaleThresholdHitCount ?? 0
   const vendorsWithAccounts = data?.vendorsWithAccounts ?? 0
@@ -604,7 +604,10 @@ export default function Watchlists() {
       primary: [...high, ...medium],
     }
   }, [accounts])
-  const visibleReviewAccounts = namedAccountsOnly ? [] : accountBuckets.review
+  const visibleReviewAccounts = useMemo(
+    () => (namedAccountsOnly ? [] : accountBuckets.review),
+    [accountBuckets.review, namedAccountsOnly],
+  )
   const visibleAccounts = useMemo(
     () => [...accountBuckets.primary, ...visibleReviewAccounts],
     [accountBuckets.primary, visibleReviewAccounts],
