@@ -10,6 +10,7 @@ import {
   Send,
   Eye,
   X,
+  Download,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -20,6 +21,7 @@ import {
   fetchBriefingReviewSummary,
   bulkApproveBriefings,
   bulkRejectBriefings,
+  downloadBriefingsCsv,
 } from '../api/client'
 
 type StatusTab = 'pending_approval' | 'sent' | 'rejected' | 'all'
@@ -161,14 +163,27 @@ export default function BriefingReview() {
           <Mail className="h-6 w-6 text-cyan-400" />
           <h1 className="text-2xl font-bold text-white">Briefing Review</h1>
         </div>
-        <button
-          onClick={refreshAll}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              downloadBriefingsCsv({
+                status: statusTab !== 'all' ? statusTab : undefined,
+              })
+            }
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-lg transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </button>
+          <button
+            onClick={refreshAll}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stats */}

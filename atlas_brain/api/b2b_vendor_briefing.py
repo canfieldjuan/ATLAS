@@ -4,6 +4,8 @@ REST endpoints for Vendor Intelligence Briefings.
 Preview, generate+send, email gate, report data, and list sent briefings.
 """
 
+import csv
+import io
 import json
 import logging
 import re
@@ -13,6 +15,7 @@ from uuid import UUID
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth, require_auth
 from ..config import settings
@@ -774,3 +777,74 @@ async def bulk_reject_briefings(
         "rejected": rejected,
         "failed": failed,
     }
+
+
+_EXPORT_LIMIT = 10_000
+
+
+@router.get("/export")
+async def export_briefings(
+    status: str | None = Query(None),
+    user: AuthUser = Depends(require_auth),
+):
+    """Export briefings as CSV."""
+    pool = _pool_or_503()
+
+    if status and status != "all":
+        rows = await pool.fetch(
+            """
+            SELECT vendor_name, recipient_email, subject, status,
+                   target_mode, created_at, approved_at, rejected_at, reject_reason
+            FROM b2b_vendor_briefings
+            WHERE status = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            status,
+            _EXPORT_LIMIT,
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT vendor_name, recipient_email, subject, status,
+                   target_mode, created_at, approved_at, rejected_at, reject_reason
+            FROM b2b_vendor_briefings
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            _EXPORT_LIMIT,
+        )
+
+    data = []
+    for r in rows:
+        data.append({
+            "vendor_name": r["vendor_name"] or "",
+            "recipient_email": r["recipient_email"] or "",
+            "subject": r["subject"] or "",
+            "status": r["status"] or "",
+            "target_mode": r["target_mode"] or "",
+            "created_at": r["created_at"].isoformat() if r["created_at"] else "",
+            "approved_at": r["approved_at"].isoformat() if r["approved_at"] else "",
+            "rejected_at": r["rejected_at"].isoformat() if r["rejected_at"] else "",
+            "reject_reason": r["reject_reason"] or "",
+        })
+
+    if not data:
+        buf = io.StringIO()
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="briefings.csv"'},
+        )
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(data[0].keys()))
+    writer.writeheader()
+    writer.writerows(data)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="briefings.csv"'},
+    )

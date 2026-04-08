@@ -7,6 +7,7 @@ import {
   UserPlus,
   Mail,
   Loader2,
+  Download,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -14,7 +15,7 @@ import DataTable from '../components/DataTable'
 import StatCard from '../components/StatCard'
 import type { Column } from '../components/DataTable'
 import type { Prospect } from '../types'
-import { fetchProspects, fetchProspectStats } from '../api/client'
+import { fetchProspects, fetchProspectStats, downloadProspectsCsv } from '../api/client'
 
 function ProspectStatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
@@ -258,14 +259,29 @@ export default function ProspectsPage() {
           <Users className="h-6 w-6 text-cyan-400" />
           <h1 className="text-2xl font-bold text-white">Prospects</h1>
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              downloadProspectsCsv({
+                company: debouncedSearch || undefined,
+                status: statusFilter || undefined,
+                seniority: seniorityFilter || undefined,
+              })
+            }
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-lg transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stats */}

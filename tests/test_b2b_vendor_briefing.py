@@ -1,7 +1,11 @@
+import csv
+import io
+from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
+from atlas_brain.api import b2b_vendor_briefing as briefing_api
 from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
 
 
@@ -181,6 +185,41 @@ async def test_fetch_cross_vendor_conclusions_uses_canonical_lookup(monkeypatch)
     assert results[0]["analysis_type"] == "pairwise_battle"
     assert results[1]["analysis_type"] == "category_council"
     assert results[1]["reference_ids"]["witness_ids"] == ["witness:crm:1"]
+
+
+@pytest.mark.asyncio
+async def test_export_briefings_returns_csv(monkeypatch):
+    class Pool:
+        async def fetch(self, query, *args):
+            assert "FROM b2b_vendor_briefings" in query
+            return [{
+                "vendor_name": "Zendesk",
+                "recipient_email": "ops@acme.com",
+                "subject": "Zendesk Briefing",
+                "status": "pending_approval",
+                "target_mode": "vendor_retention",
+                "created_at": datetime(2026, 4, 7, 12, 0),
+                "approved_at": None,
+                "rejected_at": None,
+                "reject_reason": None,
+            }]
+
+    monkeypatch.setattr(briefing_api, "_pool_or_503", lambda: Pool())
+
+    response = await briefing_api.export_briefings(
+        status="pending_approval",
+        user=object(),
+    )
+
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = "".join(
+        chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+        for chunk in chunks
+    )
+    rows = list(csv.DictReader(io.StringIO(body)))
+
+    assert rows[0]["vendor_name"] == "Zendesk"
+    assert rows[0]["status"] == "pending_approval"
 
 
 def test_apply_reasoning_synthesis_to_briefing_normalizes_flat_feed_sections():

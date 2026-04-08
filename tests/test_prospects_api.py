@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
+import csv
+import io
 
 import pytest
 
@@ -190,3 +192,51 @@ async def test_list_prospects_falls_back_to_company_match_when_email_missing(mon
     assert prospect["reasoning_atom_context"]["account_signals"][0]["buying_stage"] == "renewal_decision"
     assert pool.sequence_args[1] == ["acme"]
     assert "company_context ->> 'company'" in pool.sequence_query
+
+
+@pytest.mark.asyncio
+async def test_export_prospects_returns_filtered_csv(monkeypatch):
+    class Pool:
+        async def fetch(self, query, *args):
+            assert "FROM prospects p" in query
+            assert "p.status = $2" in query
+            return [{
+                "first_name": "Alex",
+                "last_name": "Kim",
+                "email": "alex@acme.com",
+                "email_status": "valid",
+                "title": "RevOps Lead",
+                "seniority": "manager",
+                "department": "operations",
+                "company_name": "Acme Co",
+                "company_domain": "acme.com",
+                "linkedin_url": None,
+                "city": "Austin",
+                "state": "TX",
+                "country": "US",
+                "status": "active",
+                "seq_status": "active",
+                "seq_step": 2,
+                "seq_max_steps": 4,
+                "seq_last_sent": datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+                "created_at": datetime(2026, 4, 6, 12, 0, tzinfo=timezone.utc),
+            }]
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+
+    response = await mod.export_prospects(
+        company="Acme",
+        status="active",
+        seniority=None,
+        _user=object(),
+    )
+
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = "".join(
+        chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+        for chunk in chunks
+    )
+    rows = list(csv.DictReader(io.StringIO(body)))
+
+    assert rows[0]["company_name"] == "Acme Co"
+    assert rows[0]["seq_status"] == "active"

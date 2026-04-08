@@ -14,6 +14,7 @@ import {
   Save,
   X,
   ExternalLink,
+  Download,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -30,6 +31,7 @@ import {
   bulkApproveCampaigns,
   bulkRejectCampaigns,
   updateCampaign,
+  downloadCampaignsCsv,
 } from '../api/client'
 
 type StatusTab = 'draft' | 'approved' | 'sent' | 'all'
@@ -292,6 +294,18 @@ export default function CampaignReview() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              downloadCampaignsCsv({
+                status: statusTab !== 'all' ? statusTab : undefined,
+                company: companyFilter || undefined,
+              })
+            }
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-lg transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </button>
           <Link
             to="/campaign-diagnostics"
             className="flex items-center gap-2 rounded-lg bg-slate-800/50 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700/50"
@@ -408,7 +422,7 @@ export default function CampaignReview() {
           {(['draft', 'approved', 'sent', 'all'] as const).map((tab) => (
             <button
               key={tab}
-              onClick={() => { setStatusTab(tab); setExpandedCompany(null); setSelectedIds(new Set()) }}
+              onClick={() => { setStatusTab(tab); setExpandedCompany(null); setSelectedIds(new Set()); cancelEditing() }}
               className={clsx(
                 'px-4 py-2 text-sm font-medium transition-colors border-b-2 capitalize',
                 statusTab === tab

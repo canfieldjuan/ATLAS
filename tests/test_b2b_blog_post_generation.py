@@ -11,9 +11,11 @@ import pytest
 import atlas_brain.autonomous.tasks.b2b_blog_post_generation as blog_mod
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
     _assemble_and_store,
+    _blog_post_max_per_run,
     _candidate_overlaps_gap_pain,
     _blueprint_churn_report,
     _blueprint_migration_guide,
+    _task_run_id,
     _blueprint_vendor_alternative,
     _build_specialized_blog_review_rows_from_evidence_vault,
     _detect_campaign_content_gaps,
@@ -25,6 +27,20 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (
     _merge_blog_signals_with_evidence_vault,
 )
 from atlas_brain.storage.models import ScheduledTask
+
+
+def test_blog_post_max_per_run_prefers_task_metadata_override():
+    task = SimpleNamespace(metadata={"blog_post_max_per_run": 1})
+    cfg = SimpleNamespace(blog_post_max_per_run=2)
+
+    assert _blog_post_max_per_run(task, cfg) == 1
+
+
+def test_task_run_id_prefers_scheduler_execution_id():
+    execution_id = str(uuid4())
+    task = SimpleNamespace(id=uuid4(), metadata={"_execution_id": execution_id})
+
+    assert _task_run_id(task) == execution_id
 
 
 def test_merge_blog_signals_with_evidence_vault_prefers_canonical_rows():

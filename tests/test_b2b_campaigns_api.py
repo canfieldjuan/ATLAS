@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
+import csv
+import io
 
 import pytest
 
@@ -164,6 +166,65 @@ class _FallbackReasoningView:
 
     def filtered_consumer_context(self, consumer):
         return self.consumer_context(consumer)
+
+
+@pytest.mark.asyncio
+async def test_export_campaigns_reuses_account_scope(monkeypatch):
+    captured = {}
+
+    class Pool:
+        async def fetch(self, query, *args):
+            captured["query"] = query
+            captured["args"] = args
+            return [
+                {
+                    "company_name": "Acme Corp",
+                    "vendor_name": "Zendesk",
+                    "channel": "email",
+                    "subject": "Renewal pressure",
+                    "cta": "Reply",
+                    "status": "draft",
+                    "opportunity_score": 81,
+                    "urgency_score": 7.0,
+                    "buying_stage": "evaluation",
+                    "role_type": "economic_buyer",
+                    "seat_count": 250,
+                    "contract_end": "2026-06-30",
+                    "decision_timeline": "within_90_days",
+                    "created_at": datetime(2026, 4, 7, 18, 0, tzinfo=timezone.utc),
+                    "approved_at": None,
+                    "sent_at": None,
+                    "recipient_email": "owner@acme.com",
+                    "current_step": 1,
+                    "max_steps": 4,
+                    "open_count": 0,
+                    "click_count": 0,
+                    "outcome": None,
+                },
+            ]
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
+    user = type("User", (), {"account_id": str(uuid4())})()
+
+    response = await mod.export_campaigns(
+        status="draft",
+        vendor="Zendesk",
+        company="Acme",
+        user=user,
+    )
+
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = "".join(
+        chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+        for chunk in chunks
+    )
+    rows = list(csv.DictReader(io.StringIO(body)))
+
+    assert "tracked_vendors" in captured["query"]
+    assert "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in captured["query"]
+    assert captured["args"][0] == user.account_id
+    assert rows[0]["company_name"] == "Acme Corp"
+    assert rows[0]["vendor_name"] == "Zendesk"
 
 
 @pytest.mark.asyncio

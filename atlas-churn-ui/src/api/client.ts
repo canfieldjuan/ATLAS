@@ -516,8 +516,9 @@ export async function deleteVendorTarget(id: string) {
 export function downloadCsv(
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
+  base: string = TENANT_BASE,
 ) {
-  const url = new URL(TENANT_BASE + path, window.location.origin)
+  const url = new URL(base + path, window.location.origin)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && v !== '') {
@@ -528,6 +529,18 @@ export function downloadCsv(
   const token = localStorage.getItem('atlas_token')
   if (token) url.searchParams.set('token', token)
   window.open(url.toString(), '_blank')
+}
+
+export function downloadProspectsCsv(params?: Record<string, string | number | boolean | undefined>) {
+  downloadCsv('/export', params, PROSPECTS_BASE)
+}
+
+export function downloadCampaignsCsv(params?: Record<string, string | number | boolean | undefined>) {
+  downloadCsv('/export', params, CAMPAIGNS_BASE)
+}
+
+export function downloadBriefingsCsv(params?: Record<string, string | number | boolean | undefined>) {
+  downloadCsv('/export', params, BRIEFINGS_BASE)
 }
 
 export async function generateVendorReport(id: string) {

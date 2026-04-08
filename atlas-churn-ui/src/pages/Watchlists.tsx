@@ -4,6 +4,7 @@ import {
   Activity,
   BellRing,
   Building2,
+  Download,
   Plus,
   RefreshCw,
   Search,
@@ -48,6 +49,7 @@ import {
   updateWatchlistView,
   updateCompetitiveSet,
   type VendorSearchResult,
+  downloadCsv,
 } from '../api/client'
 import type { ChurnSignal } from '../types'
 
@@ -1254,14 +1256,23 @@ export default function Watchlists() {
             Track the vendors that matter, monitor movement across the slow-burn feed, and jump directly into vendor detail for evidence-backed review.
           </p>
         </div>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => downloadCsv('/export/signals')}
+            className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

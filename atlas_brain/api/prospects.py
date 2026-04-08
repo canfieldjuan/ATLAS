@@ -2,6 +2,8 @@
 REST endpoints for Prospect audit: list enriched prospects and aggregate stats.
 """
 
+import csv
+import io
 import json
 import logging
 import re
@@ -11,6 +13,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, require_auth
 from ..services.apollo_company_overrides import (
@@ -423,3 +426,101 @@ async def remove_company_override(
     if not deleted:
         raise HTTPException(status_code=404, detail="Company override not found")
     return {"deleted": True}
+
+
+_EXPORT_LIMIT = 10_000
+
+
+@router.get("/export")
+async def export_prospects(
+    company: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    seniority: Optional[str] = Query(None),
+    _user: AuthUser = Depends(require_auth),
+):
+    """Export prospects as CSV with current filters."""
+    pool = _pool_or_503()
+
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if company:
+        conditions.append(f"LOWER(p.company_name) LIKE ${idx}")
+        params.append(f"%{company.lower()}%")
+        idx += 1
+    if status:
+        conditions.append(f"p.status = ${idx}")
+        params.append(status)
+        idx += 1
+    if seniority:
+        conditions.append(f"p.seniority = ${idx}")
+        params.append(seniority)
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    rows = await pool.fetch(
+        f"""
+        SELECT p.first_name, p.last_name, p.email, p.email_status,
+               p.title, p.seniority, p.department, p.company_name,
+               p.company_domain, p.linkedin_url, p.city, p.state,
+               p.country, p.status, p.created_at,
+               cs.status AS seq_status,
+               cs.current_step AS seq_step,
+               cs.max_steps AS seq_max_steps,
+               cs.last_sent_at AS seq_last_sent
+        FROM prospects p
+        LEFT JOIN campaign_sequences cs
+            ON cs.recipient_email = p.email
+            AND cs.status IN ('active', 'paused', 'completed', 'replied')
+        {where}
+        ORDER BY p.created_at DESC
+        LIMIT {_EXPORT_LIMIT}
+        """,
+        *params,
+    )
+
+    data = []
+    for r in rows:
+        data.append({
+            "first_name": r["first_name"] or "",
+            "last_name": r["last_name"] or "",
+            "email": r["email"] or "",
+            "email_status": r["email_status"] or "",
+            "title": r["title"] or "",
+            "seniority": r["seniority"] or "",
+            "department": r["department"] or "",
+            "company_name": r["company_name"] or "",
+            "company_domain": r["company_domain"] or "",
+            "linkedin_url": r["linkedin_url"] or "",
+            "city": r["city"] or "",
+            "state": r["state"] or "",
+            "country": r["country"] or "",
+            "status": r["status"] or "",
+            "seq_status": r["seq_status"] or "",
+            "seq_step": r["seq_step"] if r["seq_step"] is not None else "",
+            "seq_max_steps": r["seq_max_steps"] if r["seq_max_steps"] is not None else "",
+            "seq_last_sent": r["seq_last_sent"].isoformat() if r["seq_last_sent"] else "",
+            "created_at": r["created_at"].isoformat() if r["created_at"] else "",
+        })
+
+    if not data:
+        buf = io.StringIO()
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="prospects.csv"'},
+        )
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(data[0].keys()))
+    writer.writeheader()
+    writer.writerows(data)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="prospects.csv"'},
+    )

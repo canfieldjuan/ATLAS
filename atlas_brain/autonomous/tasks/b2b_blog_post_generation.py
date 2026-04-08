@@ -36,6 +36,7 @@ from ...services.scraping.sources import (
     parse_source_allowlist,
 )
 from ...reasoning.wedge_registry import Wedge, get_wedge_meta
+from ._execution_progress import task_run_id as _task_execution_run_id
 from ._b2b_shared import (
     _fetch_latest_evidence_vault,
     _segment_targeting_summary,
@@ -142,6 +143,25 @@ _SOURCEISH_SKIP_WORDS = frozenset(
         ),
     }
 )
+
+
+def _task_run_id(task: ScheduledTask | Any) -> str | None:
+    """Return a stable execution-aware run id for scheduled blog jobs."""
+    return _task_execution_run_id(task)
+
+
+def _blog_post_max_per_run(task: ScheduledTask | Any, cfg: Any) -> int:
+    """Resolve max posts per run from task metadata before config defaults."""
+    metadata = getattr(task, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("blog_post_max_per_run", "max_posts_per_run", "max_per_run"):
+            value = metadata.get(key)
+            try:
+                if value is not None:
+                    return max(1, int(value))
+            except (TypeError, ValueError):
+                logger.warning("Ignoring invalid %s=%r on blog task metadata", key, value)
+    return max(1, int(cfg.blog_post_max_per_run))
 _WEDGEISH_SKIP_WORDS = frozenset(
     " ".join(re.findall(r"[a-z0-9]+", phrase.lower()))
     for phrase in {
@@ -2437,6 +2457,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     All posts are stored as drafts.
     """
     cfg = settings.b2b_churn
+    run_id = _task_run_id(task) or str(task.id)
     maintenance_run = bool((task.metadata or {}).get("maintenance_run"))
     if not cfg.blog_post_enabled and not maintenance_run:
         return {"_skip_synthesis": "B2B blog post generation disabled"}
@@ -2478,7 +2499,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if generation_llm is None:
         return {"_skip_synthesis": "No LLM available for B2B blog post generation"}
 
-    max_posts = max(1, cfg.blog_post_max_per_run)
+    max_posts = _blog_post_max_per_run(task, cfg)
     results: list[dict[str, Any]] = []
     # Track vendors and topic types across iterations to prevent dominance
     run_seen_vendors: set[str] = set()
@@ -2639,7 +2660,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     trace_metadata={
                         **_blog_generation_trace_metadata(
                             entry["candidate"]["blueprint"],
-                            run_id=str(task.id),
+                            run_id=run_id,
                         ),
                         "workload": "anthropic_batch",
                     },
@@ -2652,7 +2673,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 for entry in prepared_entries
             ],
-            run_id=str(task.id),
+            run_id=run_id,
             min_batch_size=int(getattr(cfg, "blog_post_anthropic_batch_min_items", 2)),
             batch_metadata={
                 "report_type": "blog_post",
@@ -2694,7 +2715,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     blueprint,
                     cfg.blog_post_max_tokens,
                     related_posts=candidate["link_posts"],
-                    run_id=str(task.id),
+                    run_id=run_id,
                     pool=pool,
                     usage_out=fallback_usage,
                 )
@@ -2799,7 +2820,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     blueprint,
                     cfg.blog_post_max_tokens,
                     related_posts=link_posts,
-                    run_id=str(task.id),
+                    run_id=run_id,
                     pool=pool,
                 )
 
@@ -2811,7 +2832,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     blueprint,
                     generation_llm,
                     status="failed",
-                    run_id=str(task.id),
+                    run_id=run_id,
                     attempt_no=1,
                     failure_step="llm_call",
                     error_code="llm_returned_none",
@@ -2819,7 +2840,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 await record_attempt(
                     pool, artifact_type="blog_post", artifact_id=blueprint.slug,
-                    run_id=str(task.id), attempt_no=1, stage="generation",
+                    run_id=run_id, attempt_no=1, stage="generation",
                     status="failed", failure_step="llm_call",
                     error_message="LLM returned None",
                 )
@@ -2828,7 +2849,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     entity_type="blog_post", entity_id=blueprint.slug,
                     summary=f"LLM failed for {blueprint.slug} ({topic_type})",
                     severity="error", actionable=True,
-                    artifact_type="blog_post", run_id=str(task.id),
+                    artifact_type="blog_post", run_id=run_id,
                     reason_code="llm_returned_none",
                 )
                 continue
@@ -2839,7 +2860,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 content,
                 cfg.blog_post_max_tokens,
                 related_posts=link_posts,
-                run_id=str(task.id),
+                run_id=run_id,
                 pool=pool,
             )
             first_pass_audit = _persist_first_pass_blog_quality(blueprint, quality_report)
@@ -2849,7 +2870,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     pool,
                     artifact_type="blog_post",
                     artifact_id=blueprint.slug,
-                    run_id=str(task.id),
+                    run_id=run_id,
                     attempt_no=1,
                     stage="quality_gate_first_pass",
                     status="retry_requested",
@@ -2882,7 +2903,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     blueprint,
                     generation_llm,
                     status="rejected",
-                    run_id=str(task.id),
+                    run_id=run_id,
                     attempt_no=1,
                     score=quality_audit.get("score"),
                     threshold=quality_audit.get("threshold"),
@@ -2896,7 +2917,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 await record_attempt(
                     pool, artifact_type="blog_post", artifact_id=blueprint.slug,
-                    run_id=str(task.id), attempt_no=1, stage="quality_gate",
+                    run_id=run_id, attempt_no=1, stage="quality_gate",
                     status="rejected",
                     score=quality_audit.get("score"),
                     threshold=quality_audit.get("threshold"),
@@ -2912,7 +2933,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     entity_type="blog_post", entity_id=blueprint.slug,
                     summary=f"Quality gate rejected {blueprint.slug} ({topic_type})",
                     severity="warning", actionable=True,
-                    artifact_type="blog_post", run_id=str(task.id),
+                    artifact_type="blog_post", run_id=run_id,
                     reason_code=quality_audit.get("blocking_issues", ["unknown"])[0][:80] if quality_audit.get("blocking_issues") else "unknown",
                     decision="rejected",
                     detail=quality_audit,
@@ -2930,7 +2951,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 blueprint,
                 content,
                 generation_llm,
-                run_id=str(task.id),
+                run_id=run_id,
                 attempt_no=1,
             )
             if not post_id:
@@ -2938,7 +2959,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 from ..visibility import record_dedup
                 await record_dedup(
                     pool, stage="blog", entity_type="blog_post",
-                    entity_id=blueprint.slug, run_id=str(task.id),
+                    entity_id=blueprint.slug, run_id=run_id,
                     reason=f"Slug {blueprint.slug} already published",
                 )
                 continue
@@ -2946,7 +2967,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             from ..visibility import record_attempt
             await record_attempt(
                 pool, artifact_type="blog_post", artifact_id=blueprint.slug,
-                run_id=str(task.id), attempt_no=1, stage="quality_gate",
+                run_id=run_id, attempt_no=1, stage="quality_gate",
                 status="succeeded",
                 score=quality_audit.get("score"),
                 threshold=quality_audit.get("threshold"),
@@ -3006,6 +3027,7 @@ async def _regenerate_existing_posts(
     (legacy) are skipped.
     """
     from ...pipelines.notify import send_pipeline_notification
+    run_id = _task_run_id(task) or str(task.id)
 
     scoped_vendors = [
         value.lower()
@@ -3100,7 +3122,7 @@ async def _regenerate_existing_posts(
             content = await _generate_content_async(
                 llm, blueprint, cfg.blog_post_max_tokens,
                 related_posts=link_posts,
-                run_id=str(task.id),
+                run_id=run_id,
             )
             if content is None:
                 logger.warning("Regen: LLM failed for %s, skipping", slug)
@@ -3109,7 +3131,7 @@ async def _regenerate_existing_posts(
                     blueprint,
                     llm,
                     status="failed",
-                    run_id=str(task.id),
+                    run_id=run_id,
                     attempt_no=1,
                     failure_step="llm_call",
                     error_code="llm_returned_none",
@@ -3123,7 +3145,7 @@ async def _regenerate_existing_posts(
                 content,
                 cfg.blog_post_max_tokens,
                 related_posts=link_posts,
-                run_id=str(task.id),
+                run_id=run_id,
             )
             _persist_first_pass_blog_quality(blueprint, quality_report)
             if content is None:
@@ -3144,7 +3166,7 @@ async def _regenerate_existing_posts(
                     blueprint,
                     llm,
                     status="rejected",
-                    run_id=str(task.id),
+                    run_id=run_id,
                     attempt_no=1,
                     score=quality_audit.get("score"),
                     threshold=quality_audit.get("threshold"),
@@ -3169,7 +3191,7 @@ async def _regenerate_existing_posts(
                 blueprint,
                 content,
                 llm,
-                run_id=str(task.id),
+                run_id=run_id,
                 attempt_no=1,
             )
             if post_id:

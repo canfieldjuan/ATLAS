@@ -5,6 +5,8 @@ Provides CRUD, manual campaign generation trigger, approve/reject workflow,
 and KPI stats for the campaign engine.
 """
 
+import csv
+import io
 import json
 import logging
 import uuid as _uuid
@@ -14,6 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
 from ..autonomous.tasks._b2b_specificity import (
@@ -2320,3 +2323,114 @@ async def campaign_audit_log(
     )
 
     return {"count": len(rows), "audit_log": [_row_to_dict(r) for r in rows]}
+
+
+_EXPORT_LIMIT = 10_000
+
+
+@router.get("/export")
+async def export_campaigns(
+    status: str = Query("all"),
+    vendor: Optional[str] = Query(None),
+    company: Optional[str] = Query(None),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Export campaign queue as CSV."""
+    pool = _pool_or_503()
+
+    scope_clause, params = _campaign_scope_clause("bc", user)
+    conditions: list[str] = []
+    idx = len(params) + 1
+
+    valid_statuses = {"draft", "approved", "queued", "sent", "cancelled", "expired", "all"}
+    if status not in valid_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"status must be one of: {', '.join(sorted(valid_statuses))}",
+        )
+
+    if status != "all":
+        conditions.append(f"bc.status = ${idx}")
+        params.append(status)
+        idx += 1
+    if vendor:
+        conditions.append(f"LOWER(bc.vendor_name) LIKE ${idx}")
+        params.append(f"%{vendor.lower()}%")
+        idx += 1
+    if company:
+        conditions.append(f"LOWER(bc.company_name) LIKE ${idx}")
+        params.append(f"%{company.lower()}%")
+        idx += 1
+
+    where_parts: list[str] = []
+    if scope_clause:
+        where_parts.append(scope_clause.replace(" WHERE ", "", 1))
+    if conditions:
+        where_parts.extend(conditions)
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    rows = await pool.fetch(
+        f"""
+        SELECT bc.company_name, bc.vendor_name, bc.channel,
+               bc.subject, bc.cta, bc.status,
+               bc.opportunity_score, bc.urgency_score,
+               bc.buying_stage, bc.role_type,
+               bc.seat_count, bc.contract_end, bc.decision_timeline,
+               bc.created_at, bc.approved_at, bc.sent_at,
+               cs.recipient_email, cs.current_step, cs.max_steps,
+               cs.open_count, cs.click_count, cs.outcome
+        FROM b2b_campaigns bc
+        LEFT JOIN campaign_sequences cs ON cs.id = bc.sequence_id
+        {where}
+        ORDER BY bc.created_at DESC
+        LIMIT {_EXPORT_LIMIT}
+        """,
+        *params,
+    )
+
+    data = []
+    for r in rows:
+        data.append({
+            "company_name": r["company_name"] or "",
+            "vendor_name": r["vendor_name"] or "",
+            "channel": r["channel"] or "",
+            "subject": r["subject"] or "",
+            "cta": r["cta"] or "",
+            "status": r["status"] or "",
+            "opportunity_score": r["opportunity_score"] if r["opportunity_score"] is not None else "",
+            "urgency_score": str(r["urgency_score"]) if r["urgency_score"] is not None else "",
+            "buying_stage": r["buying_stage"] or "",
+            "role_type": r["role_type"] or "",
+            "seat_count": r["seat_count"] if r["seat_count"] is not None else "",
+            "contract_end": r["contract_end"] or "",
+            "decision_timeline": r["decision_timeline"] or "",
+            "recipient_email": r["recipient_email"] or "",
+            "current_step": r["current_step"] if r["current_step"] is not None else "",
+            "max_steps": r["max_steps"] if r["max_steps"] is not None else "",
+            "open_count": r["open_count"] if r["open_count"] is not None else "",
+            "click_count": r["click_count"] if r["click_count"] is not None else "",
+            "outcome": r["outcome"] or "",
+            "created_at": r["created_at"].isoformat() if r["created_at"] else "",
+            "approved_at": r["approved_at"].isoformat() if r["approved_at"] else "",
+            "sent_at": r["sent_at"].isoformat() if r["sent_at"] else "",
+        })
+
+    if not data:
+        buf = io.StringIO()
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="campaigns.csv"'},
+        )
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(data[0].keys()))
+    writer.writeheader()
+    writer.writerows(data)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="campaigns.csv"'},
+    )

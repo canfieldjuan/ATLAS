@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Swords,
   RefreshCw,
@@ -6,6 +7,8 @@ import {
   TrendingUp,
   Users,
   Target,
+  ExternalLink,
+  Download,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -16,6 +19,7 @@ import {
   fetchVendorTargets,
   fetchHighIntent,
   generateCampaigns,
+  downloadCsv,
 } from '../api/client'
 
 interface ChallengerSummary {
@@ -34,6 +38,7 @@ export default function Challengers() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [generatingFor, setGeneratingFor] = useState<string | null>(null)
   const [actionResult, setActionResult] = useState<string | null>(null)
+  const [lastGenVendor, setLastGenVendor] = useState<string | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchInput), 300)
@@ -142,6 +147,7 @@ export default function Challengers() {
         limit: 5,
       })
       setActionResult(`Generated ${result.generated ?? 0} campaign(s) for ${name}`)
+      setLastGenVendor(name)
       refresh()
     } catch (err) {
       setActionResult(err instanceof Error ? err.message : 'Generation failed')
@@ -245,21 +251,44 @@ export default function Challengers() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Challenger Intelligence</h1>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              downloadCsv('/export/high-intent', {
+                min_urgency: 3,
+              })
+            }
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+          >
+            <Download className="h-4 w-4" />
+            Export
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Action result */}
       {actionResult && (
         <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-3 flex items-center justify-between">
-          <span className="text-sm text-cyan-400">{actionResult}</span>
-          <button onClick={() => setActionResult(null)} className="text-cyan-400 hover:text-white">
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-cyan-400">{actionResult}</span>
+            {lastGenVendor && (
+              <Link
+                to={`/campaign-review?company=${encodeURIComponent(lastGenVendor)}`}
+                className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-white transition-colors"
+              >
+                Review campaigns <ExternalLink className="h-3 w-3" />
+              </Link>
+            )}
+          </div>
+          <button onClick={() => { setActionResult(null); setLastGenVendor(null) }} className="text-cyan-400 hover:text-white">
             <span className="text-lg leading-none">&times;</span>
           </button>
         </div>
