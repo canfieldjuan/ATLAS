@@ -73,8 +73,8 @@ export default function Opportunities() {
   // -- Filters --
   const [vendorSearch, setVendorSearch] = useState('')
   const [debouncedVendor, setDebouncedVendor] = useState('')
-  const [minUrgency, setMinUrgency] = useState(3)
-  const [windowDays, setWindowDays] = useState(365)
+  const [minUrgency, setMinUrgency] = useState(5)
+  const [windowDays, setWindowDays] = useState(90)
   const [stageFilter, setStageFilter] = useState<string>('all')
   const [intentFilter, setIntentFilter] = useState<Set<string>>(new Set())
 
@@ -111,7 +111,7 @@ export default function Opportunities() {
         min_urgency: minUrgency,
         vendor_name: debouncedVendor || undefined,
         window_days: windowDays,
-        limit: 100,
+        limit: 200,
       })
       return res.companies
     },
@@ -153,8 +153,8 @@ export default function Opportunities() {
     const dmCount = filtered.filter((r) => r.decision_maker).length
     const dmPct = total > 0 ? Math.round((dmCount / total) * 100) : 0
     const avgUrg = total > 0 ? Math.round((filtered.reduce((s, r) => s + r.urgency, 0) / total) * 10) / 10 : 0
-    const activePurchase = filtered.filter((r) => r.buying_stage === 'active_purchase').length
-    return { total, highUrgency, dmPct, avgUrg, activePurchase }
+    const withContract = filtered.filter((r) => r.contract_end).length
+    return { total, highUrgency, dmPct, avgUrg, withContract }
   }, [filtered])
 
   // -- Toggle --
@@ -503,7 +503,7 @@ export default function Opportunities() {
         <StatCard label="High Urgency (8+)" value={stats.highUrgency} icon={<AlertTriangle className="h-4 w-4 text-red-400" />} skeleton={loading} />
         <StatCard label="Decision Makers" value={`${stats.dmPct}%`} icon={<Users className="h-4 w-4 text-amber-400" />} skeleton={loading} />
         <StatCard label="Avg Urgency" value={stats.avgUrg} icon={<TrendingUp className="h-4 w-4 text-amber-400" />} skeleton={loading} />
-        <StatCard label="Active Purchase" value={stats.activePurchase} icon={<Target className="h-4 w-4 text-red-400" />} skeleton={loading} />
+        <StatCard label="Contract Known" value={stats.withContract} icon={<Target className="h-4 w-4 text-red-400" />} skeleton={loading} />
       </div>
 
       {/* Filters + bulk actions */}
@@ -627,6 +627,8 @@ export default function Opportunities() {
           emptyMessage="No opportunities found. Try lowering min urgency, extending the time window, or removing filters."
           onRowClick={(r) => setExpandedId((prev) => prev === rowKey(r) ? null : rowKey(r))}
           pageSize={50}
+          defaultSortKey="urgency"
+          defaultSortDir="desc"
         />
       </div>
 

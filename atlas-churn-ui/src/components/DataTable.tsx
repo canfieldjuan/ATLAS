@@ -18,6 +18,8 @@ interface DataTableProps<T> {
   skeletonRows?: number
   emptyAction?: { label: string; onClick: () => void }
   pageSize?: number
+  defaultSortKey?: string
+  defaultSortDir?: 'asc' | 'desc'
 }
 
 const PAGE_SIZES = [25, 50, 100] as const
@@ -30,9 +32,11 @@ export default function DataTable<T>({
   skeletonRows,
   emptyAction,
   pageSize: defaultPageSize = 25,
+  defaultSortKey,
+  defaultSortDir = 'desc',
 }: DataTableProps<T>) {
-  const [sortKey, setSortKey] = useState<string | null>(null)
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [sortKey, setSortKey] = useState<string | null>(defaultSortKey ?? null)
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSortDir)
   const [page, setPage] = useState(0)
   const [perPage, setPerPage] = useState(defaultPageSize)
 
