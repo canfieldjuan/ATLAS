@@ -321,7 +321,24 @@ export default function Leads() {
     {
       key: 'company',
       header: 'Company',
-      render: (r) => <span className="text-slate-300">{r.company || '--'}</span>,
+      render: (r) => (
+        <div className="min-w-0">
+          <span className="text-slate-300">{r.company || '--'}</span>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+            {r.company_domain && <span>{r.company_domain}</span>}
+            {r.industry && (
+              <span className="rounded-full bg-slate-800/60 px-2 py-0.5 text-slate-400">
+                {r.industry}
+              </span>
+            )}
+            {r.resolution_confidence && (
+              <span className="rounded-full bg-cyan-500/10 px-2 py-0.5 text-cyan-300">
+                {r.resolution_confidence}
+              </span>
+            )}
+          </div>
+        </div>
+      ),
     },
     {
       key: 'competitor',
@@ -344,6 +361,36 @@ export default function Leads() {
       render: (r) => <UrgencyBadge score={r.urgency} />,
       sortable: true,
       sortValue: (r) => r.urgency,
+    },
+    {
+      key: 'signal',
+      header: 'Buying Signal',
+      render: (r) => {
+        const competitor = Array.isArray(r.alternatives)
+          ? r.alternatives
+              .map((alt) => alt?.name?.trim())
+              .find((name): name is string => Boolean(name))
+          : null
+        const quote = Array.isArray(r.quotes)
+          ? r.quotes.find((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          : null
+        const timing = r.contract_end || r.contract_signal
+        return (
+          <div className="min-w-0 max-w-[280px] text-xs">
+            <p className="text-slate-200 line-clamp-1">
+              {[r.role_level, r.pain].filter(Boolean).join(' | ') || '--'}
+            </p>
+            <p className="text-slate-400 line-clamp-1">
+              {[r.buying_stage, competitor, timing].filter(Boolean).join(' | ') || '--'}
+            </p>
+            {quote && (
+              <p className="mt-1 text-[11px] italic text-slate-500 line-clamp-2">
+                "{quote}"
+              </p>
+            )}
+          </div>
+        )
+      },
     },
     {
       key: 'dm',
