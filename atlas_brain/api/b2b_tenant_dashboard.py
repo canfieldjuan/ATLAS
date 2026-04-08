@@ -779,6 +779,35 @@ async def _update_watchlist_alert_email_log(
     )
 
 
+async def _update_watchlist_view_delivery_state(
+    pool,
+    *,
+    view_id: _uuid.UUID,
+    account_id: _uuid.UUID,
+    delivered_at: datetime | None,
+    status: str,
+    summary: str,
+    recorded_at: datetime,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE b2b_watchlist_views
+        SET last_alert_delivery_at = $2,
+            last_alert_delivery_status = $3,
+            last_alert_delivery_summary = $4,
+            updated_at = $5
+        WHERE id = $1
+          AND account_id = $6
+        """,
+        view_id,
+        delivered_at,
+        status,
+        summary[:1000],
+        recorded_at,
+        account_id,
+    )
+
+
 def _pool_or_503():
     pool = get_db_pool()
     if not pool.is_initialized:
@@ -2996,6 +3025,7 @@ async def deliver_watchlist_alert_email(
     ) or "your account"
 
     if not events:
+        summary = "No open alert events to deliver"
         log_id = _uuid.uuid4()
         await _record_watchlist_alert_email_log(
             pool,
@@ -3007,9 +3037,18 @@ async def deliver_watchlist_alert_email(
             message_ids=[],
             event_count=0,
             status="no_events",
-            summary="No open alert events to deliver",
+            summary=summary,
             error=None,
             delivered_at=now,
+            recorded_at=now,
+        )
+        await _update_watchlist_view_delivery_state(
+            pool,
+            view_id=view_id,
+            account_id=account_id,
+            delivered_at=now,
+            status="no_events",
+            summary=summary,
             recorded_at=now,
         )
         return {
@@ -3022,6 +3061,7 @@ async def deliver_watchlist_alert_email(
         }
 
     if not recipient_emails:
+        summary = "Watchlist alert email delivery failed before send"
         await _record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
@@ -3032,13 +3072,23 @@ async def deliver_watchlist_alert_email(
             message_ids=[],
             event_count=event_count,
             status="failed",
-            summary="Watchlist alert email delivery failed before send",
+            summary=summary,
             error="No active owner email is configured for this account",
             delivered_at=None,
             recorded_at=now,
         )
+        await _update_watchlist_view_delivery_state(
+            pool,
+            view_id=view_id,
+            account_id=account_id,
+            delivered_at=now,
+            status="failed",
+            summary=summary,
+            recorded_at=now,
+        )
         raise HTTPException(status_code=422, detail="No active owner email is configured for this account")
     if not _watchlist_alert_sender_configured():
+        summary = "Watchlist alert email delivery failed before send"
         await _record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
@@ -3049,9 +3099,18 @@ async def deliver_watchlist_alert_email(
             message_ids=[],
             event_count=event_count,
             status="failed",
-            summary="Watchlist alert email delivery failed before send",
+            summary=summary,
             error="Campaign sender not configured for watchlist alert email delivery",
             delivered_at=None,
+            recorded_at=now,
+        )
+        await _update_watchlist_view_delivery_state(
+            pool,
+            view_id=view_id,
+            account_id=account_id,
+            delivered_at=now,
+            status="failed",
+            summary=summary,
             recorded_at=now,
         )
         raise HTTPException(status_code=503, detail="Campaign sender not configured for watchlist alert email delivery")
@@ -3059,6 +3118,7 @@ async def deliver_watchlist_alert_email(
     try:
         sender = get_campaign_sender()
     except Exception as exc:
+        summary = "Watchlist alert email delivery failed before send"
         await _record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
@@ -3069,15 +3129,25 @@ async def deliver_watchlist_alert_email(
             message_ids=[],
             event_count=event_count,
             status="failed",
-            summary="Watchlist alert email delivery failed before send",
+            summary=summary,
             error=f"Campaign sender unavailable: {exc}",
             delivered_at=None,
+            recorded_at=now,
+        )
+        await _update_watchlist_view_delivery_state(
+            pool,
+            view_id=view_id,
+            account_id=account_id,
+            delivered_at=now,
+            status="failed",
+            summary=summary,
             recorded_at=now,
         )
         raise HTTPException(status_code=503, detail=f"Campaign sender unavailable: {exc}")
 
     from_addr = _watchlist_alert_from_email()
     if not from_addr:
+        summary = "Watchlist alert email delivery failed before send"
         await _record_watchlist_alert_email_log(
             pool,
             log_id=_uuid.uuid4(),
@@ -3088,9 +3158,18 @@ async def deliver_watchlist_alert_email(
             message_ids=[],
             event_count=event_count,
             status="failed",
-            summary="Watchlist alert email delivery failed before send",
+            summary=summary,
             error="Campaign sender from-address is not configured",
             delivered_at=None,
+            recorded_at=now,
+        )
+        await _update_watchlist_view_delivery_state(
+            pool,
+            view_id=view_id,
+            account_id=account_id,
+            delivered_at=now,
+            status="failed",
+            summary=summary,
             recorded_at=now,
         )
         raise HTTPException(status_code=503, detail="Campaign sender from-address is not configured")
@@ -3159,22 +3238,14 @@ async def deliver_watchlist_alert_email(
         delivered_at=delivered_at,
         recorded_at=now,
     )
-    await pool.execute(
-        """
-        UPDATE b2b_watchlist_views
-        SET last_alert_delivery_at = $2,
-            last_alert_delivery_status = $3,
-            last_alert_delivery_summary = $4,
-            updated_at = $5
-        WHERE id = $1
-          AND account_id = $6
-        """,
-        view_id,
-        delivered_at,
-        status,
-        summary,
-        now,
-        account_id,
+    await _update_watchlist_view_delivery_state(
+        pool,
+        view_id=view_id,
+        account_id=account_id,
+        delivered_at=delivered_at or now,
+        status=status,
+        summary=summary,
+        recorded_at=now,
     )
     return {
         "watchlist_view_id": str(view_id),

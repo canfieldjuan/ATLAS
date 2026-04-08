@@ -960,7 +960,14 @@ class TaskScheduler:
                     metadata=task_def.get("metadata"),
                 )
                 if task.enabled:
-                    await self.register_and_schedule(task)
+                    try:
+                        await self.register_and_schedule(task)
+                    except Exception:
+                        logger.error(
+                            "Failed to register seeded default task '%s'",
+                            task.name,
+                            exc_info=True,
+                        )
                 schedule_info = (
                     task.cron_expression
                     or (f"every {task.interval_seconds}s" if task.interval_seconds else task.schedule_type)

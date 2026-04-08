@@ -564,3 +564,60 @@ class TestDefaults:
     def test_scheduled_count_zero_when_not_running(self):
         s = _scheduler()
         assert s.scheduled_count == 0
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_ensure_default_tasks_continues_when_seeded_task_registration_fails(self, mock_repo_fn, monkeypatch):
+        s = _scheduler()
+        s._DEFAULT_TASKS = [
+            {
+                "name": "seed_one",
+                "task_type": "builtin",
+                "schedule_type": "interval",
+                "interval_seconds": 60,
+                "enabled": True,
+                "metadata": {},
+            },
+            {
+                "name": "seed_two",
+                "task_type": "builtin",
+                "schedule_type": "interval",
+                "interval_seconds": 120,
+                "enabled": True,
+                "metadata": {},
+            },
+        ]
+
+        created_one = ScheduledTask(
+            id=uuid4(),
+            name="seed_one",
+            task_type="builtin",
+            schedule_type="interval",
+            interval_seconds=60,
+            enabled=True,
+        )
+        created_two = ScheduledTask(
+            id=uuid4(),
+            name="seed_two",
+            task_type="builtin",
+            schedule_type="interval",
+            interval_seconds=120,
+            enabled=True,
+        )
+
+        repo = AsyncMock()
+        repo.get_by_name = AsyncMock(side_effect=[None, None])
+        repo.create = AsyncMock(side_effect=[created_one, created_two])
+        mock_repo_fn.return_value = repo
+
+        async def _register_side_effect(task):
+            if task.name == "seed_one":
+                raise RuntimeError("registration failed")
+            return task
+
+        monkeypatch.setattr(s, "register_and_schedule", AsyncMock(side_effect=_register_side_effect))
+
+        await s._ensure_default_tasks()
+
+        assert repo.create.await_count == 2
+        assert s.register_and_schedule.await_count == 2

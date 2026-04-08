@@ -1113,9 +1113,12 @@ async def test_deliver_watchlist_alert_email_logs_pre_send_failure(monkeypatch):
 
     assert exc_info.value.status_code == 422
     assert "No active owner email" in exc_info.value.detail
-    insert_sql = pool.execute.await_args.args[0]
-    assert "INSERT INTO b2b_watchlist_alert_email_log" in insert_sql
-    assert pool.execute.await_args.args[8] == "failed"
+    statements = [call.args[0] for call in pool.execute.await_args_list]
+    assert any("INSERT INTO b2b_watchlist_alert_email_log" in sql for sql in statements)
+    assert any("UPDATE b2b_watchlist_views" in sql for sql in statements)
+    update_call = next(call for call in pool.execute.await_args_list if "UPDATE b2b_watchlist_views" in call.args[0])
+    assert update_call.args[3] == "failed"
+    assert update_call.args[4] == "Watchlist alert email delivery failed before send"
 
 
 @pytest.mark.asyncio
@@ -1262,7 +1265,12 @@ async def test_deliver_watchlist_alert_email_records_no_events(monkeypatch):
 
     assert result["status"] == "no_events"
     assert result["event_count"] == 0
-    assert "INSERT INTO b2b_watchlist_alert_email_log" in pool.execute.await_args.args[0]
+    statements = [call.args[0] for call in pool.execute.await_args_list]
+    assert any("INSERT INTO b2b_watchlist_alert_email_log" in sql for sql in statements)
+    assert any("UPDATE b2b_watchlist_views" in sql for sql in statements)
+    update_call = next(call for call in pool.execute.await_args_list if "UPDATE b2b_watchlist_views" in call.args[0])
+    assert update_call.args[3] == "no_events"
+    assert update_call.args[4] == "No open alert events to deliver"
 
 
 @pytest.mark.asyncio
