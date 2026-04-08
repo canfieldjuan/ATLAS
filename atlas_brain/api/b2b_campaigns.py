@@ -25,6 +25,9 @@ from ..services.campaign_quality import (
     campaign_quality_revalidation_with_fallback,
     coerce_json_dict,
 )
+from ..services.campaign_reasoning_context import (
+    campaign_review_reasoning_context,
+)
 from ..storage.database import get_db_pool
 from ..autonomous.visibility import emit_event, record_attempt
 from ..autonomous.tasks.campaign_audit import log_campaign_event
@@ -386,9 +389,8 @@ async def list_campaigns(
         cc = r.get("company_context")
         metadata = _coerce_json_dict(r.get("metadata"))
         quality = _campaign_response_quality(metadata)
-        persona = None
-        if cc and isinstance(cc, dict):
-            persona = cc.get("target_persona")
+        reasoning_summary = campaign_review_reasoning_context(cc)
+        persona = cc.get("target_persona") if isinstance(cc, dict) else None
         campaigns.append({
             "id": str(r["id"]),
             "company_name": r["company_name"],
@@ -415,6 +417,7 @@ async def list_campaigns(
             "warning_count": quality["warning_count"],
             "latest_error_summary": quality["latest_error_summary"],
             "failure_explanation": quality["failure_explanation"],
+            **reasoning_summary,
         })
 
     return {"campaigns": campaigns, "count": len(campaigns)}
@@ -1209,10 +1212,10 @@ async def review_queue(
     for r in rows:
         d = _row_to_dict(r)
         quality = _campaign_response_quality(r.get("metadata"))
-        # Extract persona from company_context, then drop the large blob
         cc = r.get("company_context")
         if cc and isinstance(cc, dict):
             d["target_persona"] = cc.get("target_persona")
+        d.update(campaign_review_reasoning_context(cc))
         d.pop("company_context", None)
         d.pop("metadata", None)
         d.update(quality)

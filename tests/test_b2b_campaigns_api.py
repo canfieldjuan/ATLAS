@@ -162,6 +162,9 @@ class _FallbackReasoningView:
             "reference_ids": {"witness_ids": ["witness:r1:0"]},
         }
 
+    def filtered_consumer_context(self, consumer):
+        return self.consumer_context(consumer)
+
 
 @pytest.mark.asyncio
 async def test_approve_campaign_blocks_generic_copy_when_revalidation_fails(monkeypatch):
@@ -393,7 +396,55 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
                         "warnings": ["timing anchor exists but content does not mention the live trigger window"],
                     },
                 },
-                "company_context": {"target_persona": "revops"},
+                "company_context": {
+                    "target_persona": "revops",
+                    "company": "Acme Co",
+                    "role_type": "revops",
+                    "buying_stage": "evaluation",
+                    "urgency": "high",
+                    "contract_end": "2026-06-30",
+                    "decision_timeline": "60 days",
+                    "pain_categories": ["pricing"],
+                    "competitors_considering": ["HubSpot"],
+                    "key_quotes": ["We need better renewal controls."],
+                    "reasoning_scope_summary": {
+                        "selection_strategy": "vendor_facet_packet_v1",
+                        "witnesses_in_scope": 8,
+                        "witness_mix": {"timing": 2},
+                    },
+                    "reasoning_atom_context": {
+                        "top_theses": [
+                            {
+                                "wedge": "pricing",
+                                "summary": "Pricing pressure is driving re-evaluation.",
+                                "why_now": "Budget owners are active before renewal.",
+                                "confidence": "high",
+                            },
+                        ],
+                        "timing_windows": [
+                            {
+                                "window_type": "renewal",
+                                "anchor": "Q2 renewal",
+                                "urgency": "high",
+                                "recommended_action": "Engage before procurement freeze.",
+                            },
+                        ],
+                        "account_signals": [
+                            {
+                                "company": "Acme Co",
+                                "buying_stage": "evaluation",
+                                "competitor_context": "HubSpot",
+                                "primary_pain": "pricing",
+                            },
+                        ],
+                        "coverage_limits": ["thin_account_signals"],
+                    },
+                    "reasoning_delta_summary": {
+                        "changed": True,
+                        "new_timing_windows": ["Q2 renewal"],
+                        "new_account_signals": ["Acme Co"],
+                    },
+                },
             }]
 
     monkeypatch.setattr(mod, "_pool_or_503", lambda: Pool())
@@ -414,6 +465,10 @@ async def test_list_campaigns_surfaces_quality_summary_from_metadata(monkeypatch
     assert result["campaigns"][0]["latest_error_summary"].startswith("content does not reference")
     assert result["campaigns"][0]["failure_explanation"]["primary_blocker"].startswith("content does not reference")
     assert result["campaigns"][0]["failure_explanation"]["boundary"] is None
+    assert result["campaigns"][0]["reasoning_scope_summary"]["selection_strategy"] == "vendor_facet_packet_v1"
+    assert result["campaigns"][0]["reasoning_atom_context"]["top_theses"][0]["summary"] == "Pricing pressure is driving re-evaluation."
+    assert result["campaigns"][0]["reasoning_atom_context"]["account_signals"][0]["contract_end"] == "2026-06-30"
+    assert result["campaigns"][0]["reasoning_delta_summary"]["new_account_signals"] == ["Acme Co"]
 
 
 @pytest.mark.asyncio
@@ -448,7 +503,54 @@ async def test_review_queue_surfaces_quality_summary_from_metadata(monkeypatch):
                 "seq_status": "active",
                 "current_step": 1,
                 "max_steps": 3,
-                "company_context": {"target_persona": "revops"},
+                "company_context": {
+                    "target_persona": "revops",
+                    "company": "Acme Co",
+                    "role_type": "revops",
+                    "buying_stage": "evaluation",
+                    "urgency": "high",
+                    "contract_end": "2026-06-30",
+                    "decision_timeline": "60 days",
+                    "pain_categories": ["pricing"],
+                    "competitors_considering": ["HubSpot"],
+                    "key_quotes": ["We need better renewal controls."],
+                    "reasoning_scope_summary": {
+                        "selection_strategy": "vendor_facet_packet_v1",
+                        "witnesses_in_scope": 8,
+                    },
+                    "reasoning_atom_context": {
+                        "top_theses": [
+                            {
+                                "wedge": "pricing",
+                                "summary": "Pricing pressure is driving re-evaluation.",
+                                "why_now": "Budget owners are active before renewal.",
+                                "confidence": "high",
+                            },
+                        ],
+                        "timing_windows": [
+                            {
+                                "window_type": "renewal",
+                                "anchor": "Q2 renewal",
+                                "urgency": "high",
+                                "recommended_action": "Engage before procurement freeze.",
+                            },
+                        ],
+                        "account_signals": [
+                            {
+                                "company": "Acme Co",
+                                "buying_stage": "evaluation",
+                                "competitor_context": "HubSpot",
+                                "primary_pain": "pricing",
+                            },
+                        ],
+                        "coverage_limits": ["thin_account_signals"],
+                    },
+                    "reasoning_delta_summary": {
+                        "changed": True,
+                        "new_timing_windows": ["Q2 renewal"],
+                        "new_account_signals": ["Acme Co"],
+                    },
+                },
                 "partner_name": None,
                 "product_name": None,
                 "is_suppressed": 0,
@@ -474,6 +576,10 @@ async def test_review_queue_surfaces_quality_summary_from_metadata(monkeypatch):
     assert result["drafts"][0]["latest_error_summary"].startswith("content does not reference")
     assert result["drafts"][0]["failure_explanation"]["primary_blocker"].startswith("content does not reference")
     assert result["drafts"][0]["failure_explanation"]["blocking_issues"][0].startswith("content does not reference")
+    assert result["drafts"][0]["reasoning_scope_summary"]["selection_strategy"] == "vendor_facet_packet_v1"
+    assert result["drafts"][0]["reasoning_atom_context"]["timing_windows"][0]["anchor"] == "Q2 renewal"
+    assert result["drafts"][0]["reasoning_atom_context"]["account_signals"][0]["quote"] == "We need better renewal controls."
+    assert result["drafts"][0]["reasoning_delta_summary"]["changed"] is True
 
 
 @pytest.mark.asyncio
