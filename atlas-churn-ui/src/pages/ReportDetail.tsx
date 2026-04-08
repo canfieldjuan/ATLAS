@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import {
@@ -11,6 +12,9 @@ import { REPORT_SCALAR_KEYS, isSpecializedReportType, REPORT_TYPE_COLORS } from 
 import useApiData from '../hooks/useApiData'
 import { fetchReport } from '../api/client'
 import type { ReportDetail as ReportDetailType } from '../types'
+import ReportActionBar from '../components/ReportActionBar'
+import SubscriptionModal from '../components/SubscriptionModal'
+import EvidenceDrawer from '../components/EvidenceDrawer'
 
 function formatInlineValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '--'
@@ -43,9 +47,24 @@ function DetailSkeleton() {
 // Page component
 // ---------------------------------------------------------------------------
 
+function freshnessLabel(dateStr: string | null): { text: string; color: string } {
+  if (!dateStr) return { text: 'unknown', color: 'text-slate-500' }
+  const hours = (Date.now() - new Date(dateStr).getTime()) / 3600000
+  if (hours < 24) return { text: 'Fresh', color: 'text-green-400' }
+  if (hours < 72) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-slate-400' }
+  if (hours < 168) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-amber-400' }
+  return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-red-400' }
+}
+
 export default function ReportDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+
+  const [subModalOpen, setSubModalOpen] = useState(false)
+  const [hasSubscription, setHasSubscription] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(null)
+  const [drawerVendor, setDrawerVendor] = useState('')
 
   const { data: report, loading, error, refresh, refreshing } = useApiData<ReportDetailType>(
     () => {
@@ -92,13 +111,22 @@ export default function ReportDetail() {
           <ArrowLeft className="h-4 w-4" />
           Back to Reports
         </button>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-        </button>
+        <div className="flex items-center gap-2">
+          <ReportActionBar
+            reportId={report.id}
+            reportType={report.report_type}
+            vendorName={report.vendor_filter ?? null}
+            onSubscribe={() => setSubModalOpen(true)}
+            hasSubscription={hasSubscription}
+          />
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+          </button>
+        </div>
       </div>
 
       <div>
@@ -108,10 +136,21 @@ export default function ReportDetail() {
         <h1 className="text-2xl font-bold text-white break-words">
           {title}
         </h1>
-        <p className="text-sm text-slate-400 mt-1 break-all">
-          {report.report_date ?? report.created_at}
-          {report.llm_model && ` | Model: ${report.llm_model}`}
-        </p>
+        <div className="flex items-center gap-3 mt-1">
+          <p className="text-sm text-slate-400 break-all">
+            {report.report_date ?? report.created_at}
+            {report.llm_model && ` | Model: ${report.llm_model}`}
+          </p>
+          {(() => {
+            const f = freshnessLabel(report.report_date ?? report.created_at)
+            return (
+              <span className={clsx('inline-flex items-center gap-1 text-xs', f.color)}>
+                <Clock className="w-3 h-3" />
+                {f.text}
+              </span>
+            )
+          })()}
+        </div>
       </div>
 
       {report.executive_summary && (
@@ -171,6 +210,24 @@ export default function ReportDetail() {
           </dl>
         </div>
       )}
+
+      {/* Subscription modal */}
+      <SubscriptionModal
+        open={subModalOpen}
+        onClose={() => setSubModalOpen(false)}
+        scopeType="report"
+        scopeKey={report.id}
+        scopeLabel={`${report.report_type.replace(/_/g, ' ')} - ${report.vendor_filter ?? 'all'}`}
+        onSaved={() => setHasSubscription(true)}
+      />
+
+      {/* Evidence drawer */}
+      <EvidenceDrawer
+        vendorName={drawerVendor}
+        witnessId={drawerWitnessId}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      />
     </div>
   )
 }

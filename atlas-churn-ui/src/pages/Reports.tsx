@@ -5,7 +5,7 @@ import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
-import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport } from '../api/client'
+import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport, generateBattleCard } from '../api/client'
 import { useState, useEffect, useMemo } from 'react'
 import { REPORT_TYPE_COLORS } from '../lib/reportConstants'
 import type { Report } from '../types'
@@ -62,6 +62,8 @@ export default function Reports() {
   const [creatingComparison, setCreatingComparison] = useState(false)
   const [creatingAccountComparison, setCreatingAccountComparison] = useState(false)
   const [creatingAccountDeepDive, setCreatingAccountDeepDive] = useState(false)
+  const [battleCardVendor, setBattleCardVendor] = useState('')
+  const [creatingBattleCard, setCreatingBattleCard] = useState(false)
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
@@ -169,6 +171,23 @@ export default function Reports() {
     }
   }
 
+  async function handleCreateBattleCard() {
+    if (!battleCardVendor.trim()) {
+      alert('Enter a vendor name')
+      return
+    }
+    setCreatingBattleCard(true)
+    try {
+      await generateBattleCard({ vendor_name: battleCardVendor.trim() })
+      setBattleCardVendor('')
+      refresh()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Battle card generation failed')
+    } finally {
+      setCreatingBattleCard(false)
+    }
+  }
+
   async function handleCreateAccountDeepDive() {
     if (!deepDiveCompany.trim()) {
       alert('Enter a company for the account deep dive')
@@ -247,6 +266,8 @@ export default function Reports() {
             <option value="challenger_intel">Challenger Intel</option>
             <option value="battle_card">Battle Card</option>
             <option value="vendor_deep_dive">Vendor Deep Dive</option>
+            <option value="battle_card">Battle Card</option>
+            <option value="challenger_brief">Challenger Brief</option>
           </select>
           <select
             value={qualityFilter}
@@ -368,6 +389,27 @@ export default function Reports() {
             className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-rose-500/15 text-rose-300 text-sm font-medium hover:bg-rose-500/25 transition-colors disabled:opacity-50"
           >
             {creatingAccountComparison ? 'Generating...' : 'Create Account Comparison'}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">Battle card vendor</label>
+            <input
+              value={battleCardVendor}
+              onChange={(e) => setBattleCardVendor(e.target.value)}
+              placeholder="Example: Zendesk"
+              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+            />
+          </div>
+          <button
+            onClick={handleCreateBattleCard}
+            disabled={creatingBattleCard}
+            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-red-500/15 text-red-300 text-sm font-medium hover:bg-red-500/25 transition-colors disabled:opacity-50"
+          >
+            {creatingBattleCard ? 'Generating...' : 'Create Battle Card'}
           </button>
         </div>
       </div>

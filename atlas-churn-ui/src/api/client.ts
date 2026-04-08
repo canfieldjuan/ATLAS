@@ -310,6 +310,13 @@ export async function generateAccountDeepDiveReport(body: {
   return post<Record<string, unknown>>(TENANT_BASE, '/reports/company-deep-dive', body)
 }
 
+export async function generateBattleCard(body: {
+  vendor_name: string
+  to_email?: string
+}) {
+  return post<Record<string, unknown>>(BRIEFINGS_BASE, '/generate', body)
+}
+
 export async function fetchReport(reportId: string) {
   const report = await get<ReportDetail>(TENANT_BASE, `/reports/${reportId}`)
   return normalizeReportDetail(report)
@@ -1390,5 +1397,59 @@ export async function fetchEvidenceTrace(params: {
 }) {
   return get<EvidenceTrace>(
     EVIDENCE_BASE, '/trace', params as Record<string, string | number | boolean>,
+  )
+}
+
+// -- Report PDF Export --------------------------------------------------------
+
+export function downloadReportPdf(reportId: string) {
+  const url = new URL(`${TENANT_BASE}/reports/${encodeURIComponent(reportId)}/pdf`, window.location.origin)
+  const token = localStorage.getItem('atlas_token')
+  if (token) url.searchParams.set('token', token)
+  window.open(url.toString(), '_blank')
+}
+
+// -- Report Subscriptions -----------------------------------------------------
+
+export interface ReportSubscription {
+  id: string
+  account_id: string
+  scope_type: 'library' | 'report'
+  scope_key: string
+  scope_label: string
+  delivery_frequency: 'weekly' | 'monthly' | 'quarterly'
+  deliverable_focus: 'all' | 'battle_cards' | 'executive_reports' | 'comparison_packs'
+  freshness_policy: 'fresh_only' | 'fresh_or_monitor' | 'any'
+  recipient_emails: string[]
+  delivery_note: string
+  enabled: boolean
+  next_delivery_at: string | null
+  last_delivery_at?: string | null
+  last_delivery_status?: string | null
+  last_delivery_summary?: string | null
+  last_delivery_report_count?: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ReportSubscriptionUpsert {
+  scope_label: string
+  delivery_frequency: 'weekly' | 'monthly' | 'quarterly'
+  deliverable_focus: 'all' | 'battle_cards' | 'executive_reports' | 'comparison_packs'
+  freshness_policy: 'fresh_only' | 'fresh_or_monitor' | 'any'
+  recipients: string[]
+  delivery_note?: string
+  enabled: boolean
+}
+
+export async function fetchReportSubscription(scopeType: string, scopeKey: string) {
+  return get<{ subscription: ReportSubscription | null }>(
+    TENANT_BASE, `/report-subscriptions/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeKey)}`,
+  )
+}
+
+export async function upsertReportSubscription(scopeType: string, scopeKey: string, body: ReportSubscriptionUpsert) {
+  return put<{ subscription: ReportSubscription }>(
+    TENANT_BASE, `/report-subscriptions/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeKey)}`, body,
   )
 }

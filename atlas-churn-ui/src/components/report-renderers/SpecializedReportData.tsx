@@ -1,5 +1,6 @@
 import { clsx } from 'clsx'
-import { Clock, Crosshair, MessageSquareQuote, Shield, Swords, Target, TrendingDown, Users, Zap } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Clock, Crosshair, Fingerprint, MessageSquareQuote, Shield, Swords, Target, TrendingDown, Users, Zap } from 'lucide-react'
 import type { ReactNode } from 'react'
 import ArchetypeBadge from '../ArchetypeBadge'
 import { StructuredReportData } from './StructuredReportData'
@@ -72,17 +73,18 @@ function ProvenanceStrip({
   source,
   referenceIds,
   extraBadges = [],
+  vendorName,
 }: {
   source?: string
   referenceIds?: ReasoningReferenceIdsViewModel
   extraBadges?: string[]
+  vendorName?: string
 }) {
   const counts = referenceIdCounts(referenceIds)
   const badges = [
     `Source: ${reasoningSourceLabel(source)}`,
     counts.total > 0 ? `${counts.total} refs` : 'No refs',
     counts.metrics > 0 ? `${counts.metrics} metrics` : null,
-    counts.witnesses > 0 ? `${counts.witnesses} witnesses` : null,
     ...extraBadges,
   ].filter(Boolean) as string[]
   return (
@@ -95,6 +97,15 @@ function ProvenanceStrip({
           {badge}
         </span>
       ))}
+      {counts.witnesses > 0 && (
+        <Link
+          to={vendorName ? `/evidence?vendor_name=${encodeURIComponent(vendorName)}` : '/evidence'}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-900/30 text-cyan-300 border border-cyan-700/40 hover:bg-cyan-900/50 transition-colors"
+        >
+          <Fingerprint className="w-3 h-3" />
+          {counts.witnesses} witnesses
+        </Link>
+      )}
     </div>
   )
 }
@@ -979,7 +990,10 @@ function BattleCardDetail({ data }: { data: BattleCardViewModel }) {
                 {data.customer_pain_quotes.slice(0, 5).map((quote, index) => (
                   <div key={index}>
                     <blockquote className="text-sm text-slate-300 italic border-l-2 border-amber-500/50 pl-3 break-words whitespace-pre-wrap">"{quote.quote}"</blockquote>
-                    <div className="flex flex-wrap gap-2 mt-1 text-xs text-slate-500">
+                    <div className="flex flex-wrap gap-2 mt-1 text-xs text-slate-500 items-center">
+                      {quote.source_site && (
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-medium">{quote.source_site}</span>
+                      )}
                       {quote.company && <span>{quote.company}</span>}
                       {quote.role && <span>{quote.role}</span>}
                       {quote.pain_category && <span>{quote.pain_category}</span>}
