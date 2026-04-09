@@ -31,8 +31,14 @@ from ..services.blog_quality import (
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.blog_admin")
+_REVIEW_BASIS_CANONICAL = "canonical_reviews"
 
 router = APIRouter(prefix="/admin/blog", tags=["blog-admin"])
+
+
+def _canonical_review_predicate(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}duplicate_of_review_id IS NULL"
 
 
 # -- schemas ------------------------------------------------------
@@ -728,7 +734,7 @@ async def get_draft_evidence(
     ctx = _safe_json(row.get("data_context") or {})
     vendor_name = ctx.get("vendor_name") or ctx.get("vendor_a") or ctx.get("vendor")
     if not vendor_name:
-        return {"reviews": [], "count": 0}
+        return {"basis": _REVIEW_BASIS_CANONICAL, "reviews": [], "count": 0}
 
     # Build query based on available context
     # Columns: summary (not headline), review_text (not full_text),
@@ -739,7 +745,7 @@ async def get_draft_evidence(
     # Reason: blog review quality aggregation
     if report_date:
         reviews = await pool.fetch(
-            """
+            f"""
             SELECT id, vendor_name, reviewer_company, summary, review_text,
                    enrichment->>'pain_category' AS pain_category,
                    (enrichment->>'urgency_score')::numeric AS urgency_score,
@@ -747,6 +753,7 @@ async def get_draft_evidence(
                    COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
             FROM b2b_reviews
             WHERE LOWER(vendor_name) = LOWER($1)
+              AND {_canonical_review_predicate()}
               AND enrichment_status = 'enriched'
               AND reviewed_at >= ($2::date - INTERVAL '90 days')
             ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
@@ -758,7 +765,7 @@ async def get_draft_evidence(
         # APPROVED-ENRICHMENT-READ: pain_category, urgency_score, reviewer_context.industry
         # Reason: blog review quality aggregation
         reviews = await pool.fetch(
-            """
+            f"""
             SELECT id, vendor_name, reviewer_company, summary, review_text,
                    enrichment->>'pain_category' AS pain_category,
                    (enrichment->>'urgency_score')::numeric AS urgency_score,
@@ -766,6 +773,7 @@ async def get_draft_evidence(
                    COALESCE(reviewer_industry, enrichment->'reviewer_context'->>'industry') AS industry
             FROM b2b_reviews
             WHERE LOWER(vendor_name) = LOWER($1)
+              AND {_canonical_review_predicate()}
               AND enrichment_status = 'enriched'
             ORDER BY (enrichment->>'urgency_score')::numeric DESC NULLS LAST
             LIMIT $2
@@ -791,7 +799,7 @@ async def get_draft_evidence(
             "review_date": r["reviewed_at"].isoformat() if r.get("reviewed_at") else None,
         })
 
-    return {"reviews": result, "count": len(result)}
+    return {"basis": _REVIEW_BASIS_CANONICAL, "reviews": result, "count": len(result)}
 
 
 @router.patch("/drafts/{draft_id}")

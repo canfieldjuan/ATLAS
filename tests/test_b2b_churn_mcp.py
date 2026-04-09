@@ -881,6 +881,25 @@ class TestB2BChurnMCPTools:
         assert data["success"] is False
         assert "error" in data
 
+    async def test_get_source_correction_impact_is_labeled_raw_provenance(self):
+        from atlas_brain.mcp.b2b.corrections import get_source_correction_impact
+
+        pool = _mock_pool(fetch_return=[{
+            "source_name": "reddit",
+            "vendor_scope": None,
+            "reason": "noise",
+            "affected_review_count": 12,
+            "created_at": datetime(2026, 2, 28, 10, 0, tzinfo=timezone.utc),
+        }])
+
+        with _patch_pool(pool):
+            raw = await get_source_correction_impact()
+
+        data = json.loads(raw)
+        assert data["success"] is True
+        assert data["basis"] == "raw_source_provenance"
+        assert data["total"] == 1
+
     # -- list_scrape_targets -----------------------------------------------
 
     async def test_list_scrape_targets_returns_results(self):

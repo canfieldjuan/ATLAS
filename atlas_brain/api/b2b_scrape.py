@@ -30,6 +30,7 @@ from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_scrape")
+_REVIEW_BASIS_RAW_TARGET_PROVENANCE = "raw_source_target_provenance"
 
 router = APIRouter(prefix="/b2b/scrape", tags=["b2b-scrape"])
 
@@ -472,6 +473,7 @@ async def _build_probation_telemetry(
         )
 
     return {
+        "basis": _REVIEW_BASIS_RAW_TARGET_PROVENANCE,
         "lookback_days": lookback_days,
         "actionable_urgency_min": actionable_urgency_min,
         "probation_targets": len(targets),

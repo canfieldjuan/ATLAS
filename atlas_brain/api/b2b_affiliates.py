@@ -18,6 +18,7 @@ from ..config import settings
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_affiliates")
+_REVIEW_BASIS_CANONICAL = "canonical_reviews"
 
 tenant_router = APIRouter(
     prefix="/b2b/tenant/affiliates",
@@ -47,6 +48,11 @@ def _as_iso_text(value):
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return str(value)
+
+
+def _canonical_review_predicate(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}duplicate_of_review_id IS NULL"
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +195,7 @@ async def list_opportunities(
                      ELSE '[]'::jsonb END
             ) AS comp(value)
             WHERE r.enrichment_status = 'enriched'
+              AND {_canonical_review_predicate('r')}
               AND COALESCE(r.reviewed_at, r.imported_at, r.enriched_at) > NOW() - make_interval(days => $1)
               AND (r.enrichment->>'urgency_score')::numeric >= $2
               AND NULLIF(BTRIM(comp.value->>'name'), '') IS NOT NULL
@@ -253,7 +260,11 @@ async def list_opportunities(
     # Re-sort by score descending after filtering
     opportunities.sort(key=lambda o: o["opportunity_score"], reverse=True)
 
-    return {"opportunities": opportunities, "count": len(opportunities)}
+    return {
+        "basis": _REVIEW_BASIS_CANONICAL,
+        "opportunities": opportunities,
+        "count": len(opportunities),
+    }
 
 
 # ---------------------------------------------------------------------------

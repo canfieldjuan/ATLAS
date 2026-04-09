@@ -1119,6 +1119,53 @@ def test_blog_quality_diagnostics_status_counts_ignore_top_n_limit(monkeypatch):
     assert len(body["top_blocked_slugs"]) == 1
 
 
+def test_blog_draft_evidence_uses_canonical_review_basis(monkeypatch):
+    app = FastAPI()
+    app.include_router(blog_admin_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    captured = {}
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *_args):
+            if "SELECT data_context, source_report_date FROM blog_posts" in query:
+                return {
+                    "data_context": {"vendor_name": "Shopify"},
+                    "source_report_date": date(2026, 4, 1),
+                }
+            return None
+
+        async def fetch(self, query, *_args):
+            captured["query"] = query
+            return [{
+                "id": uuid4(),
+                "vendor_name": "Shopify",
+                "reviewer_company": "Acme Corp",
+                "summary": "Too expensive",
+                "review_text": "We are considering a switch.",
+                "pain_category": "pricing",
+                "urgency_score": 8,
+                "source": "g2",
+                "reviewed_at": datetime(2026, 3, 20, tzinfo=timezone.utc),
+                "reviewer_title": "VP Operations",
+                "company_size_raw": "201-500",
+                "industry": "Retail",
+            }]
+
+    monkeypatch.setattr(blog_admin_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.get(f"/admin/blog/drafts/{uuid4()}/evidence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["basis"] == "canonical_reviews"
+    assert body["count"] == 1
+    assert "duplicate_of_review_id IS NULL" in captured["query"]
+
+
 def test_blog_publish_route_blocks_failed_revalidation(monkeypatch):
     app = FastAPI()
     app.include_router(blog_admin_api.router)

@@ -21,10 +21,11 @@ async def test_list_opportunities_uses_review_recency_and_self_match_filters(mon
         vendor_name=None,
         dm_only=False,
     )
-    assert result == {"opportunities": [], "count": 0}
+    assert result == {"basis": "canonical_reviews", "opportunities": [], "count": 0}
 
     sql = pool.fetch.await_args.args[0]
     assert "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)" in sql
+    assert "r.duplicate_of_review_id IS NULL" in sql
     assert "rc.reviewer_company IS NOT NULL" in sql
     assert "LOWER(rc.competitor_name) <> LOWER(rc.vendor_name)" in sql
     assert "LOWER(rc.reviewer_company) <> LOWER(rc.competitor_name)" in sql
@@ -79,4 +80,4 @@ async def test_list_opportunities_skips_rows_without_real_company(monkeypatch):
         vendor_name=None,
         dm_only=False,
     )
-    assert result == {"opportunities": [], "count": 0}
+    assert result == {"basis": "canonical_reviews", "opportunities": [], "count": 0}

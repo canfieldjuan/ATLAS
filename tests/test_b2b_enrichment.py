@@ -575,6 +575,109 @@ async def test_enrich_rows_uses_anthropic_batch_when_enabled(monkeypatch):
     assert persist.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_enrich_rows_reuses_existing_completed_tier1_batch_result(monkeypatch):
+    class FakeAnthropicLLM:
+        def __init__(self, model: str = "claude-haiku-4-5"):
+            self.model = model
+            self.name = "anthropic"
+
+    row_id = uuid4()
+    rows = [{
+        "id": row_id,
+        "vendor_name": "Zendesk",
+        "product_name": "Zendesk",
+        "product_category": "Help Desk",
+        "source": "reddit",
+        "summary": "Pricing is getting rough",
+        "review_text": (
+            "Pricing is getting rough and support is slower now. "
+            "Renewal discussions are already getting tense and the team is actively reviewing options."
+        ),
+        "pros": "",
+        "cons": "",
+        "reviewer_title": "",
+        "reviewer_company": "",
+        "company_size_raw": "",
+        "reviewer_industry": "",
+        "content_type": "review",
+        "raw_metadata": {},
+        "rating": None,
+        "rating_max": 5,
+        "enrichment_attempts": 0,
+    }]
+    cfg = SimpleNamespace(
+        enrichment_max_attempts=3,
+        enrichment_concurrency=2,
+        enrichment_local_only=False,
+        enrichment_max_tokens=2048,
+        review_truncate_length=3000,
+        openrouter_api_key="test-key",
+        enrichment_openrouter_model="anthropic/claude-haiku-4-5",
+        enrichment_tier1_max_tokens=512,
+        enrichment_tier2_max_tokens=512,
+        enrichment_tier2_openrouter_model="",
+        anthropic_batch_enabled=True,
+        enrichment_anthropic_batch_enabled=True,
+    )
+    task = _task()
+    task.metadata["anthropic_batch_enabled"] = True
+    task.metadata["enrichment_anthropic_batch_enabled"] = True
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[{"enrichment_status": "enriched", "ct": 1}]))
+    persist = AsyncMock(return_value=True)
+
+    monkeypatch.setattr("atlas_brain.services.llm.anthropic.AnthropicLLM", FakeAnthropicLLM)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_batch_utils.resolve_anthropic_batch_llm",
+        lambda **_kwargs: FakeAnthropicLLM(),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.skills.get_skill_registry",
+        lambda: SimpleNamespace(
+            get=lambda name: SimpleNamespace(content=f"{name} prompt")
+            if name in {"digest/b2b_churn_extraction_tier1", "digest/b2b_churn_extraction_tier2"}
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.cache_runner.prepare_b2b_exact_stage_request",
+        lambda *args, **_kwargs: SimpleNamespace(namespace="ns", request_envelope={}, provider="openrouter", model="anthropic/claude-haiku-4-5"),
+    )
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.lookup_b2b_exact_stage_text", AsyncMock(return_value=None))
+    monkeypatch.setattr("atlas_brain.services.b2b.cache_runner.store_b2b_exact_stage_text", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_batch_utils.reconcile_existing_batch_artifacts",
+        AsyncMock(
+            return_value={
+                str(row_id): {
+                    "state": "succeeded",
+                    "cached": False,
+                    "response_text": json.dumps({
+                        "specific_complaints": ["pricing pressure"],
+                        "quotable_phrases": [],
+                    }),
+                    "custom_id": b2b_enrichment._enrichment_batch_custom_id("tier1", row_id),
+                }
+            }
+        ),
+    )
+    run_batch = AsyncMock()
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.anthropic_batch.run_anthropic_message_batch",
+        run_batch,
+    )
+    monkeypatch.setattr(b2b_enrichment, "_persist_enrichment_result", persist)
+    monkeypatch.setattr(b2b_enrichment, "_tier1_has_extraction_gaps", lambda *_args, **_kwargs: False)
+
+    result = await b2b_enrichment._enrich_rows(rows, cfg, pool, run_id="run-1", task=task)
+
+    assert result["anthropic_batch_jobs"] == 0
+    assert result["anthropic_batch_reused_completed_items"] == 1
+    assert result["enriched"] == 1
+    assert persist.await_count == 1
+    run_batch.assert_not_awaited()
+
+
 def test_get_base_enrichment_llm_uses_vllm_first(monkeypatch):
     calls = []
 

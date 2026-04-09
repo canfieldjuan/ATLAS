@@ -14,6 +14,7 @@ _VALID_ENTITY_TYPES = {
 }
 _VALID_CORRECTION_TYPES = {"suppress", "flag", "override_field", "merge_vendor", "reclassify", "suppress_source"}
 _KNOWN_SOURCES = {s.value for s in ReviewSource}
+_REVIEW_BASIS_RAW_PROVENANCE = "raw_source_provenance"
 
 
 @mcp.tool()
@@ -520,6 +521,7 @@ async def get_source_correction_impact() -> str:
 
         return json.dumps({
             "success": True,
+            "basis": _REVIEW_BASIS_RAW_PROVENANCE,
             "active_source_suppressions": [
                 {
                     "source_name": r["source_name"],

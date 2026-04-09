@@ -2492,6 +2492,8 @@ async def _enrich_rows(
         "fallback_single_call_items": 0,
         "completed_items": 0,
         "failed_items": 0,
+        "reused_completed_items": 0,
+        "reused_pending_items": 0,
     }
 
     from ...services.b2b.anthropic_batch import (
@@ -2511,6 +2513,7 @@ async def _enrich_rows(
     from ._b2b_batch_utils import (
         anthropic_batch_min_items,
         anthropic_batch_requested,
+        reconcile_existing_batch_artifacts,
         resolve_anthropic_batch_llm,
     )
 
@@ -2616,56 +2619,150 @@ async def _enrich_rows(
                     }
                 )
 
-            tier1_execution = await run_anthropic_message_batch(
-                llm=tier1_batch_llm,
-                stage_id="b2b_enrichment.tier1",
-                task_name="b2b_enrichment",
-                items=[
-                    AnthropicBatchItem(
-                        custom_id=_enrichment_batch_custom_id("tier1", entry["row"]["id"]),
-                        artifact_type="review_enrichment_tier1",
-                        artifact_id=str(entry["row"]["id"]),
-                        vendor_name=str(entry["row"].get("vendor_name") or "") or None,
-                        messages=[
-                            Message(role=str(message["role"]), content=str(message["content"]))
-                            for message in entry["messages"]
-                        ],
-                        max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
-                        temperature=0.0,
-                        trace_span_name="task.b2b_enrichment.tier1",
-                        trace_metadata={
-                            "run_id": run_id,
-                            "vendor_name": str(entry["row"].get("vendor_name") or ""),
-                            "review_id": str(entry["row"]["id"]),
-                            "source": str(entry["row"].get("source") or ""),
-                            "tier": "tier1",
-                            "workload": "anthropic_batch",
-                        },
-                        request_metadata={"review_id": str(entry["row"]["id"]), "tier": 1},
-                        cached_response_text=entry["cached_response_text"],
-                        cached_usage=entry["cached_usage"],
-                    )
-                    for entry in tier1_entries
-                ],
-                run_id=run_id,
-                min_batch_size=anthropic_batch_min_items(
-                    task,
-                    default=2,
-                    keys=("enrichment_anthropic_batch_min_items",),
-                ),
-                batch_metadata={"stage": "tier1"},
+            existing_tier1_results = await reconcile_existing_batch_artifacts(
                 pool=pool,
+                llm=tier1_batch_llm,
+                task_name="b2b_enrichment",
+                artifact_type="review_enrichment_tier1",
+                artifact_ids=[str(entry["row"]["id"]) for entry in tier1_entries],
             )
-            batch_metrics["jobs"] += 1 if tier1_execution.provider_batch_id else 0
-            batch_metrics["submitted_items"] += int(tier1_execution.submitted_items or 0)
-            batch_metrics["cache_prefiltered_items"] += int(tier1_execution.cache_prefiltered_items or 0)
-            batch_metrics["fallback_single_call_items"] += int(tier1_execution.fallback_single_call_items or 0)
-            batch_metrics["completed_items"] += int(tier1_execution.completed_items or 0)
-            batch_metrics["failed_items"] += int(tier1_execution.failed_items or 0)
+            tier1_ready_entries: list[dict[str, Any]] = []
+            remaining_tier1_entries: list[dict[str, Any]] = []
+            for entry in tier1_entries:
+                row = entry["row"]
+                existing = existing_tier1_results.get(str(row["id"]))
+                if existing and existing.get("state") == "succeeded":
+                    tier1 = _parse_batch_text(existing.get("response_text"))
+                    if tier1 is not None:
+                        tier1_ready_entries.append(
+                            {
+                                "row": row,
+                                "tier1": tier1,
+                                "cached": bool(existing.get("cached")),
+                                "request": entry["request"],
+                            }
+                        )
+                        batch_metrics["reused_completed_items"] += 1
+                        continue
+                if existing and existing.get("state") == "pending":
+                    row_results[row["id"]] = {"status": "deferred"}
+                    batch_metrics["reused_pending_items"] += 1
+                    logger.info(
+                        "Skipping duplicate enrichment Tier 1 submission for %s; existing Anthropic batch item %s is still pending",
+                        row["id"],
+                        existing.get("custom_id"),
+                    )
+                    continue
+                remaining_tier1_entries.append(entry)
+            tier1_entries = remaining_tier1_entries
+
+            if tier1_entries:
+                tier1_execution = await run_anthropic_message_batch(
+                    llm=tier1_batch_llm,
+                    stage_id="b2b_enrichment.tier1",
+                    task_name="b2b_enrichment",
+                    items=[
+                        AnthropicBatchItem(
+                            custom_id=_enrichment_batch_custom_id("tier1", entry["row"]["id"]),
+                            artifact_type="review_enrichment_tier1",
+                            artifact_id=str(entry["row"]["id"]),
+                            vendor_name=str(entry["row"].get("vendor_name") or "") or None,
+                            messages=[
+                                Message(role=str(message["role"]), content=str(message["content"]))
+                                for message in entry["messages"]
+                            ],
+                            max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+                            temperature=0.0,
+                            trace_span_name="task.b2b_enrichment.tier1",
+                            trace_metadata={
+                                "run_id": run_id,
+                                "vendor_name": str(entry["row"].get("vendor_name") or ""),
+                                "review_id": str(entry["row"]["id"]),
+                                "source": str(entry["row"].get("source") or ""),
+                                "tier": "tier1",
+                                "workload": "anthropic_batch",
+                            },
+                            request_metadata={"review_id": str(entry["row"]["id"]), "tier": 1},
+                            cached_response_text=entry["cached_response_text"],
+                            cached_usage=entry["cached_usage"],
+                        )
+                        for entry in tier1_entries
+                    ],
+                    run_id=run_id,
+                    min_batch_size=anthropic_batch_min_items(
+                        task,
+                        default=2,
+                        keys=("enrichment_anthropic_batch_min_items",),
+                    ),
+                    batch_metadata={"stage": "tier1"},
+                    pool=pool,
+                )
+                batch_metrics["jobs"] += 1 if tier1_execution.provider_batch_id else 0
+                batch_metrics["submitted_items"] += int(tier1_execution.submitted_items or 0)
+                batch_metrics["cache_prefiltered_items"] += int(tier1_execution.cache_prefiltered_items or 0)
+                batch_metrics["fallback_single_call_items"] += int(tier1_execution.fallback_single_call_items or 0)
+                batch_metrics["completed_items"] += int(tier1_execution.completed_items or 0)
+                batch_metrics["failed_items"] += int(tier1_execution.failed_items or 0)
+            else:
+                tier1_execution = SimpleNamespace(results_by_custom_id={})
 
             tier2_entries: list[dict[str, Any]] = []
             fallback_rows: list[dict[str, Any]] = []
             per_row_batch_usage: dict[Any, dict[str, int]] = {}
+
+            for ready_entry in tier1_ready_entries:
+                row = ready_entry["row"]
+                usage = _empty_exact_cache_usage()
+                if ready_entry["cached"]:
+                    usage["tier1_exact_cache_hits"] += 1
+                    usage["exact_cache_hits"] += 1
+                else:
+                    usage["tier1_generated_calls"] += 1
+                    usage["generated"] += 1
+                per_row_batch_usage[row["id"]] = usage
+                if _tier1_has_extraction_gaps(ready_entry["tier1"], source=row.get("source")) and tier2_batch_llm is not None:
+                    payload = _build_classify_payload(row, cfg.review_truncate_length)
+                    payload["tier1_specific_complaints"] = ready_entry["tier1"].get("specific_complaints", [])
+                    payload["tier1_quotable_phrases"] = ready_entry["tier1"].get("quotable_phrases", [])
+                    payload_json = json.dumps(payload)
+                    system_prompt = _tier2_system_prompt_for_content_type(
+                        tier2_skill.content,
+                        payload.get("content_type"),
+                    )
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": payload_json},
+                    ]
+                    request = prepare_b2b_exact_stage_request(
+                        "b2b_enrichment.tier2",
+                        provider="openrouter",
+                        model=str(tier2_model_id),
+                        messages=messages,
+                        max_tokens=cfg.enrichment_tier2_max_tokens,
+                        temperature=0.0,
+                        response_format={"type": "json_object"},
+                    )
+                    cached = await lookup_b2b_exact_stage_text(request)
+                    tier2_entries.append(
+                        {
+                            "row": row,
+                            "tier1": ready_entry["tier1"],
+                            "messages": messages,
+                            "request": request,
+                            "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                            "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                        }
+                    )
+                else:
+                    row_results[row["id"]] = await _persist_enrichment_result(
+                        pool,
+                        row,
+                        _merge_tier1_tier2(ready_entry["tier1"], None),
+                        model_id=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
+                        max_attempts=max_attempts,
+                        run_id=run_id,
+                        cache_usage=usage,
+                    )
 
             for entry in tier1_entries:
                 row = entry["row"]
@@ -2742,52 +2839,93 @@ async def _enrich_rows(
                     )
 
             if tier2_entries:
-                tier2_execution = await run_anthropic_message_batch(
-                    llm=tier2_batch_llm,
-                    stage_id="b2b_enrichment.tier2",
-                    task_name="b2b_enrichment",
-                    items=[
-                        AnthropicBatchItem(
-                            custom_id=_enrichment_batch_custom_id("tier2", entry["row"]["id"]),
-                            artifact_type="review_enrichment_tier2",
-                            artifact_id=str(entry["row"]["id"]),
-                            vendor_name=str(entry["row"].get("vendor_name") or "") or None,
-                            messages=[
-                                Message(role=str(message["role"]), content=str(message["content"]))
-                                for message in entry["messages"]
-                            ],
-                            max_tokens=cfg.enrichment_tier2_max_tokens,
-                            temperature=0.0,
-                            trace_span_name="task.b2b_enrichment.tier2",
-                            trace_metadata={
-                                "run_id": run_id,
-                                "vendor_name": str(entry["row"].get("vendor_name") or ""),
-                                "review_id": str(entry["row"]["id"]),
-                                "source": str(entry["row"].get("source") or ""),
-                                "tier": "tier2",
-                                "workload": "anthropic_batch",
-                            },
-                            request_metadata={"review_id": str(entry["row"]["id"]), "tier": 2},
-                            cached_response_text=entry["cached_response_text"],
-                            cached_usage=entry["cached_usage"],
-                        )
-                        for entry in tier2_entries
-                    ],
-                    run_id=run_id,
-                    min_batch_size=anthropic_batch_min_items(
-                        task,
-                        default=2,
-                        keys=("enrichment_anthropic_batch_min_items",),
-                    ),
-                    batch_metadata={"stage": "tier2"},
+                existing_tier2_results = await reconcile_existing_batch_artifacts(
                     pool=pool,
+                    llm=tier2_batch_llm,
+                    task_name="b2b_enrichment",
+                    artifact_type="review_enrichment_tier2",
+                    artifact_ids=[str(entry["row"]["id"]) for entry in tier2_entries],
                 )
-                batch_metrics["jobs"] += 1 if tier2_execution.provider_batch_id else 0
-                batch_metrics["submitted_items"] += int(tier2_execution.submitted_items or 0)
-                batch_metrics["cache_prefiltered_items"] += int(tier2_execution.cache_prefiltered_items or 0)
-                batch_metrics["fallback_single_call_items"] += int(tier2_execution.fallback_single_call_items or 0)
-                batch_metrics["completed_items"] += int(tier2_execution.completed_items or 0)
-                batch_metrics["failed_items"] += int(tier2_execution.failed_items or 0)
+                remaining_tier2_entries: list[dict[str, Any]] = []
+                for entry in tier2_entries:
+                    row = entry["row"]
+                    existing = existing_tier2_results.get(str(row["id"]))
+                    usage = per_row_batch_usage[row["id"]]
+                    if existing and existing.get("state") == "succeeded":
+                        tier2 = _parse_batch_text(existing.get("response_text"))
+                        if tier2 is not None:
+                            row_results[row["id"]] = await _persist_enrichment_result(
+                                pool,
+                                row,
+                                _merge_tier1_tier2(entry["tier1"], tier2),
+                                model_id=f"hybrid:{cfg.enrichment_openrouter_model or 'anthropic/claude-haiku-4-5'}+{tier2_model_id}",
+                                max_attempts=max_attempts,
+                                run_id=run_id,
+                                cache_usage=usage,
+                            )
+                            batch_metrics["reused_completed_items"] += 1
+                            continue
+                    if existing and existing.get("state") == "pending":
+                        row_results[row["id"]] = {"status": "deferred"}
+                        batch_metrics["reused_pending_items"] += 1
+                        logger.info(
+                            "Skipping duplicate enrichment Tier 2 submission for %s; existing Anthropic batch item %s is still pending",
+                            row["id"],
+                            existing.get("custom_id"),
+                        )
+                        continue
+                    remaining_tier2_entries.append(entry)
+                tier2_entries = remaining_tier2_entries
+
+                if tier2_entries:
+                    tier2_execution = await run_anthropic_message_batch(
+                        llm=tier2_batch_llm,
+                        stage_id="b2b_enrichment.tier2",
+                        task_name="b2b_enrichment",
+                        items=[
+                            AnthropicBatchItem(
+                                custom_id=_enrichment_batch_custom_id("tier2", entry["row"]["id"]),
+                                artifact_type="review_enrichment_tier2",
+                                artifact_id=str(entry["row"]["id"]),
+                                vendor_name=str(entry["row"].get("vendor_name") or "") or None,
+                                messages=[
+                                    Message(role=str(message["role"]), content=str(message["content"]))
+                                    for message in entry["messages"]
+                                ],
+                                max_tokens=cfg.enrichment_tier2_max_tokens,
+                                temperature=0.0,
+                                trace_span_name="task.b2b_enrichment.tier2",
+                                trace_metadata={
+                                    "run_id": run_id,
+                                    "vendor_name": str(entry["row"].get("vendor_name") or ""),
+                                    "review_id": str(entry["row"]["id"]),
+                                    "source": str(entry["row"].get("source") or ""),
+                                    "tier": "tier2",
+                                    "workload": "anthropic_batch",
+                                },
+                                request_metadata={"review_id": str(entry["row"]["id"]), "tier": 2},
+                                cached_response_text=entry["cached_response_text"],
+                                cached_usage=entry["cached_usage"],
+                            )
+                            for entry in tier2_entries
+                        ],
+                        run_id=run_id,
+                        min_batch_size=anthropic_batch_min_items(
+                            task,
+                            default=2,
+                            keys=("enrichment_anthropic_batch_min_items",),
+                        ),
+                        batch_metadata={"stage": "tier2"},
+                        pool=pool,
+                    )
+                    batch_metrics["jobs"] += 1 if tier2_execution.provider_batch_id else 0
+                    batch_metrics["submitted_items"] += int(tier2_execution.submitted_items or 0)
+                    batch_metrics["cache_prefiltered_items"] += int(tier2_execution.cache_prefiltered_items or 0)
+                    batch_metrics["fallback_single_call_items"] += int(tier2_execution.fallback_single_call_items or 0)
+                    batch_metrics["completed_items"] += int(tier2_execution.completed_items or 0)
+                    batch_metrics["failed_items"] += int(tier2_execution.failed_items or 0)
+                else:
+                    tier2_execution = SimpleNamespace(results_by_custom_id={})
 
                 for entry in tier2_entries:
                     row = entry["row"]
@@ -2877,6 +3015,8 @@ async def _enrich_rows(
         "anthropic_batch_fallback_single_call_items": batch_metrics["fallback_single_call_items"],
         "anthropic_batch_completed_items": batch_metrics["completed_items"],
         "anthropic_batch_failed_items": batch_metrics["failed_items"],
+        "anthropic_batch_reused_completed_items": batch_metrics["reused_completed_items"],
+        "anthropic_batch_reused_pending_items": batch_metrics["reused_pending_items"],
         **cache_usage,
     }
 
