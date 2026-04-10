@@ -1246,6 +1246,8 @@ async def _skip_low_signal_strict_discussion_rows(
     max_attempts: int,
     limit: int,
 ) -> int:
+    max_attempts = base_enrichment._coerce_int_value(max_attempts, 2)
+    limit = base_enrichment._coerce_int_value(limit, 500)
     if not strict_sources or not strict_content_types or limit <= 0:
         return 0
     result = await pool.execute(
@@ -1457,28 +1459,32 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
     max_batch = base_enrichment._coerce_int_override(
         task_metadata.get("enrichment_repair_max_per_batch"),
-        cfg.enrichment_repair_max_per_batch,
+        base_enrichment._coerce_int_value(getattr(cfg, "enrichment_repair_max_per_batch", 25), 25),
         min_value=1,
         max_value=500,
     )
     max_rounds = base_enrichment._coerce_int_override(
         task_metadata.get("enrichment_repair_max_rounds_per_run"),
-        cfg.enrichment_repair_max_rounds_per_run,
+        base_enrichment._coerce_int_value(getattr(cfg, "enrichment_repair_max_rounds_per_run", 1), 1),
         min_value=1,
         max_value=100,
     )
     concurrency = base_enrichment._coerce_int_override(
         task_metadata.get("enrichment_repair_concurrency"),
-        cfg.enrichment_repair_concurrency,
+        base_enrichment._coerce_int_value(getattr(cfg, "enrichment_repair_concurrency", 5), 5),
         min_value=1,
         max_value=100,
     )
     strict_discussion_skip_limit = base_enrichment._coerce_int_override(
         task_metadata.get("enrichment_repair_strict_discussion_skip_limit"),
-        cfg.enrichment_repair_strict_discussion_skip_limit,
+        base_enrichment._coerce_int_value(
+            getattr(cfg, "enrichment_repair_strict_discussion_skip_limit", 500),
+            500,
+        ),
         min_value=1,
         max_value=5000,
     )
+    max_attempts = base_enrichment._coerce_int_value(getattr(cfg, "enrichment_repair_max_attempts", 2), 2)
     run_id = _task_run_id(task)
     scoped_vendors = _normalize_test_vendors(task_metadata.get("test_vendors") or task_metadata.get("vendor_names"))
     stale_no_signal_demoted = await _demote_stale_no_signal_rows(
@@ -1508,13 +1514,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     strict_discussion_kept = 0
     strict_discussion_dropped = 0
     rounds = 0
+    consecutive_no_progress = 0
+    circuit_breaker_reason = None
     strict_discussion_sources, strict_discussion_content_types = _strict_discussion_lists(cfg)
     low_signal_discussion_skipped = await _skip_low_signal_strict_discussion_rows(
         pool,
         strict_sources=strict_discussion_sources,
         strict_content_types=strict_discussion_content_types,
         scoped_vendors=scoped_vendors,
-        max_attempts=cfg.enrichment_repair_max_attempts,
+        max_attempts=max_attempts,
         limit=strict_discussion_skip_limit,
     )
     strict_discussion_dropped += int(low_signal_discussion_skipped or 0)
@@ -1799,7 +1807,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                       r.reviewer_industry, r.content_type, r.enrichment,
                       r.enrichment_repair_attempts
             """,
-            cfg.enrichment_repair_max_attempts,
+            max_attempts,
             max_batch,
             trusted_sources,
             [vendor.lower() for vendor in scoped_vendors],
@@ -1832,6 +1840,29 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         witness_count += result.get("witness_count", 0)
         for key in batch_metrics:
             batch_metrics[key] += int(result.get(key, 0) or 0)
+
+        # --- circuit breaker ---
+        round_promoted = result.get("promoted", 0)
+        round_failed = result.get("failed", 0)
+        round_total = round_promoted + result.get("shadowed", 0) + round_failed
+
+        if round_total > 0 and round_failed > round_total * 0.5:
+            circuit_breaker_reason = f"high failure rate ({round_failed}/{round_total})"
+            logger.warning("Enrichment repair circuit breaker: %s in round %d", circuit_breaker_reason, rounds + 1)
+            rounds += 1
+            break
+
+        if round_promoted == 0:
+            consecutive_no_progress += 1
+        else:
+            consecutive_no_progress = 0
+
+        if consecutive_no_progress >= 2:
+            circuit_breaker_reason = f"{consecutive_no_progress} consecutive rounds with no promotions"
+            logger.warning("Enrichment repair circuit breaker: %s", circuit_breaker_reason)
+            rounds += 1
+            break
+
         rounds += 1
         await asyncio.sleep(1)
 
@@ -1869,6 +1900,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "strict_discussion_candidates_dropped": strict_discussion_dropped,
         "low_signal_discussion_skipped": int(low_signal_discussion_skipped or 0),
         "scoped_vendors": scoped_vendors,
+        "circuit_breaker_reason": circuit_breaker_reason,
         "_skip_synthesis": "B2B enrichment repair complete",
     }
     from ..visibility import emit_event, record_attempt
@@ -1936,6 +1968,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "strict_discussion_candidates_dropped": strict_discussion_dropped,
             "low_signal_discussion_skipped": int(low_signal_discussion_skipped or 0),
             "scoped_vendors": scoped_vendors,
+            "circuit_breaker_reason": circuit_breaker_reason,
         },
         update_review_state=False,
     )

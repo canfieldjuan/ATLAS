@@ -1787,3 +1787,101 @@ async def test_repair_rows_uses_anthropic_batch_when_enabled(monkeypatch):
     assert result["anthropic_batch_jobs"] == 1
     assert result["anthropic_batch_items_submitted"] == 1
     assert persist.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_high_failure_rate(monkeypatch):
+    """Loop should break immediately when >50% of a round fails."""
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_model", "test-model", raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_per_batch", 10, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_rounds_per_run", 5, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_attempts", 3, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_concurrency", 2, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_strict_discussion_skip_limit", 100, raising=False)
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(return_value="UPDATE 0"),
+        fetch=AsyncMock(side_effect=[
+            # Round 1: return rows
+            [{"id": uuid4(), "vendor_name": "V", "source": "g2", "content_type": "review",
+              "enrichment": {}, "enrichment_repair_attempts": 0}],
+            # Round 2: would return rows, but should not be reached
+            [],
+        ]),
+    )
+    monkeypatch.setattr(repair_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(repair_mod, "_recover_orphaned_repairing", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_demote_stale_no_signal_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_quarantine_shadowed_hard_gap_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_skip_low_signal_strict_discussion_rows", AsyncMock(return_value=0))
+
+    # _repair_rows returns mostly failures
+    monkeypatch.setattr(
+        repair_mod, "_repair_rows",
+        AsyncMock(return_value={"promoted": 0, "shadowed": 1, "failed": 8,
+                                "exact_cache_hits": 0, "generated": 9,
+                                "witness_rows": 0, "witness_count": 0}),
+    )
+
+    result = await repair_mod.run(_task())
+
+    assert result["rounds"] == 1
+    assert result["circuit_breaker_reason"] is not None
+    assert "high failure rate" in result["circuit_breaker_reason"]
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_consecutive_no_progress(monkeypatch):
+    """Loop should break after 2 consecutive rounds with zero promotions."""
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_model", "test-model", raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_per_batch", 10, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_rounds_per_run", 10, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_attempts", 3, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_concurrency", 2, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_strict_discussion_skip_limit", 100, raising=False)
+
+    call_count = 0
+
+    async def _mock_fetch(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 3:
+            return [{"id": uuid4(), "vendor_name": "V", "source": "g2", "content_type": "review",
+                      "enrichment": {}, "enrichment_repair_attempts": 0}]
+        return []
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(return_value="UPDATE 0"),
+        fetch=AsyncMock(side_effect=_mock_fetch),
+    )
+    monkeypatch.setattr(repair_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(repair_mod, "_recover_orphaned_repairing", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_demote_stale_no_signal_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_quarantine_shadowed_hard_gap_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_skip_low_signal_strict_discussion_rows", AsyncMock(return_value=0))
+
+    # All rounds: shadowed only, zero promoted
+    monkeypatch.setattr(
+        repair_mod, "_repair_rows",
+        AsyncMock(return_value={"promoted": 0, "shadowed": 1, "failed": 0,
+                                "exact_cache_hits": 0, "generated": 1,
+                                "witness_rows": 0, "witness_count": 0}),
+    )
+
+    result = await repair_mod.run(_task())
+
+    # Should break after round 2 (2 consecutive no-progress), not go to 10
+    assert result["rounds"] == 2
+    assert result["circuit_breaker_reason"] is not None
+    assert "no promotions" in result["circuit_breaker_reason"]
