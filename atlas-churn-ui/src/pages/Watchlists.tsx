@@ -71,6 +71,12 @@ interface WatchlistsData {
   freshestAccountsReportDate: string | null
 }
 
+interface CompetitiveSetLastRunOverride {
+  last_run_status: CompetitiveSet['last_run_status']
+  last_run_summary: Record<string, unknown>
+  last_run_at: string
+}
+
 const SEARCH_DEBOUNCE_MS = 250
 const MIN_VENDOR_SEARCH_CHARS = 2
 const SEARCH_RESULTS_PREVIEW_LIMIT = 8
@@ -243,6 +249,7 @@ function watchlistViewMatchesState(
   view: WatchlistView,
   filters: {
     vendor_name: string
+    vendor_names: string[]
     category: string
     source: string
     min_urgency: string
@@ -256,7 +263,7 @@ function watchlistViewMatchesState(
     alert_delivery_frequency: 'daily' | 'weekly'
   },
 ) {
-  return (view.vendor_name || '') === filters.vendor_name
+  return JSON.stringify([...(view.vendor_names || [])].sort()) === JSON.stringify([...(filters.vendor_names || [])].sort())
     && (view.category || '') === filters.category
     && (view.source || '') === filters.source
     && String(view.min_urgency ?? '') === filters.min_urgency
@@ -272,7 +279,7 @@ function watchlistViewMatchesState(
 
 function summarizeWatchlistView(view: WatchlistView) {
   const parts: string[] = []
-  if (view.vendor_name) parts.push(view.vendor_name)
+  if (view.vendor_names?.length) parts.push(view.vendor_names.join(', '))
   if (view.category) parts.push(view.category)
   if (view.source) parts.push(view.source)
   if (view.min_urgency != null) parts.push(`urgency ${view.min_urgency}+`)
@@ -308,6 +315,7 @@ export default function Watchlists() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [savedViewName, setSavedViewName] = useState('')
   const [selectedVendorFilter, setSelectedVendorFilter] = useState('')
+  const [selectedVendorFilters, setSelectedVendorFilters] = useState<string[]>([])
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('')
   const [selectedSourceFilter, setSelectedSourceFilter] = useState('')
   const [selectedMinUrgency, setSelectedMinUrgency] = useState('')
@@ -335,6 +343,7 @@ export default function Watchlists() {
   const [editingCompetitiveSetId, setEditingCompetitiveSetId] = useState<string | null>(null)
   const [competitiveSetPreviews, setCompetitiveSetPreviews] = useState<Record<string, CompetitiveSetPlan>>({})
   const [competitiveSetRuns, setCompetitiveSetRuns] = useState<Record<string, CompetitiveSetRun[]>>({})
+  const [competitiveSetLastRunOverrides, setCompetitiveSetLastRunOverrides] = useState<Record<string, CompetitiveSetLastRunOverride>>({})
   const [competitiveSetChangedOnly, setCompetitiveSetChangedOnly] = useState<Record<string, boolean>>({})
   const [competitiveSetForceRun, setCompetitiveSetForceRun] = useState<Record<string, boolean>>({})
   const [competitiveSetForceCrossVendor, setCompetitiveSetForceCrossVendor] = useState<Record<string, boolean>>({})
@@ -383,13 +392,13 @@ export default function Watchlists() {
   const { data, loading, error, refresh, refreshing } = useApiData<WatchlistsData>(
     async () => {
       const slowBurnParams = {
-        vendor_name: selectedVendorFilter || undefined,
+        vendor_names: selectedVendorFilters.length ? selectedVendorFilters : undefined,
         category: selectedCategoryFilter || undefined,
         vendor_alert_threshold: vendorAlertThreshold ? Number(vendorAlertThreshold) : undefined,
         stale_days_threshold: staleDaysThreshold ? Number(staleDaysThreshold) : undefined,
       }
       const accountsParams = {
-        vendor_name: selectedVendorFilter || undefined,
+        vendor_names: selectedVendorFilters.length ? selectedVendorFilters : undefined,
         category: selectedCategoryFilter || undefined,
         source: selectedSourceFilter || undefined,
         min_urgency: selectedMinUrgency ? Number(selectedMinUrgency) : undefined,
@@ -462,6 +471,23 @@ export default function Watchlists() {
   const accountAlertHitCountFromApi = data?.accountAlertHitCount ?? 0
   const accountStaleThresholdHitCountFromApi = data?.accountStaleThresholdHitCount ?? 0
   const vendorsWithAccounts = data?.vendorsWithAccounts ?? 0
+  useEffect(() => {
+    setCompetitiveSetLastRunOverrides((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const [competitiveSetId, override] of Object.entries(current)) {
+        const backendSet = competitiveSets.find((item) => item.id === competitiveSetId)
+        const backendTs = toTimestamp(backendSet?.last_run_at ?? null)
+        const overrideTs = toTimestamp(override.last_run_at)
+        if (!backendSet || backendTs == null || overrideTs == null) continue
+        if (backendTs >= overrideTs && backendSet.last_run_status) {
+          delete next[competitiveSetId]
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [competitiveSets])
   const trackedNames = useMemo(
     () => new Set(trackedVendors.map((vendor) => vendor.vendor_name.toLowerCase())),
     [trackedVendors],
@@ -499,6 +525,7 @@ export default function Watchlists() {
   const currentViewFilters = useMemo(
     () => ({
       vendor_name: selectedVendorFilter,
+      vendor_names: selectedVendorFilters,
       category: selectedCategoryFilter,
       source: selectedSourceFilter,
       min_urgency: selectedMinUrgency,
@@ -699,7 +726,8 @@ export default function Watchlists() {
   }
 
   function applyWatchlistView(view: WatchlistView) {
-    setSelectedVendorFilter(view.vendor_name || '')
+    setSelectedVendorFilter(view.vendor_names?.[0] || '')
+    setSelectedVendorFilters(view.vendor_names || [])
     setSelectedCategoryFilter(view.category || '')
     setSelectedSourceFilter(view.source || '')
     setSelectedMinUrgency(view.min_urgency != null ? String(view.min_urgency) : '')
@@ -726,7 +754,7 @@ export default function Watchlists() {
     setActionMessage(null)
     const payload = {
       name: nextName,
-      vendor_name: selectedVendorFilter || undefined,
+      vendor_names: selectedVendorFilters.length ? selectedVendorFilters : undefined,
       category: selectedCategoryFilter || undefined,
       source: selectedSourceFilter || undefined,
       min_urgency: selectedMinUrgency ? Number(selectedMinUrgency) : undefined,
@@ -925,32 +953,40 @@ export default function Watchlists() {
     }
   }
 
+  function applyCompetitiveSetPreviewState(
+    competitiveSetId: string,
+    plan: CompetitiveSetPlan,
+    recentRuns: CompetitiveSetRun[],
+  ) {
+    setCompetitiveSetPreviews((current) => ({
+      ...current,
+      [competitiveSetId]: plan,
+    }))
+    setCompetitiveSetRuns((current) => ({
+      ...current,
+      [competitiveSetId]: recentRuns,
+    }))
+    setCompetitiveSetChangedOnly((current) => ({
+      ...current,
+      [competitiveSetId]: current[competitiveSetId] ?? (competitiveSetDefaults?.default_changed_vendors_only ?? true),
+    }))
+    setCompetitiveSetForceRun((current) => ({
+      ...current,
+      [competitiveSetId]: current[competitiveSetId] ?? false,
+    }))
+    setCompetitiveSetForceCrossVendor((current) => ({
+      ...current,
+      [competitiveSetId]: current[competitiveSetId] ?? false,
+    }))
+  }
+
   async function handlePreviewCompetitiveSet(item: CompetitiveSet) {
     setPreviewingCompetitiveSetId(item.id)
     setActionError(null)
     setActionMessage(null)
     try {
       const result = await fetchCompetitiveSetPlan(item.id)
-      setCompetitiveSetPreviews((current) => ({
-        ...current,
-        [item.id]: result.plan,
-      }))
-      setCompetitiveSetRuns((current) => ({
-        ...current,
-        [item.id]: result.recent_runs,
-      }))
-      setCompetitiveSetChangedOnly((current) => ({
-        ...current,
-        [item.id]: current[item.id] ?? (competitiveSetDefaults?.default_changed_vendors_only ?? true),
-      }))
-      setCompetitiveSetForceRun((current) => ({
-        ...current,
-        [item.id]: current[item.id] ?? false,
-      }))
-      setCompetitiveSetForceCrossVendor((current) => ({
-        ...current,
-        [item.id]: current[item.id] ?? false,
-      }))
+      applyCompetitiveSetPreviewState(item.id, result.plan, result.recent_runs)
       setOpenCompetitiveSetPreviewId(item.id)
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to load competitive-set preview')
@@ -964,11 +1000,76 @@ export default function Watchlists() {
     setActionError(null)
     setActionMessage(null)
     try {
+      const changedOnly = competitiveSetChangedOnly[item.id] ?? true
+      const forceRun = competitiveSetForceRun[item.id] ?? false
+      const forceCrossVendor = competitiveSetForceCrossVendor[item.id] ?? false
       const result = await runCompetitiveSetNow(item.id, {
-        changed_vendors_only: competitiveSetChangedOnly[item.id] ?? true,
-        force: competitiveSetForceRun[item.id] ?? false,
-        force_cross_vendor: competitiveSetForceCrossVendor[item.id] ?? false,
+        changed_vendors_only: changedOnly,
+        force: forceRun,
+        force_cross_vendor: forceCrossVendor,
       })
+      if (result.already_running) {
+        try {
+          const preview = await fetchCompetitiveSetPlan(item.id)
+          applyCompetitiveSetPreviewState(item.id, preview.plan, preview.recent_runs)
+          const currentRun = preview.recent_runs.find((run) => (
+            result.execution_id
+              ? run.execution_id === result.execution_id || run.run_id === result.execution_id
+              : run.status === 'running'
+          )) ?? preview.recent_runs[0]
+          if (currentRun) {
+            setCompetitiveSetLastRunOverrides((current) => ({
+              ...current,
+              [item.id]: {
+                last_run_status: currentRun.status,
+                last_run_summary: currentRun.summary ?? {},
+                last_run_at: currentRun.started_at,
+              },
+            }))
+          }
+        } catch {
+          // Keep the stale preview if the follow-up refresh fails.
+        }
+        setActionMessage(result.message || `${item.name} is already running`)
+        refresh()
+        return
+      }
+      const startedAt = new Date().toISOString()
+      const optimisticSummary = {
+        changed_vendors_only: changedOnly,
+        force: forceRun,
+        force_cross_vendor: forceCrossVendor,
+      }
+      const optimisticRunId = result.execution_id
+        ? `optimistic:${result.execution_id}`
+        : `optimistic:${startedAt}`
+      setCompetitiveSetLastRunOverrides((current) => ({
+        ...current,
+        [item.id]: {
+          last_run_status: 'running',
+          last_run_summary: optimisticSummary,
+          last_run_at: startedAt,
+        },
+      }))
+      setCompetitiveSetRuns((current) => ({
+        ...current,
+        [item.id]: [
+          {
+            id: optimisticRunId,
+            competitive_set_id: item.id,
+            account_id: '',
+            run_id: result.execution_id ?? optimisticRunId,
+            trigger: 'manual',
+            status: 'running',
+            execution_id: result.execution_id ?? null,
+            summary: optimisticSummary,
+            started_at: startedAt,
+            completed_at: null,
+            created_at: startedAt,
+          },
+          ...(current[item.id] ?? []).filter((run) => run.id !== optimisticRunId),
+        ],
+      }))
       setActionMessage(
         `${item.name} refresh started${result.execution_id ? ` (${result.execution_id})` : ''}`,
       )
@@ -1684,6 +1785,7 @@ export default function Watchlists() {
               className="rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
               onClick={() => {
                 setSelectedVendorFilter('')
+                setSelectedVendorFilters([])
                 setSelectedCategoryFilter('')
                 setSelectedSourceFilter('')
                 setSelectedMinUrgency('')
@@ -1702,13 +1804,20 @@ export default function Watchlists() {
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
           <label className="space-y-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Vendor</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Vendors {selectedVendorFilters.length > 0 && `(${selectedVendorFilters.length})`}
+            </span>
             <select
               className="w-full rounded-lg border border-slate-700/50 bg-slate-800/50 px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none"
-              value={selectedVendorFilter}
-              onChange={(event) => setSelectedVendorFilter(event.target.value)}
+              multiple
+              size={Math.min(vendorFilterOptions.length + 1, 6)}
+              value={selectedVendorFilters}
+              onChange={(event) => {
+                const selected = Array.from(event.target.selectedOptions, (o) => o.value)
+                setSelectedVendorFilters(selected)
+                setSelectedVendorFilter(selected[0] || '')
+              }}
             >
-              <option value="">All tracked vendors</option>
               {vendorFilterOptions.map((vendorName) => (
                 <option key={vendorName} value={vendorName}>
                   {vendorName}
@@ -2166,6 +2275,12 @@ export default function Watchlists() {
                 const changedOnly = competitiveSetChangedOnly[item.id] ?? true
                 const forceRun = competitiveSetForceRun[item.id] ?? false
                 const forceCrossVendor = competitiveSetForceCrossVendor[item.id] ?? false
+                const lastRunOverride = competitiveSetLastRunOverrides[item.id]
+                const lastRunStatus = lastRunOverride?.last_run_status ?? item.last_run_status
+                const lastRunSummary = lastRunOverride?.last_run_summary ?? item.last_run_summary ?? {}
+                const lastRunSkipReason = typeof lastRunSummary._skip_synthesis === 'string'
+                  ? lastRunSummary._skip_synthesis
+                  : null
                 return (
                   <div key={item.id} className="rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
                     <div className="flex items-start justify-between gap-3">
@@ -2181,14 +2296,14 @@ export default function Watchlists() {
                       <span
                         className={clsx(
                           'rounded-full px-2 py-0.5 text-[11px] font-medium',
-                          item.last_run_status === 'succeeded' && 'bg-emerald-500/10 text-emerald-300',
-                          item.last_run_status === 'partial' && 'bg-amber-500/10 text-amber-300',
-                          item.last_run_status === 'failed' && 'bg-rose-500/10 text-rose-300',
-                          item.last_run_status === 'running' && 'bg-cyan-500/10 text-cyan-300',
-                          !item.last_run_status && 'bg-slate-800 text-slate-300',
+                          lastRunStatus === 'succeeded' && 'bg-emerald-500/10 text-emerald-300',
+                          lastRunStatus === 'partial' && 'bg-amber-500/10 text-amber-300',
+                          lastRunStatus === 'failed' && 'bg-rose-500/10 text-rose-300',
+                          lastRunStatus === 'running' && 'bg-cyan-500/10 text-cyan-300',
+                          !lastRunStatus && 'bg-slate-800 text-slate-300',
                         )}
                       >
-                        {item.last_run_status ?? 'never run'}
+                        {lastRunStatus ?? 'never run'}
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
@@ -2197,6 +2312,17 @@ export default function Watchlists() {
                       {item.category_council_enabled ? <span>category council enabled</span> : null}
                       {item.asymmetry_enabled ? <span>{asymmetryJobCount} asymmetry pairs</span> : null}
                     </div>
+                    {(lastRunSummary.changed_vendors_only === true
+                      || lastRunSummary.force === true
+                      || lastRunSummary.force_cross_vendor === true
+                      || lastRunSkipReason) ? (
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-400">
+                        {lastRunSummary.changed_vendors_only === true ? <span>changed only</span> : null}
+                        {lastRunSummary.force === true ? <span>vendor forced</span> : null}
+                        {lastRunSummary.force_cross_vendor === true ? <span>cross-vendor forced</span> : null}
+                        {lastRunSkipReason ? <span>{lastRunSkipReason}</span> : null}
+                      </div>
+                    ) : null}
                     <div className="mt-2 flex flex-wrap gap-1">
                       {item.competitor_vendor_names.map((vendorName) => (
                         <span key={vendorName} className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-300">
@@ -2342,12 +2468,20 @@ export default function Watchlists() {
                                 const reused = typeof summary.vendors_skipped_hash_reuse === 'number'
                                   ? summary.vendors_skipped_hash_reuse
                                   : null
-                                const reasoned = typeof summary.vendors_reasoned === 'number'
+                                const vendorReasoned = typeof summary.vendors_reasoned === 'number'
                                   ? summary.vendors_reasoned
-                                  : null
-                                const failed = typeof summary.vendors_failed === 'number'
+                                  : 0
+                                const crossVendorReasoned = typeof summary.cross_vendor_succeeded === 'number'
+                                  ? summary.cross_vendor_succeeded
+                                  : 0
+                                const reasoned = vendorReasoned + crossVendorReasoned
+                                const vendorFailed = typeof summary.vendors_failed === 'number'
                                   ? summary.vendors_failed
-                                  : null
+                                  : 0
+                                const crossVendorFailed = typeof summary.cross_vendor_failed === 'number'
+                                  ? summary.cross_vendor_failed
+                                  : 0
+                                const failed = vendorFailed + crossVendorFailed
                                 const skipReason = typeof summary._skip_synthesis === 'string'
                                   ? summary._skip_synthesis
                                   : null

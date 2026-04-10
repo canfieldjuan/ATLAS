@@ -324,11 +324,11 @@ export async function generateAccountDeepDiveReport(body: {
   return post<Record<string, unknown>>(TENANT_BASE, '/reports/company-deep-dive', body)
 }
 
-export async function generateBattleCard(body: {
+export async function requestBattleCardReport(body: {
   vendor_name: string
-  to_email?: string
+  refresh?: boolean
 }) {
-  return post<Record<string, unknown>>(BRIEFINGS_BASE, '/generate', body)
+  return post<Record<string, unknown>>(TENANT_BASE, '/reports/battle-card', body)
 }
 
 export async function fetchReport(reportId: string) {
@@ -999,6 +999,7 @@ export interface WatchlistView {
   id: string
   name: string
   vendor_name: string | null
+  vendor_names: string[]
   category: string | null
   source: string | null
   min_urgency: number | null
@@ -1242,6 +1243,7 @@ export async function runCompetitiveSetNow(
     execution_id: string | null
     status: string
     message: string
+    already_running?: boolean
     competitive_set_id: string
     plan: CompetitiveSetPlan
   }>(TENANT_BASE, `/competitive-sets/${encodeURIComponent(competitiveSetId)}/run`, body)
