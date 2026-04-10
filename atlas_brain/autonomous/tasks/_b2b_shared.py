@@ -529,7 +529,11 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
     """
     p = f"{alias}." if alias else ""
     time_expr = _eligible_review_timestamp_expr(alias=alias)
-    status_list = ", ".join(f"'{status}'" for status in _INTELLIGENCE_ELIGIBLE_STATUSES)
+    status_list = ", ".join(
+        f"'{status}'"
+        for status in _INTELLIGENCE_ELIGIBLE_STATUSES
+        if re.fullmatch(r"[a-z_]+", status)
+    )
     parts = [f"{p}enrichment_status IN ({status_list})"]
     parts.append(f"{p}duplicate_of_review_id IS NULL")
     if window_param is not None:

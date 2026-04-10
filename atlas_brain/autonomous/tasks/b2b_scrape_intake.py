@@ -397,7 +397,14 @@ async def _load_vendor_cross_source_reviews(
         """,
         vendor_name,
     )
-    return [dict(row) for row in rows]
+    records = [dict(row) for row in rows]
+    if len(records) > 5000:
+        logger.warning(
+            "Large cross-source dedup preload for %s: %d candidate reviews",
+            vendor_name,
+            len(records),
+        )
+    return records
 
 
 def _build_vendor_cross_source_candidate_index(
@@ -1837,16 +1844,19 @@ async def _insert_reviews(
                 _batch_canonical_by_identity_key[cross_source_identity_key] = canonical_row
             vendor_index = _vendor_candidate_indexes.get(canonical_vendor)
             if vendor_index is not None:
+                by_content_hash = vendor_index["by_content_hash"]
+                by_identity_key = vendor_index["by_identity_key"]
+                by_reviewer_stem = vendor_index["by_reviewer_stem"]
                 if content_hash is not None:
-                    vendor_index.setdefault("by_content_hash", {}).setdefault(content_hash, []).append(canonical_row)
+                    by_content_hash.setdefault(content_hash, []).append(canonical_row)
                 if cross_source_identity_key is not None:
-                    vendor_index.setdefault("by_identity_key", {}).setdefault(cross_source_identity_key, []).append(canonical_row)
+                    by_identity_key.setdefault(cross_source_identity_key, []).append(canonical_row)
                 reviewer_stem = normalize_reviewer_stem_key(
                     r.get("reviewer_name"),
                     stem_length=cfg.cross_source_dedup_reviewer_stem_length,
                 )
                 if reviewer_stem:
-                    vendor_index.setdefault("by_reviewer_stem", {}).setdefault(reviewer_stem, []).append(canonical_row)
+                    by_reviewer_stem.setdefault(reviewer_stem, []).append(canonical_row)
         else:
             dedup_audit_events.append((
                 str(review_uuid),
