@@ -266,6 +266,69 @@ async def test_read_company_churn_context_parses_lists_and_rates():
 
 
 @pytest.mark.asyncio
+async def test_read_signal_product_categories_returns_distinct_trimmed_values():
+    pool = FakePool(
+        fetch_map={
+            "SELECT DISTINCT product_category": [
+                {"product_category": "CRM"},
+                {"product_category": "crm"},
+                {"product_category": " Helpdesk "},
+                {"product_category": ""},
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_signal_product_categories(pool)
+
+    assert rows == ["CRM", "Helpdesk"]
+
+
+@pytest.mark.asyncio
+async def test_read_category_vendor_signal_rows_dedupes_per_vendor_with_snapshot_metrics():
+    pool = FakePool(
+        fetch_map={
+            "FROM ranked_signals rs": [
+                {
+                    "vendor_name": "Zendesk",
+                    "total_reviews": 120,
+                    "avg_urgency": 6.4,
+                    "confidence_score": 0.8,
+                    "churn_density": 28.0,
+                    "positive_review_pct": 42.0,
+                    "displacement_edge_count": 7,
+                    "displacement_out": 12,
+                    "displacement_in": 4,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_category_vendor_signal_rows(
+        pool,
+        product_category="CRM",
+    )
+
+    score_call = next(call for call in pool.calls if "FROM ranked_signals rs" in call[0])
+    assert score_call[1] == ("CRM",)
+    assert "ROW_NUMBER() OVER" in score_call[0]
+    assert "WHERE LOWER(product_category) = LOWER($1)" in score_call[0]
+    assert "WHERE rs.vendor_row_rank = 1" in score_call[0]
+    assert rows == [
+        {
+            "vendor_name": "Zendesk",
+            "total_reviews": 120,
+            "avg_urgency": 6.4,
+            "confidence_score": 0.8,
+            "churn_density": 28.0,
+            "positive_review_pct": 42.0,
+            "displacement_edge_count": 7,
+            "displacement_out": 12,
+            "displacement_in": 4,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_read_vendor_scorecard_inventory_rows_matches_provisioning_shape():
     pool = FakePool(
         fetch_map={

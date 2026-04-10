@@ -86,8 +86,9 @@ class EcosystemAnalyzer:
 
         health = self._compute_health(category, vendors)
         slices = self._compute_vendor_slices(vendors)
-        pain_dist = await self._compute_pain_distribution(category)
-        top_flows = await self._load_top_displacements(category)
+        vendor_names = [str(v.get("vendor_name") or "").strip() for v in vendors if v.get("vendor_name")]
+        pain_dist = await self._compute_pain_distribution(vendor_names)
+        top_flows = await self._load_top_displacements(vendor_names)
 
         # Classify market structure
         health.market_structure = self._classify_market(health, slices)
@@ -108,13 +109,11 @@ class EcosystemAnalyzer:
 
     async def analyze_all_categories(self) -> dict[str, EcosystemEvidence]:
         """Analyze all categories with sufficient data."""
-        categories = await self._pool.fetch("""
-            SELECT DISTINCT product_category FROM b2b_churn_signals
-            WHERE product_category IS NOT NULL AND product_category != ''
-        """)
+        from ..autonomous.tasks._b2b_shared import read_signal_product_categories
+
+        categories = await read_signal_product_categories(self._pool)
         results = {}
-        for row in categories:
-            cat = row["product_category"]
+        for cat in categories:
             results[cat] = await self.analyze_category(cat)
         return results
 
@@ -232,18 +231,25 @@ class EcosystemAnalyzer:
     # Pain convergence
     # ------------------------------------------------------------------
 
-    async def _compute_pain_distribution(self, category: str) -> dict[str, int]:
+    async def _compute_pain_distribution(self, vendor_names: list[str]) -> dict[str, int]:
         """Aggregate pain point distribution across a category."""
+        normalized_vendor_names = sorted(
+            {
+                str(vendor_name or "").strip().lower()
+                for vendor_name in vendor_names
+                if str(vendor_name or "").strip()
+            }
+        )
+        if not normalized_vendor_names:
+            return {}
         rows = await self._pool.fetch("""
             SELECT pp.pain_category, SUM(pp.mention_count) AS total_mentions
             FROM b2b_vendor_pain_points pp
-            JOIN b2b_churn_signals cs
-                ON LOWER(pp.vendor_name) = LOWER(cs.vendor_name)
-            WHERE LOWER(cs.product_category) = LOWER($1)
+            WHERE LOWER(pp.vendor_name) = ANY($1::text[])
             GROUP BY pp.pain_category
             ORDER BY total_mentions DESC
             LIMIT 15
-        """, category)
+        """, normalized_vendor_names)
         return {r["pain_category"]: r["total_mentions"] for r in rows}
 
     async def _compute_archetype_distribution(self, category: str) -> dict[str, int]:
@@ -262,18 +268,25 @@ class EcosystemAnalyzer:
     # Displacement flows
     # ------------------------------------------------------------------
 
-    async def _load_top_displacements(self, category: str) -> list[dict[str, Any]]:
+    async def _load_top_displacements(self, vendor_names: list[str]) -> list[dict[str, Any]]:
         """Load top displacement flows within a category."""
+        normalized_vendor_names = sorted(
+            {
+                str(vendor_name or "").strip().lower()
+                for vendor_name in vendor_names
+                if str(vendor_name or "").strip()
+            }
+        )
+        if not normalized_vendor_names:
+            return []
         rows = await self._pool.fetch("""
             SELECT de.from_vendor, de.to_vendor,
                    de.mention_count, de.primary_driver, de.signal_strength
             FROM b2b_displacement_edges de
-            JOIN b2b_churn_signals cs
-                ON LOWER(de.from_vendor) = LOWER(cs.vendor_name)
-            WHERE LOWER(cs.product_category) = LOWER($1)
+            WHERE LOWER(de.from_vendor) = ANY($1::text[])
             ORDER BY de.mention_count DESC
             LIMIT 10
-        """, category)
+        """, normalized_vendor_names)
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -282,33 +295,12 @@ class EcosystemAnalyzer:
 
     async def _load_category_vendors(self, category: str) -> list[dict]:
         """Load vendor data for a category, including displacement counts."""
-        rows = await self._pool.fetch("""
-            SELECT cs.vendor_name, cs.total_reviews,
-                   cs.avg_urgency_score AS avg_urgency,
-                   cs.confidence_score,
-                   snap.churn_density, snap.positive_review_pct,
-                   snap.displacement_edge_count,
-                   COALESCE(d_out.cnt, 0) AS displacement_out,
-                   COALESCE(d_in.cnt, 0) AS displacement_in
-            FROM b2b_churn_signals cs
-            LEFT JOIN (
-                SELECT DISTINCT ON (vendor_name) *
-                FROM b2b_vendor_snapshots
-                ORDER BY vendor_name, snapshot_date DESC
-            ) snap ON LOWER(cs.vendor_name) = LOWER(snap.vendor_name)
-            LEFT JOIN (
-                SELECT from_vendor, SUM(mention_count) AS cnt
-                FROM b2b_displacement_edges
-                GROUP BY from_vendor
-            ) d_out ON LOWER(cs.vendor_name) = LOWER(d_out.from_vendor)
-            LEFT JOIN (
-                SELECT to_vendor, SUM(mention_count) AS cnt
-                FROM b2b_displacement_edges
-                GROUP BY to_vendor
-            ) d_in ON LOWER(cs.vendor_name) = LOWER(d_in.to_vendor)
-            WHERE LOWER(cs.product_category) = LOWER($1)
-        """, category)
-        return [dict(r) for r in rows]
+        from ..autonomous.tasks._b2b_shared import read_category_vendor_signal_rows
+
+        return await read_category_vendor_signal_rows(
+            self._pool,
+            product_category=category,
+        )
 
     # ------------------------------------------------------------------
     # Serialization for Tier 4 caching
