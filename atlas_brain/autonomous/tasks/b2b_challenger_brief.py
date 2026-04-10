@@ -34,12 +34,14 @@ async def _fetch_latest_evidence_vault(
     *,
     as_of: date,
     analysis_window_days: int,
+    vendor_names: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Compatibility seam delegating canonical reads to the shared adapter."""
     return await _read_vendor_intelligence_map(
         pool,
         as_of=as_of,
         analysis_window_days=analysis_window_days,
+        vendor_names=vendor_names,
     )
 
 _STAGE_SELECTING_PAIRS = "selecting_pairs"
@@ -1923,12 +1925,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         today=today,
         pairs=pairs,
     )
+    evidence_vendors = sorted(
+        {
+            str(name or "").strip()
+            for pair in pairs
+            for name in (pair.get("incumbent"), pair.get("challenger"))
+            if str(name or "").strip()
+        }
+    )
 
     try:
         evidence_vault_lookup = await _fetch_latest_evidence_vault(
             pool,
             as_of=today,
             analysis_window_days=window_days,
+            vendor_names=evidence_vendors,
         )
     except Exception:
         logger.warning("Failed to load evidence vault for challenger briefs", exc_info=True)

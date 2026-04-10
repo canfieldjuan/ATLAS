@@ -1734,7 +1734,8 @@ class TestChallengerBriefRunProgress:
         monkeypatch.setattr(brief_mod, "_update_execution_progress", AsyncMock())
         monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
         monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
-        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={}))
+        fetch_vault = AsyncMock(return_value={})
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", fetch_vault)
         monkeypatch.setattr(
             brief_mod,
             "_select_displacement_pairs",
@@ -1764,6 +1765,12 @@ class TestChallengerBriefRunProgress:
             "persisted": 1,
             "briefs_retired": 0,
         }
+        fetch_vault.assert_awaited_once_with(
+            pool,
+            as_of=date(2026, 3, 18),
+            analysis_window_days=brief_mod.settings.b2b_churn.intelligence_window_days,
+            vendor_names=["Freshdesk", "Zendesk"],
+        )
 
     @pytest.mark.asyncio
     async def test_run_uses_merged_cross_vendor_lookup(self, monkeypatch):
