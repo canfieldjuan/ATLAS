@@ -505,6 +505,29 @@ async def test_read_category_vendor_rows_can_require_scorecard_match():
 
 
 @pytest.mark.asyncio
+async def test_read_known_vendor_names_orders_non_empty_vendors():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {"vendor_name": "HubSpot"},
+                {"vendor_name": ""},
+                {"vendor_name": None},
+                {"vendor_name": "Zendesk"},
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_known_vendor_names(pool)
+
+    score_call = next(
+        call for call in pool.calls
+        if "SELECT DISTINCT vendor_name" in call[0] and "FROM b2b_churn_signals" in call[0]
+    )
+    assert "ORDER BY vendor_name" in score_call[0]
+    assert rows == ["HubSpot", "Zendesk"]
+
+
+@pytest.mark.asyncio
 async def test_fetch_all_pool_layers_prefers_specific_profile_category_over_generic_vault():
     pool = FakePool(
         fetch_map={

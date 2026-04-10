@@ -2650,12 +2650,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ]
         if "_known_vendors" not in blueprint.data_context:
             try:
-                vendor_rows = await pool.fetch(
-                    "SELECT DISTINCT vendor_name FROM b2b_churn_signals"
-                )
-                blueprint.data_context["_known_vendors"] = [
-                    row["vendor_name"] for row in vendor_rows if row["vendor_name"]
-                ]
+                from ._b2b_shared import read_known_vendor_names
+
+                blueprint.data_context["_known_vendors"] = await read_known_vendor_names(pool)
             except Exception:
                 blueprint.data_context["_known_vendors"] = []
 

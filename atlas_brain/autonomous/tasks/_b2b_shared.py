@@ -4493,6 +4493,21 @@ async def read_category_vendor_rows(
     return [dict(row) for row in rows if row.get("vendor_name")]
 
 
+async def read_known_vendor_names(
+    pool,
+) -> list[str]:
+    """Read the canonical known-vendor list from churn scorecards."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT vendor_name
+        FROM b2b_churn_signals
+        WHERE vendor_name IS NOT NULL AND TRIM(vendor_name) != ''
+        ORDER BY vendor_name
+        """
+    )
+    return [str(row["vendor_name"]) for row in rows if row.get("vendor_name")]
+
+
 async def _fetch_vendor_churn_scores_from_signals(
     pool,
     window_days: int,
