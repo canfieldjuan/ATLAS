@@ -1,6 +1,7 @@
+import json
+import datetime as datetime_module
 from types import SimpleNamespace
 from uuid import uuid4
-import datetime as datetime_module
 
 import pytest
 from unittest.mock import AsyncMock
@@ -133,7 +134,7 @@ def test_task_run_id_prefers_scheduler_execution_id():
 async def test_upsert_churn_signals_persists_materialization_run_id():
     pool = CapturePool()
 
-    failures = await mod._upsert_churn_signals(
+    result = await mod._upsert_churn_signals(
         pool,
         vendor_scores=[
             {
@@ -156,13 +157,76 @@ async def test_upsert_churn_signals_persists_materialization_run_id():
         materialization_run_id="run-123",
     )
 
-    assert failures == 0
+    assert result.phase_name == "churn_signals"
+    assert result.failed == 0
+    assert result.succeeded == 1
     assert len(pool.execute_calls) == 1
     query, params = pool.execute_calls[0]
     assert "materialization_run_id" in query
     assert "product_category = EXCLUDED.product_category" in query
     assert params[1] == "Helpdesk"
     assert params[-2] == "run-123"
+
+
+def test_build_materialization_status_tracks_failed_and_partial_phases():
+    status = mod._build_materialization_status(
+        materialization_run_id="run-123",
+        run_date=mod.date(2026, 4, 10),
+        phase_results=[
+            mod._complete_phase_result("evidence_vault", attempted=2, succeeded=2),
+            mod._MaterializationPhaseResult(
+                phase_name="churn_signals",
+                attempted=3,
+                succeeded=2,
+                failed=1,
+                state="incomplete",
+                failed_targets=["Freshdesk"],
+                reason="vendor_upsert_failure",
+            ),
+            mod._failed_phase_result(
+                "account_intelligence",
+                attempted=2,
+                failed_targets=["Zendesk", "Freshdesk"],
+                reason="persistence_exception",
+            ),
+            mod._skipped_phase_result("category_dynamics", reason="scoped_run"),
+        ],
+    )
+
+    assert status["is_complete"] is False
+    assert status["partial_phases"] == ["churn_signals"]
+    assert status["failed_phases"] == ["account_intelligence"]
+    assert status["skipped_phases"] == ["category_dynamics"]
+    assert status["phases"]["churn_signals"]["failed_targets"] == ["Freshdesk"]
+
+
+@pytest.mark.asyncio
+async def test_write_core_run_marker_marks_incomplete_runs():
+    pool = CapturePool()
+    materialization_status = {
+        "is_complete": False,
+        "failed_phases": ["account_intelligence"],
+        "partial_phases": ["churn_signals"],
+        "phases": {},
+    }
+
+    await mod._write_core_run_marker(
+        pool,
+        report_date=mod.date(2026, 4, 10),
+        analyzed_vendor_count=7,
+        upsert_failures=1,
+        elapsed_seconds=12.4,
+        materialization_status=materialization_status,
+    )
+
+    assert len(pool.execute_calls) == 1
+    query, params = pool.execute_calls[0]
+    assert "status = EXCLUDED.status" in query
+    assert params[0] == mod.date(2026, 4, 10)
+    payload = json.loads(params[1])
+    assert payload["materialization_complete"] is False
+    assert payload["materialization_status"]["failed_phases"] == ["account_intelligence"]
+    assert params[2] == "incomplete"
 
 
 @pytest.mark.asyncio

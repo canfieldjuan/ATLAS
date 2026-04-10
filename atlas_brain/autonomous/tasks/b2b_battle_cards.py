@@ -2200,30 +2200,21 @@ async def _retire_gated_out_battle_cards(
 
 
 async def _check_freshness(pool) -> date | None:
-    """Return today's date if core task wrote a completion marker, else None."""
+    """Return today's date if the core run completed canonically, else None."""
+    from ._b2b_shared import has_complete_core_run_marker
+
     today = date.today()
-    marker = await pool.fetchval(
-        "SELECT 1 FROM b2b_intelligence "
-        "WHERE report_type = 'core_run_complete' AND report_date = $1",
-        today,
-    )
-    if not marker:
+    if not await has_complete_core_run_marker(pool, today):
         logger.info("Core run not complete for %s, skipping", today)
         return None
     return today
 
 
 async def _latest_core_report_date(pool) -> date | None:
-    """Return the latest persisted core-run date, if any."""
-    return await pool.fetchval(
-        """
-        SELECT report_date
-        FROM b2b_intelligence
-        WHERE report_type = 'core_run_complete'
-        ORDER BY report_date DESC, created_at DESC
-        LIMIT 1
-        """
-    )
+    """Return the latest complete persisted core-run date, if any."""
+    from ._b2b_shared import latest_complete_core_report_date
+
+    return await latest_complete_core_report_date(pool)
 
 
 async def _resolve_core_report_date(pool, *, maintenance_run: bool) -> date | None:

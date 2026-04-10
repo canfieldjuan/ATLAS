@@ -1179,14 +1179,11 @@ def _build_vendor_aggregate(
 # ---------------------------------------------------------------------------
 
 async def _check_freshness(pool) -> date | None:
-    """Return today's date if core task wrote a completion marker, else None."""
+    """Return today's date if the core run completed canonically, else None."""
+    from ._b2b_shared import has_complete_core_run_marker
+
     today = date.today()
-    marker = await pool.fetchval(
-        "SELECT 1 FROM b2b_intelligence "
-        "WHERE report_type = 'core_run_complete' AND report_date = $1",
-        today,
-    )
-    if not marker:
+    if not await has_complete_core_run_marker(pool, today):
         logger.info("Core run not complete for %s, skipping", today)
         return None
     return today

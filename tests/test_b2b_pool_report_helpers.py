@@ -33,9 +33,10 @@ import atlas_brain.autonomous.tasks._b2b_shared as shared_mod
 
 
 class FakePool:
-    def __init__(self, *, fetch_map=None, fetchrow_map=None):
+    def __init__(self, *, fetch_map=None, fetchrow_map=None, fetchval_map=None):
         self.fetch_map = fetch_map or {}
         self.fetchrow_map = fetchrow_map or {}
+        self.fetchval_map = fetchval_map or {}
         self.calls = []
 
     async def fetch(self, query, *params):
@@ -53,6 +54,14 @@ class FakePool:
             if needle in normalized:
                 return value(*params) if callable(value) else value
         raise AssertionError(f"Unexpected fetchrow query: {normalized}")
+
+    async def fetchval(self, query, *params):
+        normalized = " ".join(str(query).split())
+        self.calls.append((normalized, params))
+        for needle, value in self.fetchval_map.items():
+            if needle in normalized:
+                return value(*params) if callable(value) else value
+        raise AssertionError(f"Unexpected fetchval query: {normalized}")
 
 
 def test_count_analyzed_vendors_dedupes_canonical_vendor_rows():
@@ -192,6 +201,37 @@ async def test_read_vendor_scorecards_applies_vendor_filter():
     score_call = next(call for call in pool.calls if "FROM b2b_churn_signals" in call[0])
     assert score_call[1][2] == ["zendesk"]
     assert "LOWER(vendor_name) = ANY($3::text[])" in score_call[0]
+
+
+@pytest.mark.asyncio
+async def test_has_complete_core_run_marker_requires_published_complete_row():
+    pool = FakePool(
+        fetchval_map={
+            "FROM b2b_intelligence": 1,
+        },
+    )
+
+    assert await shared_mod.has_complete_core_run_marker(pool, date(2026, 4, 10)) is True
+
+    marker_call = next(call for call in pool.calls if "FROM b2b_intelligence" in call[0])
+    assert marker_call[1] == (date(2026, 4, 10),)
+    assert "status = 'published'" in marker_call[0]
+    assert "materialization_complete" in marker_call[0]
+
+
+@pytest.mark.asyncio
+async def test_latest_complete_core_report_date_filters_incomplete_markers():
+    pool = FakePool(
+        fetchval_map={
+            "FROM b2b_intelligence": date(2026, 4, 9),
+        },
+    )
+
+    assert await shared_mod.latest_complete_core_report_date(pool) == date(2026, 4, 9)
+
+    marker_call = next(call for call in pool.calls if "FROM b2b_intelligence" in call[0])
+    assert "status = 'published'" in marker_call[0]
+    assert "materialization_complete" in marker_call[0]
 
 
 def test_align_vendor_intelligence_records_to_scorecards_filters_mismatched_runs():

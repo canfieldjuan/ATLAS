@@ -29,6 +29,12 @@ from ...services.vendor_registry import resolve_vendor_name_cached
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_shared")
 
+_COMPLETE_CORE_RUN_MARKER_WHERE = """
+report_type = 'core_run_complete'
+AND status = 'published'
+AND COALESCE(LOWER(intelligence_data->>'materialization_complete'), 'true') = 'true'
+"""
+
 
 def _reasoning_int(value: Any) -> int | None:
     """Unwrap a traced numeric contract field into an integer."""
@@ -42,6 +48,34 @@ def _reasoning_int(value: Any) -> int | None:
             return int(float(raw))
         except (TypeError, ValueError):
             return None
+
+
+async def has_complete_core_run_marker(pool, as_of: date) -> bool:
+    """Return whether the core run marker is complete and published for a date."""
+    marker = await pool.fetchval(
+        f"""
+        SELECT 1
+        FROM b2b_intelligence
+        WHERE {_COMPLETE_CORE_RUN_MARKER_WHERE}
+          AND report_date = $1
+        LIMIT 1
+        """,
+        as_of,
+    )
+    return bool(marker)
+
+
+async def latest_complete_core_report_date(pool) -> date | None:
+    """Return the latest date with a complete published core-run marker."""
+    return await pool.fetchval(
+        f"""
+        SELECT report_date
+        FROM b2b_intelligence
+        WHERE {_COMPLETE_CORE_RUN_MARKER_WHERE}
+        ORDER BY report_date DESC, created_at DESC
+        LIMIT 1
+        """
+    )
 
 
 

@@ -18,7 +18,7 @@ import logging
 import re
 import time
 import uuid as _uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -58,6 +58,223 @@ _PERSISTENCE_PHASES = (
     "snapshots",
     "core_marker",
 )
+
+_CANONICAL_MATERIALIZATION_PHASES = (
+    "evidence_vault",
+    "segment_intelligence",
+    "temporal_intelligence",
+    "displacement_dynamics",
+    "category_dynamics",
+    "account_intelligence",
+    "churn_signals",
+)
+
+
+@dataclass(slots=True)
+class _MaterializationPhaseResult:
+    phase_name: str
+    attempted: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    state: str = "complete"
+    failed_targets: list[str] = field(default_factory=list)
+    reason: str | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self.state != "incomplete" and self.failed == 0
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "phase_name": self.phase_name,
+            "state": self.state,
+            "attempted": self.attempted,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "is_complete": self.is_complete,
+        }
+        if self.failed_targets:
+            payload["failed_targets"] = list(self.failed_targets)
+        if self.reason:
+            payload["reason"] = self.reason
+        return payload
+
+
+def _dedupe_text_values(values: list[str] | tuple[str, ...]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+    return deduped
+
+
+def _complete_phase_result(
+    phase_name: str,
+    *,
+    attempted: int,
+    succeeded: int | None = None,
+) -> _MaterializationPhaseResult:
+    succeeded_count = attempted if succeeded is None else max(int(succeeded), 0)
+    failed_count = max(int(attempted) - succeeded_count, 0)
+    state = "complete" if failed_count == 0 else "incomplete"
+    return _MaterializationPhaseResult(
+        phase_name=phase_name,
+        attempted=max(int(attempted), 0),
+        succeeded=succeeded_count,
+        failed=failed_count,
+        state=state,
+    )
+
+
+def _failed_phase_result(
+    phase_name: str,
+    *,
+    attempted: int,
+    failed_targets: list[str] | tuple[str, ...] | None = None,
+    reason: str | None = None,
+) -> _MaterializationPhaseResult:
+    targets = _dedupe_text_values(list(failed_targets or []))
+    failed_count = max(int(attempted), len(targets), 0)
+    return _MaterializationPhaseResult(
+        phase_name=phase_name,
+        attempted=max(int(attempted), 0),
+        succeeded=0,
+        failed=failed_count,
+        state="incomplete",
+        failed_targets=targets,
+        reason=reason,
+    )
+
+
+def _skipped_phase_result(
+    phase_name: str,
+    *,
+    reason: str,
+) -> _MaterializationPhaseResult:
+    return _MaterializationPhaseResult(
+        phase_name=phase_name,
+        state="skipped",
+        reason=reason,
+    )
+
+
+def _build_materialization_status(
+    *,
+    materialization_run_id: str | None,
+    run_date: date,
+    phase_results: list[_MaterializationPhaseResult],
+) -> dict[str, Any]:
+    results_by_name = {result.phase_name: result for result in phase_results}
+    ordered_results = [
+        results_by_name[phase_name]
+        for phase_name in _CANONICAL_MATERIALIZATION_PHASES
+        if phase_name in results_by_name
+    ]
+    ordered_results.extend(
+        result
+        for result in phase_results
+        if result.phase_name not in _CANONICAL_MATERIALIZATION_PHASES
+    )
+
+    phases: dict[str, dict[str, Any]] = {}
+    failed_phases: list[str] = []
+    partial_phases: list[str] = []
+    skipped_phases: list[str] = []
+
+    for result in ordered_results:
+        phases[result.phase_name] = result.to_dict()
+        if result.state == "skipped":
+            skipped_phases.append(result.phase_name)
+            continue
+        if result.failed == 0:
+            continue
+        if result.succeeded > 0:
+            partial_phases.append(result.phase_name)
+        else:
+            failed_phases.append(result.phase_name)
+
+    return {
+        "materialization_run_id": materialization_run_id,
+        "run_date": str(run_date),
+        "is_complete": not failed_phases and not partial_phases,
+        "failed_phases": failed_phases,
+        "partial_phases": partial_phases,
+        "skipped_phases": skipped_phases,
+        "canonical_phase_count": len(ordered_results),
+        "attempted_total": sum(result.attempted for result in ordered_results),
+        "succeeded_total": sum(result.succeeded for result in ordered_results),
+        "failed_total": sum(result.failed for result in ordered_results),
+        "phases": phases,
+    }
+
+
+def _materialization_marker_status(
+    materialization_status: dict[str, Any],
+) -> str:
+    return "published" if bool(materialization_status.get("is_complete")) else "incomplete"
+
+
+def _materialization_failure_summary(
+    materialization_status: dict[str, Any],
+) -> str | None:
+    failed_phases = [
+        str(phase or "").strip()
+        for phase in materialization_status.get("failed_phases") or []
+        if str(phase or "").strip()
+    ]
+    partial_phases = [
+        str(phase or "").strip()
+        for phase in materialization_status.get("partial_phases") or []
+        if str(phase or "").strip()
+    ]
+    if not failed_phases and not partial_phases:
+        return None
+    details: list[str] = []
+    if failed_phases:
+        details.append("failed=" + ", ".join(failed_phases))
+    if partial_phases:
+        details.append("partial=" + ", ".join(partial_phases))
+    return "Canonical materialization incomplete (" + "; ".join(details) + ")"
+
+
+async def _write_core_run_marker(
+    pool,
+    *,
+    report_date: date,
+    analyzed_vendor_count: int,
+    upsert_failures: int,
+    elapsed_seconds: float,
+    materialization_status: dict[str, Any],
+) -> None:
+    marker_status = _materialization_marker_status(materialization_status)
+    payload = {
+        "vendors_analyzed": analyzed_vendor_count,
+        "upsert_failures": upsert_failures,
+        "elapsed_seconds": elapsed_seconds,
+        "materialization_complete": bool(materialization_status.get("is_complete")),
+        "materialization_status": materialization_status,
+    }
+    await pool.execute(
+        """
+        INSERT INTO b2b_intelligence (
+            report_date, report_type, intelligence_data, status, llm_model
+        ) VALUES ($1, 'core_run_complete', $2::jsonb, $3, 'pipeline_core')
+        ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
+                     LOWER(COALESCE(category_filter,'')),
+                     COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
+        DO UPDATE SET
+            intelligence_data = EXCLUDED.intelligence_data,
+            status = EXCLUDED.status,
+            created_at = now()
+        """,
+        report_date,
+        json.dumps(payload, default=str),
+        marker_status,
+    )
 
 
 def _normalize_report_pain_category(category: Any) -> str:
@@ -1442,7 +1659,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     budget = _TaskTimer()
     materialization_run_id = _task_run_id(task)
     synced_firmographics = 0
-    today = date.today()
     await _update_execution_progress(
         task,
         stage=_STAGE_LOADING_INPUTS,
@@ -1453,6 +1669,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # throughout this function hit the DB-backed cache rather than bootstrap.
     await _warm_vendor_cache()
 
+    today = date.today()
     try:
         synced_firmographics = await _sync_vendor_firmographics(pool, as_of=today)
         if synced_firmographics:
@@ -1962,6 +2179,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # consumed by all downstream products (battle cards, reports, briefs).
     # ---------------------------------------------------------------
     vault_persisted = 0
+    _vault_rows: list[tuple] = []
+    _vault_targets: list[str] = []
+    vault_materialization = _complete_phase_result("evidence_vault", attempted=0)
     try:
         _hi_by_vendor: dict[str, list[dict]] = {}
         for hi in high_intent:
@@ -1979,13 +2199,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             blocked_names_by_vendor=_company_signal_blocked_names,
         )
 
-        _vault_rows: list[tuple] = []
         _vault_seen: set[str] = set()
         for vs in vendor_scores:
             vn = _canonicalize_vendor(vs.get("vendor_name") or "")
             if not vn or vn in _vault_seen:
                 continue
             _vault_seen.add(vn)
+            _vault_targets.append(vn)
             vault = build_evidence_vault(
                 vendor_name=vn,
                 vs=vs,
@@ -2038,21 +2258,35 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             vault_persisted = len(_vault_rows)
             logger.info("Evidence vault: persisted %d vendor vaults", vault_persisted)
+        vault_materialization = _complete_phase_result(
+            "evidence_vault",
+            attempted=len(_vault_rows),
+            succeeded=vault_persisted,
+        )
     except Exception:
+        vault_materialization = _failed_phase_result(
+            "evidence_vault",
+            attempted=len(_vault_rows),
+            failed_targets=_vault_targets,
+            reason="persistence_exception",
+        )
         logger.warning("Evidence vault persistence failed (non-fatal)", exc_info=True)
 
     # ---------------------------------------------------------------
     # Segment intelligence: canonical per-vendor buyer segment objects.
     # ---------------------------------------------------------------
     segment_persisted = 0
+    _seg_rows: list[tuple] = []
+    _seg_targets: list[str] = []
+    segment_materialization = _complete_phase_result("segment_intelligence", attempted=0)
     try:
-        _seg_rows: list[tuple] = []
         _seg_seen: set[str] = set()
         for vs in vendor_scores:
             vn = _canonicalize_vendor(vs.get("vendor_name") or "")
             if not vn or vn in _seg_seen:
                 continue
             _seg_seen.add(vn)
+            _seg_targets.append(vn)
             seg = build_segment_intelligence(
                 vendor_name=vn,
                 buyer_auth=buyer_auth_lookup.get(vn),
@@ -2088,21 +2322,35 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             segment_persisted = len(_seg_rows)
             logger.info("Segment intelligence: persisted %d vendor segments", segment_persisted)
+        segment_materialization = _complete_phase_result(
+            "segment_intelligence",
+            attempted=len(_seg_rows),
+            succeeded=segment_persisted,
+        )
     except Exception:
+        segment_materialization = _failed_phase_result(
+            "segment_intelligence",
+            attempted=len(_seg_rows),
+            failed_targets=_seg_targets,
+            reason="persistence_exception",
+        )
         logger.warning("Segment intelligence persistence failed (non-fatal)", exc_info=True)
 
     # ---------------------------------------------------------------
     # Temporal intelligence: canonical per-vendor timing and trend objects.
     # ---------------------------------------------------------------
     temporal_persisted = 0
+    _temp_rows: list[tuple] = []
+    _temp_targets: list[str] = []
+    temporal_materialization = _complete_phase_result("temporal_intelligence", attempted=0)
     try:
-        _temp_rows: list[tuple] = []
         _temp_seen: set[str] = set()
         for vs in vendor_scores:
             vn = _canonicalize_vendor(vs.get("vendor_name") or "")
             if not vn or vn in _temp_seen:
                 continue
             _temp_seen.add(vn)
+            _temp_targets.append(vn)
             temp = build_temporal_intelligence(
                 vendor_name=vn,
                 timeline_entries=timeline_lookup.get(vn, []),
@@ -2139,7 +2387,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "Temporal intelligence: persisted %d vendor temporals",
                 temporal_persisted,
             )
+        temporal_materialization = _complete_phase_result(
+            "temporal_intelligence",
+            attempted=len(_temp_rows),
+            succeeded=temporal_persisted,
+        )
     except Exception:
+        temporal_materialization = _failed_phase_result(
+            "temporal_intelligence",
+            attempted=len(_temp_rows),
+            failed_targets=_temp_targets,
+            reason="persistence_exception",
+        )
         logger.warning(
             "Temporal intelligence persistence failed (non-fatal)",
             exc_info=True,
@@ -2149,6 +2408,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Displacement dynamics: canonical per-pair competitive flow objects.
     # ---------------------------------------------------------------
     displacement_dynamics_persisted = 0
+    _disp_rows: list[tuple] = []
+    _disp_targets: list[str] = []
+    displacement_materialization = _complete_phase_result("displacement_dynamics", attempted=0)
     try:
         # Read persisted edges for velocity/quote data
         _edge_rows = await pool.fetch(
@@ -2212,8 +2474,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _all_pairs.update(_edge_map.keys())
         _all_pairs.update(_flow_map.keys())
 
-        _disp_rows: list[tuple] = []
         for from_v, to_v in _all_pairs:
+            _disp_targets.append(f"{from_v}->{to_v}")
             dyn = build_displacement_dynamics(
                 from_vendor=from_v,
                 to_vendor=to_v,
@@ -2251,7 +2513,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "Displacement dynamics: persisted %d pair dynamics",
                 displacement_dynamics_persisted,
             )
+        displacement_materialization = _complete_phase_result(
+            "displacement_dynamics",
+            attempted=len(_disp_rows),
+            succeeded=displacement_dynamics_persisted,
+        )
     except Exception:
+        displacement_materialization = _failed_phase_result(
+            "displacement_dynamics",
+            attempted=len(_disp_rows),
+            failed_targets=_disp_targets,
+            reason="persistence_exception",
+        )
         logger.warning(
             "Displacement dynamics persistence failed (non-fatal)",
             exc_info=True,
@@ -2261,7 +2534,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Category dynamics: canonical per-category market regime objects.
     # ---------------------------------------------------------------
     category_dynamics_persisted = 0
+    _cat_rows: list[tuple] = []
+    _cat_targets: list[str] = []
+    category_materialization = _complete_phase_result("category_dynamics", attempted=0)
     if not _should_persist_category_dynamics(scoped_vendors):
+        category_materialization = _skipped_phase_result(
+            "category_dynamics",
+            reason="scoped_run",
+        )
         logger.info(
             "Skipping category dynamics persistence for scoped run covering %d vendors",
             len(scoped_vendors),
@@ -2343,10 +2623,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 if cat and not _is_generic_product_category(cat)
             )
 
-            _cat_rows: list[tuple] = []
             for cat in sorted(_all_cats):
                 if not cat:
                     continue
+                _cat_targets.append(cat)
                 mr_dict = None
                 regime_obj = market_regimes.get(cat)
                 if regime_obj is not None:
@@ -2395,7 +2675,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "Category dynamics: persisted %d categories",
                     category_dynamics_persisted,
                 )
+            category_materialization = _complete_phase_result(
+                "category_dynamics",
+                attempted=len(_cat_rows),
+                succeeded=category_dynamics_persisted,
+            )
         except Exception:
+            category_materialization = _failed_phase_result(
+                "category_dynamics",
+                attempted=len(_cat_rows),
+                failed_targets=_cat_targets,
+                reason="persistence_exception",
+            )
             logger.warning(
                 "Category dynamics persistence failed (non-fatal)",
                 exc_info=True,
@@ -2405,6 +2696,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # Account intelligence: canonical per-vendor account signal objects.
     # ---------------------------------------------------------------
     account_intelligence_persisted = 0
+    _acct_rows: list[tuple] = []
+    _acct_targets: list[str] = []
+    account_materialization = _complete_phase_result("account_intelligence", attempted=0)
     try:
         # Collect all vendors with signals
         _acct_vendors: set[str] = set()
@@ -2415,10 +2709,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             vs.get("vendor_name", "") for vs in vendor_scores
         )
 
-        _acct_rows: list[tuple] = []
         for vn in sorted(_acct_vendors):
             if not vn:
                 continue
+            _acct_targets.append(vn)
             acct = build_account_intelligence(
                 vendor_name=vn,
                 persisted_signals=_canonical_company_signals.get(vn, []),
@@ -2452,7 +2746,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 "Account intelligence: persisted %d vendor accounts",
                 account_intelligence_persisted,
             )
+        account_materialization = _complete_phase_result(
+            "account_intelligence",
+            attempted=len(_acct_rows),
+            succeeded=account_intelligence_persisted,
+        )
     except Exception:
+        account_materialization = _failed_phase_result(
+            "account_intelligence",
+            attempted=len(_acct_rows),
+            failed_targets=_acct_targets,
+            reason="persistence_exception",
+        )
         logger.warning(
             "Account intelligence persistence failed (non-fatal)",
             exc_info=True,
@@ -2620,7 +2925,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     await _update_persist_progress()
 
     # Upsert per-vendor churn signals
-    upsert_failures = await _upsert_churn_signals(
+    churn_signal_materialization = await _upsert_churn_signals(
         pool, vendor_scores,
         neg_lookup, pain_lookup, competitor_lookup, feature_gap_lookup,
         price_lookup, dm_lookup, company_lookup, quote_lookup,
@@ -2632,6 +2937,30 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         reasoning_lookup=reasoning_lookup,
         materialization_run_id=materialization_run_id,
     )
+    upsert_failures = churn_signal_materialization.failed
+    canonical_materialization_results = [
+        vault_materialization,
+        segment_materialization,
+        temporal_materialization,
+        displacement_materialization,
+        category_materialization,
+        account_materialization,
+        churn_signal_materialization,
+    ]
+    materialization_status = _build_materialization_status(
+        materialization_run_id=materialization_run_id,
+        run_date=today,
+        phase_results=canonical_materialization_results,
+    )
+    materialization_complete = bool(materialization_status["is_complete"])
+    materialization_failure_summary = _materialization_failure_summary(
+        materialization_status,
+    )
+    if not materialization_complete:
+        logger.warning(
+            "Canonical materialization incomplete: %s",
+            materialization_failure_summary or materialization_status,
+        )
     persistence_progress += 1
     await _update_persist_progress()
 
@@ -2923,24 +3252,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Article-archetype correlation is now handled by follow-up tasks.
 
-    # Write completion marker so follow-up tasks know core finished
+    # Write completion marker so follow-up tasks know whether core outputs
+    # are authoritative for follow-up synthesis/report tasks.
     try:
-        await pool.execute(
-            """
-            INSERT INTO b2b_intelligence (
-                report_date, report_type, intelligence_data, status, llm_model
-            ) VALUES ($1, 'core_run_complete', $2::jsonb, 'published', 'pipeline_core')
-            ON CONFLICT (report_date, report_type, LOWER(COALESCE(vendor_filter,'')),
-                         LOWER(COALESCE(category_filter,'')),
-                         COALESCE(account_id, '00000000-0000-0000-0000-000000000000'::uuid))
-            DO UPDATE SET intelligence_data = EXCLUDED.intelligence_data, created_at = now()
-            """,
-            today,
-            json.dumps({
-                "vendors_analyzed": analyzed_vendor_count,
-                "upsert_failures": upsert_failures,
-                "elapsed_seconds": round(budget.elapsed(), 1),
-            }),
+        await _write_core_run_marker(
+            pool,
+            report_date=today,
+            analyzed_vendor_count=analyzed_vendor_count,
+            upsert_failures=upsert_failures,
+            elapsed_seconds=round(budget.elapsed(), 1),
+            materialization_status=materialization_status,
         )
     except Exception:
         logger.warning("Failed to write core_run_complete marker")
@@ -2990,6 +3311,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         buyer_profiles_persisted=buyer_profiles_persisted,
         snapshots_persisted=snapshots_persisted,
         change_events_detected=change_events_detected,
+        materialization_complete=materialization_complete,
+        materialization_failed_phases=materialization_status["failed_phases"],
+        materialization_partial_phases=materialization_status["partial_phases"],
         elapsed_seconds=round(budget.elapsed(), 1),
     )
 
@@ -3000,7 +3324,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     await _emit_reasoning_events(notification_payload, high_intent, vendor_scores)
 
     response = {
-        "_skip_synthesis": "B2B churn intelligence complete",
+        "_skip_synthesis": (
+            "B2B churn intelligence complete"
+            if materialization_complete
+            else "B2B churn intelligence incomplete"
+        ),
         "date": str(today),
         "vendors_analyzed": analyzed_vendor_count,
         "high_intent_companies": len(high_intent),
@@ -3021,8 +3349,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "category_dynamics_persisted": category_dynamics_persisted,
         "account_intelligence_persisted": account_intelligence_persisted,
         "change_events_detected": change_events_detected,
+        "materialization_complete": materialization_complete,
+        "materialization_status": materialization_status,
         "elapsed_seconds": round(budget.elapsed(), 1),
     }
+    if materialization_failure_summary:
+        response["materialization_summary"] = materialization_failure_summary
     tracer.end_span(
         span,
         status="completed",
@@ -3034,6 +3366,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "fetcher_failures": fetcher_failures,
                     "upsert_failures": upsert_failures,
                     "competitive_flows": len(competitive_disp),
+                    "materialization_complete": materialization_complete,
+                    "materialization_failed_phases": materialization_status["failed_phases"],
+                    "materialization_partial_phases": materialization_status["partial_phases"],
                 },
                 rationale=notification_payload.get("executive_summary"),
             ),
@@ -3331,7 +3666,7 @@ async def _upsert_churn_signals(
     insider_lookup: dict[str, dict] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
     materialization_run_id: str | None = None,
-) -> int:
+) -> _MaterializationPhaseResult:
     """Upsert b2b_churn_signals and stamp the producing materialization run."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
@@ -3344,10 +3679,12 @@ async def _upsert_churn_signals(
     reasoning_lookup = reasoning_lookup or {}
     provenance_lookup = provenance_lookup or {}
     insider_lookup = insider_lookup or {}
-    failures = 0
+    attempted_vendors: list[str] = []
+    failed_vendors: list[str] = []
 
     for vs in vendor_scores:
         vendor = vs["vendor_name"]
+        attempted_vendors.append(vendor)
         category = vs.get("product_category")
 
         total = vs["total_reviews"]
@@ -3488,10 +3825,21 @@ async def _upsert_churn_signals(
                 now,
             )
         except Exception:
-            failures += 1
+            failed_vendors.append(vendor)
             logger.exception("Failed to upsert churn signal for %s", vendor)
 
-    return failures
+    attempted_count = len(attempted_vendors)
+    failed_targets = _dedupe_text_values(failed_vendors)
+    succeeded_count = max(attempted_count - len(failed_targets), 0)
+    return _MaterializationPhaseResult(
+        phase_name="churn_signals",
+        attempted=attempted_count,
+        succeeded=succeeded_count,
+        failed=len(failed_targets),
+        state="complete" if not failed_targets else "incomplete",
+        failed_targets=failed_targets,
+        reason="vendor_upsert_failure" if failed_targets else None,
+    )
 
 
 # ------------------------------------------------------------------

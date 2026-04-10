@@ -25,14 +25,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    # Freshness gate: only run if core task completed today
+    # Freshness gate: only run if the core task completed canonically today.
     today = date.today()
-    marker = await pool.fetchval(
-        "SELECT 1 FROM b2b_intelligence "
-        "WHERE report_type = 'core_run_complete' AND report_date = $1",
-        today,
-    )
-    if not marker:
+    from ._b2b_shared import has_complete_core_run_marker
+
+    if not await has_complete_core_run_marker(pool, today):
         return {"_skip_synthesis": "Core run not complete for today"}
 
     from .b2b_churn_intelligence import (
