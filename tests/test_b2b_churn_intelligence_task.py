@@ -335,3 +335,81 @@ async def test_run_uses_captured_run_date_for_all_persistence(monkeypatch):
     assert persisted_dates
     assert all(value == real_date(2026, 4, 10) for value in persisted_dates)
     assert completion_dates == [real_date(2026, 4, 10)]
+
+
+@pytest.mark.asyncio
+async def test_run_reports_incomplete_when_core_marker_write_fails(monkeypatch):
+    async def fake_gather(*coroutines, **_kwargs):
+        for coro in coroutines:
+            close = getattr(coro, "close", None)
+            if close:
+                close()
+        return (
+            [{"vendor_name": "Zendesk", "product_category": "Helpdesk", "total_reviews": 12, "churn_intent": 3, "avg_urgency": 7.5, "signal_reviews": 5}],
+            [],
+            {},
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            {},
+            {},
+            {},
+            {},
+            {},
+            {},
+            {},
+            {},
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+
+    pool = RunCapturePool()
+    monkeypatch.setattr(mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_churn, "snapshot_enabled", False, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_churn, "change_detection_enabled", False, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_churn, "temporal_analysis_vendor_limit", 0, raising=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_warm_vendor_cache", AsyncMock())
+    monkeypatch.setattr(mod, "_sync_vendor_firmographics", AsyncMock(return_value=0))
+    monkeypatch.setattr(mod, "_update_execution_progress", AsyncMock())
+    monkeypatch.setattr(mod, "_send_notification", AsyncMock())
+    monkeypatch.setattr(mod, "_emit_reasoning_events", AsyncMock())
+    monkeypatch.setattr(mod, "_fetch_prior_reports", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod.asyncio, "gather", fake_gather)
+    monkeypatch.setattr(mod, "build_evidence_vault", lambda **_kwargs: {"schema_version": "v1"})
+    monkeypatch.setattr(mod, "build_segment_intelligence", lambda **_kwargs: {"schema_version": "v1"})
+    monkeypatch.setattr(mod, "build_temporal_intelligence", lambda **_kwargs: {"schema_version": "v1"})
+    monkeypatch.setattr(mod, "build_account_intelligence", lambda **_kwargs: {"schema_version": "v1"})
+    monkeypatch.setattr(mod, "build_category_dynamics", lambda **_kwargs: {"schema_version": "v1"})
+    monkeypatch.setattr(mod, "_build_exploratory_payload", lambda *_args, **_kwargs: ({}, 0))
+    monkeypatch.setattr(mod, "_build_deterministic_vendor_feed", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(mod, "_build_validated_executive_summary", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(mod, "_write_core_run_marker", AsyncMock(side_effect=RuntimeError("marker failed")))
+    monkeypatch.setattr("atlas_brain.pipelines.llm.get_pipeline_llm", lambda workload=None: None)
+
+    result = await mod.run(SimpleNamespace(id=uuid4(), metadata={}))
+
+    assert result["_skip_synthesis"] == "B2B churn intelligence incomplete"
+    assert result["materialization_complete"] is True
+    assert result["core_marker_written"] is False
+    assert result["follow_up_ready"] is False
+    assert "marker failed to persist" in result["materialization_summary"]

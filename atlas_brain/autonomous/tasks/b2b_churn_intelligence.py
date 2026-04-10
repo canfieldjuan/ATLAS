@@ -241,6 +241,19 @@ def _materialization_failure_summary(
     return "Canonical materialization incomplete (" + "; ".join(details) + ")"
 
 
+def _follow_up_readiness_summary(
+    *,
+    materialization_complete: bool,
+    core_marker_written: bool,
+    materialization_failure_summary: str | None,
+) -> str | None:
+    if not materialization_complete:
+        return materialization_failure_summary
+    if core_marker_written:
+        return None
+    return "Core outputs are complete, but the core_run_complete marker failed to persist"
+
+
 async def _write_core_run_marker(
     pool,
     *,
@@ -3254,6 +3267,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Write completion marker so follow-up tasks know whether core outputs
     # are authoritative for follow-up synthesis/report tasks.
+    core_marker_written = False
     try:
         await _write_core_run_marker(
             pool,
@@ -3263,8 +3277,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             elapsed_seconds=round(budget.elapsed(), 1),
             materialization_status=materialization_status,
         )
+        core_marker_written = True
     except Exception:
         logger.warning("Failed to write core_run_complete marker")
+    follow_up_ready = materialization_complete and core_marker_written
+    follow_up_summary = _follow_up_readiness_summary(
+        materialization_complete=materialization_complete,
+        core_marker_written=core_marker_written,
+        materialization_failure_summary=materialization_failure_summary,
+    )
     persistence_progress += 1
     await _update_persist_progress()
 
@@ -3312,6 +3333,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         snapshots_persisted=snapshots_persisted,
         change_events_detected=change_events_detected,
         materialization_complete=materialization_complete,
+        core_marker_written=core_marker_written,
+        follow_up_ready=follow_up_ready,
         materialization_failed_phases=materialization_status["failed_phases"],
         materialization_partial_phases=materialization_status["partial_phases"],
         elapsed_seconds=round(budget.elapsed(), 1),
@@ -3326,7 +3349,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     response = {
         "_skip_synthesis": (
             "B2B churn intelligence complete"
-            if materialization_complete
+            if follow_up_ready
             else "B2B churn intelligence incomplete"
         ),
         "date": str(today),
@@ -3350,11 +3373,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "account_intelligence_persisted": account_intelligence_persisted,
         "change_events_detected": change_events_detected,
         "materialization_complete": materialization_complete,
+        "core_marker_written": core_marker_written,
+        "follow_up_ready": follow_up_ready,
         "materialization_status": materialization_status,
         "elapsed_seconds": round(budget.elapsed(), 1),
     }
-    if materialization_failure_summary:
-        response["materialization_summary"] = materialization_failure_summary
+    if follow_up_summary:
+        response["materialization_summary"] = follow_up_summary
     tracer.end_span(
         span,
         status="completed",
@@ -3367,6 +3392,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     "upsert_failures": upsert_failures,
                     "competitive_flows": len(competitive_disp),
                     "materialization_complete": materialization_complete,
+                    "core_marker_written": core_marker_written,
+                    "follow_up_ready": follow_up_ready,
                     "materialization_failed_phases": materialization_status["failed_phases"],
                     "materialization_partial_phases": materialization_status["partial_phases"],
                 },
