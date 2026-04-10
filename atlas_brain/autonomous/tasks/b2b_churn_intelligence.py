@@ -485,24 +485,14 @@ async def _fetch_vendor_vault_row(
     window_days: int,
 ) -> tuple[dict[str, Any], int] | tuple[None, None]:
     """Fetch the exact or nearest evidence-vault row for a vendor/window."""
-    row = await pool.fetchrow(
-        """
-        SELECT vault, analysis_window_days
-        FROM b2b_evidence_vault
-        WHERE LOWER(vendor_name) = LOWER($1)
-        ORDER BY
-            CASE WHEN analysis_window_days = $2 THEN 0 ELSE 1 END,
-            ABS(analysis_window_days - $2),
-            as_of_date DESC,
-            created_at DESC
-        LIMIT 1
-        """,
+    row = await _read_vendor_intelligence_record_nearest_window(
+        pool,
         vendor_name,
         window_days,
     )
     if not row:
         return None, None
-    vault = _safe_json(row["vault"], default={})
+    vault = row["vault"] or {}
     if not isinstance(vault, dict):
         return None, None
     try:
@@ -510,6 +500,49 @@ async def _fetch_vendor_vault_row(
     except (TypeError, ValueError):
         resolved_window = window_days
     return vault, resolved_window
+
+
+async def _read_vendor_intelligence_record_nearest_window(
+    pool,
+    vendor_name: str,
+    window_days: int,
+) -> dict[str, Any] | None:
+    from ._b2b_shared import read_vendor_intelligence_record_nearest_window
+
+    return await read_vendor_intelligence_record_nearest_window(
+        pool,
+        vendor_name=vendor_name,
+        analysis_window_days=window_days,
+    )
+
+
+async def _read_vendor_scorecard_archetypes(
+    pool,
+    vendor_names: list[str],
+) -> list[dict[str, Any]]:
+    from ._b2b_shared import read_vendor_scorecard_archetypes
+
+    return await read_vendor_scorecard_archetypes(
+        pool,
+        vendor_names=vendor_names,
+    )
+
+
+async def _build_vendor_archetype_lookup(
+    pool,
+    vendor_names: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not vendor_names:
+        return {}
+    arch_rows = await _read_vendor_scorecard_archetypes(pool, vendor_names)
+    return {
+        row["vendor_name"]: {
+            "archetype": row["archetype"],
+            "confidence": float(row["archetype_confidence"]) if row["archetype_confidence"] else None,
+        }
+        for row in arch_rows
+        if row.get("vendor_name") and row.get("archetype")
+    }
 
 
 async def _fetch_company_signal_review_context(
@@ -4569,20 +4602,7 @@ async def generate_company_deep_dive_report(
 
     # Fetch vendor archetypes for the company's current vendors
     vendor_names = [v["vendor"] for v in (snapshot.get("current_vendors") or []) if v.get("vendor")]
-    vendor_archetypes: dict[str, dict] = {}
-    if vendor_names:
-        arch_rows = await pool.fetch(
-            "SELECT vendor_name, archetype, archetype_confidence "
-            "FROM b2b_churn_signals WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
-            vendor_names,
-        )
-        vendor_archetypes = {
-            r["vendor_name"]: {
-                "archetype": r["archetype"],
-                "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else None,
-            }
-            for r in arch_rows
-        }
+    vendor_archetypes = await _build_vendor_archetype_lookup(pool, vendor_names)
 
     report_data = {
         "company_name": normalized_name,
@@ -4665,20 +4685,7 @@ async def generate_company_comparison_report(
         for v in (s.get("current_vendors") or [])
         if v.get("vendor")
     })
-    company_vendor_archetypes: dict[str, dict] = {}
-    if all_vendor_names:
-        arch_rows = await pool.fetch(
-            "SELECT vendor_name, archetype, archetype_confidence "
-            "FROM b2b_churn_signals WHERE vendor_name = ANY($1) AND archetype IS NOT NULL",
-            all_vendor_names,
-        )
-        company_vendor_archetypes = {
-            r["vendor_name"]: {
-                "archetype": r["archetype"],
-                "confidence": float(r["archetype_confidence"]) if r["archetype_confidence"] else None,
-            }
-            for r in arch_rows
-        }
+    company_vendor_archetypes = await _build_vendor_archetype_lookup(pool, all_vendor_names)
 
     report_data = {
         "primary_company": primary_name,

@@ -5058,6 +5058,37 @@ async def read_vendor_scorecard_metrics(
     return dict(row) if row else None
 
 
+async def read_vendor_scorecard_archetypes(
+    pool,
+    *,
+    vendor_names: Iterable[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Read latest non-null vendor archetypes from the derived scorecard table."""
+    requested_vendors = _canonicalize_vendor_name_filters(vendor_names)
+    if not requested_vendors:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (vendor_name)
+               vendor_name,
+               archetype,
+               archetype_confidence
+        FROM b2b_churn_signals
+        WHERE LOWER(vendor_name) = ANY($1::text[])
+          AND archetype IS NOT NULL
+        ORDER BY vendor_name,
+                 last_computed_at DESC NULLS LAST,
+                 total_reviews DESC NULLS LAST
+        """,
+        requested_vendors,
+    )
+    return [
+        dict(row)
+        for row in rows
+        if row.get("vendor_name") and row.get("archetype")
+    ]
+
+
 async def read_market_landscape_candidates(
     pool,
     *,
@@ -6697,6 +6728,39 @@ async def search_vendor_intelligence_records(
         if record is not None:
             records.append(record)
     return records
+
+
+async def read_vendor_intelligence_record_nearest_window(
+    pool,
+    *,
+    vendor_name: str,
+    analysis_window_days: int,
+) -> dict[str, Any] | None:
+    """Read the nearest-window canonical vendor intelligence row for one vendor."""
+    normalized_vendor = _canonicalize_vendor(vendor_name) or str(vendor_name or "").strip()
+    if not normalized_vendor:
+        return None
+    row = await pool.fetchrow(
+        """
+        SELECT vendor_name,
+               as_of_date,
+               analysis_window_days,
+               schema_version,
+               vault,
+               created_at
+        FROM b2b_evidence_vault
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY
+            CASE WHEN analysis_window_days = $2 THEN 0 ELSE 1 END,
+            ABS(analysis_window_days - $2),
+            as_of_date DESC,
+            created_at DESC
+        LIMIT 1
+        """,
+        normalized_vendor,
+        analysis_window_days,
+    )
+    return _normalize_vendor_intelligence_record(row)
 
 
 async def read_vendor_intelligence_map(
