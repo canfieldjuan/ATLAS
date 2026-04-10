@@ -21,6 +21,7 @@ from ...config import settings
 from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_shared import read_vendor_top_competitor_map
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_keyword_signal")
 
@@ -92,20 +93,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     vendors = vendors[: cfg.keyword_max_vendors_per_run]
 
     # Fetch top competitor per vendor for "vs" queries
-    competitor_rows = await pool.fetch(
-        """
-        SELECT vendor_name,
-               (top_competitors -> 0 ->> 'name')::text AS top_competitor
-        FROM b2b_churn_signals
-        WHERE top_competitors IS NOT NULL
-          AND top_competitors != '[]'::jsonb
-        """
+    competitor_map = await read_vendor_top_competitor_map(
+        pool,
+        vendor_names=vendors,
     )
-    competitor_map: dict[str, str] = {
-        r["vendor_name"]: r["top_competitor"]
-        for r in competitor_rows
-        if r["top_competitor"]
-    }
 
     # Current ISO week start (Monday)
     today = date.today()

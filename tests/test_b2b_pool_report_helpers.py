@@ -187,6 +187,49 @@ async def test_read_vendor_scorecards_applies_vendor_filter():
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_scorecard_details_prefers_specific_category_rows():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {
+                    "vendor_name": "Power BI",
+                    "product_category": "B2B Software",
+                    "total_reviews": 316,
+                    "top_competitors": [{"name": "Tableau"}],
+                },
+                {
+                    "vendor_name": "Power BI",
+                    "product_category": "Data & Analytics",
+                    "total_reviews": 278,
+                    "top_competitors": [{"name": "Looker"}],
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_scorecard_details(pool, vendor_names=["Power BI"])
+
+    assert len(rows) == 1
+    assert rows[0]["product_category"] == "Data & Analytics"
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_top_competitor_map_supports_jsonb_and_flat_rows():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {"vendor_name": "Acme", "product_category": "CRM", "total_reviews": 12, "top_competitors": [{"name": "Globex"}]},
+                {"vendor_name": "Beta", "product_category": "CRM", "total_reviews": 8, "top_competitor": "Initech"},
+            ],
+        },
+    )
+
+    competitors = await shared_mod.read_vendor_top_competitor_map(pool)
+
+    assert competitors == {"Acme": "Globex", "Beta": "Initech"}
+
+
+@pytest.mark.asyncio
 async def test_fetch_all_pool_layers_prefers_specific_profile_category_over_generic_vault():
     pool = FakePool(
         fetch_map={
