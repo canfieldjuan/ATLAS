@@ -124,6 +124,7 @@ async def test_read_vendor_scorecards_prefers_specific_category_rows():
                     "total_reviews": 316,
                     "churn_intent": 18,
                     "avg_urgency": 4.0,
+                    "materialization_run_id": "run-power-bi-generic",
                     "last_computed_at": "2026-03-21T23:35:44Z",
                     "review_window_end": "2026-03-21",
                 },
@@ -133,6 +134,7 @@ async def test_read_vendor_scorecards_prefers_specific_category_rows():
                     "total_reviews": 278,
                     "churn_intent": 16,
                     "avg_urgency": 4.0,
+                    "materialization_run_id": "run-power-bi-specific",
                     "last_computed_at": "2026-03-21T23:35:44Z",
                     "review_window_end": "2026-03-21",
                 },
@@ -142,6 +144,7 @@ async def test_read_vendor_scorecards_prefers_specific_category_rows():
                     "total_reviews": 45,
                     "churn_intent": 12,
                     "avg_urgency": 6.2,
+                    "materialization_run_id": "run-zendesk",
                     "last_computed_at": "2026-03-21T23:35:44Z",
                     "review_window_end": "2026-03-21",
                 },
@@ -158,6 +161,7 @@ async def test_read_vendor_scorecards_prefers_specific_category_rows():
             "total_reviews": 278,
             "churn_intent": 16,
             "avg_urgency": 4.0,
+            "materialization_run_id": "run-power-bi-specific",
         },
         {
             "vendor_name": "Zendesk",
@@ -165,6 +169,7 @@ async def test_read_vendor_scorecards_prefers_specific_category_rows():
             "total_reviews": 45,
             "churn_intent": 12,
             "avg_urgency": 6.2,
+            "materialization_run_id": "run-zendesk",
         },
     ]
 
@@ -187,6 +192,53 @@ async def test_read_vendor_scorecards_applies_vendor_filter():
     score_call = next(call for call in pool.calls if "FROM b2b_churn_signals" in call[0])
     assert score_call[1][2] == ["zendesk"]
     assert "LOWER(vendor_name) = ANY($3::text[])" in score_call[0]
+
+
+def test_align_vendor_intelligence_records_to_scorecards_filters_mismatched_runs():
+    vendor_scores = [
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-zendesk",
+        },
+        {
+            "vendor_name": "Freshdesk",
+            "materialization_run_id": "run-freshdesk",
+        },
+        {
+            "vendor_name": "Intercom",
+        },
+    ]
+    records = [
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-zendesk",
+            "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+        },
+        {
+            "vendor_name": "Freshdesk",
+            "materialization_run_id": "run-stale",
+            "vault": {"metric_snapshot": {"avg_urgency": 6.1}},
+        },
+        {
+            "vendor_name": "Intercom",
+            "vault": {"metric_snapshot": {"avg_urgency": 5.4}},
+        },
+    ]
+
+    lookup, alignment = shared_mod._align_vendor_intelligence_records_to_scorecards(
+        vendor_scores,
+        records,
+    )
+
+    assert lookup == {
+        "Zendesk": {"metric_snapshot": {"avg_urgency": 7.2}},
+        "Intercom": {"metric_snapshot": {"avg_urgency": 5.4}},
+    }
+    assert alignment["matched_vendor_count"] == 2
+    assert alignment["mismatched_vendor_count"] == 1
+    assert alignment["mismatched_vendors"] == ["Freshdesk"]
+    assert alignment["legacy_scorecard_vendors"] == ["Intercom"]
+    assert alignment["legacy_vault_vendors"] == ["Intercom"]
 
 
 @pytest.mark.asyncio
