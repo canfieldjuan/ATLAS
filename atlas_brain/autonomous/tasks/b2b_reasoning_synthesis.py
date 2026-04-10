@@ -964,6 +964,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     scope_vendor_synthesis_enabled = bool(scope_meta.get("vendor_synthesis_enabled", True))
     scope_trigger = scope_meta.get("scope_trigger") or "manual"
     changed_vendors_only = bool(scope_meta.get("changed_vendors_only"))
+    force = bool((getattr(task, "metadata", None) or {}).get("force"))
+    force_cross_vendor = bool((getattr(task, "metadata", None) or {}).get("force_cross_vendor"))
 
     async def _finalize_scope_result(result: dict[str, Any]) -> dict[str, Any]:
         if not scope_id:
@@ -1241,8 +1243,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     rerun_if_missing_reference_ids = bool(
         getattr(cfg, "reasoning_synthesis_rerun_if_missing_reference_ids", True),
     )
-    force = bool((task.metadata or {}).get("force"))
-    force_cross_vendor = bool((task.metadata or {}).get("force_cross_vendor"))
     rerun_reason_counts = {
         "forced": 0,
         "missing_prior_row": 0,
