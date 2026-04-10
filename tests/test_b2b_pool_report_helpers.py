@@ -2,6 +2,7 @@
 
 import json
 import sys
+from datetime import date, datetime, timezone
 from uuid import uuid4
 from unittest.mock import MagicMock
 
@@ -432,6 +433,79 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
         "avg_urgency_score": 6.5,
         "top_competitors": [{"name": "Freshdesk"}],
         "sentiment_distribution": {"declining": 4, "improving": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_intelligence_record_prefers_latest_exact_vendor_row():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_evidence_vault": [
+                {
+                    "vendor_name": "Zendesk",
+                    "as_of_date": date(2026, 3, 31),
+                    "analysis_window_days": 30,
+                    "schema_version": 2,
+                    "vault": json.dumps({"metric_snapshot": {"avg_urgency": 7.2}}),
+                    "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+                },
+            ],
+        },
+    )
+
+    row = await shared_mod.read_vendor_intelligence_record(
+        pool,
+        "Zendesk",
+        as_of=date(2026, 4, 1),
+        analysis_window_days=30,
+    )
+
+    evidence_call = next(call for call in pool.calls if "FROM b2b_evidence_vault" in call[0])
+    assert "SELECT DISTINCT ON (vendor_name)" in evidence_call[0]
+    assert evidence_call[1] == (date(2026, 4, 1), 30, ["zendesk"])
+    assert row == {
+        "vendor_name": "Zendesk",
+        "as_of_date": date(2026, 3, 31),
+        "analysis_window_days": 30,
+        "schema_version": 2,
+        "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+        "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_vendor_intelligence_record_uses_partial_vendor_query():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_evidence_vault": {
+                "vendor_name": "Zendesk",
+                "as_of_date": date(2026, 3, 31),
+                "analysis_window_days": 30,
+                "schema_version": 2,
+                "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+                "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+            },
+        },
+    )
+
+    row = await shared_mod.search_vendor_intelligence_record(
+        pool,
+        vendor_query="zen",
+        as_of=date(2026, 4, 1),
+        analysis_window_days=30,
+    )
+
+    evidence_call = next(call for call in pool.calls if "FROM b2b_evidence_vault" in call[0])
+    assert "vendor_name ILIKE '%' || $1 || '%'" in evidence_call[0]
+    assert "LIMIT 1" in evidence_call[0]
+    assert evidence_call[1] == ("zen", date(2026, 4, 1), 30)
+    assert row == {
+        "vendor_name": "Zendesk",
+        "as_of_date": date(2026, 3, 31),
+        "analysis_window_days": 30,
+        "schema_version": 2,
+        "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+        "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
     }
 
 
