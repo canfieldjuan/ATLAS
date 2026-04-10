@@ -862,8 +862,9 @@ async def _build_deterministic_report_bundle(
         _build_deterministic_vendor_feed,
         _build_deterministic_vendor_scorecards,
         _build_vendor_deep_dives,
+        _align_vendor_intelligence_records_to_scorecards,
         _compute_evidence_confidence,
-        read_vendor_intelligence_map,
+        read_vendor_intelligence_records,
         _structure_displacement_report,
     )
     from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
@@ -887,11 +888,31 @@ async def _build_deterministic_report_bundle(
         if pool is None:
             evidence_vault_lookup = {}
         else:
-            evidence_vault_lookup = await read_vendor_intelligence_map(
+            vendor_names = sorted(
+                {
+                    str(row.get("vendor_name") or row.get("vendor") or "").strip()
+                    for row in vendor_scores
+                    if str(row.get("vendor_name") or row.get("vendor") or "").strip()
+                }
+            )
+            evidence_vault_records = await read_vendor_intelligence_records(
                 pool,
                 as_of=as_of,
                 analysis_window_days=analysis_window_days,
+                vendor_names=vendor_names or None,
             )
+            evidence_vault_lookup, vault_alignment = (
+                _align_vendor_intelligence_records_to_scorecards(
+                    vendor_scores,
+                    evidence_vault_records,
+                )
+            )
+            if vault_alignment["mismatched_vendor_count"]:
+                logger.info(
+                    "Churn reports suppressed %d mismatched evidence-vault overlays: %s",
+                    vault_alignment["mismatched_vendor_count"],
+                    ", ".join(vault_alignment["mismatched_vendors"][:10]),
+                )
 
     lookups = _build_report_lookup_bundle(
         competitive_disp=competitive_disp,

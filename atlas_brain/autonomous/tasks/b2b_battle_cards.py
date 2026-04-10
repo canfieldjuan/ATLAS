@@ -2273,6 +2273,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _build_timeline_lookup,
         _build_battle_card_locked_facts,
         _canonicalize_vendor,
+        _align_vendor_intelligence_records_to_scorecards,
         _sanitize_battle_card_sales_copy,
         _validate_battle_card_sales_copy,
         read_vendor_scorecards,
@@ -2292,7 +2293,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _fetch_competitor_reasons,
         _fetch_data_context,
         _fetch_vendor_provenance,
-        read_vendor_intelligence_map,
+        read_vendor_intelligence_records,
         _fetch_latest_account_intelligence,
         _fetch_review_text_aggregates,
         _fetch_department_distribution,
@@ -2323,7 +2324,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             sentiment_traj, buyer_auth, timeline_signals,
             competitor_reasons, keyword_spikes,
             data_context, vendor_provenance,
-            evidence_vault_lookup,
+            evidence_vault_records,
             account_intel_lookup,
             product_profiles_raw,
             review_text_agg, department_dist, contract_ctx,
@@ -2349,7 +2350,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _fetch_keyword_spikes(pool),
             _fetch_data_context(pool, window_days),
             _fetch_vendor_provenance(pool, window_days),
-            read_vendor_intelligence_map(pool, as_of=today, analysis_window_days=window_days),
+            read_vendor_intelligence_records(
+                pool,
+                as_of=today,
+                analysis_window_days=window_days,
+            ),
             _fetch_latest_account_intelligence(pool, as_of=today, analysis_window_days=window_days),
             _fetch_product_profiles(pool),
             _fetch_review_text_aggregates(pool, window_days),
@@ -2412,11 +2417,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         review_text_agg = scoped_data["review_text_aggs"]
         department_dist = scoped_data["department_dist"]
         contract_ctx = scoped_data["contract_ctx_aggs"]
-        vendor_scope = {v.lower() for v in scoped_vendors}
-        evidence_vault_lookup = {
-            k: v for k, v in (evidence_vault_lookup or {}).items()
-            if str(k or "").strip().lower() in vendor_scope
-        }
         logger.info(
             "Scoped battle cards to %d/%d vendors for test run: %s",
             len(vendor_scores),
@@ -2426,6 +2426,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     if not vendor_scores:
         return {"_skip_synthesis": "No vendor scores after vendor scope filter"}
+    evidence_vault_lookup, vault_alignment = (
+        _align_vendor_intelligence_records_to_scorecards(
+            vendor_scores,
+            evidence_vault_records,
+        )
+    )
+    if vault_alignment["mismatched_vendor_count"]:
+        logger.info(
+            "Battle cards suppressed %d mismatched evidence-vault overlays: %s",
+            vault_alignment["mismatched_vendor_count"],
+            ", ".join(vault_alignment["mismatched_vendors"][:10]),
+        )
     vendor_total = len({
         _canonicalize_vendor(row.get("vendor_name") or row.get("vendor") or "")
         for row in vendor_scores

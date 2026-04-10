@@ -3971,6 +3971,11 @@ def _canonicalize_vendor_name_filters(vendor_names: Iterable[Any] | None) -> lis
     )
 
 
+def _normalize_materialization_run_id(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
 async def read_vendor_scorecards(
     pool,
     *,
@@ -3994,6 +3999,7 @@ async def read_vendor_scorecards(
                signal_reviews,
                churn_intent_count AS churn_intent,
                avg_urgency_score AS avg_urgency,
+               materialization_run_id,
                last_computed_at,
                review_window_end
         FROM b2b_churn_signals
@@ -4006,17 +4012,27 @@ async def read_vendor_scorecards(
         min_reviews,
         *([requested_vendors] if requested_vendors else []),
     )
-    mapped = [
-        {
-            "vendor_name": r["vendor_name"],
-            "product_category": r["product_category"],
-            "total_reviews": int(r["total_reviews"] or 0),
-            "churn_intent": int(r["churn_intent"] or 0),
-            "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] is not None else 0.0,
+    mapped = []
+    for row in rows:
+        if not row.get("vendor_name"):
+            continue
+        mapped_row = {
+            "vendor_name": row["vendor_name"],
+            "product_category": row["product_category"],
+            "total_reviews": int(row["total_reviews"] or 0),
+            "churn_intent": int(row["churn_intent"] or 0),
+            "avg_urgency": (
+                float(row["avg_urgency"])
+                if row["avg_urgency"] is not None
+                else 0.0
+            ),
         }
-        for r in rows
-        if r.get("vendor_name")
-    ]
+        materialization_run_id = _normalize_materialization_run_id(
+            row.get("materialization_run_id"),
+        )
+        if materialization_run_id is not None:
+            mapped_row["materialization_run_id"] = materialization_run_id
+        mapped.append(mapped_row)
 
     categories_by_vendor: dict[str, set[str]] = {}
     for row in mapped:
@@ -4040,6 +4056,63 @@ async def read_vendor_scorecards(
             continue
         filtered.append(row)
     return filtered
+
+
+def _align_vendor_intelligence_records_to_scorecards(
+    vendor_scores: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Filter vault overlays to vendors whose current scorecard run still matches.
+
+    We only suppress a vault overlay when both sides carry explicit
+    ``materialization_run_id`` values and those values disagree. Legacy rows
+    without a run id are allowed through for backward compatibility.
+    """
+    scorecards_by_vendor: dict[str, dict[str, Any]] = {}
+    for row in vendor_scores:
+        vendor = _canonicalize_vendor(
+            row.get("vendor_name") or row.get("vendor") or "",
+        )
+        if vendor and vendor not in scorecards_by_vendor:
+            scorecards_by_vendor[vendor] = row
+
+    aligned_lookup: dict[str, dict[str, Any]] = {}
+    mismatched_vendors: list[str] = []
+    legacy_scorecard_vendors: list[str] = []
+    legacy_vault_vendors: list[str] = []
+
+    for record in records:
+        vendor = _canonicalize_vendor(record.get("vendor_name") or "")
+        if not vendor:
+            continue
+        scorecard = scorecards_by_vendor.get(vendor)
+        if scorecard is None:
+            continue
+        score_run_id = _normalize_materialization_run_id(
+            scorecard.get("materialization_run_id"),
+        )
+        vault_run_id = _normalize_materialization_run_id(
+            record.get("materialization_run_id"),
+        )
+        if score_run_id and vault_run_id and score_run_id != vault_run_id:
+            mismatched_vendors.append(vendor)
+            continue
+        if score_run_id is None:
+            legacy_scorecard_vendors.append(vendor)
+        if vault_run_id is None:
+            legacy_vault_vendors.append(vendor)
+        vault = record.get("vault")
+        aligned_lookup[vendor] = vault if isinstance(vault, dict) else {}
+
+    return aligned_lookup, {
+        "matched_vendor_count": len(aligned_lookup),
+        "mismatched_vendor_count": len(mismatched_vendors),
+        "mismatched_vendors": sorted(mismatched_vendors),
+        "legacy_scorecard_vendor_count": len(set(legacy_scorecard_vendors)),
+        "legacy_scorecard_vendors": sorted(set(legacy_scorecard_vendors)),
+        "legacy_vault_vendor_count": len(set(legacy_vault_vendors)),
+        "legacy_vault_vendors": sorted(set(legacy_vault_vendors)),
+    }
 
 
 async def read_vendor_scorecard(
