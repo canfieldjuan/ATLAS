@@ -230,6 +230,72 @@ async def test_read_vendor_top_competitor_map_supports_jsonb_and_flat_rows():
 
 
 @pytest.mark.asyncio
+async def test_read_company_churn_context_parses_lists_and_rates():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {
+                    "vendor_name": "HubSpot",
+                    "product_category": "CRM",
+                    "avg_urgency_score": "7.5",
+                    "top_pain_categories": json.dumps(["pricing", "support"]),
+                    "top_competitors": json.dumps([{"name": "Salesforce"}]),
+                    "decision_maker_churn_rate": "0.4",
+                    "price_complaint_rate": "0.2",
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_company_churn_context(pool, company_hint="acme", limit=5)
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals" in call[0])
+    assert score_call[1] == ("acme", 5)
+    assert rows == [
+        {
+            "vendor_name": "HubSpot",
+            "product_category": "CRM",
+            "avg_urgency_score": 7.5,
+            "top_pain_categories": ["pricing", "support"],
+            "top_competitors": [{"name": "Salesforce"}],
+            "decision_maker_churn_rate": 0.4,
+            "price_complaint_rate": 0.2,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_scorecard_inventory_rows_matches_provisioning_shape():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {
+                    "vendor_name": "OpenProject",
+                    "product_category": "Project Management",
+                    "total_reviews_analyzed": 80,
+                    "confidence_score": 0.0,
+                    "last_computed_at": None,
+                    "inventory_source": "b2b_churn_signals",
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_scorecard_inventory_rows(pool)
+
+    assert rows == [
+        {
+            "vendor_name": "OpenProject",
+            "product_category": "Project Management",
+            "total_reviews_analyzed": 80,
+            "confidence_score": 0.0,
+            "last_computed_at": None,
+            "inventory_source": "b2b_churn_signals",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_fetch_all_pool_layers_prefers_specific_profile_category_over_generic_vault():
     pool = FakePool(
         fetch_map={

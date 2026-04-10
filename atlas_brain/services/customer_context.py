@@ -13,7 +13,6 @@ Usage:
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -226,33 +225,13 @@ class CustomerContextService:
             return []
 
         try:
-            rows = await pool.fetch(
-                """
-                SELECT vendor_name, product_category, avg_urgency_score,
-                       top_pain_categories, top_competitors,
-                       decision_maker_churn_rate, price_complaint_rate
-                FROM b2b_churn_signals
-                WHERE EXISTS (
-                    SELECT 1 FROM jsonb_array_elements(company_churn_list) AS c
-                    WHERE c->>'company' ILIKE '%' || $1 || '%'
-                )
-                ORDER BY avg_urgency_score DESC
-                LIMIT 5
-                """,
-                company_hint,
+            from ..autonomous.tasks._b2b_shared import read_company_churn_context
+
+            return await read_company_churn_context(
+                pool,
+                company_hint=company_hint,
+                limit=5,
             )
-            results = []
-            for r in rows:
-                results.append({
-                    "vendor_name": r["vendor_name"],
-                    "product_category": r["product_category"],
-                    "avg_urgency_score": float(r["avg_urgency_score"]) if r["avg_urgency_score"] else 0,
-                    "top_pain_categories": json.loads(r["top_pain_categories"]) if isinstance(r["top_pain_categories"], str) else (r["top_pain_categories"] or []),
-                    "top_competitors": json.loads(r["top_competitors"]) if isinstance(r["top_competitors"], str) else (r["top_competitors"] or []),
-                    "decision_maker_churn_rate": float(r["decision_maker_churn_rate"]) if r["decision_maker_churn_rate"] else None,
-                    "price_complaint_rate": float(r["price_complaint_rate"]) if r["price_complaint_rate"] else None,
-                })
-            return results
         except Exception as e:
             logger.warning("B2B churn signal lookup failed: %s", e)
             return []

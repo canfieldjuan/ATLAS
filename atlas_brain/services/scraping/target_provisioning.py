@@ -30,6 +30,8 @@ def _safe_target_metadata(value: Any) -> dict[str, Any]:
 
 
 async def fetch_coverage_inputs(pool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    from ...autonomous.tasks._b2b_shared import read_vendor_scorecard_inventory_rows
+
     profile_rows = await pool.fetch(
         """
         SELECT vendor_name, product_category, total_reviews_analyzed,
@@ -38,20 +40,7 @@ async def fetch_coverage_inputs(pool) -> tuple[list[dict[str, Any]], list[dict[s
         FROM b2b_product_profiles
         """
     )
-    signal_rows = await pool.fetch(
-        """
-        SELECT vendor_name,
-               COALESCE(NULLIF(TRIM(product_category), ''), 'Unknown') AS product_category,
-               MAX(total_reviews) AS total_reviews_analyzed,
-               0.0::double precision AS confidence_score,
-               NULL::timestamptz AS last_computed_at,
-               'b2b_churn_signals' AS inventory_source
-        FROM b2b_churn_signals
-        WHERE vendor_name IS NOT NULL
-          AND TRIM(vendor_name) != ''
-        GROUP BY vendor_name, COALESCE(NULLIF(TRIM(product_category), ''), 'Unknown')
-        """
-    )
+    signal_rows = await read_vendor_scorecard_inventory_rows(pool)
     existing_targets = await pool.fetch(
         """
         SELECT id, source, vendor_name, product_name, product_category, product_slug,
