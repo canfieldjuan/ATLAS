@@ -594,9 +594,15 @@ async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
         sources,
         list(_company_signal_low_trust_sources()),
     )
-    intelligence_eligible_reviews = int((eligible_row["intelligence_eligible_reviews"] if eligible_row else 0) or 0)
-    company_signal_eligible_reviews = int((eligible_row["company_signal_eligible_reviews"] if eligible_row else 0) or 0)
-    high_conf_named_account_reviews = int((eligible_row["high_confidence_named_account_reviews"] if eligible_row else 0) or 0)
+
+    def _row_count(key: str) -> int:
+        if not eligible_row:
+            return 0
+        return int((eligible_row[key] or 0))
+
+    intelligence_eligible_reviews = _row_count("intelligence_eligible_reviews")
+    company_signal_eligible_reviews = _row_count("company_signal_eligible_reviews")
+    high_conf_named_account_reviews = _row_count("high_confidence_named_account_reviews")
     return {
         "found": sum(status_counts.values()),
         "enriched": status_counts.get("enriched", 0),

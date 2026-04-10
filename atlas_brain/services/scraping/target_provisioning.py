@@ -16,6 +16,8 @@ from .target_planning import (
 )
 from .target_validation import validate_target_input
 
+_SEARCH_SOURCE_VALUES = frozenset(member.value for member in SEARCH_SOURCES)
+
 
 def _safe_target_metadata(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -153,8 +155,8 @@ async def apply_missing_core_targets(
     return applied
 
 
-def _is_signal_lane_source(source: str) -> bool:
-    return str(source or "").strip().lower() in {member.value for member in SEARCH_SOURCES}
+def _is_signal_lane_source(source: str | None) -> bool:
+    return (source or "").strip().lower() in _SEARCH_SOURCE_VALUES
 
 
 def _split_onboarding_candidates(

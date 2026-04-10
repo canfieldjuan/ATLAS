@@ -37,6 +37,8 @@ from ...services.scraping.source_fit import classify_source_fit, is_source_fit_a
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_scrape_intake")
 
+VendorDedupIndex = dict[str, dict[str, list[dict[str, Any]]]]
+
 
 # Common date formats returned by review site parsers
 _DATE_FORMATS = [
@@ -376,7 +378,7 @@ async def _load_existing_review_identity_sets(
     return known_keys, known_identities
 
 
-async def _load_vendor_cross_source_index_data(
+async def _load_vendor_cross_source_reviews(
     pool,
     *,
     vendor_name: str,
@@ -1570,7 +1572,7 @@ async def _insert_reviews(
     _batch_canonical_by_content_hash: dict[str, dict[str, Any]] = {}
     _batch_canonical_by_identity_key: dict[str, dict[str, Any]] = {}
     _vendor_name_cache: dict[str, str] = {}
-    _vendor_candidate_indexes: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
+    _vendor_candidate_indexes: dict[str, VendorDedupIndex] = {}
     skipped_short = 0
     skipped_quality_gate = 0
     short_flagged = 0
@@ -1698,7 +1700,7 @@ async def _insert_reviews(
                 vendor_index = _vendor_candidate_indexes.get(canonical_vendor)
                 if vendor_index is None:
                     vendor_index = _build_vendor_cross_source_candidate_index(
-                        await _load_vendor_cross_source_index_data(
+                        await _load_vendor_cross_source_reviews(
                             pool,
                             vendor_name=canonical_vendor,
                         ),
@@ -1947,7 +1949,7 @@ async def _insert_reviews(
             return int(row.get(key) or default)
         try:
             return int(row[key] or default)
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return default
 
     inserted = _count_value(count_row, "cnt")
