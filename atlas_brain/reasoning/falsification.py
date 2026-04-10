@@ -269,17 +269,13 @@ class FalsificationWatcher:
                         signals[f"prev_{col}"] = float(prev[col]) if isinstance(prev[col], (int, float)) else prev[col]
 
             # Churn signal enrichment (price, DM rate, competitors)
-            sig_row = await self._pool.fetchrow(
-                """
-                SELECT price_complaint_rate, decision_maker_churn_rate,
-                       archetype, archetype_confidence
-                FROM b2b_churn_signals
-                WHERE vendor_name = $1 AND archetype IS NOT NULL
-                ORDER BY last_computed_at DESC LIMIT 1
-                """,
-                vendor_name,
+            from ..autonomous.tasks._b2b_shared import read_vendor_signal_detail_exact
+
+            sig_row = await read_vendor_signal_detail_exact(
+                self._pool,
+                vendor_name=vendor_name,
             )
-            if sig_row:
+            if sig_row and sig_row.get("archetype") is not None:
                 if sig_row.get("price_complaint_rate") is not None:
                     signals["price_complaint_rate"] = float(sig_row["price_complaint_rate"])
                 if sig_row.get("decision_maker_churn_rate") is not None:
