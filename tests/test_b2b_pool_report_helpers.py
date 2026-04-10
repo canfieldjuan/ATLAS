@@ -363,6 +363,80 @@ async def test_read_vendor_signal_detail_applies_snapshot_scope_and_suppression(
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_signal_rows_applies_snapshot_filters_and_limit():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals sig": [
+                {
+                    "vendor_name": "Zendesk",
+                    "product_category": "CRM",
+                    "total_reviews": 120,
+                    "churn_intent_count": 22,
+                    "avg_urgency_score": 6.4,
+                    "avg_rating_normalized": 0.41,
+                    "nps_proxy": -0.2,
+                    "price_complaint_rate": 0.18,
+                    "decision_maker_churn_rate": 0.12,
+                    "keyword_spike_count": 2,
+                    "insider_signal_count": 1,
+                    "last_computed_at": None,
+                    "support_sentiment": -0.1,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_signal_rows(
+        pool,
+        vendor_name_query="Zendesk",
+        min_urgency=5.0,
+        product_category="CRM",
+        tracked_account_id="11111111-1111-1111-1111-111111111111",
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+        limit=15,
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals sig" in call[0])
+    assert score_call[1] == ("11111111-1111-1111-1111-111111111111", "Zendesk", 5.0, "CRM", 15)
+    assert "LEFT JOIN LATERAL" in score_call[0]
+    assert "sig.vendor_name ILIKE '%' || $2 || '%'" in score_call[0]
+    assert "sig.avg_urgency_score >= $3" in score_call[0]
+    assert "sig.product_category = $4" in score_call[0]
+    assert "dc.entity_type = 'churn_signal'" in score_call[0]
+    assert rows[0]["keyword_spike_count"] == 2
+    assert rows[0]["support_sentiment"] == -0.1
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_signal_summary_applies_exact_vendor_filters():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_churn_signals sig": {
+                "total_vendors": 2,
+                "high_urgency_count": 1,
+                "total_signal_reviews": 180,
+            },
+        },
+    )
+
+    row = await shared_mod.read_vendor_signal_summary(
+        pool,
+        vendor_names=["Zendesk", "Freshdesk"],
+        tracked_account_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals sig" in call[0])
+    assert score_call[1] == ("11111111-1111-1111-1111-111111111111", ["freshdesk", "zendesk"])
+    assert "LOWER(sig.vendor_name) = ANY($2::text[])" in score_call[0]
+    assert row == {
+        "total_vendors": 2,
+        "high_urgency_count": 1,
+        "total_signal_reviews": 180,
+    }
+
+
+@pytest.mark.asyncio
 async def test_read_market_landscape_candidates_uses_category_vendor_floor():
     pool = FakePool(
         fetch_map={
