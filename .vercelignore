@@ -12,8 +12,7 @@ node_distributions/
 *.ts.net.key
 *.ts.net.crt
 atlas-admin-ui/
-atlas-intel-next/
-atlas-intel-ui/
+# Keep project-rooted frontend apps available to Vercel.
 atlas-mobile/
 atlas-ui/
 atlas_brain/
