@@ -74,9 +74,38 @@ async def test_list_accounts_in_motion_raises_when_persisted_missing():
                 "_list_accounts_in_motion_from_report",
                 new=AsyncMock(return_value=None),
             ):
-                with pytest.raises(b2b_dashboard.HTTPException) as exc:
-                    await b2b_dashboard.list_accounts_in_motion("Zendesk", 5, 30, 25, None)
+                with patch.object(
+                    b2b_dashboard,
+                    "has_complete_core_run_marker",
+                    new=AsyncMock(return_value=True),
+                ):
+                    with pytest.raises(b2b_dashboard.HTTPException) as exc:
+                        await b2b_dashboard.list_accounts_in_motion("Zendesk", 5, 30, 25, None)
     assert exc.value.status_code == 404
+    assert exc.value.detail == "No persisted accounts-in-motion report found for that vendor"
+
+
+@pytest.mark.asyncio
+async def test_list_accounts_in_motion_explains_incomplete_core_when_report_missing():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with patch.object(
+            b2b_dashboard,
+            "_validate_accounts_in_motion_window",
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "_list_accounts_in_motion_from_report",
+                new=AsyncMock(return_value=None),
+            ):
+                with patch.object(
+                    b2b_dashboard,
+                    "has_complete_core_run_marker",
+                    new=AsyncMock(return_value=False),
+                ):
+                    with pytest.raises(b2b_dashboard.HTTPException) as exc:
+                        await b2b_dashboard.list_accounts_in_motion("Zendesk", 5, 30, 25, None)
+    assert exc.value.status_code == 404
+    assert "core churn materialization is incomplete" in exc.value.detail
 
 
 @pytest.mark.asyncio

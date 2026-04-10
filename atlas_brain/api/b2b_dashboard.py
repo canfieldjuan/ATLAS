@@ -31,6 +31,7 @@ from ..services.tracing import (
 from ..services.scraping.capabilities import get_capability
 from ..services.scraping.sources import ALL_SOURCES, ReviewSource, display_name as source_display_name
 from ..autonomous.tasks._b2b_shared import (
+    has_complete_core_run_marker,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
     read_vendor_signal_detail,
@@ -5167,6 +5168,15 @@ async def _list_accounts_in_motion_from_report(
     }
 
 
+async def _accounts_in_motion_missing_report_detail(pool) -> str:
+    if await has_complete_core_run_marker(pool, date.today()):
+        return "No persisted accounts-in-motion report found for that vendor"
+    return (
+        "No persisted accounts-in-motion report found for that vendor because "
+        "today's core churn materialization is incomplete"
+    )
+
+
 def _validate_accounts_in_motion_window(window_days: int) -> None:
     configured = settings.b2b_churn.intelligence_window_days
     if window_days != configured:
@@ -5295,7 +5305,10 @@ async def list_accounts_in_motion(
         user=user,
     )
     if persisted is None:
-        raise HTTPException(status_code=404, detail="No persisted accounts-in-motion report found for that vendor")
+        raise HTTPException(
+            status_code=404,
+            detail=await _accounts_in_motion_missing_report_detail(pool),
+        )
     return persisted
 
 
