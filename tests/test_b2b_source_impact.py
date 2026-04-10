@@ -116,10 +116,12 @@ def test_build_source_impact_ledger_highlights_getapp_recovery():
     assert "watchlists_accounts_in_motion" in entry["expected_consumers"]
 
 
-def test_build_source_impact_ledger_aligns_trustpilot_family_with_registry():
+def test_build_source_impact_ledger_exposes_quality_tier_alongside_source_family():
     ledger = build_source_impact_ledger(source="trustpilot")
 
-    assert ledger["sources"][0]["source_family"] == "structured_review"
+    entry = ledger["sources"][0]
+    assert entry["source_family"] == "community_signal"
+    assert entry["scrape_data_quality"] == "verified"
 
 
 def test_consumer_wiring_baseline_flags_mixed_consumers():
