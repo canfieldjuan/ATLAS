@@ -1,6 +1,6 @@
 # Atlas
 
-A multi-modal AI platform that combines personal automation, voice control, B2B sales intelligence, and consumer product analytics into a single extensible system. Atlas runs as a central "Brain" server backed by local LLMs, with edge nodes for distributed sensing, 4 web dashboards, 8 MCP servers (130+ tools), 57 autonomous scheduled tasks, a full telephony stack, and 200+ REST/WebSocket API endpoints.
+A multi-modal AI platform that combines personal automation, voice control, B2B sales intelligence, and consumer product analytics into a single extensible system. Atlas runs as a central "Brain" server backed by local LLMs, with edge nodes for distributed sensing, 4 web dashboards, 8 MCP servers (130+ tools), 57 autonomous scheduled tasks, a full telephony stack, and 476 REST/WebSocket API endpoints.
 
 ---
 
@@ -9,7 +9,7 @@ A multi-modal AI platform that combines personal automation, voice control, B2B 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                          ATLAS BRAIN                                  │
-│                   (FastAPI · 200+ API endpoints)                    │
+│                   (FastAPI · 476 API endpoints)                    │
 │                                                                       │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────┐   │
 │  │  LLM Pool  │  │    STT     │  │    TTS     │  │   Intent     │   │
@@ -96,9 +96,9 @@ A multi-modal AI platform that combines personal automation, voice control, B2B 
 ## Project Structure
 
 ```
-atlas_brain/                    # Core server (FastAPI, 200+ endpoints)
+atlas_brain/                    # Core server (FastAPI, 476 endpoints)
 ├── api/                        # REST + WebSocket endpoints
-│   ├── query/                  #   Text, audio, vision inference
+│   ├── query/                  #   Text inference
 │   ├── devices/                #   Device control + intent dispatch
 │   └── ...                     #   B2B, campaigns, email, calendar, blog, admin
 ├── agents/graphs/              # 12 LangGraph workflow state machines
@@ -460,20 +460,20 @@ curl -X POST http://127.0.0.1:8001/api/v1/devices/intent \
   -H "Content-Type: application/json" \
   -d '{"query": "turn on the living room lights"}'
 
-# Vision
-curl -X POST http://127.0.0.1:8001/api/v1/query/vision \
-  -F "image_file=@image.jpg" -F "prompt_text=What is this?"
+# Vision event feed
+curl http://127.0.0.1:8001/api/v1/vision/events
 
-# Audio transcription
-curl -X POST http://127.0.0.1:8001/api/v1/query/audio \
-  -F "audio_file=@audio.wav"
+# Voice pipeline (WebSocket)
+# Connect to ws://127.0.0.1:8001/api/v1/ws/orchestrated
 ```
 
 ---
 
 ## API Reference
 
-All REST endpoints are served under `/api/v1/` (port 8001 by default). Most endpoints require a JWT Bearer token obtained via `/api/v1/auth/login`. B2B-specific routes additionally require the `b2b_plan` claim.
+Below is a curated API overview for the main route families. For the exhaustive generated inventory of all **476 discovered routes**, see [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md).
+
+Most REST endpoints are served under `/api/v1/` (port 8001 by default). Root-level exceptions include OpenAI compatibility (`/v1/...`), Ollama compatibility (`/`, `/api/...`), and webhooks (`/webhooks/...`). Most authenticated endpoints use a JWT Bearer token obtained via `/api/v1/auth/login`. B2B-specific routes additionally require the `b2b_plan` claim.
 
 ### Authentication
 
@@ -498,18 +498,20 @@ All REST endpoints are served under `/api/v1/` (port 8001 by default). Most endp
 |--------|------|-------------|
 | `GET`  | `/api/v1/ping` | Liveness check |
 | `GET`  | `/api/v1/health` | Detailed health with service status |
-| `POST` | `/api/v1/query/text` | Text query → LLM response (streaming supported) |
-| `POST` | `/api/v1/query/audio` | Batch audio transcription (WAV upload) |
-| `WS`   | `/ws/query/audio` | Streaming PCM → STT → LLM → TTS pipeline |
-| `POST` | `/api/v1/query/vision` | Vision query (image upload + optional prompt) |
+| `POST` | `/api/v1/query/text` | Text query → LLM response |
+| `GET`  | `/api/v1/system/stats` | High-level system stats |
+| `GET`  | `/api/v1/vision/events` | Vision event feed from atlas_vision nodes |
+| `WS`   | `/api/v1/ws/orchestrated` | Full voice pipeline over WebSocket |
 
 ### LLM Management
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/api/v1/llm/models` | List available LLM models |
+| `GET`  | `/api/v1/llm/available` | List registered LLM implementations and the active model |
 | `POST` | `/api/v1/llm/activate` | Load a model into the active slot |
 | `POST` | `/api/v1/llm/deactivate` | Unload the active model |
+| `POST` | `/api/v1/llm/generate` | One-shot text generation from a prompt |
+| `POST` | `/api/v1/llm/chat` | Multi-message chat request through the active LLM |
 | `GET`  | `/api/v1/llm/status` | Active model, VRAM usage, health |
 
 ### Device Control
@@ -525,9 +527,12 @@ All REST endpoints are served under `/api/v1/` (port 8001 by default). Most endp
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/api/v1/session/` | List conversation sessions |
+| `POST` | `/api/v1/session/create` | Create a new conversation session |
+| `POST` | `/api/v1/session/continue` | Resume or create a user session on another terminal |
 | `GET`  | `/api/v1/session/{session_id}` | Session detail with transcript |
-| `DELETE` | `/api/v1/session/{session_id}` | Delete a session |
+| `GET`  | `/api/v1/session/{session_id}/history` | Paginated conversation history for a session |
+| `POST` | `/api/v1/session/{session_id}/close` | Mark a session inactive |
+| `GET`  | `/api/v1/session/status/db` | Database/session persistence health |
 
 ### Email
 
@@ -536,36 +541,57 @@ All REST endpoints are served under `/api/v1/` (port 8001 by default). Most endp
 | `GET`  | `/api/v1/email/drafts/` | List pending email drafts |
 | `GET`  | `/api/v1/email/drafts/{draft_id}` | Draft detail |
 | `POST` | `/api/v1/email/drafts/{draft_id}/approve` | Approve and send a draft |
-| `DELETE` | `/api/v1/email/drafts/{draft_id}` | Discard a draft |
-| `POST` | `/api/v1/email/actions/send` | Send an email immediately |
-| `POST` | `/api/v1/email/actions/reply` | Reply to an existing thread |
+| `POST` | `/api/v1/email/drafts/{draft_id}/reject` | Reject a draft |
+| `POST` | `/api/v1/email/drafts/{draft_id}/edit` | Edit a generated draft |
+| `POST` | `/api/v1/email/drafts/generate/{gmail_message_id}` | Generate a draft for a processed Gmail message |
+| `POST` | `/api/v1/email/drafts/{draft_id}/redraft` | Regenerate a draft |
+| `POST` | `/api/v1/email/drafts/{draft_id}/skip` | Skip a draft without sending |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/quote` | Generate a quote reply draft |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/escalate` | Escalate a complaint email |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/slots` | Suggest appointment slots |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/send-info` | Send an informational reply |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/archive` | Archive a processed email |
 | `GET`  | `/api/v1/email/inbox-rules/` | List inbox routing rules |
 | `POST` | `/api/v1/email/inbox-rules/` | Create an inbox routing rule |
+| `PUT`  | `/api/v1/email/inbox-rules/{rule_id}` | Update an inbox rule |
+| `DELETE` | `/api/v1/email/inbox-rules/{rule_id}` | Delete an inbox rule |
+| `POST` | `/api/v1/email/inbox-rules/reorder` | Reorder rule priority |
+| `POST` | `/api/v1/email/inbox-rules/test` | Test a rule against sample email content |
 
-### Communications (Calls & SMS)
+### Communications (Calls, SMS, Actions & Webhooks)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/comms/calls/make` | Initiate an outbound call |
-| `GET`  | `/api/v1/comms/calls/` | List call history |
-| `GET`  | `/api/v1/comms/calls/{call_sid}` | Call detail and transcript |
-| `POST` | `/api/v1/comms/calls/{call_sid}/hangup` | Hang up an active call |
-| `POST` | `/api/v1/comms/sms/send` | Send an SMS message |
+| `GET`  | `/api/v1/comms/status` | Communications provider status |
+| `GET`  | `/api/v1/comms/contexts` | List registered business contexts |
+| `GET`  | `/api/v1/comms/contexts/{context_id}` | Context detail and availability |
+| `POST` | `/api/v1/comms/calls` | Initiate an outbound call |
+| `POST` | `/api/v1/comms/sms` | Send an outbound SMS |
+| `POST` | `/api/v1/comms/availability` | Check availability for a call/SMS workflow |
+| `POST` | `/api/v1/comms/appointments` | Create an appointment from a comms workflow |
+| `DELETE` | `/api/v1/comms/appointments/{appointment_id}` | Delete an appointment |
+| `POST` | `/api/v1/comms/recordings/reconcile` | Reconcile provider recording state |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/book` | Turn a transcript into an appointment |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/draft-email` | Draft a follow-up email from a call |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/draft-sms` | Draft a follow-up SMS from a call |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/send-email` | Send the drafted email |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/send-sms` | Send the drafted SMS |
 | `GET`  | `/api/v1/comms/calls/search` | Full-text search over call transcripts |
 | `GET`  | `/api/v1/contacts/{contact_id}/timeline` | Contact interaction timeline |
+| `POST` | `/api/v1/comms/voice/inbound` | Inbound telephony webhook |
+| `POST` | `/api/v1/comms/voice/status` | Voice status callback webhook |
+| `POST` | `/api/v1/comms/sms/inbound` | Inbound SMS webhook |
+| `POST` | `/api/v1/comms/sms/status` | SMS delivery status webhook |
+| `WS`   | `/api/v1/comms/voice/stream/{call_sid}` | Live telephony media stream |
 
 ### Invoicing
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/v1/invoicing/invoices` | Create an invoice |
-| `GET`  | `/api/v1/invoicing/invoices` | List invoices with filters |
-| `GET`  | `/api/v1/invoicing/invoices/{id}` | Invoice detail |
-| `POST` | `/api/v1/invoicing/invoices/{id}/send` | Email the invoice to the customer |
-| `POST` | `/api/v1/invoicing/invoices/{id}/payment` | Record a payment |
-| `POST` | `/api/v1/invoicing/invoices/{id}/void` | Void an invoice |
-| `GET`  | `/api/v1/invoicing/services` | List billable services |
-| `POST` | `/api/v1/invoicing/services` | Create a billable service |
+| `GET`  | `/api/v1/invoicing/{invoice_id}` | Invoice detail |
+| `POST` | `/api/v1/invoicing/{invoice_id}/send` | Email the invoice to the customer |
+| `POST` | `/api/v1/invoicing/{invoice_id}/send-reminder` | Send a reminder for an unpaid invoice |
+| `POST` | `/api/v1/invoicing/{invoice_id}/mark-paid` | Record payment / mark invoice paid |
 
 ### B2B Intelligence — Admin Dashboard (`/api/v1/b2b/dashboard/`)
 
@@ -793,14 +819,45 @@ Scoring factors: `displacement_momentum` (25%), `churn_severity` (20%), `pain_co
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/report` | Generate an intelligence report |
+| `POST` | `/intervention` | Trigger an intervention pipeline |
 | `GET`  | `/reports` | List intelligence reports |
-| `GET`  | `/reports/{id}` | Report detail |
-| `POST` | `/reports/generate` | Generate an intelligence report |
-| `GET`  | `/pressure-baselines` | Entity pressure baseline records |
-| `GET`  | `/risk-sensors` | Alignment/urgency/rigidity sensor analysis |
-| `POST` | `/interventions` | Trigger an intervention pipeline |
+| `GET`  | `/reports/{report_id}` | Report detail |
+| `GET`  | `/pressure` | Entity pressure baseline records |
 | `GET`  | `/approvals` | Pending approval queue |
-| `POST` | `/approvals/{id}/review` | Approve or reject a pending action |
+| `GET`  | `/approvals/{approval_id}` | Approval detail |
+| `POST` | `/approvals/{approval_id}/approve` | Approve a pending action |
+| `POST` | `/approvals/{approval_id}/reject` | Reject a pending action |
+
+### Identity, Presence, Speaker ID & Recognition
+
+| Route family | Description |
+|-------------|-------------|
+| `/api/v1/identity/*` | Canonical identity records, names, creation, and modality cleanup |
+| `/api/v1/presence/*` | Occupancy status and transition history |
+| `/api/v1/speaker/*` | Speaker enrollment, verification, and enrolled-user management |
+| `/api/v1/recognition/*` | Face/gait enrollment, identification, and recognition-event history |
+
+### Alerts, Vision, Video, Security & Settings
+
+| Route family | Description |
+|-------------|-------------|
+| `/api/v1/alerts/*` | Unified cross-source alert history, rules, acknowledgements, and cleanup |
+| `/api/v1/vision/*` | Vision events, cameras, alert rules, and alert history |
+| `/api/v1/video/*` | Webcam / RTSP streams, snapshots, and recognition views |
+| `/api/v1/security/*` | Security asset telemetry, observations, and threat summaries |
+| `/api/v1/settings/*` | Voice, email, daily, intelligence, LLM, notifications, and integrations settings |
+| `/api/v1/system/*` | High-level system stats |
+
+### Additional Business Route Families
+
+| Route family | Description |
+|-------------|-------------|
+| `/api/v1/b2b/tenant/affiliates/*` | Affiliate opportunities, partner registry, and click tracking |
+| `/api/v1/b2b/vendor-targets/*` | Vendor target CRUD, claiming, and report generation |
+| `/api/v1/seller/*` | Seller-side targets, campaigns, and intelligence refresh |
+| `/api/v1/scraper/*` | Universal scrape job creation, status, results, cancel, and delete |
+| `/api/v1/actions/*` | Proactive action queue acknowledgement/dismiss flows |
 
 ### Blog (`/api/v1/blog/`, `/api/v1/admin/blog/`)
 
@@ -839,9 +896,16 @@ Scoring factors: `displacement_momentum` (25%), `churn_severity` (20%), `pain_co
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/tasks` | List all scheduled tasks with last-run status |
-| `POST` | `/tasks/{task_name}/run` | Trigger a task immediately |
-| `GET`  | `/tasks/{task_name}/history` | Task run history |
+| `GET`  | `/status/summary` | Scheduler / hook-manager status summary |
+| `GET`  | `/` | List all scheduled tasks |
+| `POST` | `/` | Create a scheduled task |
+| `GET`  | `/{task_id}` | Task detail |
+| `PUT`  | `/{task_id}` | Update a task |
+| `DELETE` | `/{task_id}` | Delete a task |
+| `POST` | `/{task_id}/run` | Trigger a task immediately |
+| `POST` | `/{task_id}/enable` | Enable and schedule a task |
+| `POST` | `/{task_id}/disable` | Disable and unschedule a task |
+| `GET`  | `/{task_id}/executions` | Task execution history |
 
 ### Reasoning Events (`/api/v1/reasoning/`)
 
@@ -856,9 +920,9 @@ Scoring factors: `displacement_momentum` (25%), `churn_severity` (20%), `pain_co
 
 | Path | Description |
 |------|-------------|
-| `WS /ws/query/audio` | Streaming voice pipeline: PCM → STT → intent route → LLM → TTS |
-| `WS /ws/edge/{node_id}` | Edge node connection: compressed protocol with zlib framing |
-| `WS /ws/orchestrated/{session_id}` | Multi-turn LangGraph workflow session |
+| `WS /api/v1/ws/edge/{location_id}` | Edge node connection and state sync |
+| `WS /api/v1/ws/orchestrated` | Orchestrated full voice pipeline: audio in → ASR → agent → TTS |
+| `WS /api/v1/comms/voice/stream/{call_sid}` | Live telephony audio stream for calls |
 
 ### OpenAI / Ollama Compatibility
 
@@ -867,17 +931,18 @@ Atlas exposes drop-in compatibility endpoints so any OpenAI SDK or Ollama client
 | Path | Compatibility |
 |------|---------------|
 | `POST /v1/chat/completions` | OpenAI Chat Completions API |
-| `GET /v1/models` | OpenAI model list |
+| `GET /` | Ollama root health check (`Ollama is running`) |
+| `GET /api/version` | Ollama version endpoint |
 | `POST /api/chat` | Ollama `/api/chat` |
-| `POST /api/generate` | Ollama `/api/generate` |
 | `GET /api/tags` | Ollama `/api/tags` |
 
 ### Webhooks
 
 | Path | Description |
 |------|-------------|
-| `POST /webhooks/campaign` | Campaign event webhook receiver (external CRM callbacks) |
-| `POST /billing/stripe/webhook` | Stripe webhook receiver (subscription lifecycle) |
+| `GET /webhooks/unsubscribe` | One-click campaign unsubscribe page |
+| `POST /webhooks/campaign-email` | Campaign email ESP event webhook receiver |
+| `POST /webhooks/stripe` | Stripe webhook receiver (subscription lifecycle) |
 
 ---
 
