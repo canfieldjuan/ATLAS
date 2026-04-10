@@ -600,6 +600,29 @@ export interface ProspectStats {
   this_month: number
 }
 
+export interface ManualQueueEntry {
+  id: string
+  company_name_raw: string
+  company_name_norm: string | null
+  domain: string | null
+  status: string
+  error_detail: string | null
+  enriched_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CompanyOverride {
+  // id is absent when returned from settings-fallback path (DB table empty)
+  id?: string
+  company_name_raw: string
+  company_name_norm: string
+  search_names: string[]
+  domains: string[]
+  created_at: string | null
+  updated_at: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Campaign Review (enhanced)
 // ---------------------------------------------------------------------------

@@ -27,6 +27,8 @@ import type {
   BlogQualityTrends,
   Prospect,
   ProspectStats,
+  ManualQueueEntry,
+  CompanyOverride,
   ReviewQueueDraft,
   AuditEvent,
   BriefingDraft,
@@ -658,6 +660,43 @@ export async function fetchProspects(params?: {
 
 export async function fetchProspectStats() {
   return get<ProspectStats>(PROSPECTS_BASE, '/stats')
+}
+
+export async function fetchManualQueue(params?: {
+  company?: string
+  limit?: number
+  offset?: number
+}) {
+  return get<{ queue: ManualQueueEntry[]; count: number }>(PROSPECTS_BASE, '/manual-queue', params)
+}
+
+export async function resolveManualQueueEntry(
+  id: string,
+  body: { action: 'retry' | 'dismiss'; domain?: string },
+) {
+  return post<{ entry: ManualQueueEntry }>(PROSPECTS_BASE, `/manual-queue/${id}/resolve`, body)
+}
+
+export async function fetchCompanyOverrides(params?: {
+  company?: string
+}) {
+  return get<{ overrides: CompanyOverride[]; count: number }>(PROSPECTS_BASE, '/company-overrides', params)
+}
+
+export async function upsertCompanyOverride(body: {
+  company_name_raw: string
+  search_names?: string[]
+  domains?: string[]
+}) {
+  return post<{ override: CompanyOverride }>(PROSPECTS_BASE, '/company-overrides', body)
+}
+
+export async function deleteCompanyOverride(id: string) {
+  return del<{ deleted: boolean }>(PROSPECTS_BASE, `/company-overrides/${id}`)
+}
+
+export async function bootstrapCompanyOverrides() {
+  return post<{ imported: number }>(PROSPECTS_BASE, '/company-overrides/bootstrap')
 }
 
 // ---------------------------------------------------------------------------
