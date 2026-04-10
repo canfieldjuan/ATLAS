@@ -291,6 +291,22 @@ class TemporalEngine:
 
     async def _compute_percentiles(self, category: str) -> list[CategoryPercentile]:
         """Compute rolling percentiles for a category from latest snapshots."""
+        from ..autonomous.tasks._b2b_shared import read_category_vendor_signal_rows
+
+        vendor_rows = await read_category_vendor_signal_rows(
+            self._pool,
+            product_category=category,
+        )
+        normalized_vendor_names = sorted(
+            {
+                str(row.get("vendor_name") or "").strip().lower()
+                for row in vendor_rows
+                if str(row.get("vendor_name") or "").strip()
+            }
+        )
+        if not normalized_vendor_names:
+            return []
+
         rows = await self._pool.fetch(
             """
             SELECT s.* FROM b2b_vendor_snapshots s
@@ -299,10 +315,9 @@ class TemporalEngine:
                 FROM b2b_vendor_snapshots
                 GROUP BY vendor_name
             ) latest ON s.vendor_name = latest.vendor_name AND s.snapshot_date = latest.max_date
-            JOIN b2b_churn_signals cs ON LOWER(s.vendor_name) = LOWER(cs.vendor_name)
-            WHERE LOWER(cs.product_category) = LOWER($1)
+            WHERE LOWER(s.vendor_name) = ANY($1::text[])
             """,
-            category,
+            normalized_vendor_names,
         )
 
         if len(rows) < 3:

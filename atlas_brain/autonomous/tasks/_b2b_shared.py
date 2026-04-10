@@ -4877,6 +4877,93 @@ async def read_company_churn_context(
     ]
 
 
+async def read_signal_product_categories(
+    pool,
+) -> list[str]:
+    """Read distinct non-empty product categories from vendor scorecards."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT product_category
+        FROM b2b_churn_signals
+        WHERE product_category IS NOT NULL
+          AND TRIM(product_category) != ''
+        ORDER BY product_category
+        """
+    )
+    categories: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        category = str(row.get("product_category") or "").strip()
+        if not category:
+            continue
+        key = category.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        categories.append(category)
+    return categories
+
+
+async def read_category_vendor_signal_rows(
+    pool,
+    *,
+    product_category: str,
+) -> list[dict[str, Any]]:
+    """Read one scorecard-backed vendor row per vendor within a category."""
+    normalized_category = str(product_category or "").strip()
+    if not normalized_category:
+        return []
+
+    rows = await pool.fetch(
+        """
+        WITH ranked_signals AS (
+            SELECT vendor_name,
+                   total_reviews,
+                   avg_urgency_score,
+                   confidence_score,
+                   last_computed_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY vendor_name
+                       ORDER BY total_reviews DESC,
+                                last_computed_at DESC NULLS LAST,
+                                product_category ASC NULLS LAST
+                   ) AS vendor_row_rank
+            FROM b2b_churn_signals
+            WHERE LOWER(product_category) = LOWER($1)
+        )
+        SELECT rs.vendor_name,
+               rs.total_reviews,
+               rs.avg_urgency_score AS avg_urgency,
+               rs.confidence_score,
+               snap.churn_density,
+               snap.positive_review_pct,
+               snap.displacement_edge_count,
+               COALESCE(d_out.cnt, 0) AS displacement_out,
+               COALESCE(d_in.cnt, 0) AS displacement_in
+        FROM ranked_signals rs
+        LEFT JOIN (
+            SELECT DISTINCT ON (vendor_name) *
+            FROM b2b_vendor_snapshots
+            ORDER BY vendor_name, snapshot_date DESC
+        ) snap ON LOWER(rs.vendor_name) = LOWER(snap.vendor_name)
+        LEFT JOIN (
+            SELECT from_vendor, SUM(mention_count) AS cnt
+            FROM b2b_displacement_edges
+            GROUP BY from_vendor
+        ) d_out ON LOWER(rs.vendor_name) = LOWER(d_out.from_vendor)
+        LEFT JOIN (
+            SELECT to_vendor, SUM(mention_count) AS cnt
+            FROM b2b_displacement_edges
+            GROUP BY to_vendor
+        ) d_in ON LOWER(rs.vendor_name) = LOWER(d_in.to_vendor)
+        WHERE rs.vendor_row_rank = 1
+        ORDER BY rs.total_reviews DESC, rs.vendor_name ASC
+        """,
+        normalized_category,
+    )
+    return [dict(row) for row in rows if row.get("vendor_name")]
+
+
 async def read_vendor_scorecard_inventory_rows(
     pool,
 ) -> list[dict[str, Any]]:
