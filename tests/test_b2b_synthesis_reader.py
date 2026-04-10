@@ -230,6 +230,53 @@ class TestLoadBestReasoningViewPackets:
         assert view.witness_pack[0]["witness_id"] == "witness:1"
 
     @pytest.mark.asyncio
+    async def test_prefers_prompt_payload_from_packet_table_when_present(self):
+        synth = _make_synthesis_row(
+            synthesis={
+                "reasoning_contracts": {
+                    "vendor_core_reasoning": {
+                        "causal_narrative": {
+                            "primary_wedge": "price_squeeze",
+                            "confidence": "high",
+                            "summary": "Pricing pressure is acute.",
+                        },
+                    },
+                },
+            },
+        )
+        packet_row = {
+            "packet": {
+                "payload": {
+                    "section_packets": {
+                        "anchor_examples": {"common_pattern": ["witness:full"]},
+                    },
+                },
+                "prompt_payload": {
+                    "witness_pack": [
+                        {
+                            "witness_id": "witness:prompt",
+                            "_sid": "witness:prompt",
+                            "excerpt_text": "Prompt witness.",
+                        },
+                    ],
+                    "section_packets": {
+                        "anchor_examples": {"common_pattern": ["witness:prompt"]},
+                    },
+                },
+            },
+        }
+        synth["synthesis"]["reasoning_contracts"]["vendor_core_reasoning"]["causal_narrative"]["citations"] = [
+            "witness:prompt",
+        ]
+        pool = _mock_pool(synth_row=synth, packet_row=packet_row)
+
+        view = await load_best_reasoning_view(pool, "Acme")
+
+        assert view is not None
+        assert view.packet_artifacts["section_packets"]["anchor_examples"]["common_pattern"] == ["witness:prompt"]
+        assert view.witness_pack[0]["witness_id"] == "witness:prompt"
+
+    @pytest.mark.asyncio
     async def test_synthesis_json_string_decoded(self):
         """Synthesis stored as JSON string should be decoded."""
         import json

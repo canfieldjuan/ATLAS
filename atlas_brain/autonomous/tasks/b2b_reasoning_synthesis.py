@@ -848,14 +848,31 @@ async def _persist_packet_artifacts(
     analysis_window_days: int,
     evidence_hash: str,
     packet: Any,
+    prompt_payload: dict[str, Any] | None = None,
+    full_packet: Any | None = None,
+    packet_meta: dict[str, Any] | None = None,
 ) -> None:
-    """Persist witness-backed packet artifacts for inspection and caching."""
+    """Persist witness-backed packet artifacts for inspection and caching.
+
+    ``packet`` is the actual packet used for witness selection and prompt
+    construction. When a lean prompt is used, ``full_packet`` can preserve the
+    richer debug context without replacing the prompt-truthful payload.
+    """
     packet_payload = {
         "schema_version": _PACKET_SCHEMA_VERSION,
         "vendor_name": vendor_name,
         "payload": packet.to_llm_payload(),
         "source_ids": sorted(packet.source_ids()),
     }
+    if isinstance(prompt_payload, dict) and prompt_payload:
+        packet_payload["prompt_payload"] = prompt_payload
+    if isinstance(packet_meta, dict) and packet_meta:
+        packet_payload["meta"] = packet_meta
+    if full_packet is not None:
+        full_payload = full_packet.to_llm_payload()
+        if full_payload != packet_payload["payload"]:
+            packet_payload["full_payload"] = full_payload
+            packet_payload["full_source_ids"] = sorted(full_packet.source_ids())
     await pool.execute(
         """
         INSERT INTO b2b_vendor_reasoning_packets
@@ -1604,35 +1621,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 max_items_per_pool=full_max_items_per_pool,
             )
             packet_witness_count = len(getattr(packet, "witness_pack", []) or [])
-            if packet_witness_count > 0:
-                witness_count += packet_witness_count
-                witness_vendor_rows += 1
-            try:
-                await _persist_packet_artifacts(
-                    pool,
-                    vendor_name=vendor_name,
-                    as_of_date=today,
-                    analysis_window_days=window_days,
-                    evidence_hash=ev_hash,
-                    packet=packet,
-                )
-            except Exception:
-                logger.warning(
-                    "Witness packet persistence failed for %s",
-                    vendor_name,
-                    exc_info=True,
-                )
             payload_mode = "full"
             payload_items_per_pool = full_max_items_per_pool
             section_packets_included = True
             include_contradiction_rows = True
             include_minority_signals = True
             payload_packet = packet
+            prompt_payload = payload_packet.to_reasoning_payload(
+                compact_metric_ledger=True,
+                compact_aggregates=True,
+            )
             payload = json.dumps(
-                payload_packet.to_reasoning_payload(
-                    compact_metric_ledger=True,
-                    compact_aggregates=True,
-                ),
+                prompt_payload,
                 separators=(",", ":"),
                 sort_keys=True,
                 default=str,
@@ -1657,14 +1657,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 include_contradiction_rows = False
                 include_minority_signals = False
+                prompt_payload = lean_packet.to_reasoning_payload(
+                    compact_metric_ledger=True,
+                    compact_aggregates=True,
+                    include_contradiction_rows=False,
+                    include_minority_signals=False,
+                    include_section_packets=False,
+                )
                 payload = json.dumps(
-                    lean_packet.to_reasoning_payload(
-                        compact_metric_ledger=True,
-                        compact_aggregates=True,
-                        include_contradiction_rows=False,
-                        include_minority_signals=False,
-                        include_section_packets=False,
-                    ),
+                    prompt_payload,
                     separators=(",", ":"),
                     sort_keys=True,
                     default=str,
@@ -1683,6 +1684,34 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     include_contradiction_rows=include_contradiction_rows,
                     include_minority_signals=include_minority_signals,
                     include_section_packets=section_packets_included,
+                )
+            if payload_witness_count > 0:
+                witness_count += payload_witness_count
+                witness_vendor_rows += 1
+            try:
+                await _persist_packet_artifacts(
+                    pool,
+                    vendor_name=vendor_name,
+                    as_of_date=today,
+                    analysis_window_days=window_days,
+                    evidence_hash=ev_hash,
+                    packet=payload_packet,
+                    prompt_payload=prompt_payload,
+                    full_packet=packet,
+                    packet_meta={
+                        "payload_mode": payload_mode,
+                        "estimated_input_tokens": estimated_input_tokens,
+                        "section_packets_included": section_packets_included,
+                        "include_contradiction_rows": include_contradiction_rows,
+                        "include_minority_signals": include_minority_signals,
+                        "prompt_executed": estimated_input_tokens <= llm_max_input_tokens,
+                    },
+                )
+            except Exception:
+                logger.warning(
+                    "Witness packet persistence failed for %s",
+                    vendor_name,
+                    exc_info=True,
                 )
             if estimated_input_tokens > llm_max_input_tokens:
                 logger.warning(

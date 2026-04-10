@@ -487,11 +487,24 @@ async def get_trace(
     packet = None
     if packet_row:
         packet_data = _safe_json(packet_row["packet"]) or {}
+        packet_payload = (
+            packet_data.get("prompt_payload")
+            if isinstance(packet_data, dict)
+            else None
+        )
+        if not isinstance(packet_payload, dict):
+            packet_payload = (
+                packet_data.get("payload")
+                if isinstance(packet_data, dict)
+                else None
+            )
+        if not isinstance(packet_payload, dict):
+            packet_payload = packet_data if isinstance(packet_data, dict) else {}
         packet = {
             "as_of_date": packet_row["as_of_date"].isoformat(),
             "evidence_hash": packet_row["evidence_hash"],
-            "section_count": len(packet_data.get("section_packets", [])),
-            "witness_pack_size": len(packet_data.get("witness_pack", [])),
+            "section_count": len(packet_payload.get("section_packets") or {}),
+            "witness_pack_size": len(packet_payload.get("witness_pack") or []),
         }
 
     # Layer 3: Witnesses (sample, not all)

@@ -6025,10 +6025,20 @@ class TestReasoningSynthesisTask:
             item for item in fake_pool.executed
             if "INSERT INTO b2b_reasoning_synthesis" in item[0]
         ]
+        packet_writes = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_vendor_reasoning_packets" in item[0]
+        ]
         persisted = json.loads(synthesis_writes[0][1][5])
+        persisted_packet = json.loads(packet_writes[0][1][5])
         assert persisted["meta"]["payload_mode"] == "lean"
         assert persisted["meta"]["section_packets_included"] is False
         assert persisted["meta"]["estimated_input_tokens"] == 500
+        assert persisted_packet["meta"]["payload_mode"] == "lean"
+        assert persisted_packet["meta"]["prompt_executed"] is True
+        assert "section_packets" not in persisted_packet["prompt_payload"]
+        assert "full_payload" in persisted_packet
+        assert persisted_packet["full_payload"]["section_packets"]["causal_packet"]["witness_ids"]
         component_tokens = persisted["meta"]["payload_component_tokens"]
         assert component_tokens["payload_profile"] > 0
         assert component_tokens["witness_pack"] > 0
@@ -6146,9 +6156,18 @@ class TestReasoningSynthesisTask:
             item for item in fake_pool.executed
             if "INSERT INTO b2b_reasoning_synthesis" in item[0]
         ]
+        packet_writes = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_vendor_reasoning_packets" in item[0]
+        ]
         persisted = json.loads(synthesis_writes[0][1][5])
+        persisted_packet = json.loads(packet_writes[0][1][5])
         assert persisted["meta"]["payload_mode"] == "full"
         assert persisted["meta"]["packet_items_per_pool"] == 4
+        assert persisted_packet["meta"]["payload_mode"] == "full"
+        assert persisted_packet["meta"]["prompt_executed"] is True
+        assert persisted_packet["prompt_payload"]["section_packets"]["account_packet"]["numeric_support"]["total_accounts"]["source_id"]
+        assert "full_payload" not in persisted_packet
         component_tokens = persisted["meta"]["payload_component_tokens"]
         assert component_tokens["payload_profile"] > 0
         assert component_tokens["witness_pack"] > 0
@@ -6232,9 +6251,16 @@ class TestReasoningSynthesisTask:
             item for item in fake_pool.executed
             if "INSERT INTO artifact_attempts" in item[0]
         ]
+        packet_writes = [
+            item for item in fake_pool.executed
+            if "INSERT INTO b2b_vendor_reasoning_packets" in item[0]
+        ]
+        persisted_packet = json.loads(packet_writes[0][1][5])
         assert len(attempt_rows) == 1
         assert attempt_rows[0][1][5] == "generation"
         assert attempt_rows[0][1][6] == "rejected"
+        assert persisted_packet["meta"]["prompt_executed"] is False
+        assert persisted_packet["meta"]["payload_mode"] == "lean"
 
     @pytest.mark.asyncio
     async def test_run_cross_vendor_synthesis_records_success_attempt(self, monkeypatch):
