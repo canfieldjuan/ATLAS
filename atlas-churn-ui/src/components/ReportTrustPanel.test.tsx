@@ -7,6 +7,8 @@ describe('ReportTrustPanel', () => {
     render(
       <ReportTrustPanel
         status="completed"
+        artifactState="ready"
+        artifactLabel="Ready"
         blockerCount={0}
         warningCount={0}
         unresolvedIssueCount={0}
@@ -28,6 +30,8 @@ describe('ReportTrustPanel', () => {
     render(
       <ReportTrustPanel
         status="failed"
+        artifactState="failed"
+        artifactLabel="Attention needed"
         blockerCount={2}
         warningCount={1}
         unresolvedIssueCount={3}

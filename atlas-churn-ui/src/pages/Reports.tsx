@@ -658,6 +658,8 @@ export default function Reports() {
                       <ReportTrustPanel
                         compact
                         status={r.status}
+                        artifactState={r.artifact_state ?? r.trust?.artifact_state}
+                        artifactLabel={r.artifact_label ?? r.trust?.artifact_label}
                         blockerCount={r.blocker_count}
                         warningCount={r.warning_count}
                         unresolvedIssueCount={r.unresolved_issue_count}

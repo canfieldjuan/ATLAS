@@ -4,7 +4,53 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from atlas_brain.services.b2b import watchlist_alerts as watchlist_alert_service
+from atlas_brain.services.b2b.report_trust import report_trust_payload
+
+
+def test_report_trust_payload_includes_artifact_state_when_status_present():
+    created_at = datetime.now(timezone.utc) - timedelta(hours=8)
+
+    trust = report_trust_payload(
+        report_date=None,
+        created_at=created_at,
+        data_stale=False,
+        blocker_count=0,
+        warning_count=1,
+        unresolved_issue_count=0,
+        status="sales_ready",
+    )
+
+    assert trust == {
+        "artifact_state": "ready",
+        "artifact_label": "Ready",
+        "freshness_state": "fresh",
+        "freshness_label": "Fresh",
+        "review_state": "warnings",
+        "review_label": "Warnings",
+    }
+
+
+def test_report_trust_payload_omits_artifact_state_when_status_is_missing():
+    created_at = datetime.now(timezone.utc) - timedelta(hours=36)
+
+    trust = report_trust_payload(
+        report_date=None,
+        created_at=created_at,
+        data_stale=False,
+        blocker_count=0,
+        warning_count=0,
+        unresolved_issue_count=1,
+        status=None,
+    )
+
+    assert trust == {
+        "freshness_state": "monitor",
+        "freshness_label": "Monitor",
+        "review_state": "open_review",
+        "review_label": "Open Review",
+    }
 
 
 def test_api_router_exposes_only_tenant_b2b_paths():
@@ -244,11 +290,15 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
 
     assert result["count"] == 1
     report = result["reports"][0]
+    assert report["artifact_state"] == "ready"
+    assert report["artifact_label"] == "Ready"
     assert report["freshness_state"] == "stale"
     assert report["freshness_label"] == "Stale"
     assert report["review_state"] == "blocked"
     assert report["review_label"] == "Blocked"
     assert report["trust"] == {
+        "artifact_state": "ready",
+        "artifact_label": "Ready",
         "freshness_state": "stale",
         "freshness_label": "Stale",
         "review_state": "blocked",
@@ -328,6 +378,33 @@ async def test_list_tenant_reports_applies_quality_freshness_and_review_filters(
 
 
 @pytest.mark.asyncio
+async def test_list_tenant_reports_rejects_invalid_quality_status(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock(return_value=[]))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await mod.list_tenant_reports(
+            report_type=None,
+            vendor_filter=None,
+            quality_status="typo_status",
+            freshness_state=None,
+            review_state=None,
+            include_stale=True,
+            limit=10,
+            user=user,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == (
+        "quality_status must be sales_ready, needs_review, thin_evidence, or deterministic_fallback"
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
@@ -359,11 +436,15 @@ async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
 
     result = await mod.get_tenant_report(str(report_id), user=user)
 
+    assert result["artifact_state"] == "ready"
+    assert result["artifact_label"] == "Ready"
     assert result["freshness_state"] == "fresh"
     assert result["freshness_label"] == "Fresh"
     assert result["review_state"] == "warnings"
     assert result["review_label"] == "Warnings"
     assert result["trust"] == {
+        "artifact_state": "ready",
+        "artifact_label": "Ready",
         "freshness_state": "fresh",
         "freshness_label": "Fresh",
         "review_state": "warnings",

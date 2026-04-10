@@ -2,7 +2,7 @@
 
 import importlib
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -127,6 +127,64 @@ async def test_get_report_handles_null_battle_card_quality():
     assert result["quality_status"] is None
     assert result["quality_score"] is None
     assert result["report_type"] == "battle_card"
+    assert result["artifact_state"] == "ready"
+    assert result["artifact_label"] == "Ready"
+    assert result["freshness_state"] == "stale"
+    assert result["review_state"] == "clean"
+    assert result["trust"]["artifact_state"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_list_reports_exposes_normalized_trust_fields():
+    created_at = datetime.now(timezone.utc) - timedelta(hours=8)
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "id": "2ea3fd03-7fd9-4b72-8f24-117667f723e9",
+                "report_date": created_at.date(),
+                "report_type": "vendor_scorecard",
+                "executive_summary": "summary",
+                "vendor_filter": "Zendesk",
+                "category_filter": None,
+                "status": "published",
+                "created_at": created_at,
+                "data_stale": False,
+                "latest_failure_step": None,
+                "latest_error_code": None,
+                "latest_error_summary": None,
+                "blocker_count": 0,
+                "warning_count": 1,
+                "unresolved_issue_count": 0,
+                "quality_status": None,
+                "quality_score": None,
+            }
+        ]
+    )
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.list_reports(
+            report_type=None,
+            vendor_filter=None,
+            include_stale=False,
+            limit=10,
+            user=None,
+        )
+
+    assert result["count"] == 1
+    report = result["reports"][0]
+    assert report["artifact_state"] == "ready"
+    assert report["artifact_label"] == "Ready"
+    assert report["freshness_state"] == "fresh"
+    assert report["review_state"] == "warnings"
+    assert report["trust"] == {
+        "artifact_state": "ready",
+        "artifact_label": "Ready",
+        "freshness_state": "fresh",
+        "freshness_label": "Fresh",
+        "review_state": "warnings",
+        "review_label": "Warnings",
+    }
 
 
 def test_validate_accounts_in_motion_window_rejects_custom_window():
