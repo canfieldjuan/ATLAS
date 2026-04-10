@@ -4092,6 +4092,7 @@ async def read_vendor_scorecard_details(
                decision_maker_churn_rate,
                company_churn_list,
                quotable_evidence,
+               materialization_run_id,
                last_computed_at,
                review_window_end
         FROM b2b_churn_signals
@@ -5048,7 +5049,8 @@ async def read_vendor_scorecard_metrics(
                avg_urgency_score,
                avg_rating_normalized,
                top_competitors,
-               sentiment_distribution
+               sentiment_distribution,
+               materialization_run_id
         FROM b2b_churn_signals
         WHERE LOWER(vendor_name) = LOWER($1)
         ORDER BY last_computed_at DESC
@@ -5106,6 +5108,7 @@ async def read_vendor_intelligence_records_latest(
                as_of_date,
                analysis_window_days,
                schema_version,
+               materialization_run_id,
                vault,
                created_at
         FROM b2b_evidence_vault
@@ -6625,6 +6628,7 @@ def _normalize_vendor_intelligence_record(row: Any) -> dict[str, Any] | None:
         "as_of_date": row.get("as_of_date"),
         "analysis_window_days": row.get("analysis_window_days"),
         "schema_version": row.get("schema_version"),
+        "materialization_run_id": row.get("materialization_run_id"),
         "created_at": row.get("created_at"),
         "vault": vault,
     }
@@ -6647,6 +6651,7 @@ async def read_vendor_intelligence_records(
                as_of_date,
                analysis_window_days,
                schema_version,
+               materialization_run_id,
                vault,
                created_at
         FROM b2b_evidence_vault
@@ -6707,6 +6712,7 @@ async def search_vendor_intelligence_record(
                as_of_date,
                analysis_window_days,
                schema_version,
+               materialization_run_id,
                vault,
                created_at
         FROM b2b_evidence_vault
@@ -6747,6 +6753,7 @@ async def search_vendor_intelligence_records(
                as_of_date,
                analysis_window_days,
                schema_version,
+               materialization_run_id,
                vault,
                created_at
         FROM b2b_evidence_vault
@@ -6779,6 +6786,7 @@ async def read_vendor_intelligence_record_nearest_window(
                as_of_date,
                analysis_window_days,
                schema_version,
+               materialization_run_id,
                vault,
                created_at
         FROM b2b_evidence_vault

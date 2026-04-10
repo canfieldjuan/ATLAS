@@ -36,7 +36,10 @@ from ...services.vendor_registry import (
     resolve_vendor_name_cached,
     _ensure_cache as _warm_vendor_cache,
 )
-from ._execution_progress import _update_execution_progress
+from ._execution_progress import (
+    _update_execution_progress,
+    task_run_id as _task_execution_run_id,
+)
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_churn_intelligence")
 
@@ -164,6 +167,11 @@ class _TaskTimer:
 
     def elapsed(self) -> float:
         return self._clock() - self._start
+
+
+def _task_run_id(task: ScheduledTask | Any) -> str | None:
+    """Return the scheduler execution id or best task-correlated fallback."""
+    return _task_execution_run_id(task)
 
 
 _GENERIC_PRODUCT_CATEGORIES = {"", "unknown", "b2b software"}
@@ -1432,6 +1440,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         return {"_skip_synthesis": "DB not ready"}
 
     budget = _TaskTimer()
+    materialization_run_id = _task_run_id(task)
     synced_firmographics = 0
     await _update_execution_progress(
         task,
@@ -2004,6 +2013,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 _date.today(),
                 window_days,
                 vault["schema_version"],
+                materialization_run_id,
                 json.dumps(vault, default=str),
             ))
 
@@ -2011,10 +2021,20 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             await pool.executemany(
                 """
                 INSERT INTO b2b_evidence_vault
-                    (vendor_name, as_of_date, analysis_window_days, schema_version, vault)
-                VALUES ($1, $2, $3, $4, $5::jsonb)
+                    (
+                        vendor_name,
+                        as_of_date,
+                        analysis_window_days,
+                        schema_version,
+                        materialization_run_id,
+                        vault
+                    )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
                 ON CONFLICT (vendor_name, as_of_date, analysis_window_days, schema_version)
-                DO UPDATE SET vault = EXCLUDED.vault, created_at = NOW()
+                DO UPDATE SET
+                    materialization_run_id = EXCLUDED.materialization_run_id,
+                    vault = EXCLUDED.vault,
+                    created_at = NOW()
                 """,
                 _vault_rows,
             )
@@ -2621,6 +2641,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         provenance_lookup=vendor_provenance,
         insider_lookup=insider_lookup,
         reasoning_lookup=reasoning_lookup,
+        materialization_run_id=materialization_run_id,
     )
     persistence_progress += 1
     await _update_persist_progress()
@@ -3320,8 +3341,9 @@ async def _upsert_churn_signals(
     provenance_lookup: dict[str, dict] | None = None,
     insider_lookup: dict[str, dict] | None = None,
     reasoning_lookup: dict[str, dict] | None = None,
+    materialization_run_id: str | None = None,
 ) -> int:
-    """Upsert b2b_churn_signals (33 columns incl. provenance + insider + reasoning). Returns failure count."""
+    """Upsert b2b_churn_signals and stamp the producing materialization run."""
     now = datetime.now(timezone.utc)
     budget_lookup = budget_lookup or {}
     use_case_lookup = use_case_lookup or {}
@@ -3375,6 +3397,7 @@ async def _upsert_churn_signals(
                     reasoning_risk_level, reasoning_executive_summary,
                     reasoning_key_signals, reasoning_uncertainty_sources,
                     signal_reviews,
+                    materialization_run_id,
                     last_computed_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                           $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
@@ -3382,7 +3405,7 @@ async def _upsert_churn_signals(
                           $30, $31, $32, $33,
                           $34, $35, $36, $37,
                           $38, $39, $40, $41,
-                          $42, $43)
+                          $42, $43, $44)
                 ON CONFLICT (vendor_name) DO UPDATE SET
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
@@ -3424,6 +3447,7 @@ async def _upsert_churn_signals(
                     reasoning_key_signals = COALESCE(EXCLUDED.reasoning_key_signals, b2b_churn_signals.reasoning_key_signals),
                     reasoning_uncertainty_sources = COALESCE(EXCLUDED.reasoning_uncertainty_sources, b2b_churn_signals.reasoning_uncertainty_sources),
                     signal_reviews = EXCLUDED.signal_reviews,
+                    materialization_run_id = EXCLUDED.materialization_run_id,
                     last_computed_at = EXCLUDED.last_computed_at
                 """,
                 vendor,
@@ -3470,6 +3494,7 @@ async def _upsert_churn_signals(
                 json.dumps(reasoning_lookup.get(vendor, {}).get("key_signals", [])) if reasoning_lookup.get(vendor) else None,
                 json.dumps(reasoning_lookup.get(vendor, {}).get("uncertainty_sources", [])) if reasoning_lookup.get(vendor) else None,
                 vs.get("signal_reviews") or total,
+                materialization_run_id,
                 now,
             )
         except Exception:

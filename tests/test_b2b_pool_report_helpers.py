@@ -579,6 +579,7 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
                 "avg_rating_normalized": 0.81,
                 "top_competitors": [{"name": "Freshdesk"}],
                 "sentiment_distribution": {"declining": 4, "improving": 1},
+                "materialization_run_id": "run-123",
             },
         },
     )
@@ -595,6 +596,7 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
         "avg_rating_normalized": 0.81,
         "top_competitors": [{"name": "Freshdesk"}],
         "sentiment_distribution": {"declining": 4, "improving": 1},
+        "materialization_run_id": "run-123",
     }
 
 
@@ -608,6 +610,7 @@ async def test_read_vendor_intelligence_record_prefers_latest_exact_vendor_row()
                     "as_of_date": date(2026, 3, 31),
                     "analysis_window_days": 30,
                     "schema_version": 2,
+                    "materialization_run_id": "run-123",
                     "vault": json.dumps({"metric_snapshot": {"avg_urgency": 7.2}}),
                     "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
                 },
@@ -630,6 +633,7 @@ async def test_read_vendor_intelligence_record_prefers_latest_exact_vendor_row()
         "as_of_date": date(2026, 3, 31),
         "analysis_window_days": 30,
         "schema_version": 2,
+        "materialization_run_id": "run-123",
         "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
         "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
     }
@@ -644,6 +648,7 @@ async def test_search_vendor_intelligence_record_uses_partial_vendor_query():
                 "as_of_date": date(2026, 3, 31),
                 "analysis_window_days": 30,
                 "schema_version": 2,
+                "materialization_run_id": "run-123",
                 "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
                 "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
             },
@@ -666,6 +671,7 @@ async def test_search_vendor_intelligence_record_uses_partial_vendor_query():
         "as_of_date": date(2026, 3, 31),
         "analysis_window_days": 30,
         "schema_version": 2,
+        "materialization_run_id": "run-123",
         "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
         "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
     }
@@ -680,6 +686,7 @@ async def test_read_vendor_intelligence_record_nearest_window_prefers_closest_ma
                 "as_of_date": date(2026, 3, 31),
                 "analysis_window_days": 60,
                 "schema_version": 2,
+                "materialization_run_id": "run-123",
                 "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
                 "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
             },
@@ -709,6 +716,7 @@ async def test_read_vendor_intelligence_records_latest_returns_latest_rows():
                     "as_of_date": date(2026, 3, 31),
                     "analysis_window_days": 60,
                     "schema_version": 2,
+                    "materialization_run_id": "run-123",
                     "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
                     "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
                 },
@@ -731,6 +739,7 @@ async def test_read_vendor_intelligence_records_latest_returns_latest_rows():
             "as_of_date": date(2026, 3, 31),
             "analysis_window_days": 60,
             "schema_version": 2,
+            "materialization_run_id": "run-123",
             "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
             "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
         },
