@@ -1,6 +1,6 @@
 # Atlas
 
-A multi-modal AI platform that combines personal automation, voice control, B2B sales intelligence, and consumer product analytics into a single extensible system. Atlas runs as a central "Brain" server backed by local LLMs, with edge nodes for distributed sensing, 4 web dashboards, 8 MCP servers (130+ tools), 57 autonomous scheduled tasks, and a full telephony stack.
+A multi-modal AI platform that combines personal automation, voice control, B2B sales intelligence, and consumer product analytics into a single extensible system. Atlas runs as a central "Brain" server backed by local LLMs, with edge nodes for distributed sensing, 4 web dashboards, 8 MCP servers (130+ tools), 57 autonomous scheduled tasks, a full telephony stack, and 500+ REST/WebSocket API endpoints.
 
 ---
 
@@ -9,7 +9,7 @@ A multi-modal AI platform that combines personal automation, voice control, B2B 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                          ATLAS BRAIN                                  │
-│                   (FastAPI · 55+ API routes)                         │
+│                   (FastAPI · 500+ API endpoints)                    │
 │                                                                       │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────┐   │
 │  │  LLM Pool  │  │    STT     │  │    TTS     │  │   Intent     │   │
@@ -96,9 +96,9 @@ A multi-modal AI platform that combines personal automation, voice control, B2B 
 ## Project Structure
 
 ```
-atlas_brain/                    # Core server (FastAPI, 55+ routes)
+atlas_brain/                    # Core server (FastAPI, 500+ endpoints)
 ├── api/                        # REST + WebSocket endpoints
-│   ├── query/                  #   Text, audio, vision inference
+│   ├── query/                  #   Text inference
 │   ├── devices/                #   Device control + intent dispatch
 │   └── ...                     #   B2B, campaigns, email, calendar, blog, admin
 ├── agents/graphs/              # 12 LangGraph workflow state machines
@@ -460,14 +460,489 @@ curl -X POST http://127.0.0.1:8001/api/v1/devices/intent \
   -H "Content-Type: application/json" \
   -d '{"query": "turn on the living room lights"}'
 
-# Vision
-curl -X POST http://127.0.0.1:8001/api/v1/query/vision \
-  -F "image_file=@image.jpg" -F "prompt_text=What is this?"
+# Vision event feed
+curl http://127.0.0.1:8001/api/v1/vision/events
 
-# Audio transcription
-curl -X POST http://127.0.0.1:8001/api/v1/query/audio \
-  -F "audio_file=@audio.wav"
+# Voice pipeline (WebSocket)
+# Connect to ws://127.0.0.1:8001/api/v1/ws/orchestrated
 ```
+
+---
+
+## API Reference
+
+Below is a curated API overview for the main route families. For a generated mounted-route snapshot from importing `atlas_brain.main:app` in the current checkout, see [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md).
+
+Most REST endpoints are served under `/api/v1/` (port 8001 by default). Root-level exceptions include OpenAI compatibility (`/v1/...`), Ollama compatibility (`/`, `/api/...`), and webhooks (`/webhooks/...`). Most authenticated endpoints use a JWT Bearer token obtained via `/api/v1/auth/login`. B2B-specific routes additionally require the `b2b_plan` claim. Exact mounted route counts can vary with optional routers and local build artifacts.
+
+### Authentication
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/auth/register` | Register a new user; returns JWT access + refresh tokens |
+| `POST` | `/api/v1/auth/login` | Password login; returns JWT access + refresh tokens |
+| `POST` | `/api/v1/auth/refresh` | Exchange refresh token for a new access token |
+| `GET`  | `/api/v1/auth/me` | Returns the authenticated user's profile |
+
+### Billing (Stripe)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/billing/checkout` | Create a Stripe Checkout session |
+| `POST` | `/api/v1/billing/portal` | Create a Stripe Customer Portal session |
+| `GET`  | `/api/v1/billing/status` | Active subscription tier and feature flags |
+
+### Core AI
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/v1/ping` | Liveness check |
+| `GET`  | `/api/v1/health` | Detailed health with service status |
+| `POST` | `/api/v1/query/text` | Text query → LLM response |
+| `GET`  | `/api/v1/system/stats` | High-level system stats |
+| `GET`  | `/api/v1/vision/events` | Vision event feed from atlas_vision nodes |
+| `WS`   | `/api/v1/ws/orchestrated` | Full voice pipeline over WebSocket |
+
+### LLM Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/v1/llm/available` | List registered LLM implementations and the active model |
+| `POST` | `/api/v1/llm/activate` | Load a model into the active slot |
+| `POST` | `/api/v1/llm/deactivate` | Unload the active model |
+| `POST` | `/api/v1/llm/generate` | One-shot text generation from a prompt |
+| `POST` | `/api/v1/llm/chat` | Multi-message chat request through the active LLM |
+| `GET`  | `/api/v1/llm/status` | Active model, VRAM usage, health |
+
+### Device Control
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/v1/devices/` | List all registered capability devices |
+| `GET`  | `/api/v1/devices/{device_id}` | Device state and metadata |
+| `POST` | `/api/v1/devices/{device_id}/action` | Execute a device action directly |
+| `POST` | `/api/v1/devices/intent` | Natural language → device action dispatch |
+
+### Session & Memory
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/session/create` | Create a new conversation session |
+| `POST` | `/api/v1/session/continue` | Resume or create a user session on another terminal |
+| `GET`  | `/api/v1/session/{session_id}` | Session detail with transcript |
+| `GET`  | `/api/v1/session/{session_id}/history` | Paginated conversation history for a session |
+| `POST` | `/api/v1/session/{session_id}/close` | Mark a session inactive |
+| `GET`  | `/api/v1/session/status/db` | Database/session persistence health |
+
+### Email
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/v1/email/drafts/` | List pending email drafts |
+| `GET`  | `/api/v1/email/drafts/{draft_id}` | Draft detail |
+| `POST` | `/api/v1/email/drafts/{draft_id}/approve` | Approve and send a draft |
+| `POST` | `/api/v1/email/drafts/{draft_id}/reject` | Reject a draft |
+| `POST` | `/api/v1/email/drafts/{draft_id}/edit` | Edit a generated draft |
+| `POST` | `/api/v1/email/drafts/generate/{gmail_message_id}` | Generate a draft for a processed Gmail message |
+| `POST` | `/api/v1/email/drafts/{draft_id}/redraft` | Regenerate a draft |
+| `POST` | `/api/v1/email/drafts/{draft_id}/skip` | Skip a draft without sending |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/quote` | Generate a quote reply draft |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/escalate` | Escalate a complaint email |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/slots` | Suggest appointment slots |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/send-info` | Send an informational reply |
+| `POST` | `/api/v1/email/actions/{gmail_message_id}/archive` | Archive a processed email |
+| `GET`  | `/api/v1/email/inbox-rules/` | List inbox routing rules |
+| `POST` | `/api/v1/email/inbox-rules/` | Create an inbox routing rule |
+| `PUT`  | `/api/v1/email/inbox-rules/{rule_id}` | Update an inbox rule |
+| `DELETE` | `/api/v1/email/inbox-rules/{rule_id}` | Delete an inbox rule |
+| `POST` | `/api/v1/email/inbox-rules/reorder` | Reorder rule priority |
+| `POST` | `/api/v1/email/inbox-rules/test` | Test a rule against sample email content |
+
+### Communications (Calls, SMS, Actions & Webhooks)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/v1/comms/status` | Communications provider status |
+| `GET`  | `/api/v1/comms/contexts` | List registered business contexts |
+| `GET`  | `/api/v1/comms/contexts/{context_id}` | Context detail and availability |
+| `POST` | `/api/v1/comms/calls` | Initiate an outbound call |
+| `POST` | `/api/v1/comms/sms` | Send an outbound SMS |
+| `POST` | `/api/v1/comms/availability` | Check availability for a call/SMS workflow |
+| `POST` | `/api/v1/comms/appointments` | Create an appointment from a comms workflow |
+| `DELETE` | `/api/v1/comms/appointments/{appointment_id}` | Delete an appointment |
+| `POST` | `/api/v1/comms/recordings/reconcile` | Reconcile provider recording state |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/book` | Turn a transcript into an appointment |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/draft-email` | Draft a follow-up email from a call |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/draft-sms` | Draft a follow-up SMS from a call |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/send-email` | Send the drafted email |
+| `POST` | `/api/v1/comms/call-actions/{transcript_id}/send-sms` | Send the drafted SMS |
+| `GET`  | `/api/v1/comms/calls/search` | Full-text search over call transcripts |
+| `GET`  | `/api/v1/contacts/{contact_id}/timeline` | Contact interaction timeline |
+| `POST` | `/api/v1/comms/voice/inbound` | Inbound telephony webhook |
+| `POST` | `/api/v1/comms/voice/status` | Voice status callback webhook |
+| `POST` | `/api/v1/comms/sms/inbound` | Inbound SMS webhook |
+| `POST` | `/api/v1/comms/sms/status` | SMS delivery status webhook |
+| `WS`   | `/api/v1/comms/voice/stream/{call_sid}` | Live telephony media stream |
+
+### Invoicing
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/v1/invoicing/{invoice_id}` | Invoice detail |
+| `POST` | `/api/v1/invoicing/{invoice_id}/send` | Email the invoice to the customer |
+| `POST` | `/api/v1/invoicing/{invoice_id}/send-reminder` | Send a reminder for an unpaid invoice |
+| `POST` | `/api/v1/invoicing/{invoice_id}/mark-paid` | Record payment / mark invoice paid |
+
+### B2B Intelligence — Admin Dashboard (`/api/v1/b2b/dashboard/`)
+
+Public / admin-facing endpoints — no tenant scope. Require `b2b_plan`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/signals` | Global churn signals across all vendors |
+| `GET`  | `/slow-burn-watchlist` | Low-urgency vendors with accumulating risk |
+| `GET`  | `/signals/{vendor_name}` | Full vendor signal detail |
+| `GET`  | `/high-intent` | Companies showing high purchase intent |
+| `GET`  | `/vendors/{vendor_name}` | Vendor profile with churn metrics |
+| `POST` | `/vendors/{vendor_name}/reason` | Trigger Claude reasoning synthesis for a vendor |
+| `POST` | `/vendors/compare-reasoning` | Side-by-side reasoning comparison |
+| `GET`  | `/reports` | List generated intelligence reports |
+| `GET`  | `/reports/{report_id}` | Report detail |
+| `GET`  | `/reports/{report_id}/pdf` | Download report as PDF |
+| `POST` | `/reports/compare` | Generate a vendor comparison report |
+| `POST` | `/reports/compare-companies` | Account-level comparison report |
+| `POST` | `/reports/company-deep-dive` | Single-company deep dive report |
+| `GET`  | `/reviews` | Enriched review list with filters |
+| `GET`  | `/reviews/{review_id}` | Single review with full enrichment |
+| `GET`  | `/pipeline` | Pipeline health: queue depths, error rates, lag |
+| `GET`  | `/source-health` | Per-source scraping health (success rate, block rate) |
+| `GET`  | `/source-health/telemetry` | Source telemetry metrics |
+| `GET`  | `/displacement-edges` | Competitive displacement graph edges |
+| `GET`  | `/displacement-history` | Displacement edge velocity over time |
+| `GET`  | `/vendor-pain-points` | Aggregated pain categories per vendor |
+| `GET`  | `/vendor-use-cases` | Use case coverage per vendor |
+| `GET`  | `/vendor-integrations` | Integration graph per vendor |
+| `GET`  | `/vendor-buyer-profiles` | Buyer profile segments per vendor |
+| `GET`  | `/product-profile` | Vendor product profile knowledge card |
+| `GET`  | `/change-events` | Contract/leadership/funding change events |
+| `GET`  | `/fuzzy-vendor-search` | Fuzzy vendor name search |
+| `GET`  | `/fuzzy-company-search` | Fuzzy company name search |
+| `GET`  | `/compare-vendor-periods` | Metric delta between two time windows |
+| `GET`  | `/signal-effectiveness` | Per-signal type performance stats |
+
+### B2B Intelligence — Tenant Dashboard (`/api/v1/b2b/tenant/`)
+
+All endpoints are tenant-scoped to the authenticated user's tracked vendors. Require `b2b_plan`.
+
+**Vendor Management**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/vendors` | List this tenant's tracked vendors |
+| `POST` | `/vendors` | Add a vendor to the tenant's tracking list |
+| `DELETE` | `/vendors/{vendor_name}` | Remove a vendor from tracking |
+| `GET`  | `/vendors/search` | Search the global vendor registry |
+| `POST` | `/push-to-crm` | Push a high-intent company to the connected CRM |
+
+**Competitive Sets**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/competitive-sets` | List tenant competitive sets |
+| `POST` | `/competitive-sets` | Create a competitive set |
+| `PUT`  | `/competitive-sets/{id}` | Update a competitive set |
+| `DELETE` | `/competitive-sets/{id}` | Delete a competitive set |
+| `GET`  | `/competitive-sets/{id}/plan` | Preview synthesis plan before running |
+| `POST` | `/competitive-sets/{id}/run` | Trigger on-demand intelligence synthesis |
+
+**Intelligence Feeds**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/overview` | KPI summary: signal counts, risk levels, archetype breakdown |
+| `GET`  | `/signals` | Tenant-scoped churn signals with filters |
+| `GET`  | `/slow-burn-watchlist` | Slow-burn risk vendors with accumulating pressure |
+| `GET`  | `/signals/{vendor_name}` | Full vendor detail scoped to tenant |
+| `GET`  | `/accounts-in-motion-feed` | At-risk accounts with decision-maker signals |
+| `GET`  | `/vendor-history` | Metric time-series for a tracked vendor |
+| `GET`  | `/compare-vendor-periods` | Metric delta between two time windows |
+| `GET`  | `/pain-trends` | Pain category trend lines over time |
+| `GET`  | `/displacement` | Competitive displacement edges for tracked vendors |
+| `GET`  | `/pipeline` | Tenant pipeline status: enrichment lag, queue depth |
+| `GET`  | `/leads` | High-intent companies scoped to tenant vendors |
+| `GET`  | `/high-intent` | Compact high-intent list for quick scan |
+| `GET`  | `/leads/{company}` | Detailed lead profile for a single company |
+
+**Watchlist Views & Alerts**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/watchlist-views` | List saved watchlist filter configurations |
+| `POST` | `/watchlist-views` | Create a watchlist view |
+| `PUT`  | `/watchlist-views/{view_id}` | Update view filters or delivery settings |
+| `DELETE` | `/watchlist-views/{view_id}` | Delete a watchlist view |
+| `GET`  | `/watchlist-views/{view_id}/alert-events` | Alert trigger history for a view |
+| `POST` | `/watchlist-views/{view_id}/alert-events/evaluate` | Run alert rules now |
+| `GET`  | `/watchlist-views/{view_id}/alert-email-log` | Email delivery log |
+| `POST` | `/watchlist-views/{view_id}/alert-events/deliver-email` | Send alert email immediately |
+
+**Reports**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/reports` | List tenant intelligence reports with trust metadata |
+| `GET`  | `/reports/{report_id}` | Report detail with freshness and review state |
+| `POST` | `/reports/compare` | Generate a vendor comparison report |
+| `POST` | `/reports/compare-companies` | Account-level comparison report |
+| `POST` | `/reports/company-deep-dive` | Single-company deep dive |
+| `POST` | `/reports/battle-card` | Competitive battle card |
+| `GET`  | `/report-subscriptions/{scope_type}/{scope_key}` | Get recurring delivery subscription |
+| `PUT`  | `/report-subscriptions/{scope_type}/{scope_key}` | Create or update recurring delivery |
+
+**Reviews, Campaigns & Exports**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/reviews` | Tenant-scoped enriched reviews |
+| `GET`  | `/reviews/{review_id}` | Single review detail |
+| `GET`  | `/campaigns` | Outreach campaigns scoped to tenant |
+| `POST` | `/campaigns/generate` | Trigger campaign generation now |
+| `PATCH` | `/campaigns/{campaign_id}` | Update campaign status or content |
+| `GET`  | `/opportunity-dispositions` | Manual disposition overrides |
+| `POST` | `/opportunity-dispositions` | Set a disposition for an opportunity |
+| `POST` | `/opportunity-dispositions/bulk` | Bulk set dispositions |
+| `POST` | `/opportunity-dispositions/remove` | Remove disposition overrides |
+| `GET`  | `/export/signals` | CSV export of signals |
+| `GET`  | `/export/reviews` | CSV export of reviews |
+| `GET`  | `/export/high-intent` | CSV export of high-intent companies |
+| `GET`  | `/export/source-health` | CSV export of source health metrics |
+
+### B2B Evidence Explorer (`/api/v1/b2b/evidence/`)
+
+Trust layer exposing raw evidence behind every signal, report, and account card. Requires `b2b_plan`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/witnesses` | List witness records for a vendor (filters: urgency, pain category, buying stage, date) |
+| `GET`  | `/witnesses/{id}` | Single witness with full review context and company signals |
+| `GET`  | `/vault` | Evidence vault claims (weakness/strength) with citation counts |
+| `GET`  | `/trace` | Full claim-to-review reasoning trace (sample of 20 witnesses) |
+| `GET`  | `/annotations` | Human annotation overrides on witness records |
+| `POST` | `/annotations` | Add or update a witness annotation |
+| `POST` | `/annotations/remove` | Remove an annotation |
+
+### B2B Win/Loss Predictor (`/api/v1/b2b/predict/`)
+
+Aggregates displacement, churn, pain, and buyer data into a probability score with evidence. Requires `b2b_plan`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/win-loss` | Predict win probability for a target vendor vs. a challenger |
+| `POST` | `/win-loss/compare` | Head-to-head comparison across multiple challengers |
+| `GET`  | `/win-loss/recent` | Recent predictions with outcome labels |
+| `GET`  | `/win-loss/{prediction_id}` | Prediction detail with factor breakdown |
+| `GET`  | `/win-loss/{prediction_id}/csv` | Export prediction as CSV |
+
+Scoring factors: `displacement_momentum` (25%), `churn_severity` (20%), `pain_concentration` (15%), `dm_engagement` (15%), `historical_outcomes` (15%), `segment_match` (10%). Vendors with insufficient data return `is_gated=true` instead of a fake probability.
+
+### B2B Campaigns (`/api/v1/b2b/campaigns/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/` | List campaigns with status and quality filters |
+| `GET`  | `/stats` | Aggregate campaign KPIs |
+| `GET`  | `/quality-trends` | Quality score trends over time |
+| `GET`  | `/analytics/funnel` | Full outreach funnel metrics |
+| `GET`  | `/analytics/by-vendor` | Per-vendor campaign analytics |
+| `GET`  | `/suppressions` | Email suppression list |
+| `POST` | `/suppressions` | Add a suppression entry |
+| `DELETE` | `/suppressions/{id}` | Remove a suppression entry |
+| `GET`  | `/review-queue` | Campaigns awaiting human review |
+
+### B2B Scrape Management (`/api/v1/b2b/scrape/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/targets` | List active scrape targets |
+| `GET`  | `/targets/probation-telemetry` | Low-yield target diagnostics |
+| `POST` | `/targets/onboard-vendor` | Provision scrape targets for a new vendor |
+| `GET`  | `/targets/coverage-plan` | Coverage gap analysis |
+| `POST` | `/targets/coverage-plan/seed-missing-core` | Auto-provision missing core-source targets |
+
+### B2B CRM Events (`/api/v1/b2b/crm/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/events` | Ingest a single CRM event (deal_won, deal_lost, meeting_booked) |
+| `POST` | `/events/batch` | Batch ingest CRM events |
+| `POST` | `/events/hubspot` | HubSpot webhook receiver |
+| `POST` | `/events/salesforce` | Salesforce webhook receiver |
+
+### B2B Vendor Briefings (`/api/v1/b2b/briefings/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/preview` | Preview briefing content before sending |
+| `POST` | `/generate` | Generate and send a vendor intelligence briefing email |
+| `POST` | `/gate` | Check data readiness before briefing generation |
+| `POST` | `/checkout` | Schedule a recurring briefing delivery |
+
+### B2B Prospects (`/api/v1/b2b/prospects/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/` | List prospects with pipeline stage filters |
+| `GET`  | `/stats` | Prospect pipeline stats |
+| `GET`  | `/manual-queue` | Manually queued prospects awaiting review |
+| `GET`  | `/company-overrides` | Manual targeting overrides |
+
+### Consumer Product Intelligence (`/api/v1/consumer/dashboard/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/asins` | List tracked Amazon ASINs |
+| `POST` | `/asins` | Add an ASIN to tracking |
+| `DELETE` | `/asins/{asin}` | Remove an ASIN from tracking |
+| `GET`  | `/pipeline` | Enrichment pipeline health |
+| `GET`  | `/categories` | Product category list with review counts |
+| `GET`  | `/brands` | Brand list with health scores |
+| `GET`  | `/brands/compare` | Side-by-side brand comparison |
+| `GET`  | `/brands/{brand_name}` | Brand detail: health score, pain map, safety signals |
+| `GET`  | `/flows` | Churn flow visualization data |
+| `GET`  | `/features` | Feature mention matrix |
+| `GET`  | `/safety` | Safety risk signals |
+| `GET`  | `/reviews` | Enriched product reviews with filters |
+| `GET`  | `/reviews/{review_id}` | Review detail with full enrichment |
+| `GET`  | `/brand-history` | Brand health score time-series |
+
+### Strategic Intelligence (`/api/v1/intelligence/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/report` | Generate an intelligence report |
+| `POST` | `/intervention` | Trigger an intervention pipeline |
+| `GET`  | `/reports` | List intelligence reports |
+| `GET`  | `/reports/{report_id}` | Report detail |
+| `GET`  | `/pressure` | Entity pressure baseline records |
+| `GET`  | `/approvals` | Pending approval queue |
+| `GET`  | `/approvals/{approval_id}` | Approval detail |
+| `POST` | `/approvals/{approval_id}/approve` | Approve a pending action |
+| `POST` | `/approvals/{approval_id}/reject` | Reject a pending action |
+
+### Identity, Presence, Speaker ID & Recognition
+
+| Route family | Description |
+|-------------|-------------|
+| `/api/v1/identity/*` | Canonical identity records, names, creation, and modality cleanup |
+| `/api/v1/presence/*` | Occupancy status and transition history |
+| `/api/v1/speaker/*` | Speaker enrollment, verification, and enrolled-user management |
+| `/api/v1/recognition/*` | Face/gait enrollment, identification, and recognition-event history |
+
+### Alerts, Vision, Video, Security & Settings
+
+| Route family | Description |
+|-------------|-------------|
+| `/api/v1/alerts/*` | Unified cross-source alert history, rules, acknowledgements, and cleanup |
+| `/api/v1/vision/*` | Vision events, cameras, alert rules, and alert history |
+| `/api/v1/video/*` | Webcam / RTSP streams, snapshots, and recognition views |
+| `/api/v1/security/*` | Security asset telemetry, observations, and threat summaries |
+| `/api/v1/settings/*` | Voice, email, daily, intelligence, LLM, notifications, and integrations settings |
+| `/api/v1/system/*` | High-level system stats |
+
+### Additional Business Route Families
+
+| Route family | Description |
+|-------------|-------------|
+| `/api/v1/b2b/tenant/affiliates/*` | Affiliate opportunities, partner registry, and click tracking |
+| `/api/v1/b2b/vendor-targets/*` | Vendor target CRUD, claiming, and report generation |
+| `/api/v1/seller/*` | Seller-side targets, campaigns, and intelligence refresh |
+| `/api/v1/scraper/*` | Universal scrape job creation, status, results, cancel, and delete |
+| `/api/v1/actions/*` | Proactive action queue acknowledgement/dismiss flows |
+
+### Blog (`/api/v1/blog/`, `/api/v1/admin/blog/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/blog/published` | List published posts (public, no auth) |
+| `GET`  | `/blog/published/{slug}` | Single published post (public) |
+| `GET`  | `/admin/blog/drafts` | List blog drafts |
+| `GET`  | `/admin/blog/drafts/{id}` | Draft detail |
+| `PATCH` | `/admin/blog/drafts/{id}` | Edit draft content or metadata |
+| `POST` | `/admin/blog/drafts/{id}/publish` | Publish a draft |
+| `GET`  | `/admin/blog/quality-trends` | Quality score trends |
+
+### Pipeline Visibility (`/api/v1/pipeline/visibility/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/extraction-health` | Enrichment extraction success rates |
+| `GET`  | `/summary` | High-level pipeline summary |
+| `GET`  | `/watchlist-delivery` | Watchlist alert delivery health |
+| `GET`  | `/queue` | Enrichment queue state |
+| `GET`  | `/events` | Recent pipeline events |
+
+### Admin & Cost Tracking (`/api/v1/admin/costs/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/summary` | LLM cost summary (all providers) |
+| `GET`  | `/burn-dashboard` | Daily spend burn rate |
+| `GET`  | `/by-provider` | Cost breakdown by LLM provider |
+| `GET`  | `/by-model` | Cost breakdown by model |
+| `GET`  | `/by-workflow` | Cost breakdown by workflow |
+| `GET`  | `/reconciliation` | Cost reconciliation against usage data |
+
+### Autonomous Tasks (`/api/v1/autonomous/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/status/summary` | Scheduler / hook-manager status summary |
+| `GET`  | `/` | List all scheduled tasks |
+| `POST` | `/` | Create a scheduled task |
+| `GET`  | `/{task_id}` | Task detail |
+| `PUT`  | `/{task_id}` | Update a task |
+| `DELETE` | `/{task_id}` | Delete a task |
+| `POST` | `/{task_id}/run` | Trigger a task immediately |
+| `POST` | `/{task_id}/enable` | Enable and schedule a task |
+| `POST` | `/{task_id}/disable` | Disable and unschedule a task |
+| `GET`  | `/{task_id}/executions` | Task execution history |
+
+### Reasoning Events (`/api/v1/reasoning/`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/events` | Pending reasoning events |
+| `GET`  | `/locks` | Active reasoning locks |
+| `GET`  | `/queue` | Reasoning work queue |
+| `POST` | `/process/{event_id}` | Manually process a reasoning event |
+
+### WebSocket Endpoints
+
+| Path | Description |
+|------|-------------|
+| `WS /api/v1/ws/edge/{location_id}` | Edge node connection and state sync |
+| `WS /api/v1/ws/orchestrated` | Orchestrated full voice pipeline: audio in → ASR → agent → TTS |
+| `WS /api/v1/comms/voice/stream/{call_sid}` | Live telephony audio stream for calls |
+
+### OpenAI / Ollama Compatibility
+
+Atlas exposes drop-in compatibility endpoints so any OpenAI SDK or Ollama client can point at the Atlas brain server:
+
+| Path | Compatibility |
+|------|---------------|
+| `POST /v1/chat/completions` | OpenAI Chat Completions API |
+| `GET /` | Ollama root health check (`Ollama is running`) |
+| `GET /api/version` | Ollama version endpoint |
+| `POST /api/chat` | Ollama `/api/chat` |
+| `GET /api/tags` | Ollama `/api/tags` |
+
+### Webhooks
+
+| Path | Description |
+|------|-------------|
+| `GET /webhooks/unsubscribe` | One-click campaign unsubscribe page |
+| `POST /webhooks/campaign-email` | Campaign email ESP event webhook receiver |
+| `POST /webhooks/stripe` | Stripe webhook receiver (subscription lifecycle) |
 
 ---
 
