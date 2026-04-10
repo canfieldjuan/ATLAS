@@ -4063,6 +4063,117 @@ async def read_vendor_scorecard(
     return None
 
 
+async def read_vendor_scorecard_details(
+    pool,
+    *,
+    vendor_names: Iterable[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Read detailed derived scorecard rows from ``b2b_churn_signals``.
+
+    This adapter is for vendor-level fallback consumers that need the richer
+    compatibility columns from the derived scorecard table.
+    """
+    requested_vendors = _canonicalize_vendor_name_filters(vendor_names)
+    vendor_filter_clause = "WHERE LOWER(vendor_name) = ANY($1::text[])" if requested_vendors else ""
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name,
+               product_category,
+               total_reviews,
+               negative_reviews,
+               churn_intent_count,
+               avg_urgency_score,
+               top_pain_categories,
+               top_competitors,
+               top_feature_gaps,
+               price_complaint_rate,
+               decision_maker_churn_rate,
+               company_churn_list,
+               quotable_evidence,
+               last_computed_at,
+               review_window_end
+        FROM b2b_churn_signals
+        """ + vendor_filter_clause + """
+        ORDER BY vendor_name, total_reviews DESC, last_computed_at DESC
+        """,
+        *([requested_vendors] if requested_vendors else []),
+    )
+    mapped = [dict(row) for row in rows if row.get("vendor_name")]
+
+    categories_by_vendor: dict[str, set[str]] = {}
+    for row in mapped:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        if not vendor:
+            continue
+        categories_by_vendor.setdefault(vendor, set()).add(
+            str(row.get("product_category") or "").strip()
+        )
+
+    filtered: list[dict[str, Any]] = []
+    for row in mapped:
+        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        category = str(row.get("product_category") or "").strip()
+        categories = categories_by_vendor.get(vendor) or set()
+        has_specific_category = any(
+            not _is_generic_vendor_score_category(value)
+            for value in categories
+        )
+        if has_specific_category and _is_generic_vendor_score_category(category):
+            continue
+        filtered.append(row)
+    return filtered
+
+
+async def read_vendor_scorecard_detail(
+    pool,
+    vendor_name: str,
+) -> dict[str, Any] | None:
+    """Read the detailed derived scorecard row for a single vendor."""
+    rows = await read_vendor_scorecard_details(
+        pool,
+        vendor_names=[vendor_name],
+    )
+    canonical = _canonicalize_vendor(vendor_name)
+    if not canonical:
+        return None
+    for row in rows:
+        if _canonicalize_vendor(row.get("vendor_name") or "") == canonical:
+            return row
+    return None
+
+
+async def read_vendor_top_competitor_map(
+    pool,
+    *,
+    vendor_names: Iterable[Any] | None = None,
+) -> dict[str, str]:
+    """Read the top named competitor per vendor from derived scorecard rows."""
+    rows = await read_vendor_scorecard_details(
+        pool,
+        vendor_names=vendor_names,
+    )
+    result: dict[str, str] = {}
+    for row in rows:
+        vendor = str(row.get("vendor_name") or "").strip()
+        if not vendor or vendor in result:
+            continue
+        flat_competitor = str(row.get("top_competitor") or "").strip()
+        if flat_competitor:
+            result[vendor] = flat_competitor
+            continue
+        competitors = _safe_json(row.get("top_competitors"), default=[])
+        if not isinstance(competitors, list) or not competitors:
+            continue
+        first = competitors[0]
+        if isinstance(first, dict):
+            competitor = str(first.get("name") or first.get("competitor") or "").strip()
+        else:
+            competitor = str(first or "").strip()
+        if competitor:
+            result[vendor] = competitor
+    return result
+
+
 async def _fetch_vendor_churn_scores_from_signals(
     pool,
     window_days: int,

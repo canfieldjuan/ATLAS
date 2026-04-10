@@ -37,7 +37,12 @@ from ...services.vendor_registry import resolve_vendor_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...templates.email.vendor_briefing import render_vendor_briefing_html
-from ._b2b_shared import _timing_summary_payload, _reasoning_int
+from ._b2b_shared import (
+    _timing_summary_payload,
+    _reasoning_int,
+    read_vendor_intelligence,
+    read_vendor_scorecard_detail,
+)
 from .campaign_suppression import is_suppressed
 
 logger = logging.getLogger("atlas.b2b.vendor_briefing")
@@ -2413,65 +2418,18 @@ async def _fetch_displacement_dynamics(
 
 
 async def _fetch_vendor_evidence_vault(pool: Any, vendor_name: str) -> dict[str, Any] | None:
-    """Fetch the latest canonical evidence-vault row for one vendor."""
-    row = await pool.fetchrow(
-        """
-        SELECT vault
-        FROM b2b_evidence_vault
-        WHERE LOWER(vendor_name) = LOWER($1)
-          AND as_of_date <= $2
-          AND analysis_window_days = $3
-        ORDER BY as_of_date DESC, created_at DESC
-        LIMIT 1
-        """,
+    """Compatibility seam delegating canonical reads to the shared adapter."""
+    return await read_vendor_intelligence(
+        pool,
         vendor_name,
-        date.today(),
-        settings.b2b_churn.intelligence_window_days,
+        as_of=date.today(),
+        analysis_window_days=settings.b2b_churn.intelligence_window_days,
     )
-    if not row:
-        canonical_vendor = await resolve_vendor_name(vendor_name)
-        row = await pool.fetchrow(
-            """
-            SELECT vault
-            FROM b2b_evidence_vault
-            WHERE LOWER(vendor_name) = LOWER($1)
-              AND as_of_date <= $2
-              AND analysis_window_days = $3
-            ORDER BY as_of_date DESC, created_at DESC
-            LIMIT 1
-            """,
-            canonical_vendor,
-            date.today(),
-            settings.b2b_churn.intelligence_window_days,
-        )
-    if not row:
-        return None
-    vault = row.get("vault")
-    if isinstance(vault, str):
-        try:
-            vault = json.loads(vault)
-        except (json.JSONDecodeError, TypeError):
-            return None
-    return vault if isinstance(vault, dict) else None
 
 
-async def _fetch_churn_signals(pool: Any, vendor_name: str) -> dict | None:
-    """Fetch latest churn signal row for vendor."""
-    row = await pool.fetchrow(
-        """
-        SELECT total_reviews, negative_reviews, churn_intent_count,
-               avg_urgency_score, top_pain_categories, top_competitors,
-               top_feature_gaps, price_complaint_rate,
-               decision_maker_churn_rate, company_churn_list,
-               quotable_evidence, product_category
-        FROM b2b_churn_signals
-        WHERE LOWER(vendor_name) = LOWER($1)
-        ORDER BY last_computed_at DESC
-        LIMIT 1
-        """,
-        vendor_name,
-    )
-    return dict(row) if row else None
+async def _fetch_churn_signals(pool: Any, vendor_name: str) -> dict[str, Any] | None:
+    """Compatibility seam delegating derived reads to the shared adapter."""
+    return await read_vendor_scorecard_detail(pool, vendor_name)
 
 
 async def _fetch_product_profile(pool: Any, vendor_name: str) -> dict | None:
