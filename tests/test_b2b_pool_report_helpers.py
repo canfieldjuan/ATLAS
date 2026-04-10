@@ -437,6 +437,51 @@ async def test_read_vendor_signal_summary_applies_exact_vendor_filters():
 
 
 @pytest.mark.asyncio
+async def test_read_ranked_vendor_signal_rows_applies_snapshot_activity_and_suppression():
+    pool = FakePool(
+        fetch_map={
+            "WITH ranked_signals AS": [
+                {
+                    "vendor_name": "Zendesk",
+                    "product_category": "Helpdesk",
+                    "total_reviews": 300,
+                    "churn_intent_count": 22,
+                    "avg_urgency_score": 8.2,
+                    "avg_rating_normalized": 4.1,
+                    "nps_proxy": 18.2,
+                    "price_complaint_rate": 0.3,
+                    "decision_maker_churn_rate": 0.2,
+                    "keyword_spike_count": 2,
+                    "insider_signal_count": 1,
+                    "last_computed_at": None,
+                    "support_sentiment": 2.4,
+                    "legacy_support_score": 1.8,
+                    "new_feature_velocity": 0.4,
+                    "employee_growth_rate": 3.2,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_ranked_vendor_signal_rows(
+        pool,
+        vendor_names=["Zendesk"],
+        tracked_account_id="11111111-1111-1111-1111-111111111111",
+        exclude_suppressed=True,
+        require_snapshot_activity=True,
+        limit=10,
+    )
+
+    score_call = next(call for call in pool.calls if "WITH ranked_signals AS" in call[0])
+    assert score_call[1] == ("11111111-1111-1111-1111-111111111111", ["zendesk"], 10)
+    assert "snap.support_sentiment IS NOT NULL" in score_call[0]
+    assert "LOWER(sig.vendor_name) = ANY($2::text[])" in score_call[0]
+    assert "dc.entity_type = 'churn_signal'" in score_call[0]
+    assert rows[0]["employee_growth_rate"] == 3.2
+    assert rows[0]["keyword_spike_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_read_market_landscape_candidates_uses_category_vendor_floor():
     pool = FakePool(
         fetch_map={

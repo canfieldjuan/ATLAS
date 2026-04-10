@@ -1795,88 +1795,18 @@ async def list_tenant_slow_burn_watchlist(
     vendor_alert_threshold = _safe_float(vendor_alert_threshold)
     stale_days_threshold = _coerce_optional_int(stale_days_threshold)
     limit = _coerce_optional_int(limit) or 10
-
-    conditions = [
-        "("
-        "snap.support_sentiment IS NOT NULL OR "
-        "snap.legacy_support_score IS NOT NULL OR "
-        "snap.new_feature_velocity IS NOT NULL OR "
-        "snap.employee_growth_rate IS NOT NULL"
-        ")",
-    ]
-    params: list = []
-    idx = 1
-
     t_params = _tenant_params(user)
-    scope = _vendor_scope_sql(idx, user)
-    if scope != "TRUE":
-        conditions.append(f"sig.{scope}")
-        params.extend(t_params)
-        idx += 1
+    tracked_account_id = t_params[0] if t_params else None
+    from ..autonomous.tasks._b2b_shared import read_ranked_vendor_signal_rows
 
-    if vendor_names:
-        conditions.append(f"LOWER(sig.vendor_name) = ANY(${idx}::text[])")
-        params.append([v.lower() for v in vendor_names])
-        idx += 1
-    elif vendor_name:
-        conditions.append(f"sig.vendor_name ILIKE '%' || ${idx} || '%'")
-        params.append(vendor_name)
-        idx += 1
-
-    if category:
-        conditions.append(f"sig.product_category = ${idx}")
-        params.append(category)
-        idx += 1
-
-    where = f"WHERE {' AND '.join(conditions)}"
-    params.append(min(limit, 100))
-
-    rows = await pool.fetch(
-        f"""
-        WITH ranked_signals AS (
-            SELECT sig.vendor_name, sig.product_category, sig.total_reviews,
-                   sig.churn_intent_count, sig.avg_urgency_score, sig.avg_rating_normalized,
-                   sig.nps_proxy, sig.price_complaint_rate, sig.decision_maker_churn_rate,
-                   snap.support_sentiment AS support_sentiment,
-                   snap.legacy_support_score AS legacy_support_score,
-                   snap.new_feature_velocity AS new_feature_velocity,
-                   snap.employee_growth_rate AS employee_growth_rate,
-                   sig.last_computed_at,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY sig.vendor_name
-                       ORDER BY sig.avg_urgency_score DESC,
-                                sig.total_reviews DESC,
-                                sig.last_computed_at DESC NULLS LAST,
-                                sig.product_category ASC NULLS LAST
-                   ) AS vendor_row_rank
-            FROM b2b_churn_signals sig
-            LEFT JOIN LATERAL (
-                SELECT support_sentiment, legacy_support_score,
-                       new_feature_velocity, employee_growth_rate
-                FROM b2b_vendor_snapshots snap
-                WHERE snap.vendor_name = sig.vendor_name
-                ORDER BY snap.snapshot_date DESC
-                LIMIT 1
-            ) snap ON TRUE
-            {where}
-        )
-        SELECT vendor_name, product_category, total_reviews,
-               churn_intent_count, avg_urgency_score, avg_rating_normalized,
-               nps_proxy, price_complaint_rate, decision_maker_churn_rate,
-               support_sentiment, legacy_support_score,
-               new_feature_velocity, employee_growth_rate,
-               last_computed_at
-        FROM ranked_signals
-        WHERE vendor_row_rank = 1
-        ORDER BY employee_growth_rate DESC NULLS LAST,
-                 support_sentiment ASC NULLS LAST,
-                 legacy_support_score ASC NULLS LAST,
-                 new_feature_velocity DESC NULLS LAST,
-                 avg_urgency_score DESC,
-                 last_computed_at DESC NULLS LAST
-        LIMIT ${idx}
-        """,
-        *params,
+    rows = await read_ranked_vendor_signal_rows(
+        pool,
+        vendor_name_query=None if vendor_names else vendor_name,
+        vendor_names=vendor_names,
+        product_category=category,
+        tracked_account_id=tracked_account_id,
+        require_snapshot_activity=True,
+        limit=limit,
     )
 
     signals = [
