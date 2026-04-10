@@ -976,6 +976,7 @@ async def test_probation_telemetry_endpoint_summarizes_rates():
         with patch("atlas_brain.api.b2b_scrape.settings", MagicMock(b2b_scrape=cfg)):
             result = await probation_telemetry(limit=100, lookback_days=None)
 
+    assert result["basis"] == "raw_source_target_provenance"
     assert result["probation_targets"] == 1
     assert result["summary"]["targets_with_runs"] == 1
     target = result["targets"][0]
