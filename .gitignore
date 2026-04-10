@@ -97,3 +97,5 @@ requirements.freeze.bak
 .claude/
 .vercel
 .env*.local
+.playwright-mcp/
+*.png

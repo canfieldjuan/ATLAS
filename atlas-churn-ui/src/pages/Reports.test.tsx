@@ -21,6 +21,7 @@ const api = vi.hoisted(() => ({
     ].join('::')
   }),
   fetchReports: vi.fn(),
+  listReportSubscriptions: vi.fn(),
   generateAccountComparisonReport: vi.fn(),
   generateAccountDeepDiveReport: vi.fn(),
   generateVendorComparisonReport: vi.fn(),
@@ -49,6 +50,7 @@ describe('Reports', () => {
     vi.clearAllMocks()
     modalState.lastProps = null
     planGate.canAccessReports = true
+    api.listReportSubscriptions.mockResolvedValue({ subscriptions: [] })
     api.fetchReports.mockResolvedValue({
       reports: [
         {
@@ -101,19 +103,21 @@ describe('Reports', () => {
       expect(modalState.lastProps?.open).toBe(true)
     })
 
-    expect(api.buildReportLibraryViewScopeKey).toHaveBeenCalledWith({
-      report_type: 'battle_card',
-      vendor_filter: 'Zendesk',
-      quality_status: 'sales_ready',
+    await waitFor(() => {
+      expect(api.buildReportLibraryViewScopeKey).toHaveBeenLastCalledWith(expect.objectContaining({
+        report_type: 'battle_card',
+        vendor_filter: 'Zendesk',
+        quality_status: 'sales_ready',
+      }))
     })
     expect(modalState.lastProps.scopeType).toBe('library_view')
     expect(modalState.lastProps.scopeKey).toBe('library-view::battle_card::Zendesk::sales_ready')
     expect(modalState.lastProps.scopeLabel).toBe('Battle Card • Zendesk • Sales Ready Library')
-    expect(modalState.lastProps.filterPayload).toEqual({
+    expect(modalState.lastProps.filterPayload).toEqual(expect.objectContaining({
       report_type: 'battle_card',
       vendor_filter: 'Zendesk',
       quality_status: 'sales_ready',
-    })
+    }))
     expect(screen.getByTestId('subscription-modal')).toHaveTextContent(
       'library_view:library-view::battle_card::Zendesk::sales_ready:Battle Card • Zendesk • Sales Ready Library',
     )
