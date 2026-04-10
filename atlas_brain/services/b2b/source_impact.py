@@ -244,7 +244,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
     ),
     "trustpilot": _profile(
         "trustpilot",
-        source_family="community_signal",
+        source_family="structured_review",
         expansion_stage="query_tune_social_source",
         work_type=("query_strategy",),
         reliable_fields=(
@@ -384,7 +384,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
     ),
     "sourceforge": _profile(
         "sourceforge",
-        source_family="developer_context",
+        source_family="structured_review",
         expansion_stage="conditional_context_expansion",
         work_type=("scrape_coverage",),
         reliable_fields=(
@@ -399,7 +399,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
     ),
     "slashdot": _profile(
         "slashdot",
-        source_family="developer_context",
+        source_family="structured_review",
         expansion_stage="conditional_context_expansion",
         work_type=("scrape_coverage",),
         reliable_fields=(
@@ -610,6 +610,8 @@ def get_consumer_wiring_baseline() -> dict[str, Any]:
         },
     ]
     return {
+        "baseline_mode": "static_code_inventory",
+        "measured": False,
         "summary": {
             "total_consumers": len(consumers),
             "canonical_consumers": sum(
@@ -680,6 +682,9 @@ async def summarize_source_field_baseline(
     pain_present_sql = _build_non_empty_text_check(
         "enrichment->>'pain_category'"
     )
+    content_classification_present_sql = _build_non_empty_text_check(
+        "enrichment->>'content_classification'"
+    )
     conditions = [
         "duplicate_of_review_id IS NULL",
         "imported_at >= NOW() - make_interval(days => $1)",
@@ -716,7 +721,13 @@ async def summarize_source_field_baseline(
                     COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
                 ) > 0
             ) AS quote_rows,
-            COUNT(*) FILTER (WHERE {pain_present_sql}) AS pain_rows
+            COUNT(*) FILTER (WHERE {pain_present_sql}) AS pain_rows,
+            COUNT(*) FILTER (
+                WHERE {content_classification_present_sql}
+            ) AS content_classification_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment->>'support_escalation' = 'true'
+            ) AS support_escalation_rows
         FROM b2b_reviews
         WHERE {where}
         GROUP BY source
@@ -735,7 +746,36 @@ async def summarize_source_field_baseline(
                 "display_name": source_display_name(row["source"]),
                 "total_reviews": total,
                 "enriched_reviews": enriched,
+                "enrichment_rate": _compute_coverage_ratio(enriched, total),
                 "coverage": {
+                    "title": _compute_coverage_ratio(row["title_rows"], enriched),
+                    "company": _compute_coverage_ratio(row["company_rows"], enriched),
+                    "company_size": _compute_coverage_ratio(
+                        row["company_size_rows"],
+                        enriched,
+                    ),
+                    "industry": _compute_coverage_ratio(row["industry_rows"], enriched),
+                    "decision_maker": _compute_coverage_ratio(
+                        row["decision_maker_rows"],
+                        enriched,
+                    ),
+                    "competitors": _compute_coverage_ratio(
+                        row["competitor_rows"],
+                        enriched,
+                    ),
+                    "timing": _compute_coverage_ratio(row["timing_rows"], enriched),
+                    "quotes": _compute_coverage_ratio(row["quote_rows"], enriched),
+                    "pain_category": _compute_coverage_ratio(row["pain_rows"], enriched),
+                    "content_classification": _compute_coverage_ratio(
+                        row["content_classification_rows"],
+                        enriched,
+                    ),
+                    "support_escalation": _compute_coverage_ratio(
+                        row["support_escalation_rows"],
+                        enriched,
+                    ),
+                },
+                "coverage_of_total_reviews": {
                     "title": _compute_coverage_ratio(row["title_rows"], total),
                     "company": _compute_coverage_ratio(row["company_rows"], total),
                     "company_size": _compute_coverage_ratio(
@@ -754,6 +794,14 @@ async def summarize_source_field_baseline(
                     "timing": _compute_coverage_ratio(row["timing_rows"], total),
                     "quotes": _compute_coverage_ratio(row["quote_rows"], total),
                     "pain_category": _compute_coverage_ratio(row["pain_rows"], total),
+                    "content_classification": _compute_coverage_ratio(
+                        row["content_classification_rows"],
+                        total,
+                    ),
+                    "support_escalation": _compute_coverage_ratio(
+                        row["support_escalation_rows"],
+                        total,
+                    ),
                 },
                 "raw_counts": {
                     "title_rows": int(row["title_rows"] or 0),
@@ -765,6 +813,12 @@ async def summarize_source_field_baseline(
                     "timing_rows": int(row["timing_rows"] or 0),
                     "quote_rows": int(row["quote_rows"] or 0),
                     "pain_rows": int(row["pain_rows"] or 0),
+                    "content_classification_rows": int(
+                        row["content_classification_rows"] or 0
+                    ),
+                    "support_escalation_rows": int(
+                        row["support_escalation_rows"] or 0
+                    ),
                 },
             }
         )
