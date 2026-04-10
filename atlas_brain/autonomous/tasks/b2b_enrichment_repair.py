@@ -2019,27 +2019,51 @@ async def retry_quarantined_reviews(
     Returns counts of recovered, still_failed, skipped reviews.
     """
     retryable_reasons = sorted(_RETRYABLE_QUARANTINE_REASONS)
-    rows = await pool.fetch(
+    candidate_summary = await pool.fetchrow(
         """
-        SELECT id, enrichment, source, rating, rating_max,
-               review_text, summary, pros, cons,
-               vendor_name, reviewer_company, raw_metadata,
-               low_fidelity_reasons
-        FROM b2b_reviews
-        WHERE enrichment_status = 'quarantined'
-          AND enrichment IS NOT NULL
-          AND (enrichment->>'enrichment_schema_version')::int >= 1
-          AND low_fidelity_reasons ?| $2::text[]
-        ORDER BY created_at DESC
-        LIMIT $1
+        WITH candidate_window AS (
+            SELECT id, created_at, low_fidelity_reasons
+            FROM b2b_reviews
+            WHERE enrichment_status = 'quarantined'
+              AND enrichment IS NOT NULL
+              AND (enrichment->>'enrichment_schema_version')::int >= 1
+            ORDER BY created_at DESC
+            LIMIT $1
+        )
+        SELECT
+            COUNT(*) FILTER (
+                WHERE NOT COALESCE(low_fidelity_reasons, '[]'::jsonb) ?| $2::text[]
+            ) AS skipped,
+            COALESCE(
+                array_agg(id ORDER BY created_at DESC) FILTER (
+                    WHERE COALESCE(low_fidelity_reasons, '[]'::jsonb) ?| $2::text[]
+                ),
+                ARRAY[]::uuid[]
+            ) AS retryable_ids
+        FROM candidate_window
         """,
         limit,
         retryable_reasons,
     )
+    retryable_ids = list((candidate_summary or {}).get("retryable_ids") or [])
+    rows = []
+    if retryable_ids:
+        rows = await pool.fetch(
+            """
+            SELECT id, enrichment, source, rating, rating_max,
+                   review_text, summary, pros, cons,
+                   vendor_name, reviewer_company, raw_metadata,
+                   low_fidelity_reasons
+            FROM b2b_reviews
+            WHERE id = ANY($1::uuid[])
+            ORDER BY created_at DESC
+            """,
+            retryable_ids,
+        )
 
     recovered = 0
     still_failed = 0
-    skipped = 0
+    skipped = int((candidate_summary or {}).get("skipped") or 0)
 
     for row in rows:
         enrichment = base_enrichment._coerce_json_dict(row.get("enrichment"))
@@ -2076,8 +2100,9 @@ async def retry_quarantined_reviews(
             still_failed += 1
             logger.debug("Quarantine retry: still failing for %s", row["id"], exc_info=True)
 
+    candidate_count = skipped + len(rows)
     logger.info(
         "Quarantine retry: recovered=%d, still_failed=%d, skipped=%d (of %d)",
-        recovered, still_failed, skipped, len(rows),
+        recovered, still_failed, skipped, candidate_count,
     )
     return {"recovered": recovered, "still_failed": still_failed, "skipped": skipped}

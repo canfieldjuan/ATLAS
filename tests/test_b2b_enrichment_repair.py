@@ -140,6 +140,44 @@ async def test_repair_single_promotes_structural_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_retry_quarantined_reviews_counts_non_retryable_candidates_as_skipped(monkeypatch):
+    row_id = uuid4()
+    pool = SimpleNamespace(
+        fetchrow=AsyncMock(return_value={"skipped": 2, "retryable_ids": [row_id]}),
+        fetch=AsyncMock(return_value=[{
+            "id": row_id,
+            "enrichment": {"enrichment_schema_version": 1},
+            "source": "reddit",
+            "rating": 2.0,
+            "rating_max": 5,
+            "review_text": "pricing issue",
+            "summary": "pricing issue",
+            "pros": "",
+            "cons": "",
+            "vendor_name": "Example",
+            "reviewer_company": "",
+            "raw_metadata": {},
+            "low_fidelity_reasons": ["evidence_engine_compute_failure"],
+        }]),
+        execute=AsyncMock(return_value="UPDATE 1"),
+    )
+    monkeypatch.setattr(
+        repair_mod.base_enrichment,
+        "_finalize_enrichment_for_persist",
+        lambda enrichment, row: (enrichment, None),
+    )
+
+    result = await repair_mod.retry_quarantined_reviews(pool, limit=3)
+
+    assert result == {"recovered": 1, "still_failed": 0, "skipped": 2}
+    fetchrow_query = pool.fetchrow.await_args.args[0]
+    assert "WITH candidate_window AS" in fetchrow_query
+    assert "COUNT(*) FILTER" in fetchrow_query
+    fetch_query = pool.fetch.await_args.args[0]
+    assert "WHERE id = ANY($1::uuid[])" in fetch_query
+
+
+@pytest.mark.asyncio
 async def test_call_repair_extractor_uses_exact_cache_hit(monkeypatch):
     cached_response = {
         "response_text": json.dumps({"competitors_mentioned": ["HubSpot"]}),
