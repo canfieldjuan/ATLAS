@@ -1899,7 +1899,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             rounds += 1
             break
 
-        if round_promoted == 0 and round_shadowed == 0:
+        if round_total > 0 and round_promoted == 0:
             consecutive_no_progress += 1
         else:
             consecutive_no_progress = 0
