@@ -32,6 +32,7 @@ from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_shared import _fetch_review_funnel_audit
 from ._b2b_witnesses import (
     derive_evidence_spans,
     derive_operating_model_shift,
@@ -3553,6 +3554,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         **batch_metrics,
         "_skip_synthesis": "B2B enrichment complete",
     }
+    result["funnel_audit"] = await _fetch_review_funnel_audit(
+        pool,
+        int(getattr(cfg, "intelligence_window_days", 30) or 30),
+    )
     if requeued:
         result["version_upgrade_requeued"] = requeued
 

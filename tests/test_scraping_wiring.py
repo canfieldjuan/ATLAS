@@ -44,12 +44,16 @@ def test_rate_limiter_includes_x_domain_from_config():
     assert limiter._rpm_map["slashdot.org"] == 8
 
 
-def test_structured_sources_match_verified_review_platforms():
+def test_structured_sources_extend_verified_review_platforms_without_claiming_verification():
     from atlas_brain.services.scraping.sources import ReviewSource, STRUCTURED_SOURCES
     from atlas_brain.services.scraping.sources import VERIFIED_SOURCES
 
-    assert STRUCTURED_SOURCES == VERIFIED_SOURCES
+    assert VERIFIED_SOURCES < STRUCTURED_SOURCES
     assert ReviewSource.SOFTWARE_ADVICE in STRUCTURED_SOURCES
+    assert ReviewSource.SOURCEFORGE in STRUCTURED_SOURCES
+    assert ReviewSource.SLASHDOT in STRUCTURED_SOURCES
+    assert ReviewSource.SOURCEFORGE not in VERIFIED_SOURCES
+    assert ReviewSource.SLASHDOT not in VERIFIED_SOURCES
 
 
 def test_default_source_allowlist_includes_developer_sources_and_excludes_noise():

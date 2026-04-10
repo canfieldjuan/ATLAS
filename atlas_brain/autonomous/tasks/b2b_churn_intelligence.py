@@ -3660,6 +3660,7 @@ async def gather_intelligence_data(
         "competitive_flows": len(data["competitive_disp"]),
         "pain_categories": len(data["pain_dist"]),
         "feature_gaps": len(data["feature_gaps"]),
+        "funnel_audit": dict((data.get("data_context") or {}).get("funnel_audit") or {}),
     }
     if raw_artifacts is not None:
         result["raw_artifacts"] = raw_artifacts

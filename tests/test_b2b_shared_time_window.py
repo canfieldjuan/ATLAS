@@ -10,7 +10,7 @@ def test_eligible_review_filters_uses_stable_review_timestamp():
     sql = mod._eligible_review_filters(window_param=1, source_param=2)
 
     assert "COALESCE(reviewed_at, imported_at, enriched_at)" in sql
-    assert "enrichment_status = 'enriched'" in sql
+    assert "enrichment_status IN ('enriched', 'no_signal', 'quarantined')" in sql
     assert "duplicate_of_review_id IS NULL" in sql
     assert "source = ANY($2::text[])" in sql
 
