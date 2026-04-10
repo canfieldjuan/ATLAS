@@ -1805,7 +1805,7 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
     )
 
     counts = await pool.fetchrow(
-        """
+        f"""
         SELECT COUNT(*) AS total_reviews,
                COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched
         FROM b2b_reviews
@@ -1818,7 +1818,7 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
     # APPROVED-ENRICHMENT-READ: pain_category
     # Reason: aggregation, GROUP BY + COUNT
     pain_rows = await pool.fetch(
-        """
+        f"""
         SELECT enrichment->>'pain_category' AS pain, COUNT(*) AS cnt
         FROM b2b_reviews
         WHERE vendor_name ILIKE '%' || $1 || '%'
