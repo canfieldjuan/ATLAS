@@ -161,6 +161,8 @@ export default function ProspectsPage() {
   const [editingOverrideId, setEditingOverrideId] = useState<string | null>(null)
   const [overrideForm, setOverrideForm] = useState({ company_name_raw: '', search_names: '', domains: '' })
   const [overrideLoading, setOverrideLoading] = useState(false)
+  const [bootstrapLoading, setBootstrapLoading] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => setCoDebouncedSearch(coSearch), 300)
@@ -184,12 +186,12 @@ export default function ProspectsPage() {
     [debouncedSearch, statusFilter, seniorityFilter],
   )
 
-  const { data: mqData, loading: mqLoading, error: mqError, refresh: mqRefresh } = useApiData(
+  const { data: mqData, loading: mqLoading, error: mqError, refresh: mqRefresh, refreshing: mqRefreshing } = useApiData(
     () => fetchManualQueue({ company: mqDebouncedSearch || undefined, limit: 200 }),
     [mqDebouncedSearch],
   )
 
-  const { data: coData, loading: coLoading, error: coError, refresh: coRefresh } = useApiData(
+  const { data: coData, loading: coLoading, error: coError, refresh: coRefresh, refreshing: coRefreshing } = useApiData(
     () => fetchCompanyOverrides({ company: coDebouncedSearch || undefined }),
     [coDebouncedSearch],
   )
@@ -449,24 +451,29 @@ export default function ProspectsPage() {
     {
       key: 'actions',
       header: 'Actions',
-      render: (r) => (
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => startEditOverride(r)}
-            className="text-slate-400 hover:text-cyan-400"
-            title="Edit"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => handleDeleteOverride(r.id)}
-            className="text-slate-400 hover:text-red-400"
-            title="Delete"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ),
+      render: (r) => {
+        if (!r.id) return <span className="text-xs text-slate-500">settings</span>
+        return (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => startEditOverride(r)}
+              disabled={deletingId === r.id}
+              className="text-slate-400 hover:text-cyan-400 disabled:opacity-50"
+              title="Edit"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => handleDeleteOverride(r.id)}
+              disabled={deletingId === r.id}
+              className="text-slate-400 hover:text-red-400 disabled:opacity-50"
+              title="Delete"
+            >
+              {deletingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+        )
+      },
     },
   ]
 
@@ -528,22 +535,28 @@ export default function ProspectsPage() {
 
   const handleDeleteOverride = async (id: string) => {
     if (!confirm('Delete this company override?')) return
+    setDeletingId(id)
     try {
       await deleteCompanyOverride(id)
       setActionResult('Override deleted')
       coRefresh()
     } catch (err) {
       setActionResult(err instanceof Error ? err.message : 'Delete failed')
+    } finally {
+      setDeletingId(null)
     }
   }
 
   const handleBootstrap = async () => {
+    setBootstrapLoading(true)
     try {
       const result = await bootstrapCompanyOverrides()
       setActionResult(`Bootstrapped ${result.imported} override(s) from settings`)
       coRefresh()
     } catch (err) {
       setActionResult(err instanceof Error ? err.message : 'Bootstrap failed')
+    } finally {
+      setBootstrapLoading(false)
     }
   }
 
@@ -598,10 +611,10 @@ export default function ProspectsPage() {
               else if (activeTab === 'manual_queue') mqRefresh()
               else coRefresh()
             }}
-            disabled={refreshing}
+            disabled={activeTab === 'prospects' ? refreshing : activeTab === 'manual_queue' ? mqRefreshing : coRefreshing}
             className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
           >
-            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            <RefreshCw className={clsx('h-4 w-4', (activeTab === 'prospects' ? refreshing : activeTab === 'manual_queue' ? mqRefreshing : coRefreshing) && 'animate-spin')} />
             Refresh
           </button>
         </div>
@@ -828,10 +841,11 @@ export default function ProspectsPage() {
               </button>
               <button
                 onClick={handleBootstrap}
-                className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors"
+                disabled={bootstrapLoading}
+                className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors disabled:opacity-50"
               >
-                <Building2 className="h-4 w-4" />
-                Bootstrap from Settings
+                {bootstrapLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Building2 className="h-4 w-4" />}
+                {bootstrapLoading ? 'Bootstrapping...' : 'Bootstrap from Settings'}
               </button>
             </div>
           </div>
