@@ -96,6 +96,40 @@ def test_plan_to_synthesis_metadata_emits_explicit_scope_contract():
 
 
 @pytest.mark.asyncio
+async def test_load_vendor_category_map_prefers_profiles_before_scorecard_fallback(monkeypatch):
+    from atlas_brain.services import b2b_competitive_sets as mod
+
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    class FakePool:
+        async def fetch(self, query, *args):
+            normalized = " ".join(str(query).split())
+            calls.append((normalized, args))
+            if "FROM requested r LEFT JOIN b2b_product_profiles p" not in normalized:
+                raise AssertionError(f"Unexpected query: {normalized}")
+            return [
+                {"vendor_name": "Salesforce", "product_category": "CRM"},
+                {"vendor_name": "HubSpot", "product_category": None},
+            ]
+
+    adapter = AsyncMock(return_value=[
+        {"vendor_name": "Salesforce", "product_category": "B2B Software"},
+        {"vendor_name": "HubSpot", "product_category": "CRM"},
+    ])
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.read_vendor_scorecard_details",
+        adapter,
+    )
+
+    result = await mod.load_vendor_category_map(FakePool(), ["Salesforce", "HubSpot"])
+
+    assert adapter.await_count == 1
+    assert adapter.await_args.kwargs == {"vendor_names": ["Salesforce", "HubSpot"]}
+    assert len(calls) == 1
+    assert result == {"salesforce": "CRM", "hubspot": "CRM"}
+
+
+@pytest.mark.asyncio
 async def test_create_competitive_set_trims_name_before_duplicate_lookup(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 
