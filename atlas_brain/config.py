@@ -2506,6 +2506,24 @@ class B2BChurnConfig(BaseSettings):
         le=10,
         description="Minimum urgency score for repair unless leave/eval pressure is already present",
     )
+    enrichment_repair_orphan_timeout_minutes: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="Minutes before a row stuck in repairing status is recovered as orphaned",
+    )
+    enrichment_repair_failure_rate_threshold: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=1.0,
+        description="Fraction of failed rows in a single round that triggers the circuit breaker",
+    )
+    enrichment_repair_no_progress_max_rounds: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Consecutive rounds with zero promotions before circuit breaker trips",
+    )
     enrichment_low_fidelity_enabled: bool = Field(
         default=True,
         description="Enable deterministic quarantine of low-fidelity enriched rows",

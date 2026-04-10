@@ -35,7 +35,7 @@ async def test_recover_orphaned_repairing_handles_legacy_null_timestamp():
     assert recovered == 2
     query = pool.execute.await_args.args[0]
     assert 'enrichment_repaired_at IS NULL' in query
-    assert 'OR enrichment_repaired_at < NOW() - INTERVAL \'30 minutes\'' in query
+    assert 'make_interval(mins => $2)' in query
 
 
 @pytest.mark.asyncio

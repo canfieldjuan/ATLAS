@@ -1244,7 +1244,7 @@ async def _quarantine_shadowed_hard_gap_rows(pool, *, limit: int) -> int:
         return 0
 
 
-async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
+async def _recover_orphaned_repairing(pool, max_attempts: int, orphan_timeout_minutes: int = 30) -> int:
     result = await pool.execute(
         """
         UPDATE b2b_reviews
@@ -1256,10 +1256,11 @@ async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
         WHERE enrichment_repair_status = 'repairing'
           AND (
                 enrichment_repaired_at IS NULL
-                OR enrichment_repaired_at < NOW() - INTERVAL '30 minutes'
+                OR enrichment_repaired_at < NOW() - make_interval(mins => $2)
               )
         """,
         max_attempts,
+        orphan_timeout_minutes,
     )
     try:
         return int(str(result).split()[-1])
@@ -1715,7 +1716,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
-    orphaned = await _recover_orphaned_repairing(pool, cfg.enrichment_repair_max_attempts)
+    orphaned = await _recover_orphaned_repairing(
+        pool, cfg.enrichment_repair_max_attempts,
+        orphan_timeout_minutes=int(getattr(cfg, 'enrichment_repair_orphan_timeout_minutes', 30)),
+    )
     task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
     max_batch = base_enrichment._coerce_int_override(
         task_metadata.get("enrichment_repair_max_per_batch"),
@@ -1777,6 +1781,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     rounds = 0
     consecutive_no_progress = 0
     circuit_breaker_reason = None
+    failure_rate_threshold = float(getattr(cfg, 'enrichment_repair_failure_rate_threshold', 0.5))
+    no_progress_max_rounds = int(getattr(cfg, 'enrichment_repair_no_progress_max_rounds', 3))
     strict_discussion_sources, strict_discussion_content_types = _strict_discussion_lists(cfg)
     low_signal_discussion_skipped = await _skip_low_signal_strict_discussion_rows(
         pool,
@@ -1893,7 +1899,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         round_failed = result.get("failed", 0)
         round_total = round_promoted + round_shadowed + round_failed
 
-        if round_total > 0 and round_failed > round_total * 0.5:
+        if round_total > 0 and round_failed > round_total * failure_rate_threshold:
             circuit_breaker_reason = f"high failure rate ({round_failed}/{round_total})"
             logger.warning("Enrichment repair circuit breaker: %s in round %d", circuit_breaker_reason, rounds + 1)
             rounds += 1
@@ -1904,7 +1910,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         else:
             consecutive_no_progress = 0
 
-        if consecutive_no_progress >= 3:
+        if consecutive_no_progress >= no_progress_max_rounds:
             circuit_breaker_reason = f"{consecutive_no_progress} consecutive rounds with no repair progress"
             logger.warning("Enrichment repair circuit breaker: %s", circuit_breaker_reason)
             rounds += 1
