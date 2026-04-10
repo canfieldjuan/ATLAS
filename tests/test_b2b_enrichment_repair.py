@@ -27,6 +27,18 @@ def test_repair_batch_custom_id_is_anthropic_safe():
 
 
 @pytest.mark.asyncio
+async def test_recover_orphaned_repairing_handles_legacy_null_timestamp():
+    pool = SimpleNamespace(execute=AsyncMock(return_value='UPDATE 2'))
+
+    recovered = await repair_mod._recover_orphaned_repairing(pool, 3)
+
+    assert recovered == 2
+    query = pool.execute.await_args.args[0]
+    assert 'enrichment_repaired_at IS NULL' in query
+    assert 'OR enrichment_repaired_at < NOW() - INTERVAL \'30 minutes\'' in query
+
+
+@pytest.mark.asyncio
 async def test_run_skips_when_repair_disabled(monkeypatch):
     monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
     monkeypatch.setattr(

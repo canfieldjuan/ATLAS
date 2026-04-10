@@ -1229,7 +1229,10 @@ async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
                 ELSE NULL
             END
         WHERE enrichment_repair_status = 'repairing'
-          AND enrichment_repaired_at < NOW() - INTERVAL '30 minutes'
+          AND (
+                enrichment_repaired_at IS NULL
+                OR enrichment_repaired_at < NOW() - INTERVAL '30 minutes'
+              )
         """,
         max_attempts,
     )
