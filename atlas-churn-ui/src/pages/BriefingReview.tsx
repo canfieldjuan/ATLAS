@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Mail,
   RefreshCw,
@@ -11,6 +12,7 @@ import {
   Eye,
   X,
   Download,
+  ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '../hooks/useApiData'
@@ -368,7 +370,7 @@ export default function BriefingReview() {
                               <Mail className="h-3 w-3" />
                               <span className="text-slate-300">{briefing.recipient_email}</span>
                               <Link
-                                to={`/reports?vendor=${encodeURIComponent(briefing.vendor_name)}`}
+                                to={`/reports?vendor_filter=${encodeURIComponent(briefing.vendor_name)}`}
                                 className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 ml-2"
                                 onClick={(e) => e.stopPropagation()}
                               >

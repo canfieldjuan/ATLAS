@@ -29,7 +29,12 @@ from ..services.tracing import (
 )
 from ..services.scraping.capabilities import get_capability
 from ..services.scraping.sources import ALL_SOURCES, ReviewSource, display_name as source_display_name
-from ..autonomous.tasks._b2b_shared import read_high_intent_companies
+from ..autonomous.tasks._b2b_shared import (
+    read_high_intent_companies,
+    read_vendor_signal_detail,
+    read_vendor_signal_rows,
+    read_vendor_signal_summary,
+)
 from ..storage.database import get_db_pool
 
 logger = logging.getLogger("atlas.api.b2b_dashboard")
@@ -269,74 +274,25 @@ async def list_signals(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
-    conditions: list[str] = []
-    params: list = []
-    idx = 1
-
-    if _should_scope(user):
-        conditions.append(f"vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)")
-        params.append(user.account_id)
-        idx += 1
-
-    if vendor_name:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-        params.append(vendor_name)
-        idx += 1
-
-    if min_urgency > 0:
-        conditions.append(f"avg_urgency_score >= ${idx}")
-        params.append(min_urgency)
-        idx += 1
-
-    if category:
-        conditions.append(f"product_category = ${idx}")
-        params.append(category)
-        idx += 1
-
-    conditions.append(_suppress_predicate('churn_signal'))
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    summary_params = list(params)  # snapshot before adding limit
-
-    capped = min(limit, 100)
-    params.append(capped)
-
-    rows = await pool.fetch(
-        f"""
-        SELECT sig.vendor_name, sig.product_category, sig.total_reviews,
-               sig.churn_intent_count, sig.avg_urgency_score, sig.avg_rating_normalized,
-               sig.nps_proxy, sig.price_complaint_rate, sig.decision_maker_churn_rate,
-               snap.support_sentiment AS support_sentiment,
-               snap.legacy_support_score AS legacy_support_score,
-               snap.new_feature_velocity AS new_feature_velocity,
-               snap.employee_growth_rate AS employee_growth_rate,
-               sig.keyword_spike_count, sig.insider_signal_count,
-               sig.last_computed_at
-        FROM b2b_churn_signals sig
-        LEFT JOIN LATERAL (
-            SELECT support_sentiment, legacy_support_score,
-                   new_feature_velocity, employee_growth_rate
-            FROM b2b_vendor_snapshots snap
-            WHERE snap.vendor_name = sig.vendor_name
-            ORDER BY snap.snapshot_date DESC
-            LIMIT 1
-        ) snap ON TRUE
-        {where}
-        ORDER BY avg_urgency_score DESC
-        LIMIT ${idx}
-        """,
-        *params,
+    tracked_account_id = user.account_id if _should_scope(user) else None
+    rows = await read_vendor_signal_rows(
+        pool,
+        vendor_name_query=vendor_name,
+        min_urgency=min_urgency,
+        product_category=category,
+        tracked_account_id=tracked_account_id,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+        limit=limit,
     )
 
-    # Summary stats (not subject to LIMIT) for dashboard stat cards
-    summary = await pool.fetchrow(
-        f"""
-        SELECT COUNT(DISTINCT vendor_name) AS total_vendors,
-               COUNT(*) FILTER (WHERE avg_urgency_score >= 7) AS high_urgency_count,
-               COALESCE(SUM(total_reviews), 0) AS total_signal_reviews
-        FROM b2b_churn_signals
-        {where}
-        """,
-        *summary_params,
+    summary = await read_vendor_signal_summary(
+        pool,
+        vendor_name_query=vendor_name,
+        min_urgency=min_urgency,
+        product_category=category,
+        tracked_account_id=tracked_account_id,
+        exclude_suppressed=True,
     )
 
     signals = [
@@ -525,65 +481,14 @@ async def get_signal(
 ):
     pool = _pool_or_503()
     vname = vendor_name.strip()
-
-    # Build optional tenant scope clause
-    scope = ""
-    scope_params: list = [vname]
-    if _should_scope(user):
-        scope = f" AND vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${ len(scope_params) + 1 }::uuid)"
-        scope_params.append(user.account_id)
-
-    if product_category:
-        pidx = len(scope_params) + 1
-        row = await pool.fetchrow(
-            f"""
-            SELECT sig.*, snap.support_sentiment AS support_sentiment,
-                   snap.legacy_support_score AS legacy_support_score,
-                   snap.new_feature_velocity AS new_feature_velocity,
-                   snap.employee_growth_rate AS employee_growth_rate
-            FROM b2b_churn_signals sig
-            LEFT JOIN LATERAL (
-                SELECT support_sentiment, legacy_support_score,
-                       new_feature_velocity, employee_growth_rate
-                FROM b2b_vendor_snapshots snap
-                WHERE snap.vendor_name = sig.vendor_name
-                ORDER BY snap.snapshot_date DESC
-                LIMIT 1
-            ) snap ON TRUE
-            WHERE sig.vendor_name ILIKE '%' || $1 || '%'
-              AND sig.product_category = ${pidx}
-              AND {_suppress_predicate('churn_signal')}
-              {scope}
-            ORDER BY avg_urgency_score DESC
-            LIMIT 1
-            """,
-            *scope_params,
-            product_category,
-        )
-    else:
-        row = await pool.fetchrow(
-            f"""
-            SELECT sig.*, snap.support_sentiment AS support_sentiment,
-                   snap.legacy_support_score AS legacy_support_score,
-                   snap.new_feature_velocity AS new_feature_velocity,
-                   snap.employee_growth_rate AS employee_growth_rate
-            FROM b2b_churn_signals sig
-            LEFT JOIN LATERAL (
-                SELECT support_sentiment, legacy_support_score,
-                       new_feature_velocity, employee_growth_rate
-                FROM b2b_vendor_snapshots snap
-                WHERE snap.vendor_name = sig.vendor_name
-                ORDER BY snap.snapshot_date DESC
-                LIMIT 1
-            ) snap ON TRUE
-            WHERE sig.vendor_name ILIKE '%' || $1 || '%'
-              AND {_suppress_predicate('churn_signal')}
-              {scope}
-            ORDER BY avg_urgency_score DESC
-            LIMIT 1
-            """,
-            *scope_params,
-        )
+    row = await read_vendor_signal_detail(
+        pool,
+        vendor_name_query=vname,
+        product_category=product_category,
+        tracked_account_id=user.account_id if _should_scope(user) else None,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+    )
 
     if not row:
         raise HTTPException(status_code=404, detail="No churn signal found for that vendor")
@@ -731,15 +636,10 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
         if not is_tracked:
             raise HTTPException(status_code=403, detail="Vendor not in your tracked list")
 
-    signal_row = await pool.fetchrow(
-        f"""
-        SELECT * FROM b2b_churn_signals
-        WHERE vendor_name ILIKE '%' || $1 || '%'
-          AND {_suppress_predicate('churn_signal')}
-        ORDER BY avg_urgency_score DESC
-        LIMIT 1
-        """,
-        vname,
+    signal_row = await read_vendor_signal_detail(
+        pool,
+        vendor_name_query=vname,
+        exclude_suppressed=True,
     )
 
     counts = await pool.fetchrow(
