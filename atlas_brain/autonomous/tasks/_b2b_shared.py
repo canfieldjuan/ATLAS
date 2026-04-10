@@ -253,6 +253,7 @@ async def _sync_vendor_firmographics(pool, *, as_of: date) -> int:
         SELECT DISTINCT vendor_name
         FROM b2b_reviews
         WHERE vendor_name IS NOT NULL AND vendor_name <> ''
+          AND duplicate_of_review_id IS NULL
         ORDER BY vendor_name
         """
     )
@@ -4247,6 +4248,264 @@ async def read_vendor_scorecard_inventory_rows(
         """
     )
     return [dict(row) for row in rows]
+
+
+async def read_vendor_scorecard_metrics(
+    pool,
+    *,
+    vendor_name: str,
+) -> dict[str, Any] | None:
+    """Read the latest scorecard metrics row for one vendor."""
+    row = await pool.fetchrow(
+        """
+        SELECT price_complaint_rate,
+               decision_maker_churn_rate,
+               total_reviews,
+               signal_reviews,
+               churn_intent_count,
+               avg_urgency_score,
+               top_competitors,
+               sentiment_distribution
+        FROM b2b_churn_signals
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY last_computed_at DESC
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    return dict(row) if row else None
+
+
+async def read_market_landscape_candidates(
+    pool,
+    *,
+    min_vendor_profiles: int,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Read category-level market landscape candidates from profile + scorecard joins."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            pp.product_category AS category,
+            COUNT(DISTINCT pp.vendor_name) AS vendor_count,
+            COALESCE(SUM(cs.total_reviews), 0) AS total_reviews,
+            ROUND(AVG(cs.avg_urgency_score)::numeric, 1) AS avg_urgency
+        FROM b2b_product_profiles pp
+        JOIN b2b_churn_signals cs
+          ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
+         AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
+        WHERE pp.product_category IS NOT NULL AND pp.product_category != ''
+        GROUP BY pp.product_category
+        HAVING COUNT(DISTINCT pp.vendor_name) >= $1
+        ORDER BY COUNT(DISTINCT pp.vendor_name) DESC, COALESCE(SUM(cs.total_reviews), 0) DESC
+        LIMIT $2
+        """,
+        min_vendor_profiles,
+        limit,
+    )
+    return [
+        {
+            "category": row["category"],
+            "vendor_count": row["vendor_count"],
+            "total_reviews": row["total_reviews"],
+            "avg_urgency": float(row["avg_urgency"]),
+        }
+        for row in rows
+    ]
+
+
+async def read_vendor_alternative_candidates(
+    pool,
+    *,
+    min_avg_urgency: float = 6.0,
+    min_total_reviews: int = 5,
+    limit: int = 15,
+) -> list[dict[str, Any]]:
+    """Read vendor-alternative blog candidates from churn scorecards."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            cs.vendor_name AS vendor,
+            cs.product_category AS category,
+            cs.avg_urgency_score AS urgency,
+            cs.total_reviews AS review_count,
+            ap.id AS affiliate_id,
+            ap.name AS affiliate_name,
+            ap.product_name AS affiliate_product,
+            ap.affiliate_url
+        FROM b2b_churn_signals cs
+        LEFT JOIN affiliate_partners ap
+            ON LOWER(ap.category) = LOWER(cs.product_category)
+            AND ap.enabled = true
+        WHERE cs.avg_urgency_score >= $1
+          AND cs.total_reviews >= $2
+        ORDER BY cs.avg_urgency_score * cs.total_reviews DESC
+        LIMIT $3
+        """,
+        min_avg_urgency,
+        min_total_reviews,
+        limit,
+    )
+    return [
+        {
+            "vendor": row["vendor"],
+            "category": row["category"],
+            "urgency": float(row["urgency"]),
+            "review_count": row["review_count"],
+            "has_affiliate": row["affiliate_id"] is not None,
+            "affiliate_id": str(row["affiliate_id"]) if row["affiliate_id"] else None,
+            "affiliate_name": row["affiliate_name"],
+            "affiliate_product": row["affiliate_product"],
+            "affiliate_url": row["affiliate_url"],
+        }
+        for row in rows
+    ]
+
+
+async def read_vendor_showdown_candidates(
+    pool,
+    *,
+    min_total_reviews: int = 10,
+    limit: int = 80,
+) -> list[dict[str, Any]]:
+    """Read vendor-showdown blog candidates from churn scorecards."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            a.vendor_name AS vendor_a, b.vendor_name AS vendor_b,
+            a.product_category AS category,
+            a.total_reviews AS reviews_a, b.total_reviews AS reviews_b,
+            (a.total_reviews + b.total_reviews) AS total_reviews,
+            a.avg_urgency_score AS urgency_a, b.avg_urgency_score AS urgency_b,
+            ABS(a.avg_urgency_score - b.avg_urgency_score) AS pain_diff
+        FROM b2b_churn_signals a
+        JOIN b2b_churn_signals b
+            ON a.product_category = b.product_category
+            AND a.vendor_name < b.vendor_name
+        WHERE a.total_reviews >= $1 AND b.total_reviews >= $1
+        ORDER BY (a.total_reviews + b.total_reviews) DESC
+        LIMIT $2
+        """,
+        min_total_reviews,
+        limit,
+    )
+    return [
+        {
+            "vendor_a": row["vendor_a"],
+            "vendor_b": row["vendor_b"],
+            "category": row["category"],
+            "reviews_a": row["reviews_a"],
+            "reviews_b": row["reviews_b"],
+            "total_reviews": row["total_reviews"],
+            "urgency_a": round(float(row["urgency_a"]), 1),
+            "urgency_b": round(float(row["urgency_b"]), 1),
+            "pain_diff": round(float(row["pain_diff"]), 1),
+        }
+        for row in rows
+    ]
+
+
+async def read_churn_report_candidates(
+    pool,
+    *,
+    min_negative_reviews: int = 8,
+    min_avg_urgency: float = 6.0,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Read churn-report blog candidates from churn scorecards."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            vendor_name AS vendor,
+            product_category AS category,
+            negative_reviews,
+            avg_urgency_score AS avg_urgency,
+            total_reviews
+        FROM b2b_churn_signals
+        WHERE negative_reviews >= $1
+          AND avg_urgency_score >= $2
+        ORDER BY negative_reviews * avg_urgency_score DESC
+        LIMIT $3
+        """,
+        min_negative_reviews,
+        min_avg_urgency,
+        limit,
+    )
+    return [
+        {
+            "vendor": row["vendor"],
+            "category": row["category"],
+            "negative_reviews": row["negative_reviews"],
+            "avg_urgency": round(float(row["avg_urgency"]), 1),
+            "total_reviews": row["total_reviews"],
+        }
+        for row in rows
+    ]
+
+
+async def read_category_vendor_rows(
+    pool,
+    *,
+    category_names: Iterable[Any],
+    limit: int | None = None,
+    require_scorecard_match: bool = False,
+) -> list[dict[str, Any]]:
+    """Read vendor rows for one or more product categories."""
+    normalized_categories = sorted(
+        {
+            str(value or "").strip().lower()
+            for value in category_names
+            if str(value or "").strip()
+        }
+    )
+    if not normalized_categories:
+        return []
+
+    limit_clause = " LIMIT $2" if limit is not None else ""
+    if require_scorecard_match:
+        query = (
+            """
+            SELECT DISTINCT pp.vendor_name, pp.product_category
+            FROM b2b_product_profiles pp
+            JOIN b2b_churn_signals cs
+              ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
+             AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
+            WHERE LOWER(pp.product_category) = ANY($1::text[])
+            ORDER BY pp.vendor_name
+            """
+            + limit_clause
+        )
+    else:
+        query = (
+            """
+            SELECT DISTINCT vendor_name, product_category
+            FROM b2b_product_profiles
+            WHERE LOWER(product_category) = ANY($1::text[])
+            ORDER BY vendor_name
+            """
+            + limit_clause
+        )
+    rows = await pool.fetch(
+        query,
+        normalized_categories,
+        *([limit] if limit is not None else []),
+    )
+    return [dict(row) for row in rows if row.get("vendor_name")]
+
+
+async def read_known_vendor_names(
+    pool,
+) -> list[str]:
+    """Read the canonical known-vendor list from churn scorecards."""
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT vendor_name
+        FROM b2b_churn_signals
+        WHERE vendor_name IS NOT NULL AND TRIM(vendor_name) != ''
+        ORDER BY vendor_name
+        """
+    )
+    return [str(row["vendor_name"]) for row in rows if row.get("vendor_name")]
 
 
 async def _fetch_vendor_churn_scores_from_signals(

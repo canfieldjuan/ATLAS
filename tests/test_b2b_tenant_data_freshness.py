@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -199,6 +199,99 @@ async def test_list_tenant_reports_excludes_stale_and_allows_global_rows(monkeyp
     assert "vendor_filter IS NULL" in sql
     assert "account_id = $1" in sql
     assert "COALESCE((intelligence_data->>'data_stale')::boolean, false) = false" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    created_at = datetime.now(timezone.utc) - timedelta(days=9)
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[{
+            "id": uuid4(),
+            "report_date": created_at.date(),
+            "report_type": "battle_card",
+            "executive_summary": "Summary",
+            "vendor_filter": "Zendesk",
+            "category_filter": None,
+            "status": "published",
+            "created_at": created_at,
+            "latest_failure_step": None,
+            "latest_error_code": None,
+            "latest_error_summary": None,
+            "data_stale": True,
+            "blocker_count": 1,
+            "warning_count": 0,
+            "unresolved_issue_count": 0,
+            "quality_status": "sales_ready",
+            "quality_score": 92,
+        }]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_reports(
+        report_type=None, include_stale=True, limit=10, user=user
+    )
+
+    assert result["count"] == 1
+    report = result["reports"][0]
+    assert report["freshness_state"] == "stale"
+    assert report["freshness_label"] == "Stale"
+    assert report["review_state"] == "blocked"
+    assert report["review_label"] == "Blocked"
+    assert report["trust"] == {
+        "freshness_state": "stale",
+        "freshness_label": "Stale",
+        "review_state": "blocked",
+        "review_label": "Blocked",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    report_id = uuid4()
+    created_at = datetime.now(timezone.utc) - timedelta(hours=10)
+    row = {
+        "id": report_id,
+        "report_date": None,
+        "report_type": "vendor_scorecard",
+        "vendor_filter": "Zendesk",
+        "category_filter": None,
+        "executive_summary": "Summary",
+        "intelligence_data": {"data_stale": False},
+        "data_density": {},
+        "status": "published",
+        "latest_failure_step": None,
+        "latest_error_code": None,
+        "latest_error_summary": None,
+        "blocker_count": 0,
+        "warning_count": 2,
+        "llm_model": "test-model",
+        "created_at": created_at,
+    }
+    pool = SimpleNamespace(is_initialized=True, fetchval=AsyncMock(return_value=0))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(mod, "_load_accessible_tenant_report", AsyncMock(return_value=row))
+
+    result = await mod.get_tenant_report(str(report_id), user=user)
+
+    assert result["freshness_state"] == "fresh"
+    assert result["freshness_label"] == "Fresh"
+    assert result["review_state"] == "warnings"
+    assert result["review_label"] == "Warnings"
+    assert result["trust"] == {
+        "freshness_state": "fresh",
+        "freshness_label": "Fresh",
+        "review_state": "warnings",
+        "review_label": "Warnings",
+    }
 
 
 @pytest.mark.asyncio
@@ -605,7 +698,7 @@ async def test_accounts_in_motion_feed_aggregates_tracked_vendor_reports(monkeyp
     assert result["accounts"][0]["source_reviews"][0]["id"] == "review-1"
     assert result["accounts"][0]["reasoning_reference_ids"]["witness_ids"] == ["witness:zendesk:1"]
     assert result["accounts"][1]["company"] == "Bravo Ltd"
-    helper.assert_awaited()
+    assert helper.await_count > 0
 
 
 @pytest.mark.asyncio
@@ -1352,7 +1445,7 @@ async def test_deliver_watchlist_alert_email_sends_to_owner_and_logs(monkeypatch
     assert result["status"] == "sent"
     assert result["recipient_emails"] == ["owner@example.com"]
     assert result["message_ids"] == ["msg-1"]
-    sender.send.assert_awaited()
+    assert sender.send.await_count > 0
     assert any(
         "INSERT INTO b2b_watchlist_alert_email_log" in call.args[0]
         for call in pool.execute.await_args_list
@@ -1581,4 +1674,4 @@ async def test_accounts_in_motion_feed_filters_by_vendor_category_source_and_sta
     assert result["freshest_report_date"] == "2026-04-04"
     assert result["accounts"][0]["company"] == "Acme Corp"
     assert result["accounts"][0]["watch_vendor"] == "Zendesk"
-    helper.assert_awaited()
+    assert helper.await_count > 0

@@ -1,40 +1,25 @@
 import { useNavigate } from 'react-router-dom'
-import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell, Clock } from 'lucide-react'
+import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
+import ReportTrustPanel from '../components/ReportTrustPanel'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
-import { fetchReports, generateAccountComparisonReport, generateAccountDeepDiveReport, generateVendorComparisonReport, generateBattleCard } from '../api/client'
+import {
+  buildReportLibraryViewScopeKey,
+  fetchReports,
+  generateAccountComparisonReport,
+  generateAccountDeepDiveReport,
+  generateVendorComparisonReport,
+  requestBattleCardReport,
+  type ReportLibraryViewFilters,
+  type ReportSubscriptionScopeType,
+} from '../api/client'
 import { useState, useEffect, useMemo } from 'react'
 import { REPORT_TYPE_COLORS } from '../lib/reportConstants'
 import SubscriptionModal from '../components/SubscriptionModal'
 import type { Report } from '../types'
-
-const QUALITY_STATUS_COLORS: Record<string, string> = {
-  sales_ready: 'bg-emerald-500/20 text-emerald-300',
-  needs_review: 'bg-amber-500/20 text-amber-300',
-  thin_evidence: 'bg-slate-500/20 text-slate-300',
-  deterministic_fallback: 'bg-rose-500/20 text-rose-300',
-}
-
-function qualityStatusLabel(status: string | null | undefined): string {
-  const key = (status || '').toLowerCase()
-  if (key === 'sales_ready') return 'Sales Ready'
-  if (key === 'needs_review') return 'Needs Review'
-  if (key === 'thin_evidence') return 'Thin Evidence'
-  if (key === 'deterministic_fallback') return 'Fallback'
-  return ''
-}
-
-function freshnessLabel(dateStr: string | null | undefined): { text: string; color: string } {
-  if (!dateStr) return { text: '', color: '' }
-  const hours = (Date.now() - new Date(dateStr).getTime()) / 3600000
-  if (hours < 24) return { text: 'Fresh', color: 'text-green-400' }
-  if (hours < 72) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-slate-400' }
-  if (hours < 168) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-amber-400' }
-  return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-red-400' }
-}
 
 function CardSkeleton() {
   return (
@@ -57,11 +42,25 @@ function toIso(value: string | null | undefined): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
+function titleizeFilterValue(value: string) {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function reportFreshnessState(report: Report): string {
+  return report.freshness_state || report.trust?.freshness_state || 'unknown'
+}
+
+function reportReviewState(report: Report): string {
+  return report.review_state || report.trust?.review_state || 'clean'
+}
+
 export default function Reports() {
   const navigate = useNavigate()
   const { canAccessReports } = usePlanGate()
   const [typeFilter, setTypeFilter] = useState('')
   const [qualityFilter, setQualityFilter] = useState('')
+  const [freshnessFilter, setFreshnessFilter] = useState('')
+  const [reviewFilter, setReviewFilter] = useState('')
   const [vendorSearch, setVendorSearch] = useState('')
   const [debouncedVendor, setDebouncedVendor] = useState('')
   const [primaryVendor, setPrimaryVendor] = useState('')
@@ -82,8 +81,13 @@ export default function Reports() {
   }, [vendorSearch])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
-    () => fetchReports({ report_type: typeFilter || undefined, vendor_filter: debouncedVendor || undefined, limit: 100 }),
-    [typeFilter, debouncedVendor],
+    () => fetchReports({
+      report_type: typeFilter || undefined,
+      vendor_filter: debouncedVendor || undefined,
+      include_stale: freshnessFilter === 'stale',
+      limit: 100,
+    }),
+    [typeFilter, debouncedVendor, freshnessFilter],
   )
 
   const PAGE_SIZES = [25, 50, 100] as const
@@ -93,16 +97,20 @@ export default function Reports() {
   const reports = useMemo(() => data?.reports ?? [], [data])
   const filteredReports = useMemo(
     () => reports.filter((report) => {
-      if (!qualityFilter) return true
-      if (report.report_type !== 'battle_card') return false
-      return (report.quality_status || '').toLowerCase() === qualityFilter
+      if (qualityFilter) {
+        if (report.report_type !== 'battle_card') return false
+        if ((report.quality_status || '').toLowerCase() !== qualityFilter) return false
+      }
+      if (freshnessFilter && reportFreshnessState(report) !== freshnessFilter) return false
+      if (reviewFilter && reportReviewState(report) !== reviewFilter) return false
+      return true
     }),
-    [reports, qualityFilter],
+    [reports, qualityFilter, freshnessFilter, reviewFilter],
   )
 
   // Reset page when data or filters change
   const reportCount = filteredReports.length
-  useEffect(() => { setPage(0) }, [reportCount, typeFilter, debouncedVendor, qualityFilter])
+  useEffect(() => { setPage(0) }, [reportCount, typeFilter, debouncedVendor, qualityFilter, freshnessFilter, reviewFilter])
 
   const totalPages = Math.max(1, Math.ceil(filteredReports.length / perPage))
   const safePage = Math.min(page, totalPages - 1)
@@ -120,12 +128,36 @@ export default function Reports() {
     ? (Date.now() - new Date(newestReportAt).getTime()) / (1000 * 60 * 60)
     : null
   const reportsStale = newestReportAgeHours !== null && newestReportAgeHours > 24
-  const hasFilters = typeFilter !== '' || vendorSearch !== '' || qualityFilter !== ''
+  const hasFilters = typeFilter !== '' || vendorSearch.trim() !== '' || qualityFilter !== '' || freshnessFilter !== '' || reviewFilter !== ''
   const debouncePending = vendorSearch !== debouncedVendor
+  const libraryViewFilters = useMemo<ReportLibraryViewFilters>(
+    () => ({
+      report_type: typeFilter || undefined,
+      vendor_filter: vendorSearch.trim() || undefined,
+      quality_status: qualityFilter || undefined,
+      freshness_state: freshnessFilter || undefined,
+      review_state: reviewFilter || undefined,
+    }),
+    [typeFilter, vendorSearch, qualityFilter, freshnessFilter, reviewFilter],
+  )
+  const libraryScopeType: ReportSubscriptionScopeType = hasFilters ? 'library_view' : 'library'
+  const libraryScopeKey = hasFilters ? buildReportLibraryViewScopeKey(libraryViewFilters) : 'library'
+  const libraryScopeLabel = useMemo(() => {
+    const parts: string[] = []
+    if (typeFilter) parts.push(titleizeFilterValue(typeFilter))
+    if (vendorSearch.trim()) parts.push(vendorSearch.trim())
+    if (qualityFilter) parts.push(titleizeFilterValue(qualityFilter))
+    if (freshnessFilter) parts.push(titleizeFilterValue(freshnessFilter))
+    if (reviewFilter) parts.push(titleizeFilterValue(reviewFilter))
+    if (parts.length === 0) return 'Full Report Library'
+    return `${parts.join(' • ')} Library`
+  }, [typeFilter, vendorSearch, qualityFilter, freshnessFilter, reviewFilter])
 
   function clearFilters() {
     setTypeFilter('')
     setQualityFilter('')
+    setFreshnessFilter('')
+    setReviewFilter('')
     setVendorSearch('')
     setDebouncedVendor('')
   }
@@ -189,9 +221,13 @@ export default function Reports() {
     }
     setCreatingBattleCard(true)
     try {
-      await generateBattleCard({ vendor_name: battleCardVendor.trim() })
+      const result = await requestBattleCardReport({ vendor_name: battleCardVendor.trim() })
+      const reportId = typeof result.report_id === 'string' ? result.report_id : ''
       setBattleCardVendor('')
       refresh()
+      if (reportId) {
+        navigate(`/reports/${reportId}`)
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Battle card generation failed')
     } finally {
@@ -239,12 +275,18 @@ export default function Reports() {
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-white">Intelligence Reports</h1>
           <div className="flex items-center gap-2">
+            <Link
+              to="/briefing-review"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+            >
+              Briefings
+            </Link>
             <button
               onClick={() => setLibSubOpen(true)}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-cyan-700/40 bg-cyan-900/20 text-cyan-300 hover:bg-cyan-900/40 transition-colors"
             >
               <Bell className="h-4 w-4" />
-              Subscribe to Library
+              {hasFilters ? 'Subscribe to View' : 'Subscribe to Library'}
             </button>
             <button
               onClick={refresh}
@@ -257,6 +299,80 @@ export default function Reports() {
           </div>
         </div>
 
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-slate-700/50 pb-px">
+          {([
+            { key: 'library' as const, label: 'Library' },
+            { key: 'subscriptions' as const, label: 'Subscriptions', count: subscriptions.length },
+          ]).map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={clsx(
+                'px-4 py-2 text-sm font-medium transition-colors border-b-2',
+                activeTab === tab.key
+                  ? 'text-cyan-400 border-cyan-400'
+                  : 'text-slate-400 border-transparent hover:text-white',
+              )}
+            >
+              {tab.label}{tab.count != null && tab.count > 0 ? ` (${tab.count})` : ''}
+            </button>
+          ))}
+        </div>
+
+        {/* Subscriptions tab */}
+        {activeTab === 'subscriptions' && (
+          <div className="space-y-4">
+            {subLoading ? (
+              <div className="flex items-center gap-2 text-sm text-slate-400">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading subscriptions...
+              </div>
+            ) : subscriptions.length === 0 ? (
+              <div className="text-sm text-slate-500 py-8 text-center">
+                No subscriptions yet. Subscribe from a report or the library view.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {subscriptions.map((sub) => (
+                  <div key={sub.id} className="bg-slate-800/50 border border-slate-700/30 rounded-lg p-4 flex items-center justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-white font-medium">{sub.scope_label || sub.scope_key}</span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-700/50 text-slate-300">{sub.scope_type}</span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-cyan-500/20 text-cyan-400">{sub.delivery_frequency}</span>
+                        <span className={clsx('px-2 py-0.5 rounded text-[10px] font-medium', sub.enabled ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400')}>
+                          {sub.enabled ? 'Active' : 'Paused'}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+                        <span>Focus: {sub.deliverable_focus}</span>
+                        <span>Freshness: {sub.freshness_policy.replace(/_/g, ' ')}</span>
+                        {sub.next_delivery_at && <span>Next: {new Date(sub.next_delivery_at).toLocaleDateString()}</span>}
+                        {sub.last_delivery_status && (
+                          <span className={sub.last_delivery_status === 'delivered' ? 'text-green-400' : 'text-red-400'}>
+                            Last: {sub.last_delivery_status} ({sub.last_delivery_report_count ?? 0} reports)
+                          </span>
+                        )}
+                      </div>
+                      {sub.recipient_emails.length > 0 && (
+                        <div className="mt-1 text-xs text-slate-500">To: {sub.recipient_emails.join(', ')}</div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setEditingSub(sub)}
+                      className="ml-4 p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-700/50 rounded-lg transition-colors"
+                      title="Edit subscription"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={activeTab !== 'library' ? { display: 'none' } : undefined} className="space-y-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap">
           <div className="relative flex-1 max-w-xs w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
@@ -298,6 +414,27 @@ export default function Reports() {
             <option value="needs_review">Needs Review</option>
             <option value="thin_evidence">Thin Evidence</option>
             <option value="deterministic_fallback">Fallback</option>
+          </select>
+          <select
+            value={freshnessFilter}
+            onChange={(e) => setFreshnessFilter(e.target.value)}
+            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+          >
+            <option value="">All Freshness</option>
+            <option value="fresh">Fresh</option>
+            <option value="monitor">Monitor</option>
+            <option value="stale">Stale</option>
+          </select>
+          <select
+            value={reviewFilter}
+            onChange={(e) => setReviewFilter(e.target.value)}
+            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+          >
+            <option value="">All Review States</option>
+            <option value="clean">Clean</option>
+            <option value="warnings">Warnings</option>
+            <option value="open_review">Open Review</option>
+            <option value="blocked">Blocked</option>
           </select>
           {hasFilters && (
             <button
@@ -471,11 +608,6 @@ export default function Reports() {
                     >
                       {r.report_type.replace(/_/g, ' ')}
                     </span>
-                    {r.report_type === 'battle_card' && r.quality_status && (
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${QUALITY_STATUS_COLORS[r.quality_status] || 'bg-slate-500/20 text-slate-300'}`}>
-                        {qualityStatusLabel(r.quality_status)}
-                      </span>
-                    )}
                   </div>
                   <FileBarChart className="h-4 w-4 text-slate-500" />
                 </div>
@@ -491,20 +623,26 @@ export default function Reports() {
                 <p className="text-sm text-slate-400 line-clamp-2">
                   {r.executive_summary ?? 'No summary available'}
                 </p>
-                <div className="flex items-center gap-2 mt-3">
+                <div className="flex items-center gap-2 mt-3 mb-3">
                   <p className="text-xs text-slate-500">
                     {r.report_date ?? r.created_at ?? '--'}
                   </p>
-                  {(() => {
-                    const f = freshnessLabel(r.created_at ?? r.report_date)
-                    return f.text ? (
-                      <span className={clsx('inline-flex items-center gap-1 text-xs', f.color)}>
-                        <Clock className="w-3 h-3" />
-                        {f.text}
-                      </span>
-                    ) : null
-                  })()}
                 </div>
+                <ReportTrustPanel
+                  compact
+                  status={r.status}
+                  blockerCount={r.blocker_count}
+                  warningCount={r.warning_count}
+                  unresolvedIssueCount={r.unresolved_issue_count}
+                  qualityStatus={r.quality_status}
+                  latestFailureStep={r.latest_failure_step}
+                  latestErrorSummary={r.latest_error_summary}
+                  freshnessState={r.freshness_state ?? r.trust?.freshness_state}
+                  freshnessLabel={r.freshness_label ?? r.trust?.freshness_label}
+                  reviewState={r.review_state ?? r.trust?.review_state}
+                  reviewLabel={r.review_label ?? r.trust?.review_label}
+                  freshnessTimestamp={r.created_at ?? r.report_date}
+                />
               </button>
             ))}
           </div>
@@ -547,14 +685,28 @@ export default function Reports() {
             </div>
           )}
         </>
+        </div>
+
+      {/* Edit subscription modal */}
+      {editingSub && (
+        <SubscriptionModal
+          open={true}
+          onClose={() => setEditingSub(null)}
+          scopeType={editingSub.scope_type}
+          scopeKey={editingSub.scope_key}
+          scopeLabel={editingSub.scope_label}
+          filterPayload={editingSub.filter_payload}
+          onSaved={() => { refreshSubs(); setEditingSub(null) }}
+        />
       )}
 
       <SubscriptionModal
         open={libSubOpen}
         onClose={() => setLibSubOpen(false)}
-        scopeType="library"
-        scopeKey="library"
-        scopeLabel="Full Report Library"
+        scopeType={libraryScopeType}
+        scopeKey={libraryScopeKey}
+        scopeLabel={libraryScopeLabel}
+        filterPayload={libraryScopeType === 'library_view' ? libraryViewFilters : undefined}
       />
     </div>
   )

@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
   bulkSetDisposition: vi.fn(),
   downloadCsv: vi.fn(),
   fetchCampaigns: vi.fn(),
+  fetchCampaignQualityTrends: vi.fn(),
+  fetchCampaignStats: vi.fn(),
   fetchDispositions: vi.fn(),
   fetchHighIntent: vi.fn(),
   generateCampaigns: vi.fn(),
@@ -39,6 +41,34 @@ describe('Opportunities', () => {
     planGate.canAccessCampaigns = true
     api.fetchHighIntent.mockResolvedValue({ companies: [] })
     api.fetchCampaigns.mockResolvedValue({ campaigns: [] })
+    api.fetchCampaignStats.mockResolvedValue({
+      total: 4,
+      by_status: { draft: 1, approved: 1, queued: 1, sent: 1 },
+      by_channel: { email: 4 },
+      top_vendors: [],
+      quality: {
+        pass: 2,
+        fail: 1,
+        missing: 1,
+        blocker_total: 3,
+        warning_total: 1,
+        by_boundary: {},
+        top_blockers: [{ reason: 'missing_roi', count: 2 }],
+      },
+    })
+    api.fetchCampaignQualityTrends.mockResolvedValue({
+      days: 14,
+      top_n: 5,
+      top_blockers: [{ reason: 'missing_roi', count: 2 }],
+      series: [
+        { day: '2026-04-06', reason: 'missing_roi', count: 1 },
+        { day: '2026-04-07', reason: 'missing_roi', count: 2 },
+      ],
+      totals_by_day: [
+        { day: '2026-04-06', blocker_total: 1 },
+        { day: '2026-04-07', blocker_total: 2 },
+      ],
+    })
     api.fetchDispositions.mockResolvedValue({ dispositions: [] })
   })
 
@@ -74,5 +104,24 @@ describe('Opportunities', () => {
 
     expect(screen.queryByText('Signal Effectiveness Mock')).not.toBeInTheDocument()
     expect(screen.queryByText('Company Timeline Mock')).not.toBeInTheDocument()
+    expect(screen.queryByText('Campaign Quality Trends')).not.toBeInTheDocument()
+    expect(screen.queryByText('Total Campaigns')).not.toBeInTheDocument()
+  })
+
+  it('renders campaign analytics when the plan gate is on', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findAllByPlaceholderText('Filter vendor...')
+
+    expect(screen.getByText('Total Campaigns')).toBeInTheDocument()
+    expect(screen.getByText('Drafts Pending')).toBeInTheDocument()
+    expect(screen.getByText('Campaign Quality Trends')).toBeInTheDocument()
+    expect(api.fetchCampaignStats).toHaveBeenCalledTimes(1)
+    expect(api.fetchCampaignQualityTrends).toHaveBeenCalledTimes(1)
   })
 })

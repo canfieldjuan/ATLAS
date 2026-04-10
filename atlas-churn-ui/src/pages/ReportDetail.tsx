@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, RefreshCw, Clock } from 'lucide-react'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
+import ReportTrustPanel from '../components/ReportTrustPanel'
 import {
   StructuredReportData,
   StructuredReportValue,
@@ -49,15 +50,6 @@ function DetailSkeleton() {
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
-
-function freshnessLabel(dateStr: string | null): { text: string; color: string } {
-  if (!dateStr) return { text: 'unknown', color: 'text-slate-500' }
-  const hours = (Date.now() - new Date(dateStr).getTime()) / 3600000
-  if (hours < 24) return { text: 'Fresh', color: 'text-green-400' }
-  if (hours < 72) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-slate-400' }
-  if (hours < 168) return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-amber-400' }
-  return { text: `${Math.floor(hours / 24)}d ago`, color: 'text-red-400' }
-}
 
 export default function ReportDetail() {
   const { id } = useParams<{ id: string }>()
@@ -148,15 +140,22 @@ export default function ReportDetail() {
             {report.report_date ?? report.created_at}
             {report.llm_model && ` | Model: ${report.llm_model}`}
           </p>
-          {(() => {
-            const f = freshnessLabel(report.report_date ?? report.created_at)
-            return (
-              <span className={clsx('inline-flex items-center gap-1 text-xs', f.color)}>
-                <Clock className="w-3 h-3" />
-                {f.text}
-              </span>
-            )
-          })()}
+        </div>
+        <div className="mt-4">
+          <ReportTrustPanel
+            status={report.status}
+            blockerCount={report.blocker_count}
+            warningCount={report.warning_count}
+            unresolvedIssueCount={report.unresolved_issue_count}
+            qualityStatus={report.quality_status}
+            latestFailureStep={report.latest_failure_step}
+            latestErrorSummary={report.latest_error_summary}
+            freshnessState={report.freshness_state ?? report.trust?.freshness_state}
+            freshnessLabel={report.freshness_label ?? report.trust?.freshness_label}
+            reviewState={report.review_state ?? report.trust?.review_state}
+            reviewLabel={report.review_label ?? report.trust?.review_label}
+            freshnessTimestamp={report.report_date ?? report.created_at}
+          />
         </div>
       </div>
 
@@ -234,7 +233,11 @@ export default function ReportDetail() {
 
           {/* Rich intelligence fields */}
           {richEntries.length > 0 && (
-            <StructuredReportData data={intel} />
+            <StructuredReportData
+              data={intel}
+              vendorName={report.vendor_filter ?? undefined}
+              onOpenWitness={handleOpenWitness}
+            />
           )}
         </>
       )}

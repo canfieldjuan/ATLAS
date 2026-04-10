@@ -1440,6 +1440,32 @@ class TestBuildChallengerBrief:
         assert inc["churn_pressure_score"] == 17.0
 
 
+@pytest.mark.asyncio
+async def test_fetch_churn_signal_uses_shared_scorecard_metrics_adapter(monkeypatch):
+    adapter = AsyncMock(return_value={
+        "price_complaint_rate": 0.2,
+        "decision_maker_churn_rate": 0.4,
+        "total_reviews": 40,
+        "signal_reviews": 20,
+        "churn_intent_count": 5,
+        "avg_urgency_score": 6.5,
+        "top_competitors": [{"name": "Freshdesk"}, {"name": "Intercom"}],
+        "sentiment_distribution": {"declining": 6, "improving": 1},
+    })
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.read_vendor_scorecard_metrics",
+        adapter,
+    )
+
+    signal = await brief_mod._fetch_churn_signal(object(), "Zendesk")
+
+    assert adapter.await_count == 1
+    assert adapter.await_args.kwargs == {"vendor_name": "Zendesk"}
+    assert signal["sentiment_direction"] == "consistently_negative"
+    assert signal["price_complaint_rate"] == 0.2
+    assert signal["dm_churn_rate"] == 0.4
+
+
 class TestResolveCrossVendorBattle:
     @pytest.mark.asyncio
     async def test_prefers_merged_lookup_entry(self):

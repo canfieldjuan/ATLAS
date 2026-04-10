@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Activity,
@@ -19,6 +19,7 @@ import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import ArchetypeBadge from '../components/ArchetypeBadge'
 import AccountMovementDrawer from '../components/AccountMovementDrawer'
+import EvidenceDrawer from '../components/EvidenceDrawer'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import {
@@ -245,6 +246,13 @@ function staleThresholdTriggered(
   return age != null && age > threshold
 }
 
+function watchlistViewVendorNames(view: WatchlistView) {
+  if (view.vendor_names?.length) {
+    return view.vendor_names
+  }
+  return view.vendor_name ? [view.vendor_name] : []
+}
+
 function watchlistViewMatchesState(
   view: WatchlistView,
   filters: {
@@ -263,7 +271,7 @@ function watchlistViewMatchesState(
     alert_delivery_frequency: 'daily' | 'weekly'
   },
 ) {
-  return JSON.stringify([...(view.vendor_names || [])].sort()) === JSON.stringify([...(filters.vendor_names || [])].sort())
+  return JSON.stringify([...watchlistViewVendorNames(view)].sort()) === JSON.stringify([...(filters.vendor_names || [])].sort())
     && (view.category || '') === filters.category
     && (view.source || '') === filters.source
     && String(view.min_urgency ?? '') === filters.min_urgency
@@ -279,7 +287,8 @@ function watchlistViewMatchesState(
 
 function summarizeWatchlistView(view: WatchlistView) {
   const parts: string[] = []
-  if (view.vendor_names?.length) parts.push(view.vendor_names.join(', '))
+  const vendorNames = watchlistViewVendorNames(view)
+  if (vendorNames.length) parts.push(vendorNames.join(', '))
   if (view.category) parts.push(view.category)
   if (view.source) parts.push(view.source)
   if (view.min_urgency != null) parts.push(`urgency ${view.min_urgency}+`)
@@ -316,6 +325,14 @@ export default function Watchlists() {
   const [savedViewName, setSavedViewName] = useState('')
   const [selectedVendorFilter, setSelectedVendorFilter] = useState('')
   const [selectedVendorFilters, setSelectedVendorFilters] = useState<string[]>([])
+  const [evidenceDrawerOpen, setEvidenceDrawerOpen] = useState(false)
+  const [evidenceDrawerWitnessId, setEvidenceDrawerWitnessId] = useState<string | null>(null)
+  const [evidenceDrawerVendor, setEvidenceDrawerVendor] = useState('')
+  const handleOpenWitness = useCallback((witnessId: string, vendorName: string) => {
+    setEvidenceDrawerWitnessId(witnessId)
+    setEvidenceDrawerVendor(vendorName)
+    setEvidenceDrawerOpen(true)
+  }, [])
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('')
   const [selectedSourceFilter, setSelectedSourceFilter] = useState('')
   const [selectedMinUrgency, setSelectedMinUrgency] = useState('')
@@ -438,6 +455,7 @@ export default function Watchlists() {
     },
     [
       selectedVendorFilter,
+      selectedVendorFilters,
       selectedCategoryFilter,
       selectedSourceFilter,
       selectedMinUrgency,
@@ -726,8 +744,9 @@ export default function Watchlists() {
   }
 
   function applyWatchlistView(view: WatchlistView) {
-    setSelectedVendorFilter(view.vendor_names?.[0] || '')
-    setSelectedVendorFilters(view.vendor_names || [])
+    const vendorNames = watchlistViewVendorNames(view)
+    setSelectedVendorFilter(vendorNames[0] || '')
+    setSelectedVendorFilters(vendorNames)
     setSelectedCategoryFilter(view.category || '')
     setSelectedSourceFilter(view.source || '')
     setSelectedMinUrgency(view.min_urgency != null ? String(view.min_urgency) : '')
@@ -2597,9 +2616,20 @@ export default function Watchlists() {
         open={selectedAccount != null}
         onClose={() => setSelectedAccount(null)}
         onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
+        onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
         onViewOpportunity={(item) => navigate(`/opportunities?vendor=${encodeURIComponent(item.vendor)}`)}
         generating={selectedAccount ? generatingCampaignFor === `${selectedAccount.company}::${selectedAccount.vendor}` : false}
+      />
+
+      <EvidenceDrawer
+        vendorName={evidenceDrawerVendor}
+        witnessId={evidenceDrawerWitnessId}
+        open={evidenceDrawerOpen}
+        onClose={() => {
+          setEvidenceDrawerOpen(false)
+          setEvidenceDrawerWitnessId(null)
+        }}
       />
     </div>
   )

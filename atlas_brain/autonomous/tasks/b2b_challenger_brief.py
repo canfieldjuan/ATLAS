@@ -428,23 +428,16 @@ async def _fetch_churn_signal(pool, vendor: str) -> dict | None:
     fields must come from synthesis or already-materialized battle-card
     artifacts, not from ``b2b_churn_signals`` compatibility columns.
     """
-    row = await pool.fetchrow(
-        """
-        SELECT price_complaint_rate, decision_maker_churn_rate,
-               total_reviews, signal_reviews, churn_intent_count, avg_urgency_score,
-               top_competitors, sentiment_distribution
-        FROM b2b_churn_signals
-        WHERE LOWER(vendor_name) = LOWER($1)
-        ORDER BY last_computed_at DESC
-        LIMIT 1
-        """,
-        vendor,
+    from ._b2b_shared import _compute_churn_pressure_score, read_vendor_scorecard_metrics
+
+    row = await read_vendor_scorecard_metrics(
+        pool,
+        vendor_name=vendor,
     )
     if not row:
         return None
 
     # Compute churn_pressure_score from available columns
-    from ._b2b_shared import _compute_churn_pressure_score
     total_reviews = int(row["total_reviews"] or 0)
     signal_reviews = int(row.get("signal_reviews") or 0) or total_reviews
     churn_intent = int(row["churn_intent_count"] or 0)

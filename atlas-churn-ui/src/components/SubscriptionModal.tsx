@@ -2,19 +2,37 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { X, Bell, Loader2, Check, AlertTriangle, Calendar, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { fetchReportSubscription, upsertReportSubscription } from '../api/client'
-import type { ReportSubscription, ReportSubscriptionUpsert } from '../api/client'
+import { normalizeReportLibraryViewFilters } from '../api/client'
+import type {
+  ReportLibraryViewFilters,
+  ReportSubscription,
+  ReportSubscriptionScopeType,
+  ReportSubscriptionUpsert,
+} from '../api/client'
 
 interface SubscriptionModalProps {
   open: boolean
   onClose: () => void
-  scopeType: 'library' | 'report'
+  scopeType: ReportSubscriptionScopeType
   scopeKey: string
   scopeLabel: string
+  filterPayload?: ReportLibraryViewFilters
   onSaved?: (sub: ReportSubscription) => void
 }
 
+function describeFilterPayload(filterPayload?: ReportLibraryViewFilters) {
+  const normalized = normalizeReportLibraryViewFilters(filterPayload)
+  const lines: string[] = []
+  if (normalized.report_type) lines.push(`Type: ${normalized.report_type.replace(/_/g, ' ')}`)
+  if (normalized.vendor_filter) lines.push(`Vendor: ${normalized.vendor_filter}`)
+  if (normalized.quality_status) lines.push(`Quality: ${normalized.quality_status.replace(/_/g, ' ')}`)
+  if (normalized.freshness_state) lines.push(`Freshness: ${normalized.freshness_state.replace(/_/g, ' ')}`)
+  if (normalized.review_state) lines.push(`Review: ${normalized.review_state.replace(/_/g, ' ')}`)
+  return lines
+}
+
 export default function SubscriptionModal({
-  open, onClose, scopeType, scopeKey, scopeLabel, onSaved,
+  open, onClose, scopeType, scopeKey, scopeLabel, filterPayload, onSaved,
 }: SubscriptionModalProps) {
   const idPrefix = `subscription-${scopeType}-${scopeKey.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   const loadRequestIdRef = useRef(0)
@@ -33,6 +51,7 @@ export default function SubscriptionModal({
   const [note, setNote] = useState('')
   const [enabled, setEnabled] = useState(true)
   const [existing, setExisting] = useState<ReportSubscription | null>(null)
+  const filterSummary = describeFilterPayload(filterPayload)
 
   // Load existing subscription
   useEffect(() => {
@@ -99,6 +118,7 @@ export default function SubscriptionModal({
     try {
       const body: ReportSubscriptionUpsert = {
         scope_label: label || scopeLabel,
+        filter_payload: scopeType === 'library_view' ? normalizeReportLibraryViewFilters(filterPayload) : undefined,
         delivery_frequency: frequency,
         deliverable_focus: focus,
         freshness_policy: freshness,
@@ -165,6 +185,21 @@ export default function SubscriptionModal({
           </div>
         ) : (
           <div className="p-6 space-y-4">
+            {scopeType === 'library_view' && filterSummary.length > 0 && (
+              <div className="rounded-lg border border-cyan-800/40 bg-cyan-950/30 px-3 py-2">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-300/80">Subscribed View</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {filterSummary.map((line) => (
+                    <span
+                      key={line}
+                      className="rounded-full border border-cyan-700/40 bg-slate-900/70 px-2.5 py-1 text-xs text-cyan-100"
+                    >
+                      {line}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {/* Label */}
             <div>
               <label htmlFor={`${idPrefix}-label`} className="block text-xs text-slate-400 mb-1">Subscription Label</label>

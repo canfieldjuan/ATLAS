@@ -1,5 +1,8 @@
 import { clsx } from 'clsx'
 import ArchetypeBadge from '../ArchetypeBadge'
+import CitationBar from './CitationBar'
+import { createCitationRegistry } from './useCitationRegistry'
+import type { CitationEntry } from './useCitationRegistry'
 import { REPORT_SCALAR_KEYS, humanLabel } from '../../lib/reportConstants'
 import {
   isRecord,
@@ -41,6 +44,16 @@ const SUMMARY_META_KEYS = [
   'count', 'mentions', 'mention_count', 'switch_count', 'confidence',
   'urgency', 'score', 'evidence_count',
 ]
+
+const REFERENCE_KEY_SUFFIXES = ['_reference_ids', '_witness_highlights']
+
+function isEvidenceMetadataKey(key: string): boolean {
+  return key === 'reference_ids'
+    || key === 'reasoning_reference_ids'
+    || key === 'witness_highlights'
+    || key === 'reasoning_witness_highlights'
+    || REFERENCE_KEY_SUFFIXES.some((suffix) => key.endsWith(suffix))
+}
 
 function isScalarValue(value: unknown): boolean {
   return value === null || value === undefined || ['string', 'number', 'boolean'].includes(typeof value)
@@ -97,6 +110,62 @@ function isRankedList(value: unknown): value is AnyObject[] {
 
 function getRankCount(item: AnyObject): number {
   return Number(item.count ?? item.mentions ?? item.mention_count ?? 0)
+}
+
+function extractWitnessIds(value: unknown): string[] {
+  if (!isRecord(value) || !Array.isArray(value.witness_ids)) return []
+  return value.witness_ids.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function extractWitnessHighlights(value: unknown): AnyObject[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isRecord).filter((item) => typeof item.witness_id === 'string' && item.witness_id.trim().length > 0)
+}
+
+function citationEntriesForSection(
+  registry: ReturnType<typeof createCitationRegistry>,
+  fieldKey: string,
+  value: unknown,
+  data: AnyObject,
+): CitationEntry[] {
+  const sectionObject = isRecord(value) ? value : null
+  const referenceIds = [
+    sectionObject?.reasoning_reference_ids,
+    sectionObject?.reference_ids,
+    data[`${fieldKey}_reference_ids`],
+  ].flatMap(extractWitnessIds)
+
+  const highlights = [
+    sectionObject?.reasoning_witness_highlights,
+    sectionObject?.witness_highlights,
+    data[`${fieldKey}_witness_highlights`],
+    data.reasoning_witness_highlights,
+    data.witness_highlights,
+  ].flatMap(extractWitnessHighlights)
+
+  const witnessIds = referenceIds.length > 0
+    ? referenceIds
+    : Array.from(new Set(highlights.map((item) => String(item.witness_id))))
+
+  if (witnessIds.length === 0) return []
+
+  const highlightMap = new Map<string, AnyObject>()
+  for (const highlight of highlights) {
+    highlightMap.set(String(highlight.witness_id), highlight)
+  }
+
+  for (const witnessId of witnessIds) {
+    const highlight = highlightMap.get(witnessId)
+    registry.register(witnessId, {
+      companyName: typeof highlight?.reviewer_company === 'string' ? highlight.reviewer_company : undefined,
+      excerptSnippet: typeof highlight?.excerpt_text === 'string' ? highlight.excerpt_text.slice(0, 80) : undefined,
+      source: typeof highlight?.source === 'string' ? highlight.source : undefined,
+    })
+  }
+
+  return witnessIds
+    .map((witnessId) => registry.getAll().find((item) => item.witnessId === witnessId) ?? { index: 0, witnessId })
+    .filter((entry) => entry.index > 0)
 }
 
 function StructuredTable({ rows }: { rows: AnyObject[] }) {
@@ -464,13 +533,18 @@ export function StructuredReportData({
   data,
   skipKeys = [],
   className,
+  vendorName,
+  onOpenWitness,
 }: {
   data: AnyObject
   skipKeys?: string[]
   className?: string
+  vendorName?: string
+  onOpenWitness?: (witnessId: string, vendorName: string) => void
 }) {
+  const registry = createCitationRegistry()
   const entries = Object.entries(data).filter(([key, value]) => {
-    if (skipKeys.includes(key) || REPORT_SCALAR_KEYS.has(key)) return false
+    if (skipKeys.includes(key) || REPORT_SCALAR_KEYS.has(key) || isEvidenceMetadataKey(key)) return false
     if (key === 'executive_summary') return false
     if (value === null || value === undefined) return false
     if (typeof value === 'string' && value.trim() === '') return false
@@ -483,14 +557,28 @@ export function StructuredReportData({
 
   return (
     <div className={clsx('grid grid-cols-1 xl:grid-cols-2 gap-6 min-w-0', className)}>
-      {entries.map(([key, value]) => (
-        <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden [overflow-wrap:anywhere]">
-          <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3 break-words">
-            {humanLabel(key)}
-          </h4>
-          <StructuredReportValue fieldKey={key} value={value} />
-        </div>
-      ))}
+      {entries.map(([key, value]) => {
+        const citations = vendorName && onOpenWitness
+          ? citationEntriesForSection(registry, key, value, data)
+          : []
+        return (
+          <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden [overflow-wrap:anywhere]">
+            <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3 break-words">
+              {humanLabel(key)}
+            </h4>
+            <StructuredReportValue fieldKey={key} value={value} />
+            {vendorName && onOpenWitness && citations.length > 0 && (
+              <div className="mt-3">
+                <CitationBar
+                  citations={citations}
+                  vendorName={vendorName}
+                  onOpenWitness={onOpenWitness}
+                />
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

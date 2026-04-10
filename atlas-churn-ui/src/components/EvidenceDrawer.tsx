@@ -4,6 +4,7 @@ import {
   Star, Tag, Fingerprint, FileText, ChevronRight, Loader2,
   Pin, Flag, EyeOff, RotateCcw,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { fetchWitness, fetchAnnotations, setAnnotation, removeAnnotations } from '../api/client'
 import type { EvidenceWitnessDetail, EvidenceAnnotation } from '../api/client'
@@ -168,7 +169,7 @@ export default function EvidenceDrawer({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div className="fixed inset-0 z-[60] flex justify-end">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
@@ -375,7 +376,15 @@ export default function EvidenceDrawer({
               <div>
                 <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                   <FileText className="w-3 h-3" /> Source Review
-                  {witness.source_url && (
+                  {witness.vendor_name && (
+                <Link
+                  to={`/reports?vendor_filter=${encodeURIComponent(witness.vendor_name)}`}
+                  className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
+                >
+                  View reports <ExternalLink className="h-3 w-3" />
+                </Link>
+              )}
+              {witness.source_url && (
                     <a href={witness.source_url} target="_blank" rel="noopener noreferrer"
                        className="ml-auto text-cyan-400 hover:text-cyan-300 flex items-center gap-1">
                       <ExternalLink className="w-3 h-3" /> View original

@@ -2650,12 +2650,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ]
         if "_known_vendors" not in blueprint.data_context:
             try:
-                vendor_rows = await pool.fetch(
-                    "SELECT DISTINCT vendor_name FROM b2b_churn_signals"
-                )
-                blueprint.data_context["_known_vendors"] = [
-                    row["vendor_name"] for row in vendor_rows if row["vendor_name"]
-                ]
+                from ._b2b_shared import read_known_vendor_names
+
+                blueprint.data_context["_known_vendors"] = await read_known_vendor_names(pool)
             except Exception:
                 blueprint.data_context["_known_vendors"] = []
 
@@ -3838,15 +3835,12 @@ async def _rerank_topic_candidates_with_reasoning(
         cat_vendors_needed = category_set - {v.lower() for v in vendor_set}
         if cat_vendors_needed:
             try:
+                from ._b2b_shared import read_category_vendor_rows
+
                 _as_of_filter = as_of or date.today()
-                cat_vendor_rows = await pool.fetch(
-                    """
-                    SELECT DISTINCT vendor_name, product_category
-                    FROM b2b_product_profiles
-                    WHERE LOWER(product_category) = ANY($1)
-                    ORDER BY vendor_name
-                    """,
-                    [c.lower() for c in cat_vendors_needed],
+                cat_vendor_rows = await read_category_vendor_rows(
+                    pool,
+                    category_names=cat_vendors_needed,
                 )
                 for row in cat_vendor_rows:
                     vn = row.get("vendor_name")
@@ -4290,106 +4284,23 @@ async def _select_topic(
 
 async def _find_vendor_alternative_candidates(pool) -> list[dict[str, Any]]:
     """Vendors with high churn + affiliate partner covering the category."""
-    rows = await pool.fetch(
-        """
-        SELECT
-            cs.vendor_name AS vendor,
-            cs.product_category AS category,
-            cs.avg_urgency_score AS urgency,
-            cs.total_reviews AS review_count,
-            ap.id AS affiliate_id,
-            ap.name AS affiliate_name,
-            ap.product_name AS affiliate_product,
-            ap.affiliate_url
-        FROM b2b_churn_signals cs
-        LEFT JOIN affiliate_partners ap
-            ON LOWER(ap.category) = LOWER(cs.product_category)
-            AND ap.enabled = true
-        WHERE cs.avg_urgency_score >= 6
-          AND cs.total_reviews >= 5
-        ORDER BY cs.avg_urgency_score * cs.total_reviews DESC
-        LIMIT 15
-        """
-    )
-    return [
-        {
-            "vendor": r["vendor"],
-            "category": r["category"],
-            "urgency": float(r["urgency"]),
-            "review_count": r["review_count"],
-            "has_affiliate": r["affiliate_id"] is not None,
-            "affiliate_id": str(r["affiliate_id"]) if r["affiliate_id"] else None,
-            "affiliate_name": r["affiliate_name"],
-            "affiliate_product": r["affiliate_product"],
-            "affiliate_url": r["affiliate_url"],
-        }
-        for r in rows
-    ]
+    from ._b2b_shared import read_vendor_alternative_candidates
+
+    return await read_vendor_alternative_candidates(pool)
 
 
 async def _find_vendor_showdown_candidates(pool) -> list[dict[str, Any]]:
     """Pairs of vendors in the same category with contrasting pain profiles."""
-    rows = await pool.fetch(
-        """
-        SELECT
-            a.vendor_name AS vendor_a, b.vendor_name AS vendor_b,
-            a.product_category AS category,
-            a.total_reviews AS reviews_a, b.total_reviews AS reviews_b,
-            (a.total_reviews + b.total_reviews) AS total_reviews,
-            a.avg_urgency_score AS urgency_a, b.avg_urgency_score AS urgency_b,
-            ABS(a.avg_urgency_score - b.avg_urgency_score) AS pain_diff
-        FROM b2b_churn_signals a
-        JOIN b2b_churn_signals b
-            ON a.product_category = b.product_category
-            AND a.vendor_name < b.vendor_name
-        WHERE a.total_reviews >= 10 AND b.total_reviews >= 10
-        ORDER BY (a.total_reviews + b.total_reviews) DESC
-        LIMIT 80
-        """
-    )
-    return [
-        {
-            "vendor_a": r["vendor_a"],
-            "vendor_b": r["vendor_b"],
-            "category": r["category"],
-            "reviews_a": r["reviews_a"],
-            "reviews_b": r["reviews_b"],
-            "total_reviews": r["total_reviews"],
-            "urgency_a": round(float(r["urgency_a"]), 1),
-            "urgency_b": round(float(r["urgency_b"]), 1),
-            "pain_diff": round(float(r["pain_diff"]), 1),
-        }
-        for r in rows
-    ]
+    from ._b2b_shared import read_vendor_showdown_candidates
+
+    return await read_vendor_showdown_candidates(pool)
 
 
 async def _find_churn_report_candidates(pool) -> list[dict[str, Any]]:
     """Single vendor with high urgency + many negative reviews."""
-    rows = await pool.fetch(
-        """
-        SELECT
-            vendor_name AS vendor,
-            product_category AS category,
-            negative_reviews,
-            avg_urgency_score AS avg_urgency,
-            total_reviews
-        FROM b2b_churn_signals
-        WHERE negative_reviews >= 8
-          AND avg_urgency_score >= 6
-        ORDER BY negative_reviews * avg_urgency_score DESC
-        LIMIT 10
-        """
-    )
-    return [
-        {
-            "vendor": r["vendor"],
-            "category": r["category"],
-            "negative_reviews": r["negative_reviews"],
-            "avg_urgency": round(float(r["avg_urgency"]), 1),
-            "total_reviews": r["total_reviews"],
-        }
-        for r in rows
-    ]
+    from ._b2b_shared import read_churn_report_candidates
+
+    return await read_churn_report_candidates(pool)
 
 
 async def _find_migration_guide_candidates(pool) -> list[dict[str, Any]]:
@@ -4632,35 +4543,13 @@ async def _find_vendor_deep_dive_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_market_landscape_candidates(pool) -> list[dict[str, Any]]:
     """Categories with multiple vendors -- write a landscape overview."""
+    from ._b2b_shared import read_market_landscape_candidates
+
     min_vendor_profiles = _blog_min_vendor_profiles("market_landscape")
-    rows = await pool.fetch(
-        """
-        SELECT
-            pp.product_category AS category,
-            COUNT(DISTINCT pp.vendor_name) AS vendor_count,
-            COALESCE(SUM(cs.total_reviews), 0) AS total_reviews,
-            ROUND(AVG(cs.avg_urgency_score)::numeric, 1) AS avg_urgency
-        FROM b2b_product_profiles pp
-        JOIN b2b_churn_signals cs
-          ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
-         AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
-        WHERE pp.product_category IS NOT NULL AND pp.product_category != ''
-        GROUP BY pp.product_category
-        HAVING COUNT(DISTINCT pp.vendor_name) >= $1
-        ORDER BY COUNT(DISTINCT pp.vendor_name) DESC, COALESCE(SUM(cs.total_reviews), 0) DESC
-        LIMIT 10
-        """,
-        min_vendor_profiles,
+    return await read_market_landscape_candidates(
+        pool,
+        min_vendor_profiles=min_vendor_profiles,
     )
-    return [
-        {
-            "category": r["category"],
-            "vendor_count": r["vendor_count"],
-            "total_reviews": r["total_reviews"],
-            "avg_urgency": float(r["avg_urgency"]),
-        }
-        for r in rows
-    ]
 
 
 async def _batch_vendor_review_counts(
@@ -5052,11 +4941,12 @@ async def _load_pool_layers_for_blog(
         ).strip()
         if category_name:
             try:
-                cat_rows = await pool.fetch(
-                    "SELECT DISTINCT vendor_name FROM b2b_product_profiles "
-                    "WHERE LOWER(product_category) = LOWER($1) "
-                    "LIMIT 10",
-                    category_name,
+                from ._b2b_shared import read_category_vendor_rows
+
+                cat_rows = await read_category_vendor_rows(
+                    pool,
+                    category_names=[category_name],
+                    limit=10,
                 )
                 view_names = [r["vendor_name"] for r in cat_rows if r.get("vendor_name")]
             except Exception:
@@ -5494,9 +5384,11 @@ async def _gather_data(
         category = topic_ctx["category"]
         sources = _blog_source_allowlist()
         # Fetch all profiles in category
-        vendor_rows = await pool.fetch(
-            "SELECT DISTINCT vendor_name FROM b2b_product_profiles WHERE product_category = $1",
-            category,
+        from ._b2b_shared import read_category_vendor_rows
+
+        vendor_rows = await read_category_vendor_rows(
+            pool,
+            category_names=[category],
         )
         profiles = []
         vendor_signals = []
@@ -5566,17 +5458,12 @@ async def _gather_data(
         category = topic_ctx["category"]
         sources = _blog_source_allowlist()
         # Fetch all vendors in this category
-        vendor_rows = await pool.fetch(
-            """
-            SELECT DISTINCT pp.vendor_name
-            FROM b2b_product_profiles pp
-            JOIN b2b_churn_signals cs
-              ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
-             AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
-            WHERE pp.product_category = $1
-            ORDER BY pp.vendor_name
-            """,
-            category,
+        from ._b2b_shared import read_category_vendor_rows
+
+        vendor_rows = await read_category_vendor_rows(
+            pool,
+            category_names=[category],
+            require_scorecard_match=True,
         )
         vendor_names = [r["vendor_name"] for r in vendor_rows]
         profiles = []
@@ -5831,16 +5718,10 @@ async def _fetch_pain_category_urgency(pool, vendor_name: str) -> dict[str, floa
 
 async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
     """Fetch churn signal data for a vendor from the aggregate table."""
-    row = await pool.fetchrow(
-        """
-        SELECT
-            avg_urgency_score, total_reviews, negative_reviews,
-            top_pain_categories, top_feature_gaps, top_competitors,
-            quotable_evidence, product_category
-        FROM b2b_churn_signals
-        WHERE vendor_name = $1
-        LIMIT 1
-        """,
+    from ._b2b_shared import read_vendor_scorecard_detail
+
+    row = await read_vendor_scorecard_detail(
+        pool,
         vendor_name,
     )
     if not row:

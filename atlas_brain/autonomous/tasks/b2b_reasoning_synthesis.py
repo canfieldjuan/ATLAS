@@ -779,13 +779,42 @@ def _prune_cross_vendor_scope_for_changed_vendors(
         for vendor_name in vendor_pools
         if vendor_name.lower() in changed_norm
     }
-    changed_categories = {value for value in changed_categories if value}
+    changed_categories_norm = {
+        str(value or "").strip().lower()
+        for value in changed_categories
+        if str(value or "").strip()
+    }
     categories = [
         category_name
         for category_name in scope_category_names
-        if str(category_name or "").strip() in changed_categories
+        if str(category_name or "").strip().lower() in changed_categories_norm
     ]
     return pairwise_pairs, categories, asymmetry_pairs
+
+
+def _canonicalize_scoped_vendor_pairs(
+    *,
+    vendor_pools: dict[str, dict[str, Any]],
+    pairs: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    vendor_name_lookup = {
+        str(vendor_name or "").strip().lower(): vendor_name
+        for vendor_name in vendor_pools
+        if str(vendor_name or "").strip()
+    }
+    canonical_pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for vendor_a, vendor_b in pairs:
+        canonical_a = vendor_name_lookup.get(str(vendor_a or "").strip().lower())
+        canonical_b = vendor_name_lookup.get(str(vendor_b or "").strip().lower())
+        if not canonical_a or not canonical_b or canonical_a.lower() == canonical_b.lower():
+            continue
+        normalized = tuple(sorted((canonical_a.lower(), canonical_b.lower())))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        canonical_pairs.append((canonical_a, canonical_b))
+    return canonical_pairs
 
 
 def _witness_row_payload(witness: dict[str, Any]) -> dict[str, Any]:
@@ -979,10 +1008,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             cross_vendor_failures = int(result.get("cross_vendor_failed", 0) or 0)
             total_successes = vendor_successes + cross_vendor_successes
             total_failures = vendor_failures + cross_vendor_failures
+            skip_reason = str(result.get("_skip_synthesis") or "").strip()
             status = "succeeded"
             if total_failures and total_successes:
                 status = "partial"
             elif total_failures and not total_successes:
+                status = "failed"
+            elif skip_reason and skip_reason != "No scoped synthesis work required":
                 status = "failed"
             await get_competitive_set_repo().mark_run_completed(
                 UUID(scope_id),
@@ -1022,6 +1054,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 run_id=run_id,
                 trigger=scope_trigger,
                 execution_id=str((task.metadata or {}).get("_execution_id") or "") or None,
+                summary={
+                    "force": force,
+                    "force_cross_vendor": force_cross_vendor,
+                    "changed_vendors_only": changed_vendors_only,
+                },
             )
         except Exception:
             logger.debug(
@@ -1363,6 +1400,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             len(scope_asymmetry_pairs),
             len(scoped_asymmetry_pairs_for_run),
         )
+
+    scoped_pairwise_pairs_for_run = _canonicalize_scoped_vendor_pairs(
+        vendor_pools=vendor_pools,
+        pairs=scoped_pairwise_pairs_for_run,
+    )
+    scoped_asymmetry_pairs_for_run = _canonicalize_scoped_vendor_pairs(
+        vendor_pools=vendor_pools,
+        pairs=scoped_asymmetry_pairs_for_run,
+    )
 
     run_cross_vendor = bool(cfg.cross_vendor_synthesis_enabled)
     scope_has_cross_vendor = bool(

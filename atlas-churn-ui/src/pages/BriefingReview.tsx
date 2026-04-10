@@ -367,6 +367,13 @@ export default function BriefingReview() {
                             <div className="flex items-center gap-2 mb-2 text-xs text-slate-400">
                               <Mail className="h-3 w-3" />
                               <span className="text-slate-300">{briefing.recipient_email}</span>
+                              <Link
+                                to={`/reports?vendor=${encodeURIComponent(briefing.vendor_name)}`}
+                                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 ml-2"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                Reports <ExternalLink className="h-3 w-3" />
+                              </Link>
                               {briefing.created_at && (
                                 <>
                                   <Clock className="h-3 w-3 ml-2" />

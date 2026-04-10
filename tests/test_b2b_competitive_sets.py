@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -564,6 +565,55 @@ async def test_run_competitive_set_now_uses_config_default_when_flag_omitted(mon
 
 
 @pytest.mark.asyncio
+async def test_run_competitive_set_now_passes_through_already_running(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    competitive_set = _competitive_set()
+    repo = SimpleNamespace(
+        get_by_id_for_account=AsyncMock(return_value=competitive_set),
+    )
+    scheduler = SimpleNamespace(
+        run_now=AsyncMock(return_value={
+            "status": "running",
+            "message": "Task 'b2b_reasoning_synthesis' is already running.",
+            "execution_id": "exec-existing",
+            "already_running": True,
+        }),
+    )
+    task = SimpleNamespace(metadata={"existing": True})
+    task_repo = SimpleNamespace(get_by_name=AsyncMock(return_value=task))
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(competitive_set.account_id),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(mod, "get_competitive_set_repo", lambda: repo)
+    monkeypatch.setattr(mod, "get_task_scheduler", lambda: scheduler)
+    monkeypatch.setattr(mod, "get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(
+        mod,
+        "load_vendor_category_map",
+        AsyncMock(return_value={"salesforce": "CRM", "hubspot": "CRM"}),
+    )
+
+    result = await mod.run_competitive_set_now(
+        competitive_set.id,
+        mod.CompetitiveSetRunRequest(),
+        user=user,
+    )
+
+    assert result["competitive_set_id"] == str(competitive_set.id)
+    assert result["execution_id"] == "exec-existing"
+    assert result["already_running"] is True
+
+
+@pytest.mark.asyncio
 async def test_competitive_scope_finalize_marks_cross_vendor_only_failures_as_failed(monkeypatch):
     from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
 
@@ -677,10 +727,118 @@ async def test_competitive_scope_finalize_preserves_force_flags_on_skip(monkeypa
 
     assert result["_skip_synthesis"] == "No pool data available"
     assert marked["competitive_set_id"] == str(scope_id)
+    assert marked["status"] == "failed"
     assert marked["summary"]["force"] is True
     assert marked["summary"]["force_cross_vendor"] is True
     assert marked["summary"]["changed_vendors_only"] is True
     assert marked["summary"]["_skip_synthesis"] == "No pool data available"
+
+
+@pytest.mark.asyncio
+async def test_competitive_scope_start_forwards_force_flags(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    started = {}
+    scope_id = uuid4()
+
+    class FakeRepo:
+        async def mark_run_started(self, competitive_set_id, *, run_id, trigger, execution_id=None, summary=None):
+            started["competitive_set_id"] = str(competitive_set_id)
+            started["run_id"] = run_id
+            started["trigger"] = trigger
+            started["execution_id"] = execution_id
+            started["summary"] = summary or {}
+
+        async def mark_run_completed(self, competitive_set_id, *, status, summary):
+            return None
+
+    class FakePool:
+        is_initialized = True
+
+    async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
+        return {}
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(mod.settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+        _fake_fetch_all_pool_layers,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.competitive_set.get_competitive_set_repo",
+        lambda: FakeRepo(),
+    )
+
+    await mod.run(SimpleNamespace(metadata={
+        "scope_type": "competitive_set",
+        "scope_id": str(scope_id),
+        "scope_vendor_names": ["Salesforce", "HubSpot"],
+        "force": True,
+        "force_cross_vendor": True,
+        "changed_vendors_only": True,
+        "scope_trigger": "manual",
+        "_execution_id": "exec-123",
+    }))
+
+    assert started["competitive_set_id"] == str(scope_id)
+    assert started["trigger"] == "manual"
+    assert started["execution_id"] == "exec-123"
+    assert started["summary"]["force"] is True
+    assert started["summary"]["force_cross_vendor"] is True
+    assert started["summary"]["changed_vendors_only"] is True
+
+
+@pytest.mark.asyncio
+async def test_competitive_set_repo_mark_run_started_persists_scope_flags(monkeypatch):
+    from atlas_brain.storage.repositories import competitive_set as mod
+
+    executed = []
+    competitive_set = _competitive_set()
+
+    class FakeConn:
+        async def execute(self, query, *args):
+            executed.append((query, args))
+
+    class FakeTransaction:
+        async def __aenter__(self):
+            return FakeConn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakePool:
+        is_initialized = True
+
+        def transaction(self):
+            return FakeTransaction()
+
+    repo = mod.CompetitiveSetRepository()
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(repo, "get_by_id", AsyncMock(return_value=competitive_set))
+
+    await repo.mark_run_started(
+        competitive_set.id,
+        run_id="run-123",
+        trigger="manual",
+        execution_id="exec-123",
+        summary={
+            "force": True,
+            "force_cross_vendor": True,
+            "changed_vendors_only": True,
+        },
+    )
+
+    insert_summary = json.loads(executed[0][1][5])
+    update_summary = json.loads(executed[1][1][1])
+
+    assert insert_summary["run_id"] == "run-123"
+    assert insert_summary["trigger"] == "manual"
+    assert insert_summary["execution_id"] == "exec-123"
+    assert insert_summary["force"] is True
+    assert insert_summary["force_cross_vendor"] is True
+    assert insert_summary["changed_vendors_only"] is True
+    assert update_summary == insert_summary
 
 
 @pytest.mark.asyncio

@@ -344,6 +344,7 @@ class CompetitiveSetRepository:
         run_id: str | None,
         trigger: str,
         execution_id: str | None = None,
+        summary: dict[str, Any] | None = None,
     ) -> None:
         pool = get_db_pool()
         if not pool.is_initialized:
@@ -351,12 +352,14 @@ class CompetitiveSetRepository:
         existing = await self.get_by_id(competitive_set_id)
         if not existing:
             raise DatabaseOperationError("mark competitive set run started", Exception("Competitive set not found"))
-        summary = {
+        run_summary = {
             "run_id": run_id,
             "trigger": trigger,
             "execution_id": execution_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
+        if isinstance(summary, dict):
+            run_summary.update(summary)
         try:
             async with pool.transaction() as conn:
                 await conn.execute(
@@ -379,7 +382,7 @@ class CompetitiveSetRepository:
                     str(run_id or ""),
                     trigger,
                     execution_id,
-                    json.dumps(summary),
+                    json.dumps(run_summary, default=str),
                 )
                 await conn.execute(
                     """
@@ -391,7 +394,7 @@ class CompetitiveSetRepository:
                     WHERE id = $1
                     """,
                     competitive_set_id,
-                    json.dumps(summary),
+                    json.dumps(run_summary, default=str),
                 )
         except DatabaseUnavailableError:
             raise

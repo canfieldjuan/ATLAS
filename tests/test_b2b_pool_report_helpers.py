@@ -296,6 +296,238 @@ async def test_read_vendor_scorecard_inventory_rows_matches_provisioning_shape()
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_churn_signals": {
+                "price_complaint_rate": 0.2,
+                "decision_maker_churn_rate": 0.4,
+                "total_reviews": 40,
+                "signal_reviews": 20,
+                "churn_intent_count": 5,
+                "avg_urgency_score": 6.5,
+                "top_competitors": [{"name": "Freshdesk"}],
+                "sentiment_distribution": {"declining": 4, "improving": 1},
+            },
+        },
+    )
+
+    row = await shared_mod.read_vendor_scorecard_metrics(pool, vendor_name="Zendesk")
+
+    assert row == {
+        "price_complaint_rate": 0.2,
+        "decision_maker_churn_rate": 0.4,
+        "total_reviews": 40,
+        "signal_reviews": 20,
+        "churn_intent_count": 5,
+        "avg_urgency_score": 6.5,
+        "top_competitors": [{"name": "Freshdesk"}],
+        "sentiment_distribution": {"declining": 4, "improving": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_market_landscape_candidates_uses_category_vendor_floor():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_product_profiles pp": [
+                {
+                    "category": "CRM",
+                    "vendor_count": 4,
+                    "total_reviews": 220,
+                    "avg_urgency": 6.4,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_market_landscape_candidates(
+        pool,
+        min_vendor_profiles=4,
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_product_profiles pp" in call[0])
+    assert score_call[1] == (4, 10)
+    assert "JOIN b2b_churn_signals cs" in score_call[0]
+    assert rows == [
+        {
+            "category": "CRM",
+            "vendor_count": 4,
+            "total_reviews": 220,
+            "avg_urgency": 6.4,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_alternative_candidates_uses_scorecard_thresholds():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals cs": [
+                {
+                    "vendor": "HubSpot",
+                    "category": "CRM",
+                    "urgency": 8.4,
+                    "review_count": 42,
+                    "affiliate_id": uuid4(),
+                    "affiliate_name": "Partner",
+                    "affiliate_product": "CRM Boost",
+                    "affiliate_url": "https://example.com",
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_alternative_candidates(pool)
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals cs" in call[0])
+    assert score_call[1] == (6.0, 5, 15)
+    assert "LEFT JOIN affiliate_partners ap" in score_call[0]
+    assert rows[0]["vendor"] == "HubSpot"
+    assert rows[0]["has_affiliate"] is True
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_showdown_candidates_uses_review_floor():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals a": [
+                {
+                    "vendor_a": "Zendesk",
+                    "vendor_b": "Freshdesk",
+                    "category": "Support",
+                    "reviews_a": 50,
+                    "reviews_b": 47,
+                    "total_reviews": 97,
+                    "urgency_a": 7.1,
+                    "urgency_b": 6.4,
+                    "pain_diff": 0.7,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_showdown_candidates(pool)
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals a" in call[0])
+    assert score_call[1] == (10, 80)
+    assert "JOIN b2b_churn_signals b" in score_call[0]
+    assert rows == [
+        {
+            "vendor_a": "Zendesk",
+            "vendor_b": "Freshdesk",
+            "category": "Support",
+            "reviews_a": 50,
+            "reviews_b": 47,
+            "total_reviews": 97,
+            "urgency_a": 7.1,
+            "urgency_b": 6.4,
+            "pain_diff": 0.7,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_churn_report_candidates_uses_negative_review_thresholds():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {
+                    "vendor": "HubSpot",
+                    "category": "CRM",
+                    "negative_reviews": 11,
+                    "avg_urgency": 7.2,
+                    "total_reviews": 52,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_churn_report_candidates(pool)
+
+    score_call = next(
+        call for call in pool.calls
+        if "FROM b2b_churn_signals" in call[0] and "negative_reviews >=" in call[0]
+    )
+    assert score_call[1] == (8, 6.0, 10)
+    assert rows == [
+        {
+            "vendor": "HubSpot",
+            "category": "CRM",
+            "negative_reviews": 11,
+            "avg_urgency": 7.2,
+            "total_reviews": 52,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_category_vendor_rows_uses_profile_lookup_by_category():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_product_profiles": [
+                {"vendor_name": "Zendesk", "product_category": "Helpdesk"},
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_category_vendor_rows(
+        pool,
+        category_names=["Helpdesk"],
+        limit=10,
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_product_profiles" in call[0])
+    assert score_call[1] == (["helpdesk"], 10)
+    assert "JOIN b2b_churn_signals cs" not in score_call[0]
+    assert rows == [{"vendor_name": "Zendesk", "product_category": "Helpdesk"}]
+
+
+@pytest.mark.asyncio
+async def test_read_category_vendor_rows_can_require_scorecard_match():
+    pool = FakePool(
+        fetch_map={
+            "JOIN b2b_churn_signals cs": [
+                {"vendor_name": "HubSpot", "product_category": "CRM"},
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_category_vendor_rows(
+        pool,
+        category_names=["CRM"],
+        require_scorecard_match=True,
+    )
+
+    score_call = next(call for call in pool.calls if "JOIN b2b_churn_signals cs" in call[0])
+    assert score_call[1] == (["crm"],)
+    assert rows == [{"vendor_name": "HubSpot", "product_category": "CRM"}]
+
+
+@pytest.mark.asyncio
+async def test_read_known_vendor_names_orders_non_empty_vendors():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {"vendor_name": "HubSpot"},
+                {"vendor_name": ""},
+                {"vendor_name": None},
+                {"vendor_name": "Zendesk"},
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_known_vendor_names(pool)
+
+    score_call = next(
+        call for call in pool.calls
+        if "SELECT DISTINCT vendor_name" in call[0] and "FROM b2b_churn_signals" in call[0]
+    )
+    assert "ORDER BY vendor_name" in score_call[0]
+    assert rows == ["HubSpot", "Zendesk"]
+
+
+@pytest.mark.asyncio
 async def test_fetch_all_pool_layers_prefers_specific_profile_category_over_generic_vault():
     pool = FakePool(
         fetch_map={
