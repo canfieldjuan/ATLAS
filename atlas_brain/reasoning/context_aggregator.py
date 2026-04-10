@@ -318,6 +318,8 @@ async def _fetch_b2b_churn(
         return []
 
     try:
+        from ..autonomous.tasks._b2b_shared import read_company_churn_context
+
         if entity_type == "company":
             company_hint = entity_id
         else:
@@ -338,22 +340,11 @@ async def _fetch_b2b_churn(
             if not company_hint:
                 return []
 
-        rows = await pool.fetch(
-            """
-            SELECT vendor_name, product_category, avg_urgency_score,
-                   top_pain_categories, top_competitors,
-                   decision_maker_churn_rate, price_complaint_rate
-            FROM b2b_churn_signals
-            WHERE EXISTS (
-                SELECT 1 FROM jsonb_array_elements(company_churn_list) AS c
-                WHERE c->>'company' ILIKE '%' || $1 || '%'
-            )
-            ORDER BY avg_urgency_score DESC
-            LIMIT 5
-            """,
-            company_hint,
+        return await read_company_churn_context(
+            pool,
+            company_hint=company_hint,
+            limit=5,
         )
-        return [dict(r) for r in rows]
     except Exception:
         logger.debug("B2B churn context fetch failed", exc_info=True)
         return []
