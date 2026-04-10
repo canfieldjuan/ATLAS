@@ -868,9 +868,18 @@ export default function ProspectsPage() {
                     type="text"
                     value={overrideForm.company_name_raw}
                     onChange={(e) => setOverrideForm((f) => ({ ...f, company_name_raw: e.target.value }))}
-                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                    disabled={Boolean(editingOverrideId)}
+                    className={clsx(
+                      'w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50',
+                      editingOverrideId && 'cursor-not-allowed bg-slate-900/30 text-slate-500 focus:border-slate-700/50'
+                    )}
                     placeholder="Acme Corp"
                   />
+                  {editingOverrideId && (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Company name is locked while editing. Create a new override to rename the key.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Search Names (comma-separated)</label>
