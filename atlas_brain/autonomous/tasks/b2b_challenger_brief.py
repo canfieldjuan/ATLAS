@@ -20,7 +20,7 @@ from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ._b2b_shared import (
-    _fetch_latest_evidence_vault,
+    read_vendor_intelligence_map,
     _segment_targeting_summary,
     _timing_summary_payload,
 )
@@ -1918,7 +1918,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     try:
-        evidence_vault_lookup = await _fetch_latest_evidence_vault(
+        evidence_vault_lookup = await read_vendor_intelligence_map(
             pool,
             as_of=today,
             analysis_window_days=window_days,

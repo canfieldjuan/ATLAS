@@ -111,7 +111,7 @@ from ._b2b_shared import (  # noqa: E402
     _fetch_data_context,
     _fetch_vendor_provenance,
     _fetch_vendor_churn_scores,
-    _fetch_vendor_churn_scores_from_signals,
+    read_vendor_scorecards,
     _sync_vendor_firmographics,
     _fetch_high_intent_companies,
     _fetch_existing_company_signals,
@@ -3084,7 +3084,7 @@ async def gather_intelligence_data(
 
     if include_raw_artifacts:
         raw_results = await asyncio.gather(
-            _fetch_vendor_churn_scores_from_signals(pool, window_days, min_reviews),
+            read_vendor_scorecards(pool, window_days=window_days, min_reviews=min_reviews),
             _fetch_keyword_spikes(pool),
             _fetch_product_profiles(pool),
             _fetch_review_text_aggregates(pool, window_days),

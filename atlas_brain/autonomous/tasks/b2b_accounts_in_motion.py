@@ -1221,7 +1221,7 @@ async def run(task: ScheduledTask, *, as_of: date | None = None) -> dict[str, An
         _fetch_churning_companies,
         _fetch_competitive_displacement_source_of_truth,
         _fetch_latest_account_intelligence,
-        _fetch_latest_evidence_vault,
+        read_vendor_intelligence_map,
         _fetch_feature_gaps,
         _fetch_high_intent_companies,
         _fetch_price_complaint_rates,
@@ -1350,7 +1350,7 @@ async def run(task: ScheduledTask, *, as_of: date | None = None) -> dict[str, An
 
     competitive_disp = _aggregate_competitive_disp(competitive_disp)
     try:
-        evidence_vault_lookup = await _fetch_latest_evidence_vault(
+        evidence_vault_lookup = await read_vendor_intelligence_map(
             pool,
             as_of=today,
             analysis_window_days=window_days,
