@@ -29,6 +29,17 @@ _TENANT_REPORT_CACHE_STAGE = "b2b_tenant_report.synthesis_chunk"
 _TENANT_REPORT_TRACE_SPAN = "task.b2b_tenant_report"
 
 
+async def _check_freshness(pool) -> date | None:
+    """Return today's date if the core run completed canonically, else None."""
+    from ._b2b_shared import has_complete_core_run_marker
+
+    today = date.today()
+    if not await has_complete_core_run_marker(pool, today):
+        logger.info("Core run not complete for %s, skipping tenant reports", today)
+        return None
+    return today
+
+
 def _tenant_report_llm_model(llm_usage: dict[str, Any] | None) -> str:
     """Persist the actual model when tenant report synthesis used an LLM."""
     model = str((llm_usage or {}).get("model") or "").strip()
@@ -1272,6 +1283,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
 
+    today = await _check_freshness(pool)
+    if today is None:
+        return {"_skip_synthesis": "Core signals not fresh for today"}
+
     # Only generate for accounts with b2b_starter+ plans (reports require b2b_starter)
     accounts = await pool.fetch(
         """
@@ -1294,7 +1309,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     from .b2b_churn_intelligence import gather_intelligence_data
 
     reports_generated = 0
-    today = date.today()
 
     for acct in accounts:
         account_id = acct["account_id"]

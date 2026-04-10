@@ -10,6 +10,7 @@ from atlas_brain.autonomous.tasks.b2b_churn_intelligence import (
     _compact_vendor_churn_scores_for_llm,
 )
 from atlas_brain.autonomous.tasks.b2b_tenant_report import (
+    _check_freshness,
     _apply_tenant_report_context,
     _apply_tenant_synthesis_context,
     _build_deterministic_tenant_report,
@@ -24,6 +25,7 @@ from atlas_brain.autonomous.tasks.b2b_tenant_report import (
     _tenant_report_chunk_size,
     _tenant_report_data_density,
     _tenant_report_llm_model,
+    run,
 )
 
 
@@ -93,6 +95,47 @@ def test_tenant_report_data_density_includes_batch_metrics():
     assert density["llm_batch_fallback_single_call_items"] == 1
     assert density["llm_batch_completed_items"] == 2
     assert density["llm_batch_failed_items"] == 1
+
+
+@pytest.mark.asyncio
+async def test_check_freshness_requires_complete_core_marker(monkeypatch):
+    pool = SimpleNamespace()
+    marker = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.has_complete_core_run_marker",
+        marker,
+    )
+
+    assert await _check_freshness(pool) is None
+    marker.assert_awaited_once_with(pool, date.today())
+
+
+@pytest.mark.asyncio
+async def test_run_skips_when_core_signals_not_fresh(monkeypatch):
+    pool = SimpleNamespace(is_initialized=True, fetch=AsyncMock())
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_tenant_report.get_db_pool",
+        lambda: pool,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_tenant_report.settings.b2b_churn.enabled",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_tenant_report.settings.b2b_churn.intelligence_enabled",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.has_complete_core_run_marker",
+        AsyncMock(return_value=False),
+    )
+
+    result = await run(SimpleNamespace(id="task-id", metadata={}))
+
+    assert result == {"_skip_synthesis": "Core signals not fresh for today"}
+    assert pool.fetch.await_count == 0
 
 
 @pytest.mark.asyncio
