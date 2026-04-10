@@ -22,6 +22,11 @@ from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
 from ..config import settings
+from ..services.b2b.source_impact import (
+    build_source_impact_ledger,
+    get_consumer_wiring_baseline,
+    summarize_source_field_baseline,
+)
 from ..services.b2b.report_trust import report_trust_payload
 from ..services.tracing import (
     build_business_trace_context,
@@ -1663,6 +1668,66 @@ async def list_source_capabilities(
             for name, cap in sorted(all_caps.items())
         ],
         "total": len(all_caps),
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /source-impact-ledger
+# ---------------------------------------------------------------------------
+
+
+@router.get("/source-impact-ledger")
+async def get_source_impact_ledger(
+    source: Optional[str] = Query(None),
+    window_days: int = Query(90, ge=1, le=3650),
+    include_field_baseline: bool = Query(True),
+    include_consumer_wiring: bool = Query(True),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+):
+    """Return source-to-pool impact mappings plus live field and wiring baselines."""
+    if source:
+        source = source.strip().lower()
+        if source not in _KNOWN_SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid source. Must be one of: {sorted(_KNOWN_SOURCES)}",
+            )
+
+    ledger = build_source_impact_ledger(source=source)
+    field_baseline: dict[str, Any] | None = None
+    if include_field_baseline:
+        pool = get_db_pool()
+        if pool.is_initialized:
+            field_baseline = await summarize_source_field_baseline(
+                pool,
+                window_days=window_days,
+                source=source,
+            )
+        else:
+            field_baseline = {
+                "available": False,
+                "reason": "Database not ready",
+                "window_days": window_days,
+                "source_filter": source,
+                "rows": [],
+                "summary": {
+                    "total_sources": 0,
+                    "total_reviews": 0,
+                    "total_enriched_reviews": 0,
+                },
+            }
+
+    consumer_wiring = (
+        get_consumer_wiring_baseline() if include_consumer_wiring else None
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "window_days": window_days,
+        "source_filter": source,
+        "impact_summary": ledger["summary"],
+        "sources": ledger["sources"],
+        "field_baseline": field_baseline,
+        "consumer_wiring": consumer_wiring,
     }
 
 

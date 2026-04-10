@@ -10,6 +10,13 @@ from ._shared import (
     VALID_SOURCES,
 )
 from .server import mcp
+from ...services.b2b.source_impact import (
+    build_source_impact_ledger,
+    get_consumer_wiring_baseline,
+    summarize_source_field_baseline,
+)
+
+_MAX_IMPACT_WINDOW_DAYS = 3650
 
 
 @mcp.tool()
@@ -412,6 +419,76 @@ async def get_source_capabilities(
         "total": len(all_profiles),
         "profiles": [p.to_dict() for p in all_profiles.values()],
     })
+
+
+@mcp.tool()
+async def get_source_impact_ledger(
+    source: Optional[str] = None,
+    window_days: int = 90,
+    include_field_baseline: bool = True,
+    include_consumer_wiring: bool = True,
+) -> str:
+    """
+    Return the source-by-pool impact ledger with optional live field and wiring baselines.
+
+    source: Optional source filter
+    window_days: Live field-baseline lookback window (default 90)
+    include_field_baseline: Include live b2b_reviews field-coverage metrics when DB is ready
+    include_consumer_wiring: Include downstream consumer wiring baseline
+    """
+    window_days = max(1, min(window_days, _MAX_IMPACT_WINDOW_DAYS))
+    valid_source_names = sorted(
+        str(member.value if hasattr(member, "value") else member)
+        for member in VALID_SOURCES
+    )
+    if source:
+        source = source.strip().lower()
+        if source not in valid_source_names:
+            return json.dumps({
+                "success": False,
+                "error": f"source must be one of {valid_source_names}",
+            })
+
+    try:
+        ledger = build_source_impact_ledger(source=source)
+        field_baseline = None
+        if include_field_baseline:
+            pool = get_pool()
+            if pool.is_initialized:
+                field_baseline = await summarize_source_field_baseline(
+                    pool,
+                    window_days=window_days,
+                    source=source,
+                )
+            else:
+                field_baseline = {
+                    "available": False,
+                    "reason": "Database not ready",
+                    "window_days": window_days,
+                    "source_filter": source,
+                    "rows": [],
+                    "summary": {
+                        "total_sources": 0,
+                        "total_reviews": 0,
+                        "total_enriched_reviews": 0,
+                    },
+                }
+
+        consumer_wiring = (
+            get_consumer_wiring_baseline() if include_consumer_wiring else None
+        )
+        return json.dumps({
+            "success": True,
+            "window_days": window_days,
+            "source_filter": source,
+            "impact_summary": ledger["summary"],
+            "sources": ledger["sources"],
+            "field_baseline": field_baseline,
+            "consumer_wiring": consumer_wiring,
+        }, default=str)
+    except Exception:
+        logger.exception("get_source_impact_ledger error")
+        return json.dumps({"success": False, "error": "Internal error"})
 
 
 @mcp.tool()
