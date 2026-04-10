@@ -39,6 +39,9 @@ from ...reasoning.wedge_registry import Wedge, get_wedge_meta
 from ._execution_progress import task_run_id as _task_execution_run_id
 from ._b2b_shared import (
     read_vendor_intelligence_map as _read_vendor_intelligence_map,
+    read_vendor_intelligence_records as _read_vendor_intelligence_records,
+    read_vendor_scorecard_details as _read_vendor_scorecard_details,
+    _align_vendor_intelligence_records_to_scorecards,
     _segment_targeting_summary,
     _timing_summary_payload,
     fetch_all_pool_layers,
@@ -66,6 +69,55 @@ async def _fetch_latest_evidence_vault(
         analysis_window_days=analysis_window_days,
         vendor_names=vendor_names,
     )
+
+
+async def _fetch_latest_evidence_vault_records(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+    vendor_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Read canonical vendor-intelligence records with run metadata."""
+    return await _read_vendor_intelligence_records(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+        vendor_names=vendor_names,
+    )
+
+
+def _blog_vendor_lookup_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+async def _fetch_vendor_scorecard_details(
+    pool,
+    *,
+    vendor_names: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Read detailed scorecard rows keyed by requested vendor label."""
+    requested_vendors = [str(name or "").strip() for name in (vendor_names or []) if str(name or "").strip()]
+    if not requested_vendors:
+        return {}
+    rows = await _read_vendor_scorecard_details(
+        pool,
+        vendor_names=requested_vendors,
+    )
+    requested_by_key = {
+        _blog_vendor_lookup_key(name): name
+        for name in requested_vendors
+    }
+    detail_lookup: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        vendor_name = str(row.get("vendor_name") or "").strip()
+        if not vendor_name:
+            continue
+        detail_lookup[vendor_name] = row
+        requested_name = requested_by_key.get(_blog_vendor_lookup_key(vendor_name))
+        if requested_name:
+            detail_lookup[requested_name] = row
+    return detail_lookup
 
 _BLOG_GENERATION_CACHE_STAGE = "b2b_blog_post_generation.content"
 _BLOG_GENERATION_TRACE_SPAN = "task.b2b_blog_post_generation"
@@ -5098,27 +5150,49 @@ async def _gather_data(
         for key in ("vendor", "vendor_a", "vendor_b", "from_vendor")
         if str(topic_ctx.get(key) or "").strip()
     ]
+    scorecard_detail_lookup: dict[str, dict[str, Any]] = {}
     try:
-        evidence_vault_lookup = (
-            await _fetch_latest_evidence_vault(
-                pool,
-                as_of=date.today(),
-                analysis_window_days=settings.b2b_churn.intelligence_window_days,
-                vendor_names=vendor_names,
+        if vendor_names:
+            evidence_vault_records, scorecard_detail_lookup = await asyncio.gather(
+                _fetch_latest_evidence_vault_records(
+                    pool,
+                    as_of=date.today(),
+                    analysis_window_days=settings.b2b_churn.intelligence_window_days,
+                    vendor_names=vendor_names,
+                ),
+                _fetch_vendor_scorecard_details(
+                    pool,
+                    vendor_names=vendor_names,
+                ),
             )
-            if vendor_names else
-            {}
-        )
+            evidence_vault_lookup, vault_alignment = (
+                _align_vendor_intelligence_records_to_scorecards(
+                    list(scorecard_detail_lookup.values()),
+                    evidence_vault_records,
+                )
+            )
+            if vault_alignment["mismatched_vendor_count"] > 0:
+                logger.info(
+                    "Suppressed stale blog evidence-vault overlays for %s",
+                    ", ".join(vault_alignment["mismatched_vendors"]),
+                )
+        else:
+            evidence_vault_lookup = {}
     except Exception:
         logger.warning("Failed to load evidence vault for blog data gathering", exc_info=True)
         evidence_vault_lookup = {}
+        scorecard_detail_lookup = {}
 
     if topic_type == "vendor_alternative":
         vendor = topic_ctx["vendor"]
         category = topic_ctx["category"]
         profile, signals, reviews, partner, extended_ctx = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
-            _fetch_churn_signals(pool, vendor),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor,
+                detail_row=scorecard_detail_lookup.get(vendor),
+            ),
             _fetch_quotable_reviews(pool, vendor_name=vendor),
             _fetch_affiliate_partner(pool, topic_ctx.get("affiliate_id")),
             _fetch_vendor_extended_context(pool, vendor),
@@ -5141,8 +5215,16 @@ async def _gather_data(
         prof_a, prof_b, sigs_a, sigs_b, quotes = await asyncio.gather(
             _fetch_product_profile(pool, vendor_a),
             _fetch_product_profile(pool, vendor_b),
-            _fetch_churn_signals(pool, vendor_a),
-            _fetch_churn_signals(pool, vendor_b),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor_a,
+                detail_row=scorecard_detail_lookup.get(vendor_a),
+            ),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor_b,
+                detail_row=scorecard_detail_lookup.get(vendor_b),
+            ),
             _fetch_quotable_reviews(pool, category=topic_ctx["category"]),
             return_exceptions=True,
         )
@@ -5162,7 +5244,11 @@ async def _gather_data(
         vendor = topic_ctx["vendor"]
         profile, signals, quotes = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
-            _fetch_churn_signals(pool, vendor),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor,
+                detail_row=scorecard_detail_lookup.get(vendor),
+            ),
             _fetch_quotable_reviews(pool, vendor_name=vendor),
             return_exceptions=True,
         )
@@ -5180,7 +5266,11 @@ async def _gather_data(
         vendor = topic_ctx["vendor"]
         profile, signals, quotes, extended_ctx = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
-            _fetch_churn_signals(pool, vendor),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor,
+                detail_row=scorecard_detail_lookup.get(vendor),
+            ),
             _fetch_quotable_reviews(pool, vendor_name=vendor),
             _fetch_vendor_extended_context(pool, vendor),
             return_exceptions=True,
@@ -5200,7 +5290,11 @@ async def _gather_data(
         vendor = topic_ctx["vendor"]
         profile, signals = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
-            _fetch_churn_signals(pool, vendor),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor,
+                detail_row=scorecard_detail_lookup.get(vendor),
+            ),
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
@@ -5276,7 +5370,11 @@ async def _gather_data(
         vendor = topic_ctx["from_vendor"]
         profile, signals = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
-            _fetch_churn_signals(pool, vendor),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor,
+                detail_row=scorecard_detail_lookup.get(vendor),
+            ),
             return_exceptions=True,
         )
         data["profile"] = profile if not isinstance(profile, Exception) else {}
@@ -5395,7 +5493,11 @@ async def _gather_data(
         for vr in vendor_rows[:10]:
             vn = vr["vendor_name"]
             p = await _fetch_product_profile(pool, vn)
-            s = await _fetch_churn_signals(pool, vn)
+            s = await _fetch_blog_signal_rows(
+                pool,
+                vn,
+                detail_row=scorecard_detail_lookup.get(vn),
+            )
             if p:
                 # Also pull avg rating from raw reviews
                 rating_row = await pool.fetchrow(
@@ -5426,7 +5528,11 @@ async def _gather_data(
         vendor = topic_ctx["vendor"]
         profile, signals, quotes, extended_ctx = await asyncio.gather(
             _fetch_product_profile(pool, vendor),
-            _fetch_churn_signals(pool, vendor),
+            _fetch_blog_signal_rows(
+                pool,
+                vendor,
+                detail_row=scorecard_detail_lookup.get(vendor),
+            ),
             _fetch_quotable_reviews(pool, vendor_name=vendor),
             _fetch_vendor_extended_context(pool, vendor),
             return_exceptions=True,
@@ -5471,7 +5577,11 @@ async def _gather_data(
         for vn in vendor_names[:10]:
             try:
                 p = await _fetch_product_profile(pool, vn)
-                s = await _fetch_churn_signals(pool, vn)
+                s = await _fetch_blog_signal_rows(
+                    pool,
+                    vn,
+                    detail_row=scorecard_detail_lookup.get(vn),
+                )
                 rating_row = await pool.fetchrow(
                     "SELECT ROUND(AVG(rating)::numeric, 1) AS avg_rating, COUNT(*) AS cnt FROM b2b_reviews WHERE vendor_name = $1 AND rating IS NOT NULL AND duplicate_of_review_id IS NULL AND source = ANY($2)",
                     vn, sources,
@@ -5716,20 +5826,14 @@ async def _fetch_pain_category_urgency(pool, vendor_name: str) -> dict[str, floa
     }
 
 
-async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
-    """Fetch churn signal data for a vendor from the aggregate table."""
-    from ._b2b_shared import read_vendor_scorecard_detail
-
-    row = await read_vendor_scorecard_detail(
-        pool,
-        vendor_name,
-    )
+def _build_blog_signal_rows_from_scorecard_detail(
+    row: dict[str, Any],
+    *,
+    per_cat_urgency: dict[str, float],
+) -> list[dict[str, Any]]:
+    """Project one scorecard-detail row into blog signal rows."""
     if not row:
         return []
-
-    # Fetch per-category urgency from raw reviews (fixes broken chart data
-    # where every category showed the same vendor-level average)
-    per_cat_urgency = await _fetch_pain_category_urgency(pool, vendor_name)
     vendor_avg = round(float(row["avg_urgency_score"]), 1)
 
     # Unpack JSONB pain categories into structured list
@@ -5787,6 +5891,38 @@ async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
             "feature_gaps": [],
         })
     return results
+
+
+async def _fetch_blog_signal_rows(
+    pool,
+    vendor_name: str,
+    *,
+    detail_row: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch blog signal rows for one vendor from scorecard detail."""
+    row = detail_row
+    if row is None:
+        from ._b2b_shared import read_vendor_scorecard_detail
+
+        row = await read_vendor_scorecard_detail(
+            pool,
+            vendor_name,
+        )
+    if not row:
+        return []
+
+    # Fetch per-category urgency from raw reviews so category charts reflect
+    # the actual category average, not the rolled-up vendor average.
+    per_cat_urgency = await _fetch_pain_category_urgency(pool, vendor_name)
+    return _build_blog_signal_rows_from_scorecard_detail(
+        row,
+        per_cat_urgency=per_cat_urgency,
+    )
+
+
+async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
+    """Compatibility seam for callers that still fetch one vendor at a time."""
+    return await _fetch_blog_signal_rows(pool, vendor_name)
 
 
 async def _fetch_quotable_reviews(
