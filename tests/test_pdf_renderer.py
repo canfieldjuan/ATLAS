@@ -1,6 +1,8 @@
 from atlas_brain.services.b2b.pdf_renderer import (
     _battle_card_priority_segments,
     _battle_card_render_view,
+    _section_coverage_rows,
+    render_report_pdf,
 )
 
 
@@ -140,3 +142,38 @@ class TestBattleCardRenderView:
                 "disqualifier": "",
             },
         ]
+
+
+class TestReportPdfEvidenceCoverage:
+    def test_section_coverage_rows_summarize_witness_partial_and_thin_sections(self):
+        rows = _section_coverage_rows({
+            "key_insights": ["Strong expansion motion"],
+            "key_insights_reference_ids": {"witness_ids": ["wit-1"]},
+            "objection_handlers": ["Missing security proof points"],
+            "objection_handlers_reference_ids": {"metric_ids": ["metric-1"]},
+            "recommended_plays": ["Refresh proof points"],
+        })
+
+        assert rows == [
+            ("Witness-backed Sections", "1"),
+            ("Partial Evidence", "Objection Handlers"),
+            ("Thin Evidence", "Recommended Plays"),
+        ]
+
+    def test_render_report_pdf_includes_section_coverage_in_export_path(self):
+        pdf_bytes = render_report_pdf(
+            report_type="exploratory_overview",
+            vendor_filter="Zendesk",
+            report_date="2026-04-10",
+            executive_summary="Summary",
+            intelligence_data={
+                "key_insights": ["Strong expansion motion"],
+                "key_insights_reference_ids": {"witness_ids": ["wit-1"]},
+                "recommended_plays": ["Refresh proof points"],
+            },
+            data_density={"reviews": 12},
+        )
+
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:5] == b"%PDF-"
+        assert len(pdf_bytes) > 500

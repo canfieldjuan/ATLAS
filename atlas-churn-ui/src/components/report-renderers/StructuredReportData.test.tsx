@@ -1,8 +1,12 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { StructuredReportData } from './StructuredReportData'
 
 describe('StructuredReportData', () => {
+  beforeEach(() => {
+    cleanup()
+  })
+
   it('renders section-level citations from sibling metadata and hides raw metadata-only sections', () => {
     const onOpenWitness = vi.fn()
 
@@ -27,6 +31,8 @@ describe('StructuredReportData', () => {
     )
 
     expect(screen.getByText('Key Insights')).toBeInTheDocument()
+    expect(screen.getByText('Witness-backed')).toBeInTheDocument()
+    expect(screen.getByText('2 linked witness citations')).toBeInTheDocument()
     expect(screen.queryByText('Key Insights Reference Ids')).not.toBeInTheDocument()
     expect(screen.queryByText('Reasoning Reference Ids')).not.toBeInTheDocument()
 
@@ -35,5 +41,51 @@ describe('StructuredReportData', () => {
 
     fireEvent.click(citationButtons[0])
     expect(onOpenWitness).toHaveBeenCalledWith('w1', 'Zendesk')
+  })
+
+  it('shows explicit partial and thin evidence states when sections lack witness citations', () => {
+    render(
+      <StructuredReportData
+        data={{
+          objection_handlers: {
+            summary: 'Pricing objections are rising',
+            reference_ids: {
+              metric_ids: ['m1'],
+            },
+          },
+          recommended_plays: {
+            summary: 'Lead with migration support',
+          },
+        }}
+      />,
+    )
+
+    expect(screen.getByText('Partial evidence')).toBeInTheDocument()
+    expect(screen.getByText('Section has evidence metadata, but no linked witness citations yet.')).toBeInTheDocument()
+    expect(screen.getByText('Thin evidence')).toBeInTheDocument()
+    expect(screen.getByText('No linked witness citations for this section yet.')).toBeInTheDocument()
+  })
+
+  it('prefers backend-provided section evidence over local inference', () => {
+    render(
+      <StructuredReportData
+        data={{
+          recommended_plays: {
+            summary: 'Lead with migration support',
+          },
+        }}
+        sectionEvidence={{
+          recommended_plays: {
+            state: 'partial',
+            label: 'Partial evidence',
+            detail: 'Backend flagged this section for operator review.',
+          },
+        }}
+      />,
+    )
+
+    expect(screen.getByText('Partial evidence')).toBeInTheDocument()
+    expect(screen.getByText('Backend flagged this section for operator review.')).toBeInTheDocument()
+    expect(screen.queryByText('Thin evidence')).not.toBeInTheDocument()
   })
 })

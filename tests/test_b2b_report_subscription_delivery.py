@@ -33,6 +33,11 @@ def _selection(
     )
 
 
+@pytest.fixture(autouse=True)
+def _default_campaign_from_email(monkeypatch):
+    monkeypatch.setattr(mod, "_campaign_from_email", lambda: "atlas@example.com")
+
+
 @pytest.mark.asyncio
 async def test_send_subscription_email_retries_and_wraps_footer(monkeypatch):
     calls: list[dict] = []

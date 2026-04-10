@@ -1,5 +1,5 @@
-import { useNavigate, Link } from 'react-router-dom'
-import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell, Pencil } from 'lucide-react'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
+import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell, Pencil, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
@@ -8,6 +8,8 @@ import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import {
   buildReportLibraryViewScopeKey,
+  downloadReportPdf,
+  fetchReport,
   fetchReports,
   generateAccountComparisonReport,
   generateAccountDeepDiveReport,
@@ -56,14 +58,145 @@ function reportReviewState(report: Report): string {
   return report.review_state || report.trust?.review_state || 'clean'
 }
 
+function reportTitle(report: Report): string {
+  if (['vendor_comparison', 'account_comparison'].includes(report.report_type) && report.vendor_filter && report.category_filter) {
+    return `${report.vendor_filter} vs ${report.category_filter}`
+  }
+  if (report.report_type === 'challenger_brief' && report.vendor_filter && report.category_filter) {
+    return `${report.vendor_filter} → ${report.category_filter}`
+  }
+  return report.vendor_filter ?? report.report_type.replace(/_/g, ' ')
+}
+
+function reportSubscriptionLabel(report: Report): string {
+  return `${report.report_type.replace(/_/g, ' ')} - ${report.vendor_filter ?? 'all'}`
+}
+
+function reportExportPresentation(report: Report) {
+  if (report.has_pdf_export) {
+    return {
+      label: 'PDF ready',
+      className: 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20',
+    }
+  }
+
+  const artifactState = report.artifact_state || report.trust?.artifact_state
+  if (artifactState === 'processing') {
+    return {
+      label: 'Generating PDF',
+      className: 'bg-amber-500/10 text-amber-300 border border-amber-500/20',
+    }
+  }
+
+  if (artifactState === 'failed') {
+    return {
+      label: 'PDF failed',
+      className: 'bg-rose-500/10 text-rose-300 border border-rose-500/20',
+    }
+  }
+
+  return {
+    label: 'PDF unavailable',
+    className: 'bg-slate-800/70 text-slate-400 border border-slate-700/60',
+  }
+}
+
+function reportSubscriptionActionPresentation(reportSubscription: NonNullable<Report['report_subscription']> | null) {
+  if (!reportSubscription) {
+    return {
+      label: 'Subscribe',
+      className: 'bg-slate-800 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700',
+    }
+  }
+
+  if (reportSubscription.enabled) {
+    return {
+      label: 'Manage Subscription',
+      className: 'bg-cyan-900/20 border border-cyan-700/40 text-cyan-200 hover:bg-cyan-900/35',
+    }
+  }
+
+  return {
+    label: 'Resume Subscription',
+    className: 'bg-amber-500/10 border border-amber-500/25 text-amber-300 hover:bg-amber-500/20',
+  }
+}
+
+function reportDetailLocation(reportId: string, backTo: string) {
+  const next = new URLSearchParams()
+  if (backTo !== '/reports') {
+    next.set('back_to', backTo)
+  }
+
+  return {
+    pathname: `/reports/${reportId}`,
+    search: next.toString() ? `?${next.toString()}` : '',
+  }
+}
+
+const REPORT_BACK_TARGET_KEYS = [
+  'report_type',
+  'vendor_filter',
+  'quality_status',
+  'freshness_state',
+  'review_state',
+  'composer',
+  'primary_vendor',
+  'comparison_vendor',
+  'primary_company',
+  'comparison_company',
+  'deep_dive_company',
+  'battle_card_vendor',
+  'tab',
+  'subscription_id',
+] as const
+
+function buildReportsBackTarget(searchParams: URLSearchParams) {
+  const next = new URLSearchParams()
+  for (const key of REPORT_BACK_TARGET_KEYS) {
+    const value = searchParams.get(key)
+    if (value) next.set(key, value)
+  }
+  const qs = next.toString()
+  return qs ? `/reports?${qs}` : '/reports'
+}
+
+function buildReportSubscriptionLocation(searchParams: URLSearchParams, report: Report) {
+  const backTarget = buildReportsBackTarget(searchParams)
+  const next = new URLSearchParams(
+    backTarget.startsWith('/reports?') ? backTarget.slice('/reports?'.length) : '',
+  )
+  next.set('report_subscription', report.id)
+  next.set('report_focus_type', report.report_type)
+  if (report.vendor_filter) next.set('report_focus_vendor', report.vendor_filter)
+  else next.delete('report_focus_vendor')
+  next.set('report_focus_label', report.report_subscription?.scope_label ?? reportSubscriptionLabel(report))
+  const qs = next.toString()
+  return qs ? `/reports?${qs}` : '/reports'
+}
+
+type ReportComposer =
+  | 'vendor_comparison'
+  | 'account_deep_dive'
+  | 'account_comparison'
+  | 'battle_card'
+
+const REPORT_COMPOSERS = new Set<ReportComposer>([
+  'vendor_comparison',
+  'account_deep_dive',
+  'account_comparison',
+  'battle_card',
+])
+
 export default function Reports() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { canAccessReports } = usePlanGate()
-  const [typeFilter, setTypeFilter] = useState('')
-  const [qualityFilter, setQualityFilter] = useState('')
-  const [freshnessFilter, setFreshnessFilter] = useState('')
-  const [reviewFilter, setReviewFilter] = useState('')
-  const [vendorSearch, setVendorSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState(() => searchParams.get('report_type') ?? '')
+  const [qualityFilter, setQualityFilter] = useState(() => searchParams.get('quality_status') ?? '')
+  const [freshnessFilter, setFreshnessFilter] = useState(() => searchParams.get('freshness_state') ?? '')
+  const [reviewFilter, setReviewFilter] = useState(() => searchParams.get('review_state') ?? '')
+  const [vendorSearch, setVendorSearch] = useState(() => searchParams.get('vendor_filter') ?? '')
   const [debouncedVendor, setDebouncedVendor] = useState('')
   const [primaryVendor, setPrimaryVendor] = useState('')
   const [comparisonVendor, setComparisonVendor] = useState('')
@@ -76,28 +209,100 @@ export default function Reports() {
   const [battleCardVendor, setBattleCardVendor] = useState('')
   const [creatingBattleCard, setCreatingBattleCard] = useState(false)
   const [libSubOpen, setLibSubOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'library' | 'subscriptions'>('library')
+  const [activeComposer, setActiveComposer] = useState<ReportComposer | null>(() => {
+    const composer = searchParams.get('composer')
+    return composer && REPORT_COMPOSERS.has(composer as ReportComposer)
+      ? composer as ReportComposer
+      : null
+  })
+  const [activeTab, setActiveTab] = useState<'library' | 'subscriptions'>(
+    () => searchParams.get('tab') === 'subscriptions' ? 'subscriptions' : 'library',
+  )
   const [subscriptions, setSubscriptions] = useState<ReportSubscription[]>([])
   const [subLoading, setSubLoading] = useState(false)
   const [editingSub, setEditingSub] = useState<ReportSubscription | null>(null)
+  const [cardSubTarget, setCardSubTarget] = useState<{ scopeType: 'report'; scopeKey: string; scopeLabel: string } | null>(null)
+  const [savedReportSubscriptions, setSavedReportSubscriptions] = useState<Record<string, NonNullable<Report['report_subscription']>>>({})
+  const [requestedReportFallback, setRequestedReportFallback] = useState<Report | null>(null)
+  const [copiedReportLinkId, setCopiedReportLinkId] = useState<string | null>(null)
   const activeVendorFilter = debouncedVendor.trim()
+  const requestedReportSubscriptionId = searchParams.get('report_subscription') ?? ''
+  const requestedReportFocusType = searchParams.get('report_focus_type') ?? ''
+  const requestedReportFocusVendor = searchParams.get('report_focus_vendor') ?? ''
+  const requestedReportFocusLabel = searchParams.get('report_focus_label') ?? ''
+  const effectiveTypeFilter = typeFilter || (requestedReportSubscriptionId ? requestedReportFocusType : '')
+  const effectiveVendorFilter = activeVendorFilter || (requestedReportSubscriptionId ? requestedReportFocusVendor : '')
+  const reportsBackTarget = useMemo(() => buildReportsBackTarget(searchParams), [searchParams])
+
+  useEffect(() => {
+    const composer = searchParams.get('composer')
+    if (composer && REPORT_COMPOSERS.has(composer as ReportComposer)) {
+      setActiveComposer(composer as ReportComposer)
+    }
+    setPrimaryVendor(searchParams.get('primary_vendor') ?? '')
+    setComparisonVendor(searchParams.get('comparison_vendor') ?? '')
+    setPrimaryCompany(searchParams.get('primary_company') ?? '')
+    setComparisonCompany(searchParams.get('comparison_company') ?? '')
+    setDeepDiveCompany(searchParams.get('deep_dive_company') ?? '')
+    setBattleCardVendor(searchParams.get('battle_card_vendor') ?? '')
+  }, [searchParams])
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
     return () => clearTimeout(timer)
   }, [vendorSearch])
 
+  const updateReportsQuery = useCallback((updates: Record<string, string | null | undefined>) => {
+    const next = new URLSearchParams(searchParams)
+    Object.entries(updates).forEach(([key, value]) => {
+      const trimmed = typeof value === 'string' ? value.trim() : value
+      if (trimmed) next.set(key, trimmed)
+      else next.delete(key)
+    })
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const updateComposerParams = useCallback((composer: ReportComposer | null, updates: Record<string, string | null | undefined>) => {
+    updateReportsQuery({
+      composer: composer ?? undefined,
+      ...updates,
+    })
+  }, [updateReportsQuery])
+
+  const updateSearchFilterParams = useCallback((nextFilters: {
+    report_type?: string
+    vendor_filter?: string
+    quality_status?: string
+    freshness_state?: string
+    review_state?: string
+  }) => {
+    updateReportsQuery({
+      report_type: nextFilters.report_type ?? typeFilter,
+      vendor_filter: nextFilters.vendor_filter ?? vendorSearch,
+      quality_status: nextFilters.quality_status ?? qualityFilter,
+      freshness_state: nextFilters.freshness_state ?? freshnessFilter,
+      review_state: nextFilters.review_state ?? reviewFilter,
+    })
+  }, [
+    typeFilter,
+    vendorSearch,
+    qualityFilter,
+    freshnessFilter,
+    reviewFilter,
+    updateReportsQuery,
+  ])
+
   const { data, loading, error, refresh, refreshing } = useApiData(
     () => fetchReports({
-      report_type: typeFilter || undefined,
-      vendor_filter: activeVendorFilter || undefined,
+      report_type: effectiveTypeFilter || undefined,
+      vendor_filter: effectiveVendorFilter || undefined,
       quality_status: qualityFilter || undefined,
       freshness_state: freshnessFilter || undefined,
       review_state: reviewFilter || undefined,
       include_stale: freshnessFilter === 'stale',
       limit: 100,
     }),
-    [typeFilter, activeVendorFilter, qualityFilter, freshnessFilter, reviewFilter],
+    [effectiveTypeFilter, effectiveVendorFilter, qualityFilter, freshnessFilter, reviewFilter],
   )
 
   const PAGE_SIZES = [25, 50, 100] as const
@@ -180,6 +385,155 @@ export default function Reports() {
     void refreshSubs()
   }, [refreshSubs])
 
+  useEffect(() => {
+    const requestedSubscriptionId = searchParams.get('subscription_id') ?? ''
+    if (!requestedSubscriptionId || subLoading) return
+    const match = subscriptions.find((sub) => sub.id === requestedSubscriptionId)
+    if (!match) return
+    if (activeTab !== 'subscriptions') setActiveTab('subscriptions')
+    if (!editingSub || editingSub.id !== match.id) {
+      setEditingSub(match)
+    }
+  }, [subscriptions, subLoading, searchParams, activeTab, editingSub])
+
+  const handleTabChange = useCallback((tab: 'library' | 'subscriptions') => {
+    setActiveTab(tab)
+    updateReportsQuery({
+      tab: tab === 'subscriptions' ? 'subscriptions' : undefined,
+      subscription_id: tab === 'subscriptions' ? searchParams.get('subscription_id') : undefined,
+      report_subscription: tab === 'library' ? searchParams.get('report_subscription') : undefined,
+      report_focus_type: tab === 'library' ? searchParams.get('report_focus_type') : undefined,
+      report_focus_vendor: tab === 'library' ? searchParams.get('report_focus_vendor') : undefined,
+      report_focus_label: tab === 'library' ? searchParams.get('report_focus_label') : undefined,
+    })
+  }, [searchParams, updateReportsQuery])
+
+  const handleEditSubscription = useCallback((subscription: ReportSubscription) => {
+    setActiveTab('subscriptions')
+    setEditingSub(subscription)
+    updateReportsQuery({
+      tab: 'subscriptions',
+      subscription_id: subscription.id,
+    })
+  }, [updateReportsQuery])
+
+  const handleCloseEditingSubscription = useCallback(() => {
+    setEditingSub(null)
+    updateReportsQuery({ subscription_id: undefined })
+  }, [updateReportsQuery])
+
+  const resolveReportSubscription = useCallback(
+    (report: Report) => savedReportSubscriptions[report.id] ?? report.report_subscription ?? null,
+    [savedReportSubscriptions],
+  )
+
+  useEffect(() => {
+    setRequestedReportFallback(null)
+  }, [requestedReportSubscriptionId])
+
+  useEffect(() => {
+    if (activeTab !== 'library') return
+    if (!requestedReportSubscriptionId) return
+    if (reports.some((candidate) => candidate.id === requestedReportSubscriptionId)) return
+    if (requestedReportFallback?.id === requestedReportSubscriptionId) return
+
+    let cancelled = false
+    void fetchReport(requestedReportSubscriptionId)
+      .then((report) => {
+        if (cancelled) return
+        setRequestedReportFallback(report)
+        if (!requestedReportFocusType || !requestedReportFocusVendor || !requestedReportFocusLabel) {
+          updateReportsQuery({
+            report_focus_type: requestedReportFocusType || report.report_type,
+            report_focus_vendor: requestedReportFocusVendor || report.vendor_filter || undefined,
+            report_focus_label: requestedReportFocusLabel || report.report_subscription?.scope_label || reportSubscriptionLabel(report),
+          })
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('Failed to hydrate requested report subscription target', err)
+          setRequestedReportFallback(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeTab,
+    requestedReportSubscriptionId,
+    reports,
+    requestedReportFallback,
+    requestedReportFocusType,
+    requestedReportFocusVendor,
+    requestedReportFocusLabel,
+    updateReportsQuery,
+  ])
+
+  useEffect(() => {
+    if (activeTab !== 'library') return
+    if (!requestedReportSubscriptionId) return
+    const report = reports.find((candidate) => candidate.id === requestedReportSubscriptionId) ?? requestedReportFallback
+    if (!report && requestedReportFocusLabel) {
+      const nextTarget = {
+        scopeType: 'report' as const,
+        scopeKey: requestedReportSubscriptionId,
+        scopeLabel: requestedReportFocusLabel,
+      }
+      if (
+        cardSubTarget?.scopeKey === nextTarget.scopeKey
+        && cardSubTarget.scopeLabel === nextTarget.scopeLabel
+      ) {
+        return
+      }
+      setCardSubTarget(nextTarget)
+      return
+    }
+    if (!report) return
+    const reportSubscription = resolveReportSubscription(report)
+    const nextTarget = {
+      scopeType: 'report' as const,
+      scopeKey: report.id,
+      scopeLabel: requestedReportFocusLabel || reportSubscription?.scope_label || reportSubscriptionLabel(report),
+    }
+    if (
+      cardSubTarget?.scopeKey === nextTarget.scopeKey
+      && cardSubTarget.scopeLabel === nextTarget.scopeLabel
+    ) {
+      return
+    }
+    setCardSubTarget(nextTarget)
+  }, [activeTab, requestedReportSubscriptionId, requestedReportFocusLabel, reports, requestedReportFallback, resolveReportSubscription, cardSubTarget])
+
+  const handleOpenReportSubscription = useCallback((report: Report) => {
+    const reportSubscription = resolveReportSubscription(report)
+    setCardSubTarget({
+      scopeType: 'report',
+      scopeKey: report.id,
+      scopeLabel: reportSubscription?.scope_label || reportSubscriptionLabel(report),
+    })
+    const location = buildReportSubscriptionLocation(searchParams, {
+      ...report,
+      report_subscription: reportSubscription,
+    })
+    setSearchParams(new URLSearchParams(location.slice('/reports?'.length)), { replace: true })
+  }, [resolveReportSubscription, searchParams, setSearchParams])
+
+  const handleCopyReportSubscriptionLink = useCallback((report: Report) => {
+    const reportSubscription = resolveReportSubscription(report)
+    const location = buildReportSubscriptionLocation(searchParams, {
+      ...report,
+      report_subscription: reportSubscription,
+    })
+    void navigator.clipboard.writeText(`${window.location.origin}${location}`).then(() => {
+      setCopiedReportLinkId(report.id)
+      window.setTimeout(() => {
+        setCopiedReportLinkId((current) => (current === report.id ? null : current))
+      }, 2000)
+    })
+  }, [resolveReportSubscription, searchParams])
+
   function clearFilters() {
     setTypeFilter('')
     setQualityFilter('')
@@ -187,6 +541,22 @@ export default function Reports() {
     setReviewFilter('')
     setVendorSearch('')
     setDebouncedVendor('')
+    updateReportsQuery({
+      report_type: undefined,
+      vendor_filter: undefined,
+      quality_status: undefined,
+      freshness_state: undefined,
+      review_state: undefined,
+    })
+  }
+
+  function composerPanelClass(composer: ReportComposer) {
+    return clsx(
+      'bg-slate-900/50 border rounded-xl p-4 transition-colors',
+      activeComposer === composer
+        ? 'border-cyan-500/50 bg-cyan-950/20'
+        : 'border-slate-700/50',
+    )
   }
 
   async function handleCreateComparison() {
@@ -204,9 +574,17 @@ export default function Reports() {
       const reportId = typeof result.report_id === 'string' ? result.report_id : ''
       setPrimaryVendor('')
       setComparisonVendor('')
+      setActiveComposer(null)
+      updateComposerParams(null, {
+        primary_vendor: undefined,
+        comparison_vendor: undefined,
+        composer: undefined,
+      })
       refresh()
       if (reportId) {
-        navigate(`/reports/${reportId}`)
+        navigate(reportDetailLocation(reportId, reportsBackTarget), {
+          state: { backTo: reportsBackTarget },
+        })
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Comparison generation failed')
@@ -230,9 +608,17 @@ export default function Reports() {
       const reportId = typeof result.report_id === 'string' ? result.report_id : ''
       setPrimaryCompany('')
       setComparisonCompany('')
+      setActiveComposer(null)
+      updateComposerParams(null, {
+        primary_company: undefined,
+        comparison_company: undefined,
+        composer: undefined,
+      })
       refresh()
       if (reportId) {
-        navigate(`/reports/${reportId}`)
+        navigate(reportDetailLocation(reportId, reportsBackTarget), {
+          state: { backTo: reportsBackTarget },
+        })
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Account comparison generation failed')
@@ -251,9 +637,16 @@ export default function Reports() {
       const result = await requestBattleCardReport({ vendor_name: battleCardVendor.trim() })
       const reportId = typeof result.report_id === 'string' ? result.report_id : ''
       setBattleCardVendor('')
+      setActiveComposer(null)
+      updateComposerParams(null, {
+        battle_card_vendor: undefined,
+        composer: undefined,
+      })
       refresh()
       if (reportId) {
-        navigate(`/reports/${reportId}`)
+        navigate(reportDetailLocation(reportId, reportsBackTarget), {
+          state: { backTo: reportsBackTarget },
+        })
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Battle card generation failed')
@@ -275,9 +668,16 @@ export default function Reports() {
       })
       const reportId = typeof result.report_id === 'string' ? result.report_id : ''
       setDeepDiveCompany('')
+      setActiveComposer(null)
+      updateComposerParams(null, {
+        deep_dive_company: undefined,
+        composer: undefined,
+      })
       refresh()
       if (reportId) {
-        navigate(`/reports/${reportId}`)
+        navigate(reportDetailLocation(reportId, reportsBackTarget), {
+          state: { backTo: reportsBackTarget },
+        })
       }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Account deep dive generation failed')
@@ -334,7 +734,7 @@ export default function Reports() {
           ]).map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => handleTabChange(tab.key)}
               className={clsx(
                 'px-4 py-2 text-sm font-medium transition-colors border-b-2',
                 activeTab === tab.key
@@ -386,7 +786,7 @@ export default function Reports() {
                       )}
                     </div>
                     <button
-                      onClick={() => setEditingSub(sub)}
+                      onClick={() => handleEditSubscription(sub)}
                       className="ml-4 p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-700/50 rounded-lg transition-colors"
                       title="Edit subscription"
                     >
@@ -408,13 +808,21 @@ export default function Reports() {
                   type="text"
                   placeholder="Filter by vendor..."
                   value={vendorSearch}
-                  onChange={(e) => setVendorSearch(e.target.value)}
+                  onChange={(e) => {
+                    const nextValue = e.target.value
+                    setVendorSearch(nextValue)
+                    updateSearchFilterParams({ vendor_filter: nextValue })
+                  }}
                   className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
                 />
               </div>
               <select
                 value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value)}
+                onChange={(e) => {
+                  const nextValue = e.target.value
+                  setTypeFilter(nextValue)
+                  updateSearchFilterParams({ report_type: nextValue })
+                }}
                 className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
               >
                 <option value="">All Types</option>
@@ -434,7 +842,11 @@ export default function Reports() {
               </select>
               <select
                 value={qualityFilter}
-                onChange={(e) => setQualityFilter(e.target.value)}
+                onChange={(e) => {
+                  const nextValue = e.target.value
+                  setQualityFilter(nextValue)
+                  updateSearchFilterParams({ quality_status: nextValue })
+                }}
                 className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
               >
                 <option value="">All Quality</option>
@@ -445,7 +857,11 @@ export default function Reports() {
               </select>
               <select
                 value={freshnessFilter}
-                onChange={(e) => setFreshnessFilter(e.target.value)}
+                onChange={(e) => {
+                  const nextValue = e.target.value
+                  setFreshnessFilter(nextValue)
+                  updateSearchFilterParams({ freshness_state: nextValue })
+                }}
                 className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
               >
                 <option value="">All Freshness</option>
@@ -455,7 +871,11 @@ export default function Reports() {
               </select>
               <select
                 value={reviewFilter}
-                onChange={(e) => setReviewFilter(e.target.value)}
+                onChange={(e) => {
+                  const nextValue = e.target.value
+                  setReviewFilter(nextValue)
+                  updateSearchFilterParams({ review_state: nextValue })
+                }}
                 className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
               >
                 <option value="">All Review States</option>
@@ -496,13 +916,18 @@ export default function Reports() {
               )}
             </div>
 
-            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <div className={composerPanelClass('vendor_comparison')}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-slate-400 mb-1">Primary vendor</label>
                   <input
                     value={primaryVendor}
-                    onChange={(e) => setPrimaryVendor(e.target.value)}
+                    onChange={(e) => {
+                      const nextValue = e.target.value
+                      setActiveComposer('vendor_comparison')
+                      setPrimaryVendor(nextValue)
+                      updateComposerParams('vendor_comparison', { primary_vendor: nextValue })
+                    }}
                     placeholder="Example: Salesforce"
                     className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
                   />
@@ -511,7 +936,12 @@ export default function Reports() {
                   <label className="block text-xs font-medium text-slate-400 mb-1">Comparison vendor</label>
                   <input
                     value={comparisonVendor}
-                    onChange={(e) => setComparisonVendor(e.target.value)}
+                    onChange={(e) => {
+                      const nextValue = e.target.value
+                      setActiveComposer('vendor_comparison')
+                      setComparisonVendor(nextValue)
+                      updateComposerParams('vendor_comparison', { comparison_vendor: nextValue })
+                    }}
                     placeholder="Example: HubSpot"
                     className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
                   />
@@ -526,13 +956,18 @@ export default function Reports() {
               </div>
             </div>
 
-            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <div className={composerPanelClass('account_deep_dive')}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-slate-400 mb-1">Account deep dive company</label>
                   <input
                     value={deepDiveCompany}
-                    onChange={(e) => setDeepDiveCompany(e.target.value)}
+                    onChange={(e) => {
+                      const nextValue = e.target.value
+                      setActiveComposer('account_deep_dive')
+                      setDeepDiveCompany(nextValue)
+                      updateComposerParams('account_deep_dive', { deep_dive_company: nextValue })
+                    }}
                     placeholder="Example: DataPulse Analytics"
                     className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
                   />
@@ -547,13 +982,18 @@ export default function Reports() {
               </div>
             </div>
 
-            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <div className={composerPanelClass('account_comparison')}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-slate-400 mb-1">Primary company</label>
                   <input
                     value={primaryCompany}
-                    onChange={(e) => setPrimaryCompany(e.target.value)}
+                    onChange={(e) => {
+                      const nextValue = e.target.value
+                      setActiveComposer('account_comparison')
+                      setPrimaryCompany(nextValue)
+                      updateComposerParams('account_comparison', { primary_company: nextValue })
+                    }}
                     placeholder="Example: DataPulse Analytics"
                     className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
                   />
@@ -562,7 +1002,12 @@ export default function Reports() {
                   <label className="block text-xs font-medium text-slate-400 mb-1">Comparison company</label>
                   <input
                     value={comparisonCompany}
-                    onChange={(e) => setComparisonCompany(e.target.value)}
+                    onChange={(e) => {
+                      const nextValue = e.target.value
+                      setActiveComposer('account_comparison')
+                      setComparisonCompany(nextValue)
+                      updateComposerParams('account_comparison', { comparison_company: nextValue })
+                    }}
                     placeholder="Example: FinEdge Capital"
                     className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
                   />
@@ -577,13 +1022,18 @@ export default function Reports() {
               </div>
             </div>
 
-            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+            <div className={composerPanelClass('battle_card')}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-slate-400 mb-1">Battle card vendor</label>
                   <input
                     value={battleCardVendor}
-                    onChange={(e) => setBattleCardVendor(e.target.value)}
+                    onChange={(e) => {
+                      const nextValue = e.target.value
+                      setActiveComposer('battle_card')
+                      setBattleCardVendor(nextValue)
+                      updateComposerParams('battle_card', { battle_card_vendor: nextValue })
+                    }}
                     placeholder="Example: Zendesk"
                     className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
                   />
@@ -621,58 +1071,108 @@ export default function Reports() {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {pagedReports.map((r: Report) => (
-                    <button
-                      key={r.id}
-                      onClick={() => navigate(`/reports/${r.id}`)}
-                      className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5 text-left hover:border-cyan-500/30 transition-colors"
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                              REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-500/20 text-slate-400'
-                            }`}
+                    (() => {
+                      const exportState = reportExportPresentation(r)
+                      const title = reportTitle(r)
+                      const reportSubscription = resolveReportSubscription(r)
+                      const subscriptionAction = reportSubscriptionActionPresentation(reportSubscription)
+                      return (
+                        <div
+                          key={r.id}
+                          className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5 text-left hover:border-cyan-500/30 transition-colors"
+                          data-testid={`report-card-${r.id}`}
+                        >
+                          <button
+                            onClick={() => navigate(reportDetailLocation(r.id, reportsBackTarget), {
+                              state: { backTo: reportsBackTarget },
+                            })}
+                            className="w-full text-left"
                           >
-                            {r.report_type.replace(/_/g, ' ')}
-                          </span>
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                    REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-500/20 text-slate-400'
+                                  }`}
+                                >
+                                  {r.report_type.replace(/_/g, ' ')}
+                                </span>
+                              </div>
+                              <FileBarChart className="h-4 w-4 text-slate-500" />
+                            </div>
+                            {(r.vendor_filter || r.category_filter) && (
+                              <p className="text-sm text-white font-medium mb-1">
+                                {title}
+                              </p>
+                            )}
+                            <p className="text-sm text-slate-400 line-clamp-2">
+                              {r.executive_summary ?? 'No summary available'}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-2 mt-3 mb-3">
+                              <p className="text-xs text-slate-500">
+                                {r.report_date ?? r.created_at ?? '--'}
+                              </p>
+                              <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium', exportState.className)}>
+                                {exportState.label}
+                              </span>
+                            </div>
+                            <ReportTrustPanel
+                              compact
+                              status={r.status}
+                              artifactState={r.artifact_state ?? r.trust?.artifact_state}
+                              artifactLabel={r.artifact_label ?? r.trust?.artifact_label}
+                              blockerCount={r.blocker_count}
+                              warningCount={r.warning_count}
+                              unresolvedIssueCount={r.unresolved_issue_count}
+                              qualityStatus={r.quality_status}
+                              latestFailureStep={r.latest_failure_step}
+                              latestErrorSummary={r.latest_error_summary}
+                              freshnessState={r.freshness_state ?? r.trust?.freshness_state}
+                              freshnessLabel={r.freshness_label ?? r.trust?.freshness_label}
+                              reviewState={r.review_state ?? r.trust?.review_state}
+                              reviewLabel={r.review_label ?? r.trust?.review_label}
+                              freshnessTimestamp={r.created_at ?? r.report_date}
+                            />
+                          </button>
+                          <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
+                            <button
+                              onClick={() => handleCopyReportSubscriptionLink(r)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 text-xs font-medium hover:text-white hover:bg-slate-700 transition-colors"
+                            >
+                              {copiedReportLinkId === r.id ? (
+                                <>
+                                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                  Copied
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3.5 w-3.5" />
+                                  Copy Link
+                                </>
+                              )}
+                            </button>
+                            {r.has_pdf_export ? (
+                              <button
+                                onClick={() => downloadReportPdf(r.id)}
+                                className="inline-flex items-center px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-300 text-xs font-medium hover:bg-emerald-500/20 transition-colors"
+                              >
+                                Export PDF
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleOpenReportSubscription(r)}
+                                className={clsx(
+                                  'inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                                  subscriptionAction.className,
+                                )}
+                              >
+                                {subscriptionAction.label}
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <FileBarChart className="h-4 w-4 text-slate-500" />
-                      </div>
-                      {(r.vendor_filter || r.category_filter) && (
-                        <p className="text-sm text-white font-medium mb-1">
-                          {['vendor_comparison', 'account_comparison'].includes(r.report_type) && r.vendor_filter && r.category_filter
-                            ? `${r.vendor_filter} vs ${r.category_filter}`
-                            : r.report_type === 'challenger_brief' && r.vendor_filter && r.category_filter
-                              ? `${r.vendor_filter} → ${r.category_filter}`
-                              : r.vendor_filter}
-                        </p>
-                      )}
-                      <p className="text-sm text-slate-400 line-clamp-2">
-                        {r.executive_summary ?? 'No summary available'}
-                      </p>
-                      <div className="flex items-center gap-2 mt-3 mb-3">
-                        <p className="text-xs text-slate-500">
-                          {r.report_date ?? r.created_at ?? '--'}
-                        </p>
-                      </div>
-                      <ReportTrustPanel
-                        compact
-                        status={r.status}
-                        artifactState={r.artifact_state ?? r.trust?.artifact_state}
-                        artifactLabel={r.artifact_label ?? r.trust?.artifact_label}
-                        blockerCount={r.blocker_count}
-                        warningCount={r.warning_count}
-                        unresolvedIssueCount={r.unresolved_issue_count}
-                        qualityStatus={r.quality_status}
-                        latestFailureStep={r.latest_failure_step}
-                        latestErrorSummary={r.latest_error_summary}
-                        freshnessState={r.freshness_state ?? r.trust?.freshness_state}
-                        freshnessLabel={r.freshness_label ?? r.trust?.freshness_label}
-                        reviewState={r.review_state ?? r.trust?.review_state}
-                        reviewLabel={r.review_label ?? r.trust?.review_label}
-                        freshnessTimestamp={r.created_at ?? r.report_date}
-                      />
-                    </button>
+                      )
+                    })()
                   ))}
                 </div>
 
@@ -722,12 +1222,12 @@ export default function Reports() {
         {editingSub && (
           <SubscriptionModal
             open={true}
-            onClose={() => setEditingSub(null)}
+            onClose={handleCloseEditingSubscription}
             scopeType={editingSub.scope_type}
             scopeKey={editingSub.scope_key}
             scopeLabel={editingSub.scope_label}
             filterPayload={editingSub.filter_payload}
-            onSaved={() => { void refreshSubs(); setEditingSub(null) }}
+            onSaved={() => { void refreshSubs(); handleCloseEditingSubscription() }}
           />
         )}
       </div>
@@ -740,6 +1240,47 @@ export default function Reports() {
         scopeLabel={libraryScopeLabel}
         filterPayload={libraryScopeType === 'library_view' ? libraryViewFilters : undefined}
         onSaved={() => { void refreshSubs(); setLibSubOpen(false) }}
+      />
+
+      <SubscriptionModal
+        open={Boolean(cardSubTarget)}
+        onClose={() => {
+          setCardSubTarget(null)
+          updateReportsQuery({
+            report_subscription: undefined,
+            report_focus_type: undefined,
+            report_focus_vendor: undefined,
+            report_focus_label: undefined,
+          })
+        }}
+        scopeType={cardSubTarget?.scopeType ?? 'report'}
+        scopeKey={cardSubTarget?.scopeKey ?? ''}
+        scopeLabel={cardSubTarget?.scopeLabel ?? ''}
+        onSaved={(subscription) => {
+          if (subscription.scope_type === 'report') {
+            setSavedReportSubscriptions((current) => ({
+              ...current,
+              [subscription.scope_key]: {
+                id: subscription.id,
+                scope_type: 'report',
+                scope_key: subscription.scope_key,
+                scope_label: subscription.scope_label,
+                enabled: subscription.enabled,
+              },
+            }))
+          }
+          void refreshSubs()
+          setCardSubTarget(null)
+          updateReportsQuery({
+            report_subscription: subscription.scope_key,
+            report_focus_type: reports.find((report) => report.id === subscription.scope_key)?.report_type
+              ?? (requestedReportFallback?.id === subscription.scope_key ? requestedReportFallback.report_type : undefined),
+            report_focus_vendor: reports.find((report) => report.id === subscription.scope_key)?.vendor_filter
+              ?? (requestedReportFallback?.id === subscription.scope_key ? requestedReportFallback.vendor_filter : undefined)
+              ?? undefined,
+            report_focus_label: subscription.scope_label,
+          })
+        }}
       />
     </div>
   )

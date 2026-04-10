@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useCallback, useEffect } from 'react'
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
@@ -54,9 +54,11 @@ function DetailSkeleton() {
 export default function ReportDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [subModalOpen, setSubModalOpen] = useState(false)
-  const [hasSubscription, setHasSubscription] = useState(false)
+  const [subscriptionStateOverride, setSubscriptionStateOverride] = useState<'active' | 'paused' | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(null)
   const [drawerVendor, setDrawerVendor] = useState('')
@@ -75,10 +77,46 @@ export default function ReportDetail() {
     [id],
   )
 
+  useEffect(() => {
+    setSubscriptionStateOverride(null)
+  }, [id])
+
+  useEffect(() => {
+    setSubModalOpen(searchParams.get('subscription') === 'report')
+  }, [searchParams])
+
   if (error) return <PageError error={error} onRetry={refresh} />
   if (loading) return <DetailSkeleton />
   if (!report) return <PageError error={new Error('Report not found')} />
 
+  const baseSubscriptionState = report.report_subscription
+    ? (report.report_subscription.enabled ? 'active' : 'paused')
+    : 'none'
+  const subscriptionState = subscriptionStateOverride ?? baseSubscriptionState
+  const reportScopeLabel = report.report_subscription?.scope_label
+    ?? `${report.report_type.replace(/_/g, ' ')} - ${report.vendor_filter ?? 'all'}`
+  const stateBackTo = typeof location.state === 'object' && location.state && 'backTo' in location.state
+    && typeof (location.state as { backTo?: unknown }).backTo === 'string'
+    && (location.state as { backTo: string }).backTo.startsWith('/reports')
+    ? (location.state as { backTo: string }).backTo
+    : null
+  const queryBackTo = (() => {
+    const value = searchParams.get('back_to')
+    return value && value.startsWith('/reports') ? value : null
+  })()
+  const backToReports = stateBackTo ?? queryBackTo ?? '/reports'
+  const detailShareUrl = (() => {
+    const next = new URLSearchParams()
+    if (subModalOpen) {
+      next.set('subscription', 'report')
+      next.set('report_focus_label', reportScopeLabel)
+    }
+    if (backToReports !== '/reports') {
+      next.set('back_to', backToReports)
+    }
+    const qs = next.toString()
+    return qs ? `/reports/${report.id}?${qs}` : `/reports/${report.id}`
+  })()
   const badgeColor = REPORT_TYPE_COLORS[report.report_type] ?? 'bg-slate-500/20 text-slate-400'
   const title = ['vendor_comparison', 'account_comparison'].includes(report.report_type) && report.vendor_filter && report.category_filter
     ? `${report.vendor_filter} vs ${report.category_filter}`
@@ -106,7 +144,7 @@ export default function ReportDetail() {
     <div className="space-y-6 max-w-6xl min-w-0">
       <div className="flex items-center justify-between">
         <button
-          onClick={() => navigate('/reports')}
+          onClick={() => navigate(backToReports)}
           className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -115,8 +153,17 @@ export default function ReportDetail() {
         <div className="flex items-center gap-2">
           <ReportActionBar
             reportId={report.id}
-            onSubscribe={() => setSubModalOpen(true)}
-            hasSubscription={hasSubscription}
+            onSubscribe={() => {
+              const next = new URLSearchParams(searchParams)
+              next.set('subscription', 'report')
+              setSearchParams(next, { replace: true })
+            }}
+            hasSubscription={subscriptionState !== 'none'}
+            subscriptionState={subscriptionState}
+            hasPdfExport={report.has_pdf_export ?? false}
+            artifactState={report.artifact_state ?? report.trust?.artifact_state}
+            artifactLabel={report.artifact_label ?? report.trust?.artifact_label}
+            linkUrl={detailShareUrl}
           />
           <button
             onClick={refresh}
@@ -237,6 +284,7 @@ export default function ReportDetail() {
           {richEntries.length > 0 && (
             <StructuredReportData
               data={intel}
+              sectionEvidence={report.section_evidence}
               vendorName={report.vendor_filter ?? undefined}
               onOpenWitness={handleOpenWitness}
             />
@@ -261,11 +309,15 @@ export default function ReportDetail() {
       {/* Subscription modal */}
       <SubscriptionModal
         open={subModalOpen}
-        onClose={() => setSubModalOpen(false)}
+        onClose={() => {
+          const next = new URLSearchParams(searchParams)
+          next.delete('subscription')
+          setSearchParams(next, { replace: true })
+        }}
         scopeType="report"
         scopeKey={report.id}
-        scopeLabel={`${report.report_type.replace(/_/g, ' ')} - ${report.vendor_filter ?? 'all'}`}
-        onSaved={() => setHasSubscription(true)}
+        scopeLabel={reportScopeLabel}
+        onSaved={(subscription) => setSubscriptionStateOverride(subscription.enabled ? 'active' : 'paused')}
       />
 
       {/* Evidence drawer */}

@@ -27,7 +27,7 @@ from ..services.b2b.source_impact import (
     get_consumer_wiring_baseline,
     summarize_source_field_baseline,
 )
-from ..services.b2b.report_trust import report_trust_payload
+from ..services.b2b.report_trust import report_section_evidence_payload, report_trust_payload
 from ..services.tracing import (
     build_business_trace_context,
     build_reasoning_trace_context,
@@ -1032,6 +1032,7 @@ async def list_reports(
                 "review_state": trust["review_state"],
                 "review_label": trust["review_label"],
                 "trust": trust,
+                "has_pdf_export": trust["artifact_state"] == "ready",
                 "created_at": str(r["created_at"]) if r["created_at"] else None,
             }
         )
@@ -1090,6 +1091,7 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
     blocker_count = row["blocker_count"] or 0
     warning_count = row["warning_count"] or 0
     open_issue_count = unresolved_issue_count or 0
+    section_evidence = report_section_evidence_payload(intelligence_data)
     trust = report_trust_payload(
         report_date=row["report_date"],
         created_at=row["created_at"],
@@ -1108,6 +1110,7 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         "category_filter": row["category_filter"],
         "executive_summary": row["executive_summary"],
         "intelligence_data": intelligence_data,
+        "section_evidence": section_evidence,
         "data_density": _safe_json(row["data_density"]),
         "status": row["status"],
         "latest_failure_step": row["latest_failure_step"],
@@ -1125,6 +1128,7 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         "review_state": trust["review_state"],
         "review_label": trust["review_label"],
         "trust": trust,
+        "has_pdf_export": trust["artifact_state"] == "ready",
         "llm_model": row["llm_model"],
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }

@@ -31,6 +31,86 @@ function describeFilterPayload(filterPayload?: ReportLibraryViewFilters) {
   return lines
 }
 
+function getSubscriptionModalPresentation(
+  existing: ReportSubscription | null,
+  enabled: boolean,
+) {
+  if (!existing) {
+    return {
+      heading: 'Subscribe to Reports',
+      badge: 'New',
+      badgeClassName: 'bg-slate-800 text-slate-300 border border-slate-700',
+      description: 'Set up recurring delivery for this report scope.',
+    }
+  }
+
+  if (enabled) {
+    return {
+      heading: 'Manage Active Subscription',
+      badge: 'Active',
+      badgeClassName: 'bg-cyan-900/30 text-cyan-300 border border-cyan-700/40',
+      description: 'This subscription is currently delivering on schedule.',
+    }
+  }
+
+  return {
+    heading: 'Resume Paused Subscription',
+    badge: 'Paused',
+    badgeClassName: 'bg-amber-500/10 text-amber-300 border border-amber-500/25',
+    description: 'Delivery is paused until you reactivate this subscription.',
+  }
+}
+
+function getSubscriptionSavePresentation(
+  existing: ReportSubscription | null,
+  enabled: boolean,
+) {
+  if (!existing) {
+    if (enabled) {
+      return {
+        actionLabel: 'Subscribe',
+        savingLabel: 'Subscribing...',
+        helperText: 'This will create a recurring delivery for this report scope.',
+      }
+    }
+    return {
+      actionLabel: 'Save Paused Subscription',
+      savingLabel: 'Saving...',
+      helperText: 'This will save the subscription without starting delivery yet.',
+    }
+  }
+
+  if (existing.enabled && enabled) {
+    return {
+      actionLabel: 'Update Subscription',
+      savingLabel: 'Saving...',
+      helperText: 'This will update the active delivery schedule.',
+    }
+  }
+
+  if (existing.enabled && !enabled) {
+    return {
+      actionLabel: 'Pause Subscription',
+      savingLabel: 'Saving...',
+      helperText: 'This will pause recurring delivery until you resume it.',
+    }
+  }
+
+  if (!existing.enabled && enabled) {
+    return {
+      actionLabel: 'Resume Subscription',
+      savingLabel: 'Saving...',
+      helperText: 'This will reactivate recurring delivery with these settings.',
+    }
+  }
+
+  return {
+    actionLabel: 'Update Paused Subscription',
+    savingLabel: 'Saving...',
+    helperText: 'This will keep delivery paused while saving your changes.',
+  }
+}
+
 export default function SubscriptionModal({
   open, onClose, scopeType, scopeKey, scopeLabel, filterPayload, onSaved,
 }: SubscriptionModalProps) {
@@ -52,6 +132,8 @@ export default function SubscriptionModal({
   const [enabled, setEnabled] = useState(true)
   const [existing, setExisting] = useState<ReportSubscription | null>(null)
   const filterSummary = describeFilterPayload(filterPayload)
+  const modalPresentation = getSubscriptionModalPresentation(existing, enabled)
+  const savePresentation = getSubscriptionSavePresentation(existing, enabled)
 
   // Load existing subscription
   useEffect(() => {
@@ -168,11 +250,21 @@ export default function SubscriptionModal({
       <div className="relative w-full max-w-lg bg-slate-900 border border-slate-700/50 rounded-xl shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700/50">
-          <div className="flex items-center gap-2">
-            <Bell className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-lg font-semibold text-white">
-              {existing ? 'Manage Subscription' : 'Subscribe to Reports'}
-            </h2>
+          <div className="flex items-start gap-3">
+            <Bell className="w-5 h-5 text-cyan-400 mt-0.5" />
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-semibold text-white">
+                  {modalPresentation.heading}
+                </h2>
+                <span className={clsx('inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium', modalPresentation.badgeClassName)}>
+                  {modalPresentation.badge}
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-slate-400">
+                {modalPresentation.description}
+              </p>
+            </div>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-700/50 text-slate-400 hover:text-white transition-colors">
             <X className="w-5 h-5" />
@@ -185,6 +277,10 @@ export default function SubscriptionModal({
           </div>
         ) : (
           <div className="p-6 space-y-4">
+            <div className={clsx('rounded-lg px-3 py-2 border', modalPresentation.badgeClassName)}>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] opacity-80">Subscription Status</div>
+              <div className="mt-1 text-sm">{modalPresentation.description}</div>
+            </div>
             {scopeType === 'library_view' && filterSummary.length > 0 && (
               <div className="rounded-lg border border-cyan-800/40 bg-cyan-950/30 px-3 py-2">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-300/80">Subscribed View</div>
@@ -362,6 +458,9 @@ export default function SubscriptionModal({
         {/* Footer */}
         {!loading && (
           <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-700/50">
+            <p className="mr-auto text-xs text-slate-500">
+              {savePresentation.helperText}
+            </p>
             <button
               onClick={onClose}
               className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
@@ -374,7 +473,7 @@ export default function SubscriptionModal({
               className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-600 text-white rounded-lg transition-colors"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
-              {saving ? 'Saving...' : existing ? 'Update' : 'Subscribe'}
+              {saving ? savePresentation.savingLabel : savePresentation.actionLabel}
             </button>
           </div>
         )}

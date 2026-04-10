@@ -16,6 +16,7 @@ from ...services.b2b.report_trust import (
     report_artifact_payload,
     report_freshness_label,
     report_review_payload,
+    report_section_evidence_payload,
 )
 from ...services.campaign_sender import get_campaign_sender
 from ...storage.database import get_db_pool
@@ -210,6 +211,10 @@ def _format_report_type_label(report_type: str) -> str:
     return str(report_type or "report").replace("_", " ").title()
 
 
+def _format_section_label(section_key: str) -> str:
+    return str(section_key or "section").replace("_", " ").title()
+
+
 def _report_display_title(row) -> str:
     report_type = str(row["report_type"] or "")
     vendor_filter = str(row["vendor_filter"] or "").strip()
@@ -253,6 +258,36 @@ def _report_trust_label(row, intelligence_data: dict[str, Any]) -> str:
     if status in _PERSISTED_ARTIFACT_STATUSES:
         return "Persisted artifact"
     return "In workflow"
+
+
+def _section_evidence_summary(
+    section_evidence: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    summary = {
+        "witness_backed_count": 0,
+        "partial_count": 0,
+        "thin_count": 0,
+        "partial_sections": [],
+        "thin_sections": [],
+    }
+    if not isinstance(section_evidence, dict):
+        return summary
+
+    for field_key in sorted(section_evidence.keys()):
+        entry = section_evidence.get(field_key)
+        if not isinstance(entry, dict):
+            continue
+        state = str(entry.get("state") or "").strip().lower()
+        label = _format_section_label(field_key)
+        if state == "witness_backed":
+            summary["witness_backed_count"] += 1
+        elif state == "partial":
+            summary["partial_count"] += 1
+            summary["partial_sections"].append(label)
+        elif state == "thin":
+            summary["thin_count"] += 1
+            summary["thin_sections"].append(label)
+    return summary
 
 
 def _artifact_ready(row, intelligence_data: dict[str, Any]) -> bool:
@@ -653,6 +688,27 @@ def _delivery_content_hash(row, artifacts: list[dict[str, Any]]) -> str:
                 "review_label": str(artifact.get("review_label") or ""),
                 "executive_summary": str(artifact["executive_summary"] or ""),
                 "evidence_highlights": [str(item or "") for item in artifact.get("evidence_highlights") or []],
+                "section_evidence": [
+                    {
+                        "section": str(section_key or ""),
+                        "state": str((section_value or {}).get("state") or ""),
+                        "label": str((section_value or {}).get("label") or ""),
+                        "detail": str((section_value or {}).get("detail") or ""),
+                        "witness_count": int((section_value or {}).get("witness_count") or 0),
+                        "metric_count": int((section_value or {}).get("metric_count") or 0),
+                    }
+                    for section_key, section_value in sorted(
+                        (artifact.get("section_evidence") or {}).items(),
+                        key=lambda item: str(item[0] or ""),
+                    )
+                ],
+                "section_evidence_summary": {
+                    "witness_backed_count": int((artifact.get("section_evidence_summary") or {}).get("witness_backed_count") or 0),
+                    "partial_count": int((artifact.get("section_evidence_summary") or {}).get("partial_count") or 0),
+                    "thin_count": int((artifact.get("section_evidence_summary") or {}).get("thin_count") or 0),
+                    "partial_sections": [str(item or "") for item in (artifact.get("section_evidence_summary") or {}).get("partial_sections") or []],
+                    "thin_sections": [str(item or "") for item in (artifact.get("section_evidence_summary") or {}).get("thin_sections") or []],
+                },
             }
             for artifact in artifacts
         ],
@@ -1014,6 +1070,7 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
         _row_int(row, "warning_count"),
         _row_int(row, "unresolved_issue_count"),
     )
+    section_evidence = report_section_evidence_payload(intelligence_data)
     executive_summary = str(
         row["executive_summary"]
         or intelligence_data.get("executive_summary")
@@ -1028,6 +1085,8 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
         "artifact_state": artifact_state["state"],
         "artifact_label": artifact_state["label"],
         "quality_status": _quality_status(row, intelligence_data),
+        "section_evidence": section_evidence,
+        "section_evidence_summary": _section_evidence_summary(section_evidence),
         "blocker_count": _row_int(row, "blocker_count"),
         "warning_count": _row_int(row, "warning_count"),
         "unresolved_issue_count": _row_int(row, "unresolved_issue_count"),

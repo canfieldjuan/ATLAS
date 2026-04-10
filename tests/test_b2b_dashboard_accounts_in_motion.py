@@ -135,6 +135,9 @@ async def test_get_report_handles_null_battle_card_quality():
             "intelligence_data": {
                 "quality_status": None,
                 "battle_card_quality": None,
+                "key_insights": [{"label": "Pricing", "summary": "Pricing churn risk"}],
+                "key_insights_reference_ids": {"witness_ids": ["w1"]},
+                "recommended_plays": {"summary": "Lead with migration support"},
             },
             "data_density": {"status": "ok"},
             "status": "completed",
@@ -156,10 +159,27 @@ async def test_get_report_handles_null_battle_card_quality():
     assert result["quality_status"] is None
     assert result["quality_score"] is None
     assert result["report_type"] == "battle_card"
+    assert result["has_pdf_export"] is True
     assert result["artifact_state"] == "ready"
     assert result["artifact_label"] == "Ready"
     assert result["freshness_state"] == "stale"
     assert result["review_state"] == "clean"
+    assert result["section_evidence"] == {
+        "key_insights": {
+            "state": "witness_backed",
+            "label": "Witness-backed",
+            "detail": "1 linked witness citation",
+            "witness_count": 1,
+            "metric_count": 0,
+        },
+        "recommended_plays": {
+            "state": "thin",
+            "label": "Thin evidence",
+            "detail": "No linked witness citations for this section yet.",
+            "witness_count": 0,
+            "metric_count": 0,
+        },
+    }
     assert result["trust"]["artifact_state"] == "ready"
 
 
@@ -202,6 +222,7 @@ async def test_list_reports_exposes_normalized_trust_fields():
 
     assert result["count"] == 1
     report = result["reports"][0]
+    assert report["has_pdf_export"] is True
     assert report["artifact_state"] == "ready"
     assert report["artifact_label"] == "Ready"
     assert report["freshness_state"] == "fresh"

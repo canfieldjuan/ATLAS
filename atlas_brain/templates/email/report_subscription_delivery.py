@@ -5,6 +5,19 @@ from __future__ import annotations
 from html import escape
 
 
+def _coverage_line(label: str, count: object, sections: object | None = None) -> str:
+    try:
+        normalized_count = int(count or 0)
+    except Exception:
+        normalized_count = 0
+    text = f"{label}: {normalized_count}"
+    if isinstance(sections, list):
+        named_sections = [str(item or "").strip() for item in sections if str(item or "").strip()]
+        if named_sections:
+            text += f" ({', '.join(named_sections[:3])})"
+    return text
+
+
 def _artifact_section_html(artifact: dict[str, object]) -> str:
     title = escape(str(artifact.get("title") or "Persisted artifact"))
     type_label = escape(str(artifact.get("type_label") or "Report"))
@@ -16,6 +29,7 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
     executive_summary = escape(str(artifact.get("executive_summary") or "No executive summary is attached to this artifact yet."))
     report_url = escape(str(artifact.get("report_url") or ""), quote=True)
     evidence_highlights = artifact.get("evidence_highlights") or []
+    section_evidence_summary = artifact.get("section_evidence_summary") or {}
 
     highlight_items = ""
     if isinstance(evidence_highlights, list):
@@ -37,6 +51,41 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
             "Witness Highlights"
             "</div>"
             f"<ul style=\"padding-left:18px;margin:0;\">{highlight_items}</ul>"
+            "</div>"
+        )
+
+    section_coverage_items = ""
+    if isinstance(section_evidence_summary, dict):
+        section_coverage_lines = [
+            _coverage_line(
+                "Witness-backed sections",
+                section_evidence_summary.get("witness_backed_count"),
+            ),
+            _coverage_line(
+                "Partial evidence",
+                section_evidence_summary.get("partial_count"),
+                section_evidence_summary.get("partial_sections"),
+            ),
+            _coverage_line(
+                "Thin evidence",
+                section_evidence_summary.get("thin_count"),
+                section_evidence_summary.get("thin_sections"),
+            ),
+        ]
+        for line in section_coverage_lines:
+            section_coverage_items += (
+                "<li style=\"margin:0 0 8px;color:#334155;font-size:14px;line-height:1.6;\">"
+                f"{escape(line)}"
+                "</li>"
+            )
+    section_coverage_block = ""
+    if section_coverage_items:
+        section_coverage_block = (
+            "<div style=\"margin-top:14px;\">"
+            "<div style=\"font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#0f766e;margin-bottom:8px;\">"
+            "Section Coverage"
+            "</div>"
+            f"<ul style=\"padding-left:18px;margin:0;\">{section_coverage_items}</ul>"
             "</div>"
         )
 
@@ -62,6 +111,7 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
       {"<br><span style=\"color:#64748b;\">" + freshness_detail + "</span>" if freshness_detail else ""}
     </div>
     <p style="margin:14px 0 0;font-size:14px;color:#334155;line-height:1.7;">{executive_summary}</p>
+    {section_coverage_block}
     {highlight_block}
     {cta_block}
   </td>
@@ -187,6 +237,18 @@ def render_report_subscription_delivery_text(
             lines.append(f"  Detail: {freshness_detail}")
         lines.append(f"  Summary: {artifact.get('executive_summary') or 'No executive summary is attached to this artifact yet.'}")
         evidence_highlights = artifact.get("evidence_highlights") or []
+        section_evidence_summary = artifact.get("section_evidence_summary") or {}
+        if isinstance(section_evidence_summary, dict):
+            lines.append("  Section coverage:")
+            lines.append(
+                f"    {_coverage_line('Witness-backed sections', section_evidence_summary.get('witness_backed_count'))}"
+            )
+            lines.append(
+                f"    {_coverage_line('Partial evidence', section_evidence_summary.get('partial_count'), section_evidence_summary.get('partial_sections'))}"
+            )
+            lines.append(
+                f"    {_coverage_line('Thin evidence', section_evidence_summary.get('thin_count'), section_evidence_summary.get('thin_sections'))}"
+            )
         if isinstance(evidence_highlights, list):
             for highlight in evidence_highlights[:3]:
                 text = str(highlight or "").strip()

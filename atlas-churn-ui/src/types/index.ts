@@ -190,6 +190,14 @@ export interface Report {
   unresolved_issue_count?: number
   quality_status?: string | null
   quality_score?: number | null
+  report_subscription?: {
+    id: string
+    scope_type: 'report'
+    scope_key: string
+    scope_label: string
+    enabled: boolean
+  } | null
+  has_pdf_export?: boolean
   artifact_state?: 'ready' | 'processing' | 'failed' | 'unknown' | null
   artifact_label?: string | null
   freshness_state?: 'fresh' | 'monitor' | 'stale' | 'unknown' | null
@@ -210,6 +218,13 @@ export interface Report {
 export interface ReportDetail extends Report {
   category_filter: string | null
   intelligence_data: Record<string, unknown> | null
+  section_evidence?: Record<string, {
+    state: 'witness_backed' | 'partial' | 'thin'
+    label: string
+    detail: string
+    witness_count?: number
+    metric_count?: number
+  }> | null
   data_density: Record<string, unknown> | null
   llm_model: string | null
 }

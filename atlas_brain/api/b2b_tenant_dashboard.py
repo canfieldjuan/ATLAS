@@ -31,6 +31,7 @@ from ..services.b2b.report_trust import (
     REPORT_QUALITY_STATUSES,
     report_freshness_payload,
     report_review_payload,
+    report_section_evidence_payload,
     report_trust_payload,
 )
 from ..services.b2b import watchlist_alerts as watchlist_alert_service
@@ -3416,6 +3417,8 @@ async def list_tenant_reports(
     if normalized_quality_status or normalized_freshness_state or normalized_review_state:
         scan_limit = min(max(capped * 5, capped), 200)
     params.append(scan_limit)
+    report_subscription_account_idx = idx + 1
+    params.append(user.account_id)
 
     rows = await pool.fetch(
         f"""
@@ -3441,8 +3444,22 @@ async def list_tenant_reports(
                  WHEN report_type = 'battle_card'
                  THEN COALESCE((intelligence_data->'battle_card_quality'->>'score')::int, NULL)
                  ELSE NULL
-               END AS quality_score
+               END AS quality_score,
+               rs.id AS report_subscription_id,
+               rs.scope_type AS report_subscription_scope_type,
+               rs.scope_key AS report_subscription_scope_key,
+               rs.scope_label AS report_subscription_scope_label,
+               rs.enabled AS report_subscription_enabled
         FROM b2b_intelligence
+        LEFT JOIN LATERAL (
+            SELECT id, scope_type, scope_key, scope_label, enabled
+            FROM b2b_report_subscriptions
+            WHERE account_id = ${report_subscription_account_idx}::uuid
+              AND scope_type = 'report'
+              AND scope_key = b2b_intelligence.id::text
+            ORDER BY updated_at DESC NULLS LAST, id DESC
+            LIMIT 1
+        ) rs ON TRUE
         {where}
         ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
         LIMIT ${idx}
@@ -3466,6 +3483,15 @@ async def list_tenant_reports(
         blocker_count = r["blocker_count"] or 0
         warning_count = r["warning_count"] or 0
         unresolved_issue_count = r["unresolved_issue_count"] or 0
+        report_subscription = None
+        if r["report_subscription_id"]:
+            report_subscription = {
+                "id": str(r["report_subscription_id"]),
+                "scope_type": r["report_subscription_scope_type"],
+                "scope_key": r["report_subscription_scope_key"],
+                "scope_label": r["report_subscription_scope_label"],
+                "enabled": bool(r["report_subscription_enabled"]),
+            }
         trust = report_trust_payload(
             report_date=r["report_date"],
             created_at=r["created_at"],
@@ -3492,6 +3518,8 @@ async def list_tenant_reports(
                 "unresolved_issue_count": unresolved_issue_count,
                 "quality_status": r["quality_status"],
                 "quality_score": r["quality_score"],
+                "report_subscription": report_subscription,
+                "has_pdf_export": trust["artifact_state"] == "ready",
                 "artifact_state": trust["artifact_state"],
                 "artifact_label": trust["artifact_label"],
                 "freshness_state": trust["freshness_state"],
@@ -3540,6 +3568,7 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
             quality_status = quality.get("status")
         if isinstance(quality, dict):
             quality_score = quality.get("score")
+    section_evidence = report_section_evidence_payload(intelligence_data)
     data_stale = False
     if isinstance(intelligence_data, dict):
         data_stale = bool(intelligence_data.get("data_stale") is True)
@@ -3555,6 +3584,21 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         unresolved_issue_count=open_issue_count,
         status=row["status"],
     )
+    subscription_row = await _fetch_report_subscription_row(
+        pool,
+        account_id=user.account_id,
+        scope_type="report",
+        scope_key=str(row["id"]),
+    )
+    report_subscription = None
+    if subscription_row:
+        report_subscription = {
+            "id": str(subscription_row["id"]),
+            "scope_type": subscription_row["scope_type"],
+            "scope_key": subscription_row["scope_key"],
+            "scope_label": subscription_row["scope_label"],
+            "enabled": bool(subscription_row["enabled"]),
+        }
 
     return {
         "id": str(row["id"]),
@@ -3564,6 +3608,7 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         "category_filter": row["category_filter"],
         "executive_summary": row["executive_summary"],
         "intelligence_data": intelligence_data,
+        "section_evidence": section_evidence,
         "data_density": data_density,
         "status": row["status"],
         "latest_failure_step": row["latest_failure_step"],
@@ -3574,6 +3619,8 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         "unresolved_issue_count": open_issue_count,
         "quality_status": quality_status,
         "quality_score": quality_score,
+        "report_subscription": report_subscription,
+        "has_pdf_export": trust["artifact_state"] == "ready",
         "artifact_state": trust["artifact_state"],
         "artifact_label": trust["artifact_label"],
         "freshness_state": trust["freshness_state"],

@@ -25,6 +25,14 @@ import type {
 } from '../../types/reportViewModels'
 
 type AnyObject = Record<string, unknown>
+type SectionEvidenceState = 'witness_backed' | 'partial' | 'thin'
+type SectionEvidenceSummary = {
+  state: SectionEvidenceState
+  label: string
+  detail: string
+  witness_count?: number
+  metric_count?: number
+}
 
 const QUOTE_KEYS = new Set([
   'anonymized_quotes', 'quotable_evidence', 'quotes', 'top_pain_quotes',
@@ -122,30 +130,121 @@ function extractWitnessHighlights(value: unknown): AnyObject[] {
   return value.filter(isRecord).filter((item) => typeof item.witness_id === 'string' && item.witness_id.trim().length > 0)
 }
 
+function extractMetricIds(value: unknown): string[] {
+  if (!isRecord(value) || !Array.isArray(value.metric_ids)) return []
+  return value.metric_ids.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function collectSectionEvidence(
+  fieldKey: string,
+  value: unknown,
+  data: AnyObject,
+): {
+  sectionReferenceSources: unknown[]
+  sectionHighlightSources: unknown[]
+  witnessIds: string[]
+  metricIds: string[]
+  highlights: AnyObject[]
+} {
+  const sectionObject = isRecord(value) ? value : null
+  const sectionReferenceSources = [
+    sectionObject?.reasoning_reference_ids,
+    sectionObject?.reference_ids,
+    data[`${fieldKey}_reference_ids`],
+  ]
+  const sectionHighlightSources = [
+    sectionObject?.reasoning_witness_highlights,
+    sectionObject?.witness_highlights,
+    data[`${fieldKey}_witness_highlights`],
+  ]
+  const highlights = [
+    ...sectionHighlightSources,
+    data.reasoning_witness_highlights,
+    data.witness_highlights,
+  ].flatMap(extractWitnessHighlights)
+  const sectionWitnessIds = sectionHighlightSources
+    .flatMap(extractWitnessHighlights)
+    .map((item) => String(item.witness_id))
+  const witnessIds = [
+    ...sectionReferenceSources.flatMap(extractWitnessIds),
+    ...sectionWitnessIds,
+  ]
+  const metricIds = sectionReferenceSources.flatMap(extractMetricIds)
+
+  return {
+    sectionReferenceSources,
+    sectionHighlightSources,
+    witnessIds: Array.from(new Set(witnessIds)),
+    metricIds: Array.from(new Set(metricIds)),
+    highlights,
+  }
+}
+
+function sectionEvidenceMeta(
+  fieldKey: string,
+  value: unknown,
+  data: AnyObject,
+): SectionEvidenceSummary & { className: string } {
+  const evidence = collectSectionEvidence(fieldKey, value, data)
+  if (evidence.witnessIds.length > 0) {
+    const witnessCount = evidence.witnessIds.length
+    return {
+      state: 'witness_backed',
+      label: 'Witness-backed',
+      detail: `${witnessCount} linked witness citation${witnessCount === 1 ? '' : 's'}`,
+      className: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
+    }
+  }
+
+  const hasSectionMetadata = evidence.metricIds.length > 0
+    || evidence.sectionReferenceSources.some((item) => isRecord(item))
+    || evidence.sectionHighlightSources.some((item) => Array.isArray(item))
+
+  if (hasSectionMetadata) {
+    return {
+      state: 'partial',
+      label: 'Partial evidence',
+      detail: 'Section has evidence metadata, but no linked witness citations yet.',
+      className: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
+    }
+  }
+
+  return {
+    state: 'thin',
+    label: 'Thin evidence',
+    detail: 'No linked witness citations for this section yet.',
+    className: 'bg-rose-500/15 text-rose-300 border border-rose-500/30',
+  }
+}
+
+function decorateSectionEvidenceMeta(
+  evidence: SectionEvidenceSummary,
+): SectionEvidenceSummary & { className: string } {
+  if (evidence.state === 'witness_backed') {
+    return {
+      ...evidence,
+      className: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30',
+    }
+  }
+  if (evidence.state === 'partial') {
+    return {
+      ...evidence,
+      className: 'bg-amber-500/15 text-amber-300 border border-amber-500/30',
+    }
+  }
+  return {
+    ...evidence,
+    className: 'bg-rose-500/15 text-rose-300 border border-rose-500/30',
+  }
+}
+
 function citationEntriesForSection(
   registry: ReturnType<typeof createCitationRegistry>,
   fieldKey: string,
   value: unknown,
   data: AnyObject,
 ): CitationEntry[] {
-  const sectionObject = isRecord(value) ? value : null
-  const referenceIds = [
-    sectionObject?.reasoning_reference_ids,
-    sectionObject?.reference_ids,
-    data[`${fieldKey}_reference_ids`],
-  ].flatMap(extractWitnessIds)
-
-  const highlights = [
-    sectionObject?.reasoning_witness_highlights,
-    sectionObject?.witness_highlights,
-    data[`${fieldKey}_witness_highlights`],
-    data.reasoning_witness_highlights,
-    data.witness_highlights,
-  ].flatMap(extractWitnessHighlights)
-
-  const witnessIds = referenceIds.length > 0
-    ? referenceIds
-    : Array.from(new Set(highlights.map((item) => String(item.witness_id))))
+  const { witnessIds, highlights } = collectSectionEvidence(fieldKey, value, data)
 
   if (witnessIds.length === 0) return []
 
@@ -535,12 +634,14 @@ export function StructuredReportData({
   className,
   vendorName,
   onOpenWitness,
+  sectionEvidence,
 }: {
   data: AnyObject
   skipKeys?: string[]
   className?: string
   vendorName?: string
   onOpenWitness?: (witnessId: string, vendorName: string) => void
+  sectionEvidence?: Record<string, SectionEvidenceSummary> | null
 }) {
   const registry = createCitationRegistry()
   const entries = Object.entries(data).filter(([key, value]) => {
@@ -558,15 +659,26 @@ export function StructuredReportData({
   return (
     <div className={clsx('grid grid-cols-1 xl:grid-cols-2 gap-6 min-w-0', className)}>
       {entries.map(([key, value]) => {
+        const evidence = decorateSectionEvidenceMeta(
+          sectionEvidence?.[key] ?? sectionEvidenceMeta(key, value, data),
+        )
         const citations = vendorName && onOpenWitness
           ? citationEntriesForSection(registry, key, value, data)
           : []
         return (
           <div key={key} className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 min-w-0 overflow-hidden [overflow-wrap:anywhere]">
-            <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider mb-3 break-words">
-              {humanLabel(key)}
-            </h4>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <h4 className="text-xs font-medium text-cyan-400 uppercase tracking-wider break-words">
+                {humanLabel(key)}
+              </h4>
+              <span className={clsx('px-2 py-0.5 rounded text-[11px] font-medium', evidence.className)}>
+                {evidence.label}
+              </span>
+            </div>
             <StructuredReportValue fieldKey={key} value={value} />
+            <p className="mt-3 text-xs text-slate-500">
+              {evidence.detail}
+            </p>
             {vendorName && onOpenWitness && citations.length > 0 && (
               <div className="mt-3">
                 <CitationBar

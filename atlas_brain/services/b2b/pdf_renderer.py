@@ -14,6 +14,7 @@ from typing import Any
 
 from fpdf import FPDF
 
+from .report_trust import report_section_evidence_payload
 from ..tracing import (
     build_business_trace_context,
     build_reasoning_trace_context,
@@ -83,6 +84,10 @@ def _safe_list(val: Any) -> list:
         except (json.JSONDecodeError, TypeError):
             return []
     return []
+
+
+def _format_section_label(section_key: str) -> str:
+    return str(section_key or "section").replace("_", " ").title()
 
 
 def _copy_dict(val: Any) -> dict[str, Any]:
@@ -677,6 +682,46 @@ def _render_generic_data(pdf: IntelligenceReportPDF, data: dict, skip_keys: set 
             else:
                 for item in val[:10]:
                     pdf.body_text(f"  - {_safe_str(item)[:200]}")
+
+
+def _section_coverage_rows(data: dict[str, Any]) -> list[tuple[str, str]]:
+    if not isinstance(data, dict):
+        return []
+    section_evidence = report_section_evidence_payload(data)
+    if not section_evidence:
+        return []
+
+    witness_backed_count = 0
+    partial_sections: list[str] = []
+    thin_sections: list[str] = []
+    for section_key in sorted(section_evidence.keys()):
+        entry = section_evidence.get(section_key)
+        if not isinstance(entry, dict):
+            continue
+        state = str(entry.get("state") or "").strip().lower()
+        label = _format_section_label(section_key)
+        if state == "witness_backed":
+            witness_backed_count += 1
+        elif state == "partial":
+            partial_sections.append(label)
+        elif state == "thin":
+            thin_sections.append(label)
+
+    rows = [("Witness-backed Sections", str(witness_backed_count))]
+    if partial_sections:
+        rows.append(("Partial Evidence", ", ".join(partial_sections[:4])))
+    if thin_sections:
+        rows.append(("Thin Evidence", ", ".join(thin_sections[:4])))
+    return rows
+
+
+def _render_section_coverage(pdf: IntelligenceReportPDF, data: dict[str, Any]) -> None:
+    rows = _section_coverage_rows(data)
+    if not rows:
+        return
+    pdf.section_title("Section Coverage")
+    for label, value in rows:
+        pdf.metric_row(label, value)
 
 
 def _render_vendor_deep_dive(
@@ -1799,6 +1844,8 @@ def render_report_pdf(
 
     # -- Main content via type-specific renderer --------------------------------
     data = intelligence_data if intelligence_data is not None else {}
+    if isinstance(data, dict):
+        _render_section_coverage(pdf, data)
 
     renderer = _RENDERERS.get(report_type)
     if renderer:

@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from atlas_brain.services.b2b import watchlist_alerts as watchlist_alert_service
-from atlas_brain.services.b2b.report_trust import report_trust_payload
+from atlas_brain.services.b2b.report_trust import report_section_evidence_payload, report_trust_payload
 
 
 def test_report_trust_payload_includes_artifact_state_when_status_present():
@@ -50,6 +50,49 @@ def test_report_trust_payload_omits_artifact_state_when_status_is_missing():
         "freshness_label": "Monitor",
         "review_state": "open_review",
         "review_label": "Open Review",
+    }
+
+
+def test_report_section_evidence_payload_marks_witness_backed_partial_and_thin_sections():
+    payload = report_section_evidence_payload({
+        "key_insights": [
+            {"label": "Pricing", "summary": "Pricing churn risk"},
+        ],
+        "key_insights_reference_ids": {
+            "witness_ids": ["w1", "w2"],
+        },
+        "objection_handlers": {
+            "summary": "Procurement objections are rising",
+            "reference_ids": {"metric_ids": ["m1"]},
+        },
+        "recommended_plays": {
+            "summary": "Lead with migration support",
+        },
+        "reasoning_witness_highlights": [
+            {"witness_id": "top-level-only", "excerpt_text": "Global highlight"},
+        ],
+    })
+
+    assert payload["key_insights"] == {
+        "state": "witness_backed",
+        "label": "Witness-backed",
+        "detail": "2 linked witness citations",
+        "witness_count": 2,
+        "metric_count": 0,
+    }
+    assert payload["objection_handlers"] == {
+        "state": "partial",
+        "label": "Partial evidence",
+        "detail": "Section has evidence metadata, but no linked witness citations yet.",
+        "witness_count": 0,
+        "metric_count": 1,
+    }
+    assert payload["recommended_plays"] == {
+        "state": "thin",
+        "label": "Thin evidence",
+        "detail": "No linked witness citations for this section yet.",
+        "witness_count": 0,
+        "metric_count": 0,
     }
 
 
@@ -278,6 +321,11 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
             "unresolved_issue_count": 0,
             "quality_status": "sales_ready",
             "quality_score": 92,
+            "report_subscription_id": None,
+            "report_subscription_scope_type": None,
+            "report_subscription_scope_key": None,
+            "report_subscription_scope_label": None,
+            "report_subscription_enabled": None,
         }]),
     )
     user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
@@ -290,6 +338,8 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
 
     assert result["count"] == 1
     report = result["reports"][0]
+    assert report["has_pdf_export"] is True
+    assert report["report_subscription"] is None
     assert report["artifact_state"] == "ready"
     assert report["artifact_label"] == "Ready"
     assert report["freshness_state"] == "stale"
@@ -334,6 +384,11 @@ async def test_list_tenant_reports_applies_quality_freshness_and_review_filters(
                 "unresolved_issue_count": 0,
                 "quality_status": "sales_ready",
                 "quality_score": 92,
+                "report_subscription_id": None,
+                "report_subscription_scope_type": None,
+                "report_subscription_scope_key": None,
+                "report_subscription_scope_label": None,
+                "report_subscription_enabled": None,
             },
             {
                 "id": nonmatching_id,
@@ -353,6 +408,11 @@ async def test_list_tenant_reports_applies_quality_freshness_and_review_filters(
                 "unresolved_issue_count": 0,
                 "quality_status": "sales_ready",
                 "quality_score": 90,
+                "report_subscription_id": None,
+                "report_subscription_scope_type": None,
+                "report_subscription_scope_key": None,
+                "report_subscription_scope_label": None,
+                "report_subscription_enabled": None,
             },
         ]),
     )
@@ -374,7 +434,63 @@ async def test_list_tenant_reports_applies_quality_freshness_and_review_filters(
     assert result["count"] == 1
     assert [report["id"] for report in result["reports"]] == [str(matching_id)]
     _, *fetch_params = pool.fetch.await_args.args
-    assert fetch_params[-1] == 50
+    assert fetch_params[-2] == 50
+    assert fetch_params[-1] == user.account_id
+
+
+@pytest.mark.asyncio
+async def test_list_tenant_reports_exposes_report_subscription_summary(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    report_id = uuid4()
+    subscription_id = uuid4()
+    created_at = datetime.now(timezone.utc) - timedelta(hours=4)
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[{
+            "id": report_id,
+            "report_date": created_at.date(),
+            "report_type": "battle_card",
+            "executive_summary": "Summary",
+            "vendor_filter": "Zendesk",
+            "category_filter": None,
+            "status": "processing",
+            "created_at": created_at,
+            "latest_failure_step": None,
+            "latest_error_code": None,
+            "latest_error_summary": None,
+            "data_stale": False,
+            "blocker_count": 0,
+            "warning_count": 0,
+            "unresolved_issue_count": 0,
+            "quality_status": "sales_ready",
+            "quality_score": 90,
+            "report_subscription_id": subscription_id,
+            "report_subscription_scope_type": "report",
+            "report_subscription_scope_key": str(report_id),
+            "report_subscription_scope_label": "battle card - Zendesk",
+            "report_subscription_enabled": True,
+        }]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_reports(
+        report_type=None,
+        include_stale=True,
+        limit=10,
+        user=user,
+    )
+
+    report = result["reports"][0]
+    assert report["report_subscription"] == {
+        "id": str(subscription_id),
+        "scope_type": "report",
+        "scope_key": str(report_id),
+        "scope_label": "battle card - Zendesk",
+        "enabled": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -417,7 +533,12 @@ async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
         "vendor_filter": "Zendesk",
         "category_filter": None,
         "executive_summary": "Summary",
-        "intelligence_data": {"data_stale": False},
+        "intelligence_data": {
+            "data_stale": False,
+            "key_insights": [{"label": "Pricing", "summary": "Pricing churn risk"}],
+            "key_insights_reference_ids": {"witness_ids": ["w1"]},
+            "recommended_plays": {"summary": "Lead with migration support"},
+        },
         "data_density": {},
         "status": "published",
         "latest_failure_step": None,
@@ -433,15 +554,34 @@ async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
     monkeypatch.setattr(mod, "_load_accessible_tenant_report", AsyncMock(return_value=row))
+    monkeypatch.setattr(mod, "_fetch_report_subscription_row", AsyncMock(return_value=None))
 
     result = await mod.get_tenant_report(str(report_id), user=user)
 
     assert result["artifact_state"] == "ready"
+    assert result["has_pdf_export"] is True
+    assert result["report_subscription"] is None
     assert result["artifact_label"] == "Ready"
     assert result["freshness_state"] == "fresh"
     assert result["freshness_label"] == "Fresh"
     assert result["review_state"] == "warnings"
     assert result["review_label"] == "Warnings"
+    assert result["section_evidence"] == {
+        "key_insights": {
+            "state": "witness_backed",
+            "label": "Witness-backed",
+            "detail": "1 linked witness citation",
+            "witness_count": 1,
+            "metric_count": 0,
+        },
+        "recommended_plays": {
+            "state": "thin",
+            "label": "Thin evidence",
+            "detail": "No linked witness citations for this section yet.",
+            "witness_count": 0,
+            "metric_count": 0,
+        },
+    }
     assert result["trust"] == {
         "artifact_state": "ready",
         "artifact_label": "Ready",
@@ -449,6 +589,59 @@ async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
         "freshness_label": "Fresh",
         "review_state": "warnings",
         "review_label": "Warnings",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_report_exposes_report_subscription_summary(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    report_id = uuid4()
+    created_at = datetime.now(timezone.utc) - timedelta(hours=6)
+    row = {
+        "id": report_id,
+        "report_date": None,
+        "report_type": "vendor_scorecard",
+        "vendor_filter": "Zendesk",
+        "category_filter": None,
+        "executive_summary": "Summary",
+        "intelligence_data": {"data_stale": False},
+        "data_density": {},
+        "status": "published",
+        "latest_failure_step": None,
+        "latest_error_code": None,
+        "latest_error_summary": None,
+        "blocker_count": 0,
+        "warning_count": 0,
+        "llm_model": "test-model",
+        "created_at": created_at,
+    }
+    subscription_id = uuid4()
+    pool = SimpleNamespace(is_initialized=True, fetchval=AsyncMock(return_value=0))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(mod, "_load_accessible_tenant_report", AsyncMock(return_value=row))
+    monkeypatch.setattr(
+        mod,
+        "_fetch_report_subscription_row",
+        AsyncMock(return_value={
+            "id": subscription_id,
+            "scope_type": "report",
+            "scope_key": str(report_id),
+            "scope_label": "custom report label",
+            "enabled": True,
+        }),
+    )
+
+    result = await mod.get_tenant_report(str(report_id), user=user)
+
+    assert result["report_subscription"] == {
+        "id": str(subscription_id),
+        "scope_type": "report",
+        "scope_key": str(report_id),
+        "scope_label": "custom report label",
+        "enabled": True,
     }
 
 

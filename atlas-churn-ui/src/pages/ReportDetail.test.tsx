@@ -11,6 +11,10 @@ const drawerState = vi.hoisted(() => ({
   lastProps: null as any,
 }))
 
+const actionBarState = vi.hoisted(() => ({
+  lastProps: null as any,
+}))
+
 const api = vi.hoisted(() => ({
   fetchReport: vi.fn(),
 }))
@@ -19,15 +23,31 @@ vi.mock('../api/client', () => ({
   fetchReport: api.fetchReport,
 }))
 vi.mock('../components/ReportActionBar', () => ({
-  default: ({ onSubscribe }: { onSubscribe: () => void }) => (
-    <button onClick={onSubscribe}>Open subscription</button>
-  ),
+  default: (props: any) => {
+    actionBarState.lastProps = props
+    return <button onClick={props.onSubscribe}>Open subscription</button>
+  },
 }))
 vi.mock('../components/SubscriptionModal', () => ({
   default: (props: any) => {
     modalState.lastProps = props
     if (!props.open) return null
-    return <div data-testid="subscription-modal">{props.scopeType}:{props.scopeKey}:{props.scopeLabel}</div>
+    return (
+      <div data-testid="subscription-modal">
+        {props.scopeType}:{props.scopeKey}:{props.scopeLabel}
+        <button
+          onClick={() => props.onSaved?.({
+            id: `saved-${props.scopeKey}`,
+            scope_type: props.scopeType,
+            scope_key: props.scopeKey,
+            scope_label: props.scopeLabel,
+            enabled: false,
+          })}
+        >
+          Save paused subscription
+        </button>
+      </div>
+    )
   },
 }))
 vi.mock('../components/EvidenceDrawer', () => ({
@@ -43,6 +63,7 @@ describe('ReportDetail', () => {
     vi.clearAllMocks()
     modalState.lastProps = null
     drawerState.lastProps = null
+    actionBarState.lastProps = null
     api.fetchReport.mockResolvedValue({
       id: 'report-1',
       report_type: 'vendor_scorecard',
@@ -60,6 +81,7 @@ describe('ReportDetail', () => {
       latest_failure_step: null,
       latest_error_summary: null,
       data_density: {},
+      report_subscription: null,
       intelligence_data: {
         reasoning_reference_ids: { witness_ids: ['w1'] },
         reasoning_witness_highlights: [
@@ -84,6 +106,85 @@ describe('ReportDetail', () => {
     })
   })
 
+  it('initializes the action bar from backend report subscription state', async () => {
+    api.fetchReport.mockResolvedValueOnce({
+      id: 'report-subscribed',
+      report_type: 'vendor_scorecard',
+      vendor_filter: 'Zendesk',
+      category_filter: null,
+      executive_summary: 'Executive summary',
+      created_at: '2026-04-10T00:00:00Z',
+      report_date: '2026-04-10',
+      llm_model: 'gpt-test',
+      status: 'completed',
+      blocker_count: 0,
+      warning_count: 0,
+      unresolved_issue_count: 0,
+      quality_status: 'needs_review',
+      latest_failure_step: null,
+      latest_error_summary: null,
+      data_density: {},
+      report_subscription: {
+        id: 'sub-1',
+        scope_type: 'report',
+        scope_key: 'report-subscribed',
+        scope_label: 'custom report label',
+        enabled: true,
+      },
+      intelligence_data: {},
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      { initialEntries: ['/reports/report-subscribed'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Zendesk')
+    expect(actionBarState.lastProps.hasSubscription).toBe(true)
+    expect(actionBarState.lastProps.subscriptionState).toBe('active')
+  })
+
+  it('initializes the action bar as paused when the backend report subscription is disabled', async () => {
+    api.fetchReport.mockResolvedValueOnce({
+      id: 'report-paused',
+      report_type: 'vendor_scorecard',
+      vendor_filter: 'Notion',
+      category_filter: null,
+      executive_summary: 'Executive summary',
+      created_at: '2026-04-10T00:00:00Z',
+      report_date: '2026-04-10',
+      llm_model: 'gpt-test',
+      status: 'completed',
+      blocker_count: 0,
+      warning_count: 0,
+      unresolved_issue_count: 0,
+      quality_status: 'needs_review',
+      latest_failure_step: null,
+      latest_error_summary: null,
+      data_density: {},
+      report_subscription: {
+        id: 'sub-paused',
+        scope_type: 'report',
+        scope_key: 'report-paused',
+        scope_label: 'custom paused label',
+        enabled: false,
+      },
+      intelligence_data: {},
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      { initialEntries: ['/reports/report-paused'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Notion')
+    expect(actionBarState.lastProps.subscriptionState).toBe('paused')
+  })
+
   it('opens the report subscription modal with the report scope metadata', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports/:id', element: <ReportDetail /> }],
@@ -102,8 +203,144 @@ describe('ReportDetail', () => {
     expect(modalState.lastProps.scopeType).toBe('report')
     expect(modalState.lastProps.scopeKey).toBe('report-1')
     expect(modalState.lastProps.scopeLabel).toBe('vendor scorecard - Zendesk')
+    expect(actionBarState.lastProps.hasSubscription).toBe(false)
+    expect(actionBarState.lastProps.subscriptionState).toBe('none')
     expect(screen.getByTestId('subscription-modal')).toHaveTextContent(
       'report:report-1:vendor scorecard - Zendesk',
+    )
+  })
+
+  it('hydrates the report subscription modal from the URL', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      { initialEntries: ['/reports/report-1?subscription=report'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await waitFor(() => {
+      expect(modalState.lastProps?.open).toBe(true)
+    })
+
+    expect(modalState.lastProps.scopeType).toBe('report')
+    expect(modalState.lastProps.scopeKey).toBe('report-1')
+    expect(modalState.lastProps.scopeLabel).toBe('vendor scorecard - Zendesk')
+    expect(screen.getByTestId('subscription-modal')).toHaveTextContent(
+      'report:report-1:vendor scorecard - Zendesk',
+    )
+  })
+
+  it('keeps the detail action bar paused after saving a paused subscription', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      { initialEntries: ['/reports/report-1'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Zendesk')
+    fireEvent.click(screen.getByText('Open subscription'))
+
+    await waitFor(() => {
+      expect(modalState.lastProps?.open).toBe(true)
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save paused subscription' }))
+
+    await waitFor(() => {
+      expect(actionBarState.lastProps.subscriptionState).toBe('paused')
+    })
+  })
+
+  it('returns to the preserved library URL from the back button', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/reports', element: <div data-testid="reports-route">Reports route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          {
+            pathname: '/reports/report-1',
+            state: {
+              backTo: '/reports?report_type=battle_card&vendor_filter=Zendesk&freshness_state=stale',
+            },
+          },
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Zendesk')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Reports' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('reports-route')).toBeInTheDocument()
+    })
+    expect(router.state.location.pathname).toBe('/reports')
+    expect(router.state.location.search).toBe('?report_type=battle_card&vendor_filter=Zendesk&freshness_state=stale')
+  })
+
+  it('falls back to the back_to query when detail opens without router state', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/reports', element: <div data-testid="reports-route">Reports route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freports%3Freport_type%3Dbattle_card%26vendor_filter%3DZendesk%26freshness_state%3Dstale',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Zendesk')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Reports' }))
+
+    expect(await screen.findByTestId('reports-route')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/reports')
+    expect(router.state.location.search).toBe('?report_type=battle_card&vendor_filter=Zendesk&freshness_state=stale')
+  })
+
+  it('passes a normalized share URL to the detail action bar', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freports%3Freport_type%3Dbattle_card%26vendor_filter%3DZendesk%26freshness_state%3Dstale',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Zendesk')
+    expect(actionBarState.lastProps.linkUrl).toBe(
+      '/reports/report-1?back_to=%2Freports%3Freport_type%3Dbattle_card%26vendor_filter%3DZendesk%26freshness_state%3Dstale',
+    )
+  })
+
+  it('preserves the open report subscription modal in the copied detail link', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?subscription=report&back_to=%2Freports%3Freport_type%3Dbattle_card%26vendor_filter%3DZendesk',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await waitFor(() => {
+      expect(modalState.lastProps?.open).toBe(true)
+    })
+
+    expect(actionBarState.lastProps.linkUrl).toBe(
+      '/reports/report-1?subscription=report&report_focus_label=vendor+scorecard+-+Zendesk&back_to=%2Freports%3Freport_type%3Dbattle_card%26vendor_filter%3DZendesk',
     )
   })
 
@@ -125,5 +362,61 @@ describe('ReportDetail', () => {
     expect(drawerState.lastProps.vendorName).toBe('Zendesk')
     expect(drawerState.lastProps.witnessId).toBe('w1')
     expect(screen.getByTestId('evidence-drawer')).toHaveTextContent('Zendesk:w1')
+  })
+
+  it('renders partial and thin evidence states for generic report sections', async () => {
+    api.fetchReport.mockResolvedValueOnce({
+      id: 'report-2',
+      report_type: 'exploratory_overview',
+      vendor_filter: 'Intercom',
+      category_filter: null,
+      executive_summary: 'Evidence overview',
+      created_at: '2026-04-10T00:00:00Z',
+      report_date: '2026-04-10',
+      llm_model: 'gpt-test',
+      status: 'completed',
+      blocker_count: 0,
+      warning_count: 0,
+      unresolved_issue_count: 0,
+      quality_status: 'needs_review',
+      latest_failure_step: null,
+      latest_error_summary: null,
+      data_density: {},
+      section_evidence: {
+        objection_handlers: {
+          state: 'partial',
+          label: 'Partial evidence',
+          detail: 'Section has evidence metadata, but no linked witness citations yet.',
+        },
+        recommended_plays: {
+          state: 'partial',
+          label: 'Partial evidence',
+          detail: 'Backend flagged this section for operator review.',
+        },
+      },
+      intelligence_data: {
+        objection_handlers: {
+          summary: 'Pricing objections are rising',
+          reference_ids: {
+            metric_ids: ['m1'],
+          },
+        },
+        recommended_plays: {
+          summary: 'Lead with migration support',
+        },
+      },
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      { initialEntries: ['/reports/report-2'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intercom')
+    expect(screen.getAllByText('Partial evidence')).toHaveLength(2)
+    expect(screen.getByText('Section has evidence metadata, but no linked witness citations yet.')).toBeInTheDocument()
+    expect(screen.getByText('Backend flagged this section for operator review.')).toBeInTheDocument()
   })
 })

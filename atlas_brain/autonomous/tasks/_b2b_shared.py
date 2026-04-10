@@ -50,6 +50,91 @@ def _reasoning_int(value: Any) -> int | None:
             return None
 
 
+async def has_complete_core_run_marker(pool, report_date: date) -> bool:
+    """Return whether the core churn materialization finished for ``report_date``."""
+    marker = await pool.fetchval(
+        """
+        SELECT 1
+        FROM b2b_intelligence
+        WHERE report_type = 'core_run_complete'
+          AND report_date = $1
+          AND status = 'published'
+          AND COALESCE(
+                (intelligence_data->>'materialization_complete')::boolean,
+                TRUE
+              ) = TRUE
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        report_date,
+    )
+    return bool(marker)
+
+
+async def latest_complete_core_report_date(pool) -> date | None:
+    """Return the newest report_date with a complete published core-run marker."""
+    return await pool.fetchval(
+        """
+        SELECT report_date
+        FROM b2b_intelligence
+        WHERE report_type = 'core_run_complete'
+          AND status = 'published'
+          AND COALESCE(
+                (intelligence_data->>'materialization_complete')::boolean,
+                TRUE
+              ) = TRUE
+        ORDER BY report_date DESC, created_at DESC
+        LIMIT 1
+        """
+    )
+
+
+async def describe_core_run_gap(pool, report_date: date) -> str:
+    """Explain why the canonical core-run marker is unavailable for ``report_date``."""
+    row = await pool.fetchrow(
+        """
+        SELECT status, intelligence_data
+        FROM b2b_intelligence
+        WHERE report_type = 'core_run_complete'
+          AND report_date = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        report_date,
+    )
+    if not row:
+        return "Core signals are not available for today"
+
+    intelligence_data = row.get("intelligence_data") or {}
+    if not isinstance(intelligence_data, dict):
+        intelligence_data = {}
+    materialization_status = intelligence_data.get("materialization_status") or {}
+    if not isinstance(materialization_status, dict):
+        materialization_status = {}
+
+    failed_phases = [
+        str(item).strip()
+        for item in (materialization_status.get("failed_phases") or [])
+        if str(item).strip()
+    ]
+    partial_phases = [
+        str(item).strip()
+        for item in (materialization_status.get("partial_phases") or [])
+        if str(item).strip()
+    ]
+
+    details: list[str] = []
+    if failed_phases:
+        details.append(f"failed: {', '.join(failed_phases)}")
+    if partial_phases:
+        details.append(f"partial: {', '.join(partial_phases)}")
+
+    reason = "Core churn materialization is incomplete for today"
+    if details:
+        return f"{reason} ({'; '.join(details)})"
+    return reason
+
+
 
 def filter_vendors_by_focus_categories(
     vendor_scores: list[dict],

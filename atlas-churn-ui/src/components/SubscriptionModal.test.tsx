@@ -18,8 +18,16 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../api/client', () => api)
 
+async function flushMicrotasks() {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 describe('SubscriptionModal', () => {
   afterEach(() => {
+    vi.useRealTimers()
     cleanup()
   })
 
@@ -70,13 +78,20 @@ describe('SubscriptionModal', () => {
       expect(api.fetchReportSubscription).toHaveBeenCalledWith('report', 'report-1')
     })
 
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Resume Paused Subscription' })).toBeInTheDocument()
+    })
+    expect(screen.getAllByText('Paused')).not.toHaveLength(0)
+    expect(screen.getAllByText('Delivery is paused until you reactivate this subscription.')).not.toHaveLength(0)
     expect(screen.getByDisplayValue('Existing report sub')).toBeInTheDocument()
     expect(screen.getByLabelText('Frequency')).toHaveValue('monthly')
     expect(screen.getByLabelText('Deliverable Focus')).toHaveValue('battle_cards')
     expect(screen.getByLabelText('Freshness Policy')).toHaveValue('any')
     expect(screen.getByDisplayValue('team@example.com')).toBeInTheDocument()
     expect(screen.getByDisplayValue('Carry forward')).toBeInTheDocument()
-    expect(screen.getByText('Paused')).toBeInTheDocument()
+    expect(screen.getAllByText('Paused')).not.toHaveLength(0)
+    expect(screen.getByText('This will keep delivery paused while saving your changes.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update Paused Subscription' })).toBeInTheDocument()
 
     rerender(
       <SubscriptionModal
@@ -92,13 +107,145 @@ describe('SubscriptionModal', () => {
       expect(api.fetchReportSubscription).toHaveBeenCalledWith('library', 'library')
     })
 
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Subscribe to Reports' })).toBeInTheDocument()
+    })
+    expect(screen.getAllByText('Set up recurring delivery for this report scope.')).not.toHaveLength(0)
     expect(screen.getByDisplayValue('Full Report Library')).toBeInTheDocument()
     expect(screen.getByLabelText('Frequency')).toHaveValue('weekly')
     expect(screen.getByLabelText('Deliverable Focus')).toHaveValue('all')
     expect(screen.getByLabelText('Freshness Policy')).toHaveValue('fresh_or_monitor')
     expect(screen.getByText('Active')).toBeInTheDocument()
+    expect(screen.getByText('This will create a recurring delivery for this report scope.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeInTheDocument()
     expect(screen.queryByDisplayValue('team@example.com')).not.toBeInTheDocument()
     expect(screen.queryByDisplayValue('Carry forward')).not.toBeInTheDocument()
+  })
+
+  it('shows active subscription language for enabled existing subscriptions', async () => {
+    api.fetchReportSubscription.mockResolvedValue({
+      subscription: {
+        id: 'sub-active-1',
+        scope_type: 'report',
+        scope_key: 'report-1',
+        scope_label: 'Existing active report sub',
+        filter_payload: {},
+        report_id: 'report-1',
+        delivery_frequency: 'weekly',
+        deliverable_focus: 'all',
+        freshness_policy: 'fresh_or_monitor',
+        recipient_emails: ['team@example.com'],
+        delivery_note: '',
+        enabled: true,
+        next_delivery_at: null,
+        last_delivery_at: null,
+        last_delivery_status: null,
+        last_delivery_report_count: null,
+        last_delivery_summary: null,
+        created_at: null,
+        updated_at: null,
+      },
+    })
+
+    render(
+      <SubscriptionModal
+        open
+        onClose={vi.fn()}
+        scopeType="report"
+        scopeKey="report-1"
+        scopeLabel="Report One"
+      />,
+    )
+
+    await waitFor(() => {
+      expect(api.fetchReportSubscription).toHaveBeenCalledWith('report', 'report-1')
+    })
+
+    await flushMicrotasks()
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Manage Active Subscription' })).toBeInTheDocument()
+    })
+    expect(screen.getAllByText('Active')).not.toHaveLength(0)
+    expect(screen.getAllByText('This subscription is currently delivering on schedule.')).not.toHaveLength(0)
+    expect(screen.getByText('This will update the active delivery schedule.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update Subscription' })).toBeInTheDocument()
+  })
+
+  it('updates action copy when the enabled state changes', async () => {
+    api.fetchReportSubscription.mockResolvedValue({
+      subscription: {
+        id: 'sub-toggle-1',
+        scope_type: 'report',
+        scope_key: 'report-1',
+        scope_label: 'Toggle report sub',
+        filter_payload: {},
+        report_id: 'report-1',
+        delivery_frequency: 'weekly',
+        deliverable_focus: 'all',
+        freshness_policy: 'fresh_or_monitor',
+        recipient_emails: ['team@example.com'],
+        delivery_note: '',
+        enabled: true,
+        next_delivery_at: null,
+        last_delivery_at: null,
+        last_delivery_status: null,
+        last_delivery_report_count: null,
+        last_delivery_summary: null,
+        created_at: null,
+        updated_at: null,
+      },
+    })
+
+    render(
+      <SubscriptionModal
+        open
+        onClose={vi.fn()}
+        scopeType="report"
+        scopeKey="report-1"
+        scopeLabel="Report One"
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Update Subscription' })).toBeInTheDocument()
+    })
+    expect(screen.getByText('This will update the active delivery schedule.')).toBeInTheDocument()
+
+    const activeLabel = screen.getAllByText('Active').at(-1) as HTMLElement
+    const toggle = activeLabel.previousElementSibling as HTMLElement
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pause Subscription' })).toBeInTheDocument()
+    })
+    expect(screen.getByText('This will pause recurring delivery until you resume it.')).toBeInTheDocument()
+  })
+
+  it('shows paused-new action copy when creating a disabled subscription', async () => {
+    api.fetchReportSubscription.mockResolvedValue({ subscription: null })
+
+    render(
+      <SubscriptionModal
+        open
+        onClose={vi.fn()}
+        scopeType="report"
+        scopeKey="report-1"
+        scopeLabel="Report One"
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Subscribe' })).toBeInTheDocument()
+    })
+
+    const activeLabel = screen.getByText('Active')
+    const toggle = activeLabel.previousElementSibling as HTMLElement
+    fireEvent.click(toggle)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save Paused Subscription' })).toBeInTheDocument()
+    })
+    expect(screen.getByText('This will save the subscription without starting delivery yet.')).toBeInTheDocument()
   })
 
   it('ignores stale load responses after switching scopes', async () => {
@@ -133,42 +280,56 @@ describe('SubscriptionModal', () => {
       />,
     )
 
-    if (resolveLibrary) {
-      resolveLibrary({ subscription: null })
-    }
-
     await waitFor(() => {
-      expect(screen.getByDisplayValue('Full Report Library')).toBeInTheDocument()
+      expect(api.fetchReportSubscription).toHaveBeenCalledWith('library', 'library')
     })
 
-    if (resolveReport) {
-      resolveReport({
-        subscription: {
-          id: 'sub-1',
-          scope_type: 'report',
-          scope_key: 'report-1',
-          scope_label: 'Stale report subscription',
-          filter_payload: {},
-          report_id: 'report-1',
-          delivery_frequency: 'monthly',
-          deliverable_focus: 'battle_cards',
-          freshness_policy: 'any',
-          recipient_emails: ['team@example.com'],
-          delivery_note: 'Carry forward',
-          enabled: false,
-          next_delivery_at: null,
-          last_delivery_at: null,
-          last_delivery_status: null,
-          last_delivery_report_count: null,
-          last_delivery_summary: null,
-          created_at: null,
-          updated_at: null,
-        },
+    if (resolveLibrary) {
+      await act(async () => {
+        resolveLibrary?.({ subscription: null })
+        await Promise.resolve()
       })
     }
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue('Full Report Library')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Subscribe to Reports' })).toBeInTheDocument()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Report Library')
+    })
+
+    if (resolveReport) {
+      await act(async () => {
+        resolveReport?.({
+          subscription: {
+            id: 'sub-1',
+            scope_type: 'report',
+            scope_key: 'report-1',
+            scope_label: 'Stale report subscription',
+            filter_payload: {},
+            report_id: 'report-1',
+            delivery_frequency: 'monthly',
+            deliverable_focus: 'battle_cards',
+            freshness_policy: 'any',
+            recipient_emails: ['team@example.com'],
+            delivery_note: 'Carry forward',
+            enabled: false,
+            next_delivery_at: null,
+            last_delivery_at: null,
+            last_delivery_status: null,
+            last_delivery_report_count: null,
+            last_delivery_summary: null,
+            created_at: null,
+            updated_at: null,
+          },
+        })
+        await Promise.resolve()
+      })
+    }
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Report Library')
     })
     expect(screen.queryByDisplayValue('Stale report subscription')).not.toBeInTheDocument()
   })
@@ -214,15 +375,14 @@ describe('SubscriptionModal', () => {
       />,
     )
 
-    await act(async () => {
-      await Promise.resolve()
-    })
-    expect(screen.getByDisplayValue('Report One')).toBeInTheDocument()
+    await flushMicrotasks()
+    expect(screen.getByLabelText('Subscription Label')).toHaveValue('Report One')
     fireEvent.change(screen.getByLabelText('Recipient Emails'), {
       target: { value: 'team@example.com' },
     })
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Subscribe' }))
+      await Promise.resolve()
       await Promise.resolve()
       expect(api.upsertReportSubscription).toHaveBeenCalled()
     })
@@ -239,6 +399,7 @@ describe('SubscriptionModal', () => {
     )
 
     await act(async () => {
+      await Promise.resolve()
       await Promise.resolve()
       vi.advanceTimersByTime(1300)
     })
