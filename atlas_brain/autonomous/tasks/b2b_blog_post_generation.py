@@ -5831,16 +5831,10 @@ async def _fetch_pain_category_urgency(pool, vendor_name: str) -> dict[str, floa
 
 async def _fetch_churn_signals(pool, vendor_name: str) -> list[dict[str, Any]]:
     """Fetch churn signal data for a vendor from the aggregate table."""
-    row = await pool.fetchrow(
-        """
-        SELECT
-            avg_urgency_score, total_reviews, negative_reviews,
-            top_pain_categories, top_feature_gaps, top_competitors,
-            quotable_evidence, product_category
-        FROM b2b_churn_signals
-        WHERE vendor_name = $1
-        LIMIT 1
-        """,
+    from ._b2b_shared import read_vendor_scorecard_detail
+
+    row = await read_vendor_scorecard_detail(
+        pool,
         vendor_name,
     )
     if not row:

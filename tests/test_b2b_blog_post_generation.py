@@ -1679,6 +1679,55 @@ def test_apply_blog_quality_gate_ignores_meaningless_existing_numeric_anchor():
     )
 
 
+@pytest.mark.asyncio
+async def test_fetch_churn_signals_uses_shared_scorecard_detail_adapter(monkeypatch):
+    pool = object()
+    adapter = AsyncMock(return_value={
+        "avg_urgency_score": 7.4,
+        "total_reviews": 40,
+        "negative_reviews": 12,
+        "top_pain_categories": json.dumps([
+            {"category": "pricing", "count": 5},
+            {"category": None, "count": 2},
+        ]),
+        "top_feature_gaps": json.dumps([
+            {"feature": "SSO"},
+            "Role permissions",
+        ]),
+        "top_competitors": [{"name": "Freshdesk"}],
+        "quotable_evidence": [],
+        "product_category": "Support",
+    })
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.read_vendor_scorecard_detail",
+        adapter,
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_pain_category_urgency",
+        AsyncMock(return_value={"pricing": 8.1, "support": 6.0}),
+    )
+
+    rows = await blog_mod._fetch_churn_signals(pool, "Zendesk")
+
+    assert adapter.await_count == 1
+    assert adapter.await_args.args == (pool, "Zendesk")
+    assert rows == [
+        {
+            "pain_category": "pricing",
+            "signal_count": 5,
+            "avg_urgency": 8.1,
+            "feature_gaps": ["SSO", "Role permissions"],
+        },
+        {
+            "pain_category": "support",
+            "signal_count": 1,
+            "avg_urgency": 6.0,
+            "feature_gaps": [],
+        },
+    ]
+
+
 def test_apply_blog_deterministic_repairs_strips_unsupported_category_outcome_lines():
     blueprint = blog_mod.PostBlueprint(
         topic_type="vendor_showdown",
