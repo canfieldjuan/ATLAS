@@ -11,7 +11,6 @@ from .comms import router as comms_router
 from .devices import router as devices_router
 from .health import router as health_router
 from .llm import router as llm_router
-from .models import router as models_router
 from .query import router as query_router
 from .session import router as session_router
 from .vision import router as vision_router
@@ -59,6 +58,12 @@ from .b2b_evidence import router as b2b_evidence_router
 logger = logging.getLogger("atlas.api")
 
 try:
+    from .models import router as models_router
+except Exception as exc:
+    models_router = None
+    logger.warning("Models router disabled during api package import: %s", exc)
+
+try:
     from .video import router as video_router
 except Exception as exc:
     video_router = None
@@ -69,7 +74,8 @@ router = APIRouter()
 
 router.include_router(health_router)
 router.include_router(query_router)
-router.include_router(models_router)
+if models_router is not None:
+    router.include_router(models_router)
 router.include_router(devices_router)
 router.include_router(alerts_router)
 router.include_router(comms_router)
