@@ -4964,6 +4964,53 @@ async def read_category_vendor_signal_rows(
     return [dict(row) for row in rows if row.get("vendor_name")]
 
 
+async def read_vendor_graph_sync_rows(
+    pool,
+) -> list[dict[str, Any]]:
+    """Read vendor rows for knowledge-graph sync from canonical scorecard state."""
+    rows = await pool.fetch(
+        """
+        WITH ranked_signals AS (
+            SELECT vendor_name,
+                   product_category,
+                   total_reviews,
+                   avg_urgency_score,
+                   confidence_score,
+                   last_computed_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY vendor_name
+                       ORDER BY total_reviews DESC,
+                                last_computed_at DESC NULLS LAST,
+                                product_category ASC NULLS LAST
+                   ) AS vendor_row_rank
+            FROM b2b_churn_signals
+        )
+        SELECT v.canonical_name,
+               v.aliases,
+               rs.product_category,
+               rs.total_reviews,
+               rs.avg_urgency_score AS avg_urgency,
+               rs.confidence_score,
+               snap.churn_density,
+               snap.positive_review_pct,
+               snap.recommend_ratio,
+               snap.pain_count,
+               snap.competitor_count
+        FROM b2b_vendors v
+        LEFT JOIN ranked_signals rs
+            ON LOWER(v.canonical_name) = LOWER(rs.vendor_name)
+           AND rs.vendor_row_rank = 1
+        LEFT JOIN (
+            SELECT DISTINCT ON (vendor_name) *
+            FROM b2b_vendor_snapshots
+            ORDER BY vendor_name, snapshot_date DESC
+        ) snap ON LOWER(v.canonical_name) = LOWER(snap.vendor_name)
+        ORDER BY v.canonical_name
+        """
+    )
+    return [dict(row) for row in rows if row.get("canonical_name")]
+
+
 async def read_vendor_scorecard_inventory_rows(
     pool,
 ) -> list[dict[str, Any]]:
