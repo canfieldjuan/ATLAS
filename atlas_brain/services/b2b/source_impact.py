@@ -244,7 +244,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
     ),
     "trustpilot": _profile(
         "trustpilot",
-        source_family="structured_review",
+        source_family="community_signal",
         expansion_stage="query_tune_social_source",
         work_type=("query_strategy",),
         reliable_fields=(
@@ -384,7 +384,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
     ),
     "sourceforge": _profile(
         "sourceforge",
-        source_family="structured_review",
+        source_family="developer_context",
         expansion_stage="conditional_context_expansion",
         work_type=("scrape_coverage",),
         reliable_fields=(
@@ -399,7 +399,7 @@ _SOURCE_IMPACT_PROFILES: dict[str, SourceImpactProfile] = {
     ),
     "slashdot": _profile(
         "slashdot",
-        source_family="structured_review",
+        source_family="developer_context",
         expansion_stage="conditional_context_expansion",
         work_type=("scrape_coverage",),
         reliable_fields=(
@@ -448,7 +448,10 @@ def build_source_impact_ledger(source: str | None = None) -> dict[str, Any]:
         entry = profile.to_dict()
         capability = profiles.get(source_name)
         if capability is not None:
+            entry["scrape_data_quality"] = capability.data_quality.value
             entry["capabilities"] = capability.to_dict()
+        else:
+            entry["scrape_data_quality"] = None
         sources_out.append(entry)
 
     summary = {
@@ -464,6 +467,18 @@ def build_source_impact_ledger(source: str | None = None) -> dict[str, Any]:
         ),
         "news_context_sources": sum(
             1 for entry in sources_out if entry["source_family"] == "news_context"
+        ),
+        "verified_quality_sources": sum(
+            1 for entry in sources_out if entry["scrape_data_quality"] == "verified"
+        ),
+        "structured_quality_sources": sum(
+            1 for entry in sources_out if entry["scrape_data_quality"] == "structured"
+        ),
+        "community_quality_sources": sum(
+            1 for entry in sources_out if entry["scrape_data_quality"] == "community"
+        ),
+        "news_quality_sources": sum(
+            1 for entry in sources_out if entry["scrape_data_quality"] == "news"
         ),
         "parser_quality_targets": sorted(
             entry["source"]
