@@ -626,6 +626,17 @@ def _empty_repair_usage() -> dict[str, int]:
     }
 
 
+def _coerce_float_override(
+    raw_value: Any,
+    default_value: float,
+    *,
+    min_value: float,
+    max_value: float,
+) -> float:
+    coerced = base_enrichment._coerce_float_value(raw_value, float(default_value))
+    return max(min_value, min(max_value, coerced))
+
+
 def _row_usage_result(status: Any, usage: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = {"status": status}
     usage_dict = usage or {}
@@ -1715,12 +1726,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     pool = get_db_pool()
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
+    task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
 
     orphaned = await _recover_orphaned_repairing(
         pool, cfg.enrichment_repair_max_attempts,
-        orphan_timeout_minutes=int(getattr(cfg, 'enrichment_repair_orphan_timeout_minutes', 30)),
+        orphan_timeout_minutes=base_enrichment._coerce_int_override(
+            task_metadata.get("enrichment_repair_orphan_timeout_minutes"),
+            getattr(cfg, "enrichment_repair_orphan_timeout_minutes", 30),
+            min_value=5,
+            max_value=120,
+        ),
     )
-    task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
     max_batch = base_enrichment._coerce_int_override(
         task_metadata.get("enrichment_repair_max_per_batch"),
         base_enrichment._coerce_int_value(getattr(cfg, "enrichment_repair_max_per_batch", 25), 25),
@@ -1781,8 +1797,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     rounds = 0
     consecutive_no_progress = 0
     circuit_breaker_reason = None
-    failure_rate_threshold = float(getattr(cfg, 'enrichment_repair_failure_rate_threshold', 0.5))
-    no_progress_max_rounds = int(getattr(cfg, 'enrichment_repair_no_progress_max_rounds', 3))
+    failure_rate_threshold = _coerce_float_override(
+        task_metadata.get("enrichment_repair_failure_rate_threshold"),
+        getattr(cfg, "enrichment_repair_failure_rate_threshold", 0.5),
+        min_value=0.1,
+        max_value=1.0,
+    )
+    no_progress_max_rounds = base_enrichment._coerce_int_override(
+        task_metadata.get("enrichment_repair_no_progress_max_rounds"),
+        getattr(cfg, "enrichment_repair_no_progress_max_rounds", 3),
+        min_value=1,
+        max_value=20,
+    )
     strict_discussion_sources, strict_discussion_content_types = _strict_discussion_lists(cfg)
     low_signal_discussion_skipped = await _skip_low_signal_strict_discussion_rows(
         pool,
