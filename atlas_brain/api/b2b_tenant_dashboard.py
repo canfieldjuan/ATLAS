@@ -1662,78 +1662,31 @@ async def list_tenant_signals(
     _require_b2b_product(user)
     pool = _pool_or_503()
     vendor_names = [v.strip() for v in vendor_names if v and v.strip()] if isinstance(vendor_names, (list, tuple)) else ([vendor_names.strip()] if isinstance(vendor_names, str) and vendor_names.strip() else None)
-
-    conditions: list[str] = []
-    params: list = []
-    idx = 1
-
-    # Tenant scope
     t_params = _tenant_params(user)
-    scope = _vendor_scope_sql(idx, user)
-    if scope != "TRUE":
-        conditions.append(scope)
-        params.extend(t_params)
-        idx += 1
-
-    if vendor_names:
-        conditions.append(f"LOWER(vendor_name) = ANY(${idx}::text[])")
-        params.append([v.lower() for v in vendor_names])
-        idx += 1
-    elif vendor_name:
-        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-        params.append(vendor_name)
-        idx += 1
-
-    if min_urgency > 0:
-        conditions.append(f"avg_urgency_score >= ${idx}")
-        params.append(min_urgency)
-        idx += 1
-
-    if category:
-        conditions.append(f"product_category = ${idx}")
-        params.append(category)
-        idx += 1
-
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    summary_params = list(params)
-    capped = min(limit, 100)
-    params.append(capped)
-
-    rows = await pool.fetch(
-        f"""
-        SELECT sig.vendor_name, sig.product_category, sig.total_reviews,
-               sig.churn_intent_count, sig.avg_urgency_score, sig.avg_rating_normalized,
-               sig.nps_proxy, sig.price_complaint_rate, sig.decision_maker_churn_rate,
-               snap.support_sentiment AS support_sentiment,
-               snap.legacy_support_score AS legacy_support_score,
-               snap.new_feature_velocity AS new_feature_velocity,
-               snap.employee_growth_rate AS employee_growth_rate,
-               sig.last_computed_at
-        FROM b2b_churn_signals sig
-        LEFT JOIN LATERAL (
-            SELECT support_sentiment, legacy_support_score,
-                   new_feature_velocity, employee_growth_rate
-            FROM b2b_vendor_snapshots snap
-            WHERE snap.vendor_name = sig.vendor_name
-            ORDER BY snap.snapshot_date DESC
-            LIMIT 1
-        ) snap ON TRUE
-        {where}
-        ORDER BY avg_urgency_score DESC
-        LIMIT ${idx}
-        """,
-        *params,
+    tracked_account_id = t_params[0] if t_params else None
+    from ..autonomous.tasks._b2b_shared import (
+        read_vendor_signal_rows,
+        read_vendor_signal_summary,
     )
 
-    summary = await pool.fetchrow(
-        f"""
-        SELECT COUNT(DISTINCT vendor_name) AS total_vendors,
-               COUNT(*) FILTER (WHERE avg_urgency_score >= 7) AS high_urgency_count,
-               COALESCE(SUM(total_reviews), 0) AS total_signal_reviews
-        FROM b2b_churn_signals
-        {where}
-        """,
-        *summary_params,
+    rows = await read_vendor_signal_rows(
+        pool,
+        vendor_name_query=None if vendor_names else vendor_name,
+        vendor_names=vendor_names,
+        min_urgency=min_urgency,
+        product_category=category,
+        tracked_account_id=tracked_account_id,
+        include_snapshot_metrics=True,
+        limit=limit,
+    )
+
+    summary = await read_vendor_signal_summary(
+        pool,
+        vendor_name_query=None if vendor_names else vendor_name,
+        vendor_names=vendor_names,
+        min_urgency=min_urgency,
+        product_category=category,
+        tracked_account_id=tracked_account_id,
     )
 
     signals = [
