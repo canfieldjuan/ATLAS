@@ -912,6 +912,108 @@ describe('Watchlists', () => {
         competitive_set_id: 'set-1',
       },
     })
+    api.fetchCompetitiveSetPlan.mockResolvedValueOnce({
+      competitive_set: {
+        id: 'set-1',
+        name: 'Helpdesk core',
+      },
+      plan: {
+        competitive_set_id: 'set-1',
+        focal_vendor_name: 'Intercom',
+        vendor_names: ['Intercom', 'Zendesk', 'Freshdesk'],
+        pairwise_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        category_names: [],
+        asymmetry_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        vendor_synthesis_enabled: true,
+        pairwise_enabled: true,
+        category_council_enabled: false,
+        asymmetry_enabled: true,
+        vendor_job_count: 3,
+        pairwise_job_count: 2,
+        category_job_count: 0,
+        asymmetry_job_count: 2,
+        estimated_total_jobs: 7,
+        estimate: {
+          lookback_days: 30,
+          vendor_jobs_planned: 3,
+          pairwise_jobs_planned: 2,
+          category_jobs_planned: 0,
+          asymmetry_jobs_planned: 2,
+          estimated_vendor_tokens: 1200,
+          estimated_cross_vendor_tokens: 2400,
+          estimated_total_tokens: 3600,
+          estimated_vendor_cost_usd: 0.12,
+          estimated_cross_vendor_cost_usd: 0.24,
+          estimated_total_cost_usd: 0.36,
+          estimated_vendor_tokens_likely_to_reason: 800,
+          estimated_vendor_cost_usd_likely_to_reason: 0.08,
+          vendor_jobs_with_history: 2,
+          vendor_jobs_using_fallback: 1,
+          cross_vendor_jobs_with_history: 3,
+          cross_vendor_jobs_using_fallback: 1,
+          vendor_jobs_with_matching_pools: 2,
+          vendor_jobs_missing_pools: 1,
+          vendor_jobs_likely_to_reason: 2,
+          vendor_jobs_likely_hash_reuse: 1,
+          vendor_jobs_likely_stale_reuse: 0,
+          vendor_jobs_likely_missing_prior: 0,
+          vendor_jobs_likely_hash_changed: 1,
+          vendor_jobs_likely_prior_quality_weak: 0,
+          vendor_jobs_likely_missing_packet_artifacts: 0,
+          vendor_jobs_likely_missing_reference_ids: 0,
+          likely_rerun_vendors: ['Intercom:changed'],
+          likely_reuse_vendors: ['Zendesk:reuse'],
+          recent_vendor_sample_count: 3,
+          recent_cross_vendor_sample_count: 2,
+          note: 'Estimated from recent runs.',
+        },
+      },
+      recent_runs: [
+        {
+          id: 'run-1',
+          competitive_set_id: 'set-1',
+          account_id: 'acct-1',
+          run_id: 'scope-run-1',
+          trigger: 'manual',
+          status: 'succeeded',
+          execution_id: 'exec-prev',
+          summary: {
+            vendors_reasoned: 2,
+            vendors_skipped_hash_reuse: 1,
+            vendors_failed: 0,
+            total_tokens: 1234,
+            force: true,
+            force_cross_vendor: true,
+            changed_vendors_only: false,
+          },
+          started_at: '2026-04-07T12:00:00Z',
+          completed_at: '2026-04-07T12:01:00Z',
+          created_at: '2026-04-07T12:00:00Z',
+        },
+        {
+          id: 'run-2',
+          competitive_set_id: 'set-1',
+          account_id: 'acct-1',
+          run_id: 'scope-run-2',
+          trigger: 'manual',
+          status: 'failed',
+          execution_id: 'exec-skip',
+          summary: {
+            vendors_reasoned: 0,
+            vendors_skipped_hash_reuse: 0,
+            vendors_failed: 0,
+            total_tokens: 0,
+            force: true,
+            force_cross_vendor: true,
+            changed_vendors_only: true,
+            _skip_synthesis: 'No pool data available',
+          },
+          started_at: '2026-04-07T12:05:00Z',
+          completed_at: '2026-04-07T12:05:30Z',
+          created_at: '2026-04-07T12:05:00Z',
+        },
+      ],
+    })
 
     render(
       <MemoryRouter>
@@ -925,6 +1027,9 @@ describe('Watchlists', () => {
     await waitFor(() => {
       expect(api.fetchCompetitiveSetPlan).toHaveBeenCalledWith('set-1')
     })
+    expect(screen.getByText('vendor forced')).toBeInTheDocument()
+    expect(screen.getByText('cross-vendor forced')).toBeInTheDocument()
+    expect(screen.getByText('No pool data available')).toBeInTheDocument()
 
     await user.click(screen.getByLabelText('Run changed vendors only'))
     await user.click(screen.getByLabelText('Force vendor rerun'))

@@ -2348,6 +2348,9 @@ export default function Watchlists() {
                                 const failed = typeof summary.vendors_failed === 'number'
                                   ? summary.vendors_failed
                                   : null
+                                const skipReason = typeof summary._skip_synthesis === 'string'
+                                  ? summary._skip_synthesis
+                                  : null
                                 return (
                                   <div key={run.id} className="rounded-md border border-slate-700/50 bg-slate-950/50 p-2">
                                     <div className="flex items-center justify-between gap-2">
@@ -2372,7 +2375,12 @@ export default function Watchlists() {
                                         <span>{formatWholeNumber(failed)} failed</span>
                                         <span>{formatWholeNumber(totalTokens)} tokens</span>
                                         {summary.changed_vendors_only === true ? <span>changed only</span> : null}
+                                        {summary.force === true ? <span>vendor forced</span> : null}
+                                        {summary.force_cross_vendor === true ? <span>cross-vendor forced</span> : null}
                                       </div>
+                                      {skipReason ? (
+                                        <div className="mt-2 text-[11px] text-slate-500">{skipReason}</div>
+                                      ) : null}
                                     </div>
                                   )
                               })}

@@ -602,6 +602,54 @@ async def test_competitive_scope_finalize_marks_cross_vendor_only_failures_as_fa
 
 
 @pytest.mark.asyncio
+async def test_competitive_scope_finalize_preserves_force_flags_on_skip(monkeypatch):
+    from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
+
+    marked = {}
+    scope_id = uuid4()
+
+    class FakeRepo:
+        async def mark_run_completed(self, competitive_set_id, *, status, summary):
+            marked["competitive_set_id"] = str(competitive_set_id)
+            marked["status"] = status
+            marked["summary"] = summary
+
+    class FakePool:
+        is_initialized = True
+
+    async def _fake_fetch_all_pool_layers(pool, *, as_of, analysis_window_days, vendor_names=None):
+        return {}
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(mod.settings.b2b_churn, "reasoning_synthesis_enabled", True, raising=False)
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.fetch_all_pool_layers",
+        _fake_fetch_all_pool_layers,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.storage.repositories.competitive_set.get_competitive_set_repo",
+        lambda: FakeRepo(),
+    )
+
+    result = await mod.run(SimpleNamespace(metadata={
+        "scope_type": "competitive_set",
+        "scope_id": str(scope_id),
+        "scope_vendor_names": ["Salesforce", "HubSpot"],
+        "force": True,
+        "force_cross_vendor": True,
+        "changed_vendors_only": True,
+        "scope_trigger": "manual",
+    }))
+
+    assert result["_skip_synthesis"] == "No pool data available"
+    assert marked["competitive_set_id"] == str(scope_id)
+    assert marked["summary"]["force"] is True
+    assert marked["summary"]["force_cross_vendor"] is True
+    assert marked["summary"]["changed_vendors_only"] is True
+    assert marked["summary"]["_skip_synthesis"] == "No pool data available"
+
+
+@pytest.mark.asyncio
 async def test_scheduled_competitive_sets_use_configured_changed_only_default(monkeypatch):
     from atlas_brain.autonomous.tasks import b2b_reasoning_synthesis as mod
 

@@ -5319,6 +5319,8 @@ class TestReasoningSynthesisTask:
         assert result["cross_vendor_failed"] == 0
         assert result["cross_vendor_tokens"] == 3210
         assert result["cross_vendor_mirrored"] == 4
+        assert result["force"] is False
+        assert result["force_cross_vendor"] is True
         assert seen["force"] is True
         assert seen["vendor_names"] == ["ModelVendor"]
 

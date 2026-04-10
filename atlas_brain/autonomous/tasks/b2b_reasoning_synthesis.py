@@ -988,6 +988,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 summary={
                     "run_id": run_id,
                     "trigger": scope_trigger,
+                    "force": force,
+                    "force_cross_vendor": force_cross_vendor,
+                    "changed_vendors_only": changed_vendors_only,
                     **result,
                 },
             )
@@ -1025,8 +1028,24 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 exc_info=True,
             )
 
+    metadata = getattr(task, "metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    manual_scope_requested = bool(
+        scope_meta
+        or metadata.get("force")
+        or metadata.get("force_cross_vendor")
+        or _metadata_text_list(metadata.get("test_vendors"))
+    )
+    scheduled_scope_requested = bool(
+        str(metadata.get("scheduled_scope_strategy") or "").strip()
+        or getattr(task, "schedule_type", None)
+    )
     scheduled_scope_strategy = _scheduled_scope_strategy(task)
-    if not scope_id and scheduled_scope_strategy == "competitive_sets":
+    if (
+        not manual_scope_requested
+        and scheduled_scope_requested
+        and scheduled_scope_strategy == "competitive_sets"
+    ):
         from ...services.b2b_competitive_sets import (
             build_competitive_set_plan,
             load_vendor_category_map,
@@ -1163,15 +1182,16 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if not vendor_pools:
         return await _finalize_scope_result({"_skip_synthesis": "No pool data available"})
 
-    # Optional vendor filter: scoped competitive set or legacy test_vendors.
-    if filter_vendors:
-        vendor_set = {v.lower() for v in filter_vendors}
+    # Explicit competitive-set scopes still enforce a local post-filter.
+    # Legacy test_vendors filtering is already handled by fetch_all_pool_layers.
+    if scope_vendor_names:
+        vendor_set = {v.lower() for v in scope_vendor_names}
         vendor_pools = {
             k: v for k, v in vendor_pools.items()
             if k.lower() in vendor_set
         }
         logger.info(
-            "Filtered reasoning synthesis to %d vendors: %s",
+            "Filtered reasoning synthesis to %d scoped vendors: %s",
             len(vendor_pools), sorted(vendor_pools.keys()),
         )
     if scope_vendor_names and not vendor_pools:
@@ -1367,6 +1387,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "vendors_rerun_missing_packet_artifacts": rerun_reason_counts["missing_packet_artifacts"],
             "vendors_rerun_missing_reference_ids": rerun_reason_counts["missing_reference_ids"],
             "vendors_forced": rerun_reason_counts["forced"],
+            "force": force,
+            "force_cross_vendor": force_cross_vendor,
             "changed_vendors_only": changed_vendors_only,
             "cross_vendor_succeeded": 0,
             "cross_vendor_failed": 0,
@@ -2496,6 +2518,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "vendors_rerun_missing_packet_artifacts": rerun_reason_counts["missing_packet_artifacts"],
         "vendors_rerun_missing_reference_ids": rerun_reason_counts["missing_reference_ids"],
         "vendors_forced": rerun_reason_counts["forced"],
+        "force": force,
+        "force_cross_vendor": force_cross_vendor,
         "vendors_payload_mode_full": payload_mode_full,
         "vendors_payload_mode_lean": payload_mode_lean,
         "vendor_batch_jobs": vendor_batch_metrics["jobs"],
