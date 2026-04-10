@@ -19,6 +19,16 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ...config import settings
+from ...autonomous.visibility import record_dedup
+from ...services.b2b.review_dedup import (
+    choose_cross_source_duplicate_survivor,
+    load_cross_source_review_candidates,
+    make_cross_source_identity_key,
+    make_review_text_payload,
+    normalize_review_date_key,
+    normalize_reviewer_stem_key,
+)
+from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
@@ -58,6 +68,36 @@ _TWITTER_MARKETING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:now\s+available|product\s+update|release\s+notes|hiring)\b", re.I),
 )
 _CAPTERRA_AGGREGATE_METHOD = "jsonld_aggregate"
+_DEFAULT_SOURCE_QUALITY_GATE_SOURCES = frozenset({"quora", "twitter", "capterra"})
+
+
+def _coerce_config_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+    return default
+
+
+def _normalize_source_quality_gate_sources(raw: Any) -> set[str]:
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        values = list(raw)
+    else:
+        values = []
+    sources = {
+        str(part).strip().lower()
+        for part in values
+        if str(part).strip()
+    }
+    return sources or set(_DEFAULT_SOURCE_QUALITY_GATE_SOURCES)
 
 
 def _parse_date(raw: Any) -> datetime | None:
@@ -168,6 +208,15 @@ def _make_review_content_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _review_text_payload_from_row(review: dict[str, Any]) -> str:
+    return make_review_text_payload(
+        review.get("summary"),
+        review.get("review_text"),
+        review.get("pros"),
+        review.get("cons"),
+    )
+
+
 def _tokenize_vendor_name(vendor_name: str) -> list[str]:
     """Create robust vendor tokens for social-text checks."""
     tokens = [t for t in re.findall(r"[a-z0-9]+", str(vendor_name or "").lower()) if len(t) >= 4]
@@ -233,7 +282,10 @@ def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
             return "quora_non_question_url"
         return None
 
-    if source == "capterra" and cfg.source_quality_drop_capterra_aggregates:
+    if source == "capterra" and _coerce_config_bool(
+        getattr(cfg, "source_quality_drop_capterra_aggregates", True),
+        True,
+    ):
         meta = review.get("raw_metadata") or {}
         if str(meta.get("extraction_method") or "").strip().lower() == _CAPTERRA_AGGREGATE_METHOD:
             return "capterra_aggregate_page"
@@ -246,11 +298,14 @@ def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
             if str(value or "").strip()
         )
         intent = _review_has_twitter_intent(text)
-        if cfg.source_quality_twitter_require_intent and not intent:
+        if _coerce_config_bool(getattr(cfg, "source_quality_twitter_require_intent", True), True) and not intent:
             return "twitter_no_intent"
         if _review_looks_like_twitter_marketing(text) and not intent:
             return "twitter_marketing_post"
-        if cfg.source_quality_twitter_drop_vendor_self_posts and _is_vendor_self_tweet(
+        if _coerce_config_bool(
+            getattr(cfg, "source_quality_twitter_drop_vendor_self_posts", True),
+            True,
+        ) and _is_vendor_self_tweet(
             review, str(review.get("vendor_name") or "")
         ):
             return "twitter_vendor_self_post"
@@ -261,13 +316,11 @@ def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
 
 def _should_apply_source_quality_gate(source: str, cfg) -> bool:
     """Return True when source-specific quality gates should run."""
-    if not cfg.source_quality_gate_enabled:
+    if not _coerce_config_bool(getattr(cfg, "source_quality_gate_enabled", True), True):
         return False
-    gated_sources = {
-        part.strip().lower()
-        for part in str(cfg.source_quality_gate_sources or "").split(",")
-        if part.strip()
-    }
+    gated_sources = _normalize_source_quality_gate_sources(
+        getattr(cfg, "source_quality_gate_sources", _DEFAULT_SOURCE_QUALITY_GATE_SOURCES)
+    )
     return str(source or "").strip().lower() in gated_sources
 
 
@@ -322,6 +375,35 @@ async def _load_existing_review_identity_sets(
         source,
     )
     return known_keys, known_identities
+
+
+async def _load_vendor_cross_source_candidates(
+    pool,
+    *,
+    vendor_name: str,
+    content_hash: str | None,
+    identity_key: str | None,
+    reviewer_name: Any = None,
+    reviewed_at: Any = None,
+    rating: Any = None,
+) -> list[dict[str, Any]]:
+    cfg = settings.b2b_scrape
+    return await load_cross_source_review_candidates(
+        pool,
+        vendor_name=vendor_name,
+        content_hash=content_hash,
+        identity_key=identity_key,
+        reviewer_stem=normalize_reviewer_stem_key(
+            reviewer_name,
+            stem_length=cfg.cross_source_dedup_reviewer_stem_length,
+        ),
+        reviewed_date=normalize_review_date_key(reviewed_at),
+        rating=rating,
+        max_candidates=cfg.cross_source_dedup_max_candidates,
+        reviewer_stem_length=cfg.cross_source_dedup_reviewer_stem_length,
+        review_date_tolerance_days=cfg.cross_source_dedup_review_date_tolerance_days,
+        rating_tolerance=cfg.cross_source_dedup_rating_tolerance,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -552,14 +634,19 @@ INSERT INTO b2b_reviews (
     relevance_score, author_churn_score, source_weight,
     reddit_subreddit, reddit_trending, reddit_flair,
     reddit_is_edited, reddit_is_crosspost, reddit_num_comments,
-    reddit_score, reddit_comment_thread_count, reddit_crosspost_subreddits
+    reddit_score, reddit_comment_thread_count, reddit_crosspost_subreddits,
+    cross_source_content_hash, cross_source_identity_key,
+    duplicate_of_review_id, duplicate_reason, deduped_at,
+    enrichment_status, id
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
     $24, $25, $26,
     $27, $28, $29,
     $30, $31, $32, $33, $34, $35,
-    $36, $37, $38::jsonb
+    $36, $37, $38::jsonb,
+    $39, $40, $41::uuid, $42, $43,
+    $44, $45::uuid
 )
 ON CONFLICT (dedup_key) DO NOTHING
 """
@@ -916,11 +1003,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     """Autonomous task handler: scrape B2B review sites per configured targets."""
     cfg = settings.b2b_scrape
     if not cfg.enabled:
-        return {"_skip_synthesis": True, "skipped": "b2b_scrape disabled"}
+        return {
+            "_skip_synthesis": True,
+            "skipped": "b2b_scrape disabled",
+            "skip_reason": "B2B scrape intake disabled",
+            "trigger_reason": "B2B scrape intake disabled",
+        }
 
     pool = get_db_pool()
     if not pool.is_initialized:
-        return {"_skip_synthesis": True, "skipped": "db not ready"}
+        return {
+            "_skip_synthesis": True,
+            "skipped": "db not ready",
+            "skip_reason": "B2B scrape intake skipped -- database not ready",
+            "trigger_reason": "B2B scrape intake skipped -- database not ready",
+        }
 
     # Import here to avoid circular imports and lazy-load curl_cffi
     from ...services.scraping.client import get_scrape_client
@@ -977,6 +1074,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             "targets_due": 0,
             "targets_skipped_source_fit": len(source_fit_skipped),
             "skipped_targets": source_fit_skipped[:20],
+            "skip_reason": "No scrape targets due",
+            "trigger_reason": "No scrape targets due",
         }
 
     total_reviews = 0
@@ -1300,6 +1399,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         ),
         "skipped_targets": source_fit_skipped[:20],
         "results": results_summary,
+        "skip_reason": "B2B scrape intake completed",
+        "trigger_reason": (
+            "B2B scrape intake completed -- new reviews inserted"
+            if total_inserted > 0
+            else "B2B scrape intake completed -- no new reviews inserted"
+        ),
     }
 
 
@@ -1339,6 +1444,7 @@ async def _insert_reviews(
 ) -> dict[str, int]:
     """Insert reviews into b2b_reviews with dedup and return batch stats."""
     rows = []
+    dedup_audit_events: list[tuple[str, str, str, dict[str, Any]]] = []
     cfg = settings.b2b_scrape
     _known = set(known_keys or set())
     _known_identities = set(known_identities or set())
@@ -1346,11 +1452,14 @@ async def _insert_reviews(
     _existing_keys = set(_known)
     _existing_identities = set(_known_identities)
     _existing_content_hashes = set(_known_content_hashes)
+    _batch_canonical_by_content_hash: dict[str, dict[str, Any]] = {}
+    _batch_canonical_by_identity_key: dict[str, dict[str, Any]] = {}
     skipped_short = 0
     skipped_quality_gate = 0
     duplicate_or_existing = 0
     duplicate_same_batch = 0
     duplicate_existing = 0
+    cross_source_duplicates = 0
     repaired_existing = 0
     repair_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str | None, str | None]] = []
     for r in reviews:
@@ -1378,6 +1487,13 @@ async def _insert_reviews(
 
         reviewed_at_ts = _parse_date(r.get("reviewed_at"))
         content_hash = _make_review_content_hash(review_text, pros, cons)
+        review_payload = _review_text_payload_from_row(r)
+        cross_source_identity_key = make_cross_source_identity_key(
+            canonical_vendor,
+            r.get("reviewer_name"),
+            reviewed_at_ts or r.get("reviewed_at"),
+            r.get("rating"),
+        )
 
         dedup_key = _make_dedup_key(
             r["source"], canonical_vendor,
@@ -1393,6 +1509,7 @@ async def _insert_reviews(
             reviewed_at_ts or r.get("reviewed_at"),
         )
         reviewer_company = r.get("reviewer_company")
+        reviewer_title = sanitize_reviewer_title(r.get("reviewer_title"))
         reviewer_company_norm = normalize_company_name(reviewer_company or "") or None
 
         # Skip reviews already known in DB or already seen in this batch.
@@ -1409,12 +1526,17 @@ async def _insert_reviews(
             ):
                 duplicate_existing += 1
                 if any(
-                    r.get(field)
-                    for field in ("reviewer_title", "reviewer_company", "company_size_raw", "reviewer_industry")
+                    value
+                    for value in (
+                        reviewer_title,
+                        reviewer_company,
+                        r.get("company_size_raw"),
+                        r.get("reviewer_industry"),
+                    )
                 ):
                     repair_candidates.append((
                         dedup_key,
-                        r.get("reviewer_title"),
+                        reviewer_title,
                         reviewer_company,
                         reviewer_company_norm,
                         r.get("company_size_raw"),
@@ -1429,9 +1551,70 @@ async def _insert_reviews(
         if content_hash is not None:
             _known_content_hashes.add(content_hash)
 
+        review_uuid = _uuid.uuid4()
+        duplicate_of_review_id: _uuid.UUID | None = None
+        duplicate_reason: str | None = None
+        deduped_at: datetime | None = None
+        enrichment_status = "pending"
+        duplicate_detail: dict[str, Any] | None = None
+
+        if cfg.cross_source_dedup_enabled:
+            candidate_rows: list[dict[str, Any]] = []
+            if content_hash is not None and content_hash in _batch_canonical_by_content_hash:
+                candidate_rows.append(_batch_canonical_by_content_hash[content_hash])
+            if (
+                cross_source_identity_key is not None
+                and cross_source_identity_key in _batch_canonical_by_identity_key
+            ):
+                candidate = _batch_canonical_by_identity_key[cross_source_identity_key]
+                if candidate not in candidate_rows:
+                    candidate_rows.append(candidate)
+            if content_hash is not None or cross_source_identity_key is not None:
+                existing_candidates = await _load_vendor_cross_source_candidates(
+                    pool,
+                    vendor_name=canonical_vendor,
+                    content_hash=content_hash,
+                    identity_key=cross_source_identity_key,
+                    reviewer_name=r.get("reviewer_name"),
+                    reviewed_at=reviewed_at_ts or r.get("reviewed_at"),
+                    rating=r.get("rating"),
+                )
+                candidate_rows.extend(existing_candidates)
+            survivor, duplicate_reason, duplicate_detail = choose_cross_source_duplicate_survivor(
+                candidates=candidate_rows,
+                incoming_source=r["source"],
+                incoming_content_hash=content_hash,
+                incoming_identity_key=cross_source_identity_key,
+                incoming_payload=review_payload,
+                similarity_threshold=cfg.cross_source_dedup_similarity_threshold,
+                incoming_reviewer_name=r.get("reviewer_name"),
+                incoming_reviewed_at=reviewed_at_ts or r.get("reviewed_at"),
+                incoming_rating=r.get("rating"),
+                loose_similarity_threshold=cfg.cross_source_dedup_loose_similarity_threshold,
+                reviewer_stem_length=cfg.cross_source_dedup_reviewer_stem_length,
+                review_date_tolerance_days=cfg.cross_source_dedup_review_date_tolerance_days,
+                rating_tolerance=cfg.cross_source_dedup_rating_tolerance,
+            )
+            if survivor is not None:
+                survivor_id = survivor.get("id")
+                if survivor_id:
+                    duplicate_of_review_id = (
+                        survivor_id if isinstance(survivor_id, _uuid.UUID)
+                        else _uuid.UUID(str(survivor_id))
+                    )
+                    duplicate_reason = duplicate_reason or "cross_source_duplicate"
+                    deduped_at = datetime.now(timezone.utc)
+                    enrichment_status = "duplicate"
+                    cross_source_duplicates += 1
+
         raw_metadata = _merge_scrape_raw_metadata(r.get("raw_metadata", {}), target_context)
         if content_hash is not None:
             raw_metadata["review_content_hash"] = content_hash
+        if duplicate_of_review_id is not None:
+            raw_metadata["duplicate_of_review_id"] = str(duplicate_of_review_id)
+            raw_metadata["duplicate_reason"] = duplicate_reason
+            if duplicate_detail:
+                raw_metadata["duplicate_detail"] = duplicate_detail
 
         rows.append((
             dedup_key,
@@ -1448,7 +1631,7 @@ async def _insert_reviews(
             r.get("pros"),
             r.get("cons"),
             r.get("reviewer_name"),
-            r.get("reviewer_title"),
+            reviewer_title,
             reviewer_company,
             reviewer_company_norm,
             r.get("company_size_raw"),
@@ -1479,7 +1662,39 @@ async def _insert_reviews(
             json.dumps(raw_metadata.get("crosspost_subreddits"))
             if raw_metadata.get("crosspost_subreddits") is not None
             else None,
+            content_hash,
+            cross_source_identity_key,
+            duplicate_of_review_id,
+            duplicate_reason,
+            deduped_at,
+            enrichment_status,
+            review_uuid,
         ))
+        if duplicate_of_review_id is None:
+            canonical_row = {
+                "id": review_uuid,
+                "source": r["source"],
+                "cross_source_content_hash": content_hash,
+                "cross_source_identity_key": cross_source_identity_key,
+                "summary": r.get("summary"),
+                "review_text": r.get("review_text"),
+                "pros": r.get("pros"),
+                "cons": r.get("cons"),
+                "enrichment_status": enrichment_status,
+                "source_weight": raw_metadata.get("source_weight"),
+                "imported_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if content_hash is not None:
+                _batch_canonical_by_content_hash[content_hash] = canonical_row
+            if cross_source_identity_key is not None:
+                _batch_canonical_by_identity_key[cross_source_identity_key] = canonical_row
+        else:
+            dedup_audit_events.append((
+                str(review_uuid),
+                str(duplicate_of_review_id),
+                duplicate_reason or "cross_source_duplicate",
+                duplicate_detail or {},
+            ))
 
     if skipped_short:
         logger.info("Skipped %d reviews with text < %d chars", skipped_short, _MIN_ENRICHABLE_TEXT_LEN)
@@ -1501,6 +1716,7 @@ async def _insert_reviews(
             "duplicate_same_batch": duplicate_same_batch,
             "duplicate_existing": duplicate_existing,
             "duplicate_db_conflict": 0,
+            "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
             "named_company_reviews": 0,
             "eligible_rows": 0,
@@ -1519,6 +1735,7 @@ async def _insert_reviews(
             "duplicate_same_batch": duplicate_same_batch,
             "duplicate_existing": duplicate_existing,
             "duplicate_db_conflict": len(rows),
+            "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
             "named_company_reviews": 0,
             "eligible_rows": len(rows),
@@ -1547,6 +1764,16 @@ async def _insert_reviews(
     inserted = int(count_row["cnt"] or 0) if count_row else 0
     named_company_reviews = int(count_row["named_company_reviews"] or 0) if count_row else 0
     duplicate_db_conflict = max(len(rows) - inserted, 0)
+    for entity_id, survivor_id, reason_code, detail in dedup_audit_events:
+        await record_dedup(
+            pool,
+            stage="review_ingest",
+            entity_type="review",
+            entity_id=entity_id,
+            survivor_entity_id=survivor_id,
+            reason=f"Suppressed cross-source duplicate review ({reason_code})",
+            detail=detail,
+        )
     return {
         "inserted": inserted,
         "skipped_short": skipped_short,
@@ -1555,6 +1782,7 @@ async def _insert_reviews(
         "duplicate_same_batch": duplicate_same_batch,
         "duplicate_existing": duplicate_existing,
         "duplicate_db_conflict": duplicate_db_conflict,
+        "cross_source_duplicates": cross_source_duplicates,
         "repaired_existing": repaired_existing,
         "named_company_reviews": named_company_reviews,
         "eligible_rows": len(rows),
