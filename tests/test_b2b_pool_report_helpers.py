@@ -360,6 +360,108 @@ async def test_read_market_landscape_candidates_uses_category_vendor_floor():
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_alternative_candidates_uses_scorecard_thresholds():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals cs": [
+                {
+                    "vendor": "HubSpot",
+                    "category": "CRM",
+                    "urgency": 8.4,
+                    "review_count": 42,
+                    "affiliate_id": uuid4(),
+                    "affiliate_name": "Partner",
+                    "affiliate_product": "CRM Boost",
+                    "affiliate_url": "https://example.com",
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_alternative_candidates(pool)
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals cs" in call[0])
+    assert score_call[1] == (6.0, 5, 15)
+    assert "LEFT JOIN affiliate_partners ap" in score_call[0]
+    assert rows[0]["vendor"] == "HubSpot"
+    assert rows[0]["has_affiliate"] is True
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_showdown_candidates_uses_review_floor():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals a": [
+                {
+                    "vendor_a": "Zendesk",
+                    "vendor_b": "Freshdesk",
+                    "category": "Support",
+                    "reviews_a": 50,
+                    "reviews_b": 47,
+                    "total_reviews": 97,
+                    "urgency_a": 7.1,
+                    "urgency_b": 6.4,
+                    "pain_diff": 0.7,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_showdown_candidates(pool)
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals a" in call[0])
+    assert score_call[1] == (10, 80)
+    assert "JOIN b2b_churn_signals b" in score_call[0]
+    assert rows == [
+        {
+            "vendor_a": "Zendesk",
+            "vendor_b": "Freshdesk",
+            "category": "Support",
+            "reviews_a": 50,
+            "reviews_b": 47,
+            "total_reviews": 97,
+            "urgency_a": 7.1,
+            "urgency_b": 6.4,
+            "pain_diff": 0.7,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_read_churn_report_candidates_uses_negative_review_thresholds():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {
+                    "vendor": "HubSpot",
+                    "category": "CRM",
+                    "negative_reviews": 11,
+                    "avg_urgency": 7.2,
+                    "total_reviews": 52,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_churn_report_candidates(pool)
+
+    score_call = next(
+        call for call in pool.calls
+        if "FROM b2b_churn_signals" in call[0] and "negative_reviews >=" in call[0]
+    )
+    assert score_call[1] == (8, 6.0, 10)
+    assert rows == [
+        {
+            "vendor": "HubSpot",
+            "category": "CRM",
+            "negative_reviews": 11,
+            "avg_urgency": 7.2,
+            "total_reviews": 52,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_fetch_all_pool_layers_prefers_specific_profile_category_over_generic_vault():
     pool = FakePool(
         fetch_map={

@@ -4290,106 +4290,23 @@ async def _select_topic(
 
 async def _find_vendor_alternative_candidates(pool) -> list[dict[str, Any]]:
     """Vendors with high churn + affiliate partner covering the category."""
-    rows = await pool.fetch(
-        """
-        SELECT
-            cs.vendor_name AS vendor,
-            cs.product_category AS category,
-            cs.avg_urgency_score AS urgency,
-            cs.total_reviews AS review_count,
-            ap.id AS affiliate_id,
-            ap.name AS affiliate_name,
-            ap.product_name AS affiliate_product,
-            ap.affiliate_url
-        FROM b2b_churn_signals cs
-        LEFT JOIN affiliate_partners ap
-            ON LOWER(ap.category) = LOWER(cs.product_category)
-            AND ap.enabled = true
-        WHERE cs.avg_urgency_score >= 6
-          AND cs.total_reviews >= 5
-        ORDER BY cs.avg_urgency_score * cs.total_reviews DESC
-        LIMIT 15
-        """
-    )
-    return [
-        {
-            "vendor": r["vendor"],
-            "category": r["category"],
-            "urgency": float(r["urgency"]),
-            "review_count": r["review_count"],
-            "has_affiliate": r["affiliate_id"] is not None,
-            "affiliate_id": str(r["affiliate_id"]) if r["affiliate_id"] else None,
-            "affiliate_name": r["affiliate_name"],
-            "affiliate_product": r["affiliate_product"],
-            "affiliate_url": r["affiliate_url"],
-        }
-        for r in rows
-    ]
+    from ._b2b_shared import read_vendor_alternative_candidates
+
+    return await read_vendor_alternative_candidates(pool)
 
 
 async def _find_vendor_showdown_candidates(pool) -> list[dict[str, Any]]:
     """Pairs of vendors in the same category with contrasting pain profiles."""
-    rows = await pool.fetch(
-        """
-        SELECT
-            a.vendor_name AS vendor_a, b.vendor_name AS vendor_b,
-            a.product_category AS category,
-            a.total_reviews AS reviews_a, b.total_reviews AS reviews_b,
-            (a.total_reviews + b.total_reviews) AS total_reviews,
-            a.avg_urgency_score AS urgency_a, b.avg_urgency_score AS urgency_b,
-            ABS(a.avg_urgency_score - b.avg_urgency_score) AS pain_diff
-        FROM b2b_churn_signals a
-        JOIN b2b_churn_signals b
-            ON a.product_category = b.product_category
-            AND a.vendor_name < b.vendor_name
-        WHERE a.total_reviews >= 10 AND b.total_reviews >= 10
-        ORDER BY (a.total_reviews + b.total_reviews) DESC
-        LIMIT 80
-        """
-    )
-    return [
-        {
-            "vendor_a": r["vendor_a"],
-            "vendor_b": r["vendor_b"],
-            "category": r["category"],
-            "reviews_a": r["reviews_a"],
-            "reviews_b": r["reviews_b"],
-            "total_reviews": r["total_reviews"],
-            "urgency_a": round(float(r["urgency_a"]), 1),
-            "urgency_b": round(float(r["urgency_b"]), 1),
-            "pain_diff": round(float(r["pain_diff"]), 1),
-        }
-        for r in rows
-    ]
+    from ._b2b_shared import read_vendor_showdown_candidates
+
+    return await read_vendor_showdown_candidates(pool)
 
 
 async def _find_churn_report_candidates(pool) -> list[dict[str, Any]]:
     """Single vendor with high urgency + many negative reviews."""
-    rows = await pool.fetch(
-        """
-        SELECT
-            vendor_name AS vendor,
-            product_category AS category,
-            negative_reviews,
-            avg_urgency_score AS avg_urgency,
-            total_reviews
-        FROM b2b_churn_signals
-        WHERE negative_reviews >= 8
-          AND avg_urgency_score >= 6
-        ORDER BY negative_reviews * avg_urgency_score DESC
-        LIMIT 10
-        """
-    )
-    return [
-        {
-            "vendor": r["vendor"],
-            "category": r["category"],
-            "negative_reviews": r["negative_reviews"],
-            "avg_urgency": round(float(r["avg_urgency"]), 1),
-            "total_reviews": r["total_reviews"],
-        }
-        for r in rows
-    ]
+    from ._b2b_shared import read_churn_report_candidates
+
+    return await read_churn_report_candidates(pool)
 
 
 async def _find_migration_guide_candidates(pool) -> list[dict[str, Any]]:
