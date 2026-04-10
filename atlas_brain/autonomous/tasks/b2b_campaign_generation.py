@@ -2253,6 +2253,7 @@ async def _compute_vendor_trend(
             f"""
             SELECT COUNT(*) FROM b2b_reviews r
             WHERE r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
               AND r.enriched_at > NOW() - INTERVAL '30 days'
               AND (r.enrichment->>'urgency_score')::numeric >= ${base_idx}
               AND ({name_conditions})
@@ -2263,6 +2264,7 @@ async def _compute_vendor_trend(
             f"""
             SELECT COUNT(*) FROM b2b_reviews r
             WHERE r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
               AND r.enriched_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'
               AND (r.enrichment->>'urgency_score')::numeric >= ${base_idx}
               AND ({name_conditions})

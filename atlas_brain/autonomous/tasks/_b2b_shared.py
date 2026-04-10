@@ -5234,6 +5234,7 @@ async def _fetch_insider_aggregates(pool, window_days: int) -> list[dict[str, An
         ) AS ph(value) ON true
         WHERE content_type = 'insider_account'
           AND enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND imported_at > NOW() - make_interval(days => $1)
         GROUP BY vendor_name
         """,
@@ -5486,6 +5487,7 @@ async def fetch_all_pool_layers(
                 LEFT JOIN b2b_account_resolution ar
                   ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
                 WHERE r.enrichment_status = 'enriched'
+                  AND r.duplicate_of_review_id IS NULL
                   AND COALESCE(r.reviewed_at, r.imported_at) <= ($1::date + INTERVAL '1 day')
                   AND COALESCE(r.reviewed_at, r.imported_at) >= ($1::date - ($2::int * INTERVAL '1 day'))
                 ORDER BY
@@ -9161,6 +9163,7 @@ async def read_review_details(
         recency_expr = "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)"
     conditions = [
         "r.enrichment_status = 'enriched'",
+        "r.duplicate_of_review_id IS NULL",
         f"{recency_expr} > NOW() - make_interval(days => $1)",
     ]
     params: list = [window_days]
@@ -9309,6 +9312,7 @@ async def read_campaign_opportunities(
 
     conditions = [
         "r.enrichment_status = 'enriched'",
+        "r.duplicate_of_review_id IS NULL",
         "COALESCE(r.reviewed_at, r.imported_at, r.enriched_at)"
         " > NOW() - make_interval(days => $1)",
         "(r.enrichment->>'urgency_score')::numeric >= $2",
@@ -9504,6 +9508,7 @@ async def read_vendor_quote_evidence(
 
     conditions = [
         "r.enrichment_status = 'enriched'",
+        "r.duplicate_of_review_id IS NULL",
         f"{recency_expr} > NOW() - make_interval(days => $1)",
         "LOWER(r.vendor_name) = LOWER($2)",
     ]
@@ -9587,6 +9592,7 @@ async def read_category_quote_evidence(
 
     conditions = [
         "r.enrichment_status = 'enriched'",
+        "r.duplicate_of_review_id IS NULL",
         "r.enriched_at > NOW() - make_interval(days => $1)",
         "r.product_category = $2",
     ]

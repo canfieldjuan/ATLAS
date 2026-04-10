@@ -5359,6 +5359,7 @@ async def _list_accounts_in_motion_from_reviews(
     # Reason: DISTINCT ON per-company dedup + intent_to_leave filter + budget_authority — structurally unique
     conditions = [
         "r.enrichment_status = 'enriched'",
+        "r.duplicate_of_review_id IS NULL",
         "(r.enrichment->'churn_signals'->>'intent_to_leave')::boolean = true",
         "r.reviewer_company IS NOT NULL",
         "LENGTH(TRIM(r.reviewer_company)) > 3",

@@ -293,6 +293,7 @@ class FalsificationWatcher:
                 """
                 SELECT COUNT(*) FROM b2b_reviews
                 WHERE vendor_name = $1
+                  AND duplicate_of_review_id IS NULL
                   AND enriched_at >= NOW() - INTERVAL '7 days'
                   AND overall_sentiment = 'negative'
                 """,
