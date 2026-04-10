@@ -532,18 +532,32 @@ export default function EvidenceExplorer() {
                         Weakness Evidence ({vault.weakness_evidence.length})
                       </h3>
                       <div className="space-y-2">
-                        {vault.weakness_evidence.map((ev, i) => (
-                          <div key={i} className="bg-slate-800/40 rounded-lg p-3 border-l-2 border-l-red-500 border border-slate-700/30">
-                            <p className="text-sm text-slate-200">
-                              {(ev as Record<string, unknown>).claim as string || (ev as Record<string, unknown>).text as string || JSON.stringify(ev)}
-                            </p>
-                            {(ev as Record<string, unknown>).mention_count != null && (
-                              <span className="text-xs text-slate-500 mt-1 inline-block">
-                                {String((ev as Record<string, unknown>).mention_count)} mentions
-                              </span>
-                            )}
-                          </div>
-                        ))}
+                        {vault.weakness_evidence.map((ev, i) => {
+                          const e = ev as Record<string, unknown>
+                          const label = String(e.label || e.key || e.claim || e.text || '')
+                          const quote = String(e.best_quote || '')
+                          const mentions = Number(e.mention_count_total ?? e.mention_count ?? 0)
+                          const confidence = Number(e.confidence_score ?? 0)
+                          const trend = e.trend as Record<string, unknown> | undefined
+                          return (
+                            <div key={i} className="bg-slate-800/40 rounded-lg p-3 border-l-2 border-l-red-500 border border-slate-700/30 overflow-hidden">
+                              <div className="flex items-center justify-between gap-2 mb-1">
+                                <span className="text-sm font-medium text-slate-200">{label || 'Unknown'}</span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {mentions > 0 && <span className="text-[10px] text-slate-500">{mentions} mentions</span>}
+                                  {confidence > 0 && <span className="text-[10px] text-slate-500">{Math.round(confidence * 100)}% conf</span>}
+                                </div>
+                              </div>
+                              {quote && <p className="text-xs text-slate-400 italic line-clamp-2 break-words">\"{quote}\"</p>}
+                              {trend && (
+                                <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-500">
+                                  {trend.direction && <span>{String(trend.direction)}</span>}
+                                  {trend.recent_count != null && <span>{String(trend.recent_count)} recent</span>}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                         {vault.weakness_evidence.length === 0 && (
                           <p className="text-sm text-slate-500 italic">No weakness evidence recorded</p>
                         )}
@@ -555,18 +569,32 @@ export default function EvidenceExplorer() {
                         Strength Evidence ({vault.strength_evidence.length})
                       </h3>
                       <div className="space-y-2">
-                        {vault.strength_evidence.map((ev, i) => (
-                          <div key={i} className="bg-slate-800/40 rounded-lg p-3 border-l-2 border-l-emerald-500 border border-slate-700/30">
-                            <p className="text-sm text-slate-200">
-                              {(ev as Record<string, unknown>).claim as string || (ev as Record<string, unknown>).text as string || JSON.stringify(ev)}
-                            </p>
-                            {(ev as Record<string, unknown>).mention_count != null && (
-                              <span className="text-xs text-slate-500 mt-1 inline-block">
-                                {String((ev as Record<string, unknown>).mention_count)} mentions
-                              </span>
-                            )}
-                          </div>
-                        ))}
+                        {vault.strength_evidence.map((ev, i) => {
+                          const e = ev as Record<string, unknown>
+                          const label = String(e.label || e.key || e.claim || e.text || '')
+                          const quote = String(e.best_quote || '')
+                          const mentions = Number(e.mention_count_total ?? e.mention_count ?? 0)
+                          const confidence = Number(e.confidence_score ?? 0)
+                          const trend = e.trend as Record<string, unknown> | undefined
+                          return (
+                            <div key={i} className="bg-slate-800/40 rounded-lg p-3 border-l-2 border-l-emerald-500 border border-slate-700/30 overflow-hidden">
+                              <div className="flex items-center justify-between gap-2 mb-1">
+                                <span className="text-sm font-medium text-slate-200">{label || 'Unknown'}</span>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {mentions > 0 && <span className="text-[10px] text-slate-500">{mentions} mentions</span>}
+                                  {confidence > 0 && <span className="text-[10px] text-slate-500">{Math.round(confidence * 100)}% conf</span>}
+                                </div>
+                              </div>
+                              {quote && <p className="text-xs text-slate-400 italic line-clamp-2 break-words">\"{quote}\"</p>}
+                              {trend && (
+                                <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-500">
+                                  {trend.direction && <span>{String(trend.direction)}</span>}
+                                  {trend.recent_count != null && <span>{String(trend.recent_count)} recent</span>}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
                         {vault.strength_evidence.length === 0 && (
                           <p className="text-sm text-slate-500 italic">No strength evidence recorded</p>
                         )}
