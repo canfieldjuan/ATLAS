@@ -329,6 +329,51 @@ async def test_read_category_vendor_signal_rows_dedupes_per_vendor_with_snapshot
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_graph_sync_rows_uses_ranked_scorecard_join():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_vendors v": [
+                {
+                    "canonical_name": "Zendesk",
+                    "aliases": ["Zen"],
+                    "product_category": "CRM",
+                    "total_reviews": 120,
+                    "avg_urgency": 6.4,
+                    "confidence_score": 0.8,
+                    "churn_density": 28.0,
+                    "positive_review_pct": 42.0,
+                    "recommend_ratio": 0.63,
+                    "pain_count": 5,
+                    "competitor_count": 3,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_graph_sync_rows(pool)
+
+    score_call = next(call for call in pool.calls if "FROM b2b_vendors v" in call[0])
+    assert score_call[1] == ()
+    assert "WITH ranked_signals AS" in score_call[0]
+    assert "rs.vendor_row_rank = 1" in score_call[0]
+    assert rows == [
+        {
+            "canonical_name": "Zendesk",
+            "aliases": ["Zen"],
+            "product_category": "CRM",
+            "total_reviews": 120,
+            "avg_urgency": 6.4,
+            "confidence_score": 0.8,
+            "churn_density": 28.0,
+            "positive_review_pct": 42.0,
+            "recommend_ratio": 0.63,
+            "pain_count": 5,
+            "competitor_count": 3,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_read_vendor_scorecard_inventory_rows_matches_provisioning_shape():
     pool = FakePool(
         fetch_map={

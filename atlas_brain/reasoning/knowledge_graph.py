@@ -176,23 +176,10 @@ class KnowledgeGraphSync:
     # ------------------------------------------------------------------
 
     async def _sync_vendors(self) -> int:
-        """Sync b2b_vendors + b2b_churn_signals -> B2bVendor nodes."""
-        rows = await self._pg.fetch("""
-            SELECT v.canonical_name, v.aliases,
-                   cs.product_category, cs.total_reviews,
-                   cs.avg_urgency_score AS avg_urgency,
-                   cs.confidence_score,
-                   snap.churn_density, snap.positive_review_pct,
-                   snap.recommend_ratio, snap.pain_count, snap.competitor_count
-            FROM b2b_vendors v
-            LEFT JOIN b2b_churn_signals cs
-                ON LOWER(v.canonical_name) = LOWER(cs.vendor_name)
-            LEFT JOIN (
-                SELECT DISTINCT ON (vendor_name) *
-                FROM b2b_vendor_snapshots
-                ORDER BY vendor_name, snapshot_date DESC
-            ) snap ON LOWER(v.canonical_name) = LOWER(snap.vendor_name)
-        """)
+        """Sync canonical vendor scorecard rows into B2bVendor nodes."""
+        from ..autonomous.tasks._b2b_shared import read_vendor_graph_sync_rows
+
+        rows = await read_vendor_graph_sync_rows(self._pg)
 
         if not rows:
             return 0
