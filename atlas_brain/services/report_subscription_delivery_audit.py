@@ -46,6 +46,10 @@ async def summarize_report_subscription_delivery_health(
             COUNT(*) FILTER (WHERE status = 'failed') AS failed_attempts,
             COUNT(*) FILTER (WHERE status = 'processing') AS processing_attempts,
             COUNT(*) FILTER (
+                WHERE status = 'skipped'
+                  AND freshness_state = 'blocked'
+            ) AS blocked_core_incomplete_attempts,
+            COUNT(*) FILTER (
                 WHERE summary ILIKE 'Skipped delivery because the eligible report package has not materially changed%'
             ) AS unchanged_skip_attempts,
             COUNT(*) FILTER (
@@ -86,6 +90,10 @@ async def summarize_report_subscription_delivery_health(
             COUNT(*) FILTER (WHERE l.status = 'failed') AS failed_attempt_count,
             COUNT(*) FILTER (WHERE l.status = 'partial') AS partial_attempt_count,
             COUNT(*) FILTER (
+                WHERE l.status = 'skipped'
+                  AND l.freshness_state = 'blocked'
+            ) AS blocked_core_incomplete_attempt_count,
+            COUNT(*) FILTER (
                 WHERE l.summary ILIKE 'Skipped delivery because the eligible report package has not materially changed%'
             ) AS unchanged_skip_attempt_count,
             MAX(l.delivered_at) AS latest_delivered_at
@@ -113,6 +121,7 @@ async def summarize_report_subscription_delivery_health(
             l.delivered_at,
             l.delivery_mode,
             l.status,
+            l.freshness_state,
             l.scope_type,
             l.scope_key,
             COALESCE(array_length(l.delivered_report_ids, 1), 0) AS report_count,
@@ -163,6 +172,7 @@ async def summarize_report_subscription_delivery_health(
             "skipped_attempts": int(summary.get("skipped_attempts", 0) or 0),
             "failed_attempts": int(summary.get("failed_attempts", 0) or 0),
             "processing_attempts": int(summary.get("processing_attempts", 0) or 0),
+            "blocked_core_incomplete_attempts": int(summary.get("blocked_core_incomplete_attempts", 0) or 0),
             "unchanged_skip_attempts": int(summary.get("unchanged_skip_attempts", 0) or 0),
             "fully_suppressed_attempts": int(summary.get("fully_suppressed_attempts", 0) or 0),
             "suppressed_recipient_failures": int(summary.get("suppressed_recipient_failures", 0) or 0),

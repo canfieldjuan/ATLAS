@@ -55,6 +55,7 @@ def test_required_rollout_migrations_include_report_subscription_tables():
     assert "266_b2b_report_subscription_delivery_log" in _REQUIRED_MIGRATIONS
     assert "268_b2b_report_subscription_delivery_dry_run_status" in _REQUIRED_MIGRATIONS
     assert "269_b2b_report_subscription_delivery_mode" in _REQUIRED_MIGRATIONS
+    assert "283_b2b_report_subscription_delivery_blocked_freshness" in _REQUIRED_MIGRATIONS
 
 
 def test_required_rollout_tables_include_report_subscription_tables():

@@ -561,6 +561,10 @@ def _serialize_report_subscription(row) -> dict[str, Any]:
     filter_payload = _safe_json(row["filter_payload"])
     if not isinstance(filter_payload, dict):
         filter_payload = {}
+    try:
+        last_delivery_freshness_state = row["last_delivery_freshness_state"]
+    except Exception:
+        last_delivery_freshness_state = None
     return {
         "id": str(row["id"]),
         "scope_type": row["scope_type"],
@@ -577,6 +581,7 @@ def _serialize_report_subscription(row) -> dict[str, Any]:
         "next_delivery_at": row["next_delivery_at"].isoformat() if row["next_delivery_at"] else None,
         "last_delivery_status": row["last_delivery_status"] or None,
         "last_delivery_at": row["last_delivery_at"].isoformat() if row["last_delivery_at"] else None,
+        "last_delivery_freshness_state": last_delivery_freshness_state or None,
         "last_delivery_summary": row["last_delivery_summary"] or "",
         "last_delivery_error": row["last_delivery_error"] or "",
         "last_delivery_report_count": int(row["last_delivery_report_count"] or 0),
@@ -600,12 +605,13 @@ async def _fetch_report_subscription_row(
                s.created_at, s.updated_at,
                dl.status AS last_delivery_status,
                dl.delivered_at AS last_delivery_at,
+               dl.freshness_state AS last_delivery_freshness_state,
                dl.summary AS last_delivery_summary,
                dl.error AS last_delivery_error,
                COALESCE(array_length(dl.delivered_report_ids, 1), 0) AS last_delivery_report_count
         FROM b2b_report_subscriptions s
         LEFT JOIN LATERAL (
-            SELECT status, delivered_at, summary, error, delivered_report_ids
+            SELECT status, delivered_at, freshness_state, summary, error, delivered_report_ids
             FROM b2b_report_subscription_delivery_log
             WHERE subscription_id = s.id
               AND status <> 'processing'

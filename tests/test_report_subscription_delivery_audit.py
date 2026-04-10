@@ -32,6 +32,7 @@ async def test_summarize_report_subscription_delivery_health_shapes_results():
                     "skipped_attempts": 1,
                     "failed_attempts": 1,
                     "processing_attempts": 0,
+                    "blocked_core_incomplete_attempts": 1,
                     "unchanged_skip_attempts": 1,
                     "fully_suppressed_attempts": 1,
                     "suppressed_recipient_failures": 2,
@@ -62,6 +63,7 @@ async def test_summarize_report_subscription_delivery_health_shapes_results():
                         "live_attempt_count": 3,
                         "failed_attempt_count": 1,
                         "partial_attempt_count": 1,
+                        "blocked_core_incomplete_attempt_count": 1,
                         "unchanged_skip_attempt_count": 1,
                         "latest_delivered_at": now,
                     }
@@ -78,6 +80,7 @@ async def test_summarize_report_subscription_delivery_health_shapes_results():
                         "delivered_at": now,
                         "delivery_mode": "live",
                         "status": "sent",
+                        "freshness_state": "fresh",
                         "scope_type": "report",
                         "scope_key": "report-1",
                         "report_count": 1,
@@ -100,9 +103,11 @@ async def test_summarize_report_subscription_delivery_health_shapes_results():
     assert result["delivery_summary"]["total_attempts"] == 5
     assert result["delivery_summary"]["live_attempts"] == 3
     assert result["delivery_summary"]["dry_run_attempts"] == 2
+    assert result["delivery_summary"]["blocked_core_incomplete_attempts"] == 1
     assert result["delivery_summary"]["unchanged_skip_attempts"] == 1
     assert result["delivery_summary"]["suppressed_recipient_failures"] == 2
     assert result["active_subscription_summary"] == {"enabled_subscriptions": 2, "due_now": 1}
     assert result["status_breakdown"][0]["delivery_mode"] == "dry_run"
     assert result["top_accounts"][0]["account_name"] == "Canary Co"
     assert result["recent_attempts"][0]["status"] == "sent"
+    assert result["recent_attempts"][0]["freshness_state"] == "fresh"

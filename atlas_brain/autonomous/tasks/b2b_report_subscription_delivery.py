@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -22,6 +23,7 @@ from ...storage.models import ScheduledTask
 from ...templates.email.report_subscription_delivery import (
     render_report_subscription_delivery_html,
 )
+from ._b2b_shared import has_complete_core_run_marker
 from .campaign_send import _unsub_headers, _wrap_with_footer
 from .campaign_suppression import is_suppressed
 
@@ -66,6 +68,14 @@ _PERSISTED_ARTIFACT_STATUSES = {"completed", "published"}
 _DELIVERY_CONTENT_HASH_STATUSES = ("sent",)
 _DELIVERY_LOG_CLAIMABLE_STALE_STATUSES = ("failed", "processing")
 _DELIVERY_LOG_RECLAIMABLE_IMMEDIATE_STATUSES = ("dry_run",)
+_DELIVERY_BLOCKED_FRESHNESS_STATE = "blocked"
+
+
+@dataclass
+class _ArtifactSelectionResult:
+    artifacts: list[dict[str, Any]]
+    eligible_before_freshness_count: int = 0
+    freshness_blocked_count: int = 0
 
 
 def _safe_json(value: Any) -> Any:
@@ -584,6 +594,38 @@ def _aggregate_freshness_state(artifacts: list[dict[str, Any]]) -> str:
     return "mixed"
 
 
+def _empty_selection_result() -> _ArtifactSelectionResult:
+    return _ArtifactSelectionResult(artifacts=[])
+
+
+def _selection_is_fully_freshness_blocked(selection: _ArtifactSelectionResult) -> bool:
+    return (
+        not selection.artifacts
+        and selection.eligible_before_freshness_count > 0
+        and selection.freshness_blocked_count == selection.eligible_before_freshness_count
+    )
+
+
+async def _blocked_delivery_skip_details(
+    pool,
+    row,
+    selection: _ArtifactSelectionResult,
+) -> tuple[str | None, str, str | None]:
+    if not _selection_is_fully_freshness_blocked(selection):
+        return None, "none", None
+    freshness_policy = str(row["freshness_policy"] or "fresh_or_monitor").strip().lower()
+    if freshness_policy == "any":
+        return None, "none", None
+    core_as_of = date.today()
+    if await has_complete_core_run_marker(pool, core_as_of):
+        return None, "none", None
+    summary = (
+        "Skipped delivery because today's core churn materialization is incomplete, "
+        "and no authoritative persisted artifacts were fresh enough for the saved policy."
+    )
+    return summary, _DELIVERY_BLOCKED_FRESHNESS_STATE, "core_incomplete"
+
+
 def _delivery_content_hash(row, artifacts: list[dict[str, Any]]) -> str:
     payload = {
         "scope_type": str(row["scope_type"] or ""),
@@ -1008,7 +1050,7 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
     }
 
 
-async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[str, Any]]:
+async def _resolve_artifact_selection(pool, row, tracked_vendors: set[str]) -> _ArtifactSelectionResult:
     scope_type = str(row["scope_type"] or "")
     freshness_policy = str(row["freshness_policy"] or "fresh_or_monitor")
     filter_payload = _normalize_subscription_filter_payload(
@@ -1018,20 +1060,26 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
     if scope_type == "report":
         report_row = await _fetch_report_row(pool, row["report_id"])
         if not report_row:
-            return []
+            return _empty_selection_result()
         intelligence_data = _safe_json(report_row["intelligence_data"])
         if not isinstance(intelligence_data, dict):
             intelligence_data = {}
         if not _artifact_ready(report_row, intelligence_data):
-            return []
+            return _empty_selection_result()
         if not _tracked_vendor_allowed(report_row, tracked_vendors, row["account_id"]):
-            return []
+            return _empty_selection_result()
         if _delivery_eligibility_reason(report_row, intelligence_data):
-            return []
+            return _empty_selection_result()
         artifact = _build_delivery_artifact(report_row)
+        selection = _ArtifactSelectionResult(
+            artifacts=[],
+            eligible_before_freshness_count=1,
+        )
         if not _freshness_allowed(freshness_policy, artifact["freshness_state"]):
-            return []
-        return [artifact]
+            selection.freshness_blocked_count = 1
+            return selection
+        selection.artifacts.append(artifact)
+        return selection
 
     rows = await _fetch_library_rows(
         pool,
@@ -1043,7 +1091,7 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
     overridden_report_ids: set[str] = set()
     if settings.b2b_report_delivery.report_scope_overrides_library:
         overridden_report_ids = await _overridden_report_ids(pool, row["account_id"])
-    artifacts: list[dict[str, Any]] = []
+    selection = _empty_selection_result()
     for report_row in rows:
         report_type = str(report_row["report_type"] or "")
         if not _focus_allowed(scope_type, str(row["deliverable_focus"] or "all"), report_type):
@@ -1064,12 +1112,19 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
         if _delivery_eligibility_reason(report_row, intelligence_data):
             continue
         artifact = _build_delivery_artifact(report_row)
+        selection.eligible_before_freshness_count += 1
         if not _freshness_allowed(freshness_policy, artifact["freshness_state"]):
+            selection.freshness_blocked_count += 1
             continue
-        artifacts.append(artifact)
-        if len(artifacts) >= settings.b2b_report_delivery.max_reports_per_delivery:
+        selection.artifacts.append(artifact)
+        if len(selection.artifacts) >= settings.b2b_report_delivery.max_reports_per_delivery:
             break
-    return artifacts
+    return selection
+
+
+async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[str, Any]]:
+    selection = await _resolve_artifact_selection(pool, row, tracked_vendors)
+    return selection.artifacts
 
 
 async def _send_subscription_email(
@@ -1184,7 +1239,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         try:
             tracked_vendors = await _tracked_vendors(pool, row["account_id"])
-            artifacts = await _resolve_artifacts(pool, row, tracked_vendors)
+            selection = await _resolve_artifact_selection(pool, row, tracked_vendors)
+            artifacts = selection.artifacts
             delivered_report_ids = [artifact["report_id"] for artifact in artifacts]
             freshness_state = _aggregate_freshness_state(artifacts)
 
@@ -1192,9 +1248,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 error_message = "Subscription has no recipients"
                 status = "failed"
             elif not artifacts:
+                blocked_summary, blocked_freshness_state, blocked_skip_reason = await _blocked_delivery_skip_details(
+                    pool,
+                    row,
+                    selection,
+                )
                 status = "skipped"
-                summary = "Skipped delivery because no eligible persisted artifacts matched the saved policy."
-                skip_reason = "no_eligible_artifacts"
+                summary = blocked_summary or (
+                    "Skipped delivery because no eligible persisted artifacts matched the saved policy."
+                )
+                freshness_state = blocked_freshness_state
+                skip_reason = blocked_skip_reason or "no_eligible_artifacts"
             else:
                 content_hash = _delivery_content_hash(row, artifacts)
                 if delivery_cfg.suppress_unchanged_deliveries:

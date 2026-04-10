@@ -18,6 +18,21 @@ class _DuePool:
         return self._rows
 
 
+def _selection(
+    artifacts,
+    *,
+    eligible_before_freshness_count: int | None = None,
+    freshness_blocked_count: int = 0,
+):
+    return mod._ArtifactSelectionResult(
+        artifacts=list(artifacts),
+        eligible_before_freshness_count=(
+            len(artifacts) if eligible_before_freshness_count is None else eligible_before_freshness_count
+        ),
+        freshness_blocked_count=freshness_blocked_count,
+    )
+
+
 @pytest.mark.asyncio
 async def test_send_subscription_email_retries_and_wraps_footer(monkeypatch):
     calls: list[dict] = []
@@ -364,7 +379,7 @@ async def test_run_skips_unchanged_delivery_without_sending(monkeypatch):
     monkeypatch.setattr(mod, "get_campaign_sender", lambda: sender)
     monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-1"}))
     monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(mod, "_resolve_artifact_selection", AsyncMock(return_value=_selection([artifact])))
     monkeypatch.setattr(mod, "_latest_delivery_content_hash", AsyncMock(return_value="same-hash"))
     monkeypatch.setattr(mod, "_delivery_content_hash", lambda *_args, **_kwargs: "same-hash")
     monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
@@ -414,7 +429,7 @@ async def test_run_does_not_advance_when_no_artifacts_match_policy(monkeypatch):
     monkeypatch.setattr(mod, "get_campaign_sender", lambda: SimpleNamespace())
     monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-no-artifacts"}))
     monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod, "_resolve_artifact_selection", AsyncMock(return_value=_selection([])))
     monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
     monkeypatch.setattr(mod, "_advance_subscription", advance)
 
@@ -423,6 +438,58 @@ async def test_run_does_not_advance_when_no_artifacts_match_policy(monkeypatch):
     assert result["skipped"] == 1
     assert finalize.await_args.kwargs["status"] == "skipped"
     assert "no eligible persisted artifacts matched the saved policy" in finalize.await_args.kwargs["summary"]
+    advance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_marks_core_incomplete_freshness_skip_as_blocked(monkeypatch):
+    scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=5)
+    row = {
+        "id": "sub-core-blocked",
+        "account_id": "acct-core-blocked",
+        "account_name": "Blocked Co",
+        "report_id": "report-core-blocked",
+        "scope_type": "library",
+        "scope_key": "library",
+        "scope_label": "Blocked recurring library",
+        "delivery_frequency": "weekly",
+        "deliverable_focus": "all",
+        "freshness_policy": "fresh_only",
+        "recipient_emails": ["buyer@example.com"],
+        "delivery_note": "note",
+        "next_delivery_at": scheduled_for,
+    }
+    pool = _DuePool(row)
+    finalize = AsyncMock()
+    advance = AsyncMock()
+
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "enabled", True, raising=False)
+    monkeypatch.setattr(mod.settings.b2b_report_delivery, "max_subscriptions_per_run", 1, raising=False)
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "get_campaign_sender", lambda: SimpleNamespace())
+    monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-core-blocked"}))
+    monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
+    monkeypatch.setattr(
+        mod,
+        "_resolve_artifact_selection",
+        AsyncMock(
+            return_value=_selection(
+                [],
+                eligible_before_freshness_count=2,
+                freshness_blocked_count=2,
+            )
+        ),
+    )
+    monkeypatch.setattr(mod, "has_complete_core_run_marker", AsyncMock(return_value=False))
+    monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
+    monkeypatch.setattr(mod, "_advance_subscription", advance)
+
+    result = await mod.run(SimpleNamespace())
+
+    assert result["skipped"] == 1
+    assert finalize.await_args.kwargs["status"] == "skipped"
+    assert finalize.await_args.kwargs["freshness_state"] == "blocked"
+    assert "core churn materialization is incomplete" in finalize.await_args.kwargs["summary"]
     advance.assert_not_awaited()
 
 
@@ -468,7 +535,7 @@ async def test_run_sends_and_advances_subscription_with_anchor(monkeypatch):
     monkeypatch.setattr(mod, "get_campaign_sender", lambda: SimpleNamespace())
     monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-2"}))
     monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(mod, "_resolve_artifact_selection", AsyncMock(return_value=_selection([artifact])))
     monkeypatch.setattr(mod, "_latest_delivery_content_hash", AsyncMock(return_value=None))
     monkeypatch.setattr(mod, "_delivery_content_hash", lambda *_args, **_kwargs: "new-hash")
     monkeypatch.setattr(mod, "_send_subscription_email", send_helper)
@@ -540,7 +607,7 @@ async def test_run_dry_run_skips_send_and_does_not_advance(monkeypatch):
     monkeypatch.setattr(mod, "_fetch_due_rows", AsyncMock(return_value=[row]))
     monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-dry"}))
     monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(mod, "_resolve_artifact_selection", AsyncMock(return_value=_selection([artifact])))
     monkeypatch.setattr(mod, "_latest_delivery_content_hash", AsyncMock(return_value=None))
     monkeypatch.setattr(mod, "_delivery_content_hash", lambda *_args, **_kwargs: "dry-hash")
     monkeypatch.setattr(mod, "_send_subscription_email", send_helper)
@@ -600,7 +667,7 @@ async def test_run_advances_when_all_recipients_are_suppressed(monkeypatch):
     monkeypatch.setattr(mod, "get_campaign_sender", lambda: SimpleNamespace())
     monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-suppressed"}))
     monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(mod, "_resolve_artifact_selection", AsyncMock(return_value=_selection([artifact])))
     monkeypatch.setattr(mod, "_delivery_content_hash", lambda *_args, **_kwargs: "suppressed-hash")
     monkeypatch.setattr(mod, "_send_subscription_email", send_helper)
     monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
@@ -683,7 +750,7 @@ async def test_run_canary_scope_defers_non_canary_accounts(monkeypatch):
     monkeypatch.setattr(mod, "_fetch_due_rows", AsyncMock(return_value=[due_rows[0]]))
     monkeypatch.setattr(mod, "_claim_delivery_attempt", claim)
     monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(mod, "_resolve_artifact_selection", AsyncMock(return_value=_selection([artifact])))
     monkeypatch.setattr(mod, "_delivery_content_hash", lambda *_args, **_kwargs: "live-hash")
     monkeypatch.setattr(mod, "_send_subscription_email", send_helper)
     monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
@@ -840,7 +907,7 @@ async def test_run_does_not_skip_unchanged_after_partial_delivery(monkeypatch):
     monkeypatch.setattr(mod, "get_campaign_sender", lambda: SimpleNamespace())
     monkeypatch.setattr(mod, "_claim_delivery_attempt", AsyncMock(return_value={"id": "log-3"}))
     monkeypatch.setattr(mod, "_tracked_vendors", AsyncMock(return_value=set()))
-    monkeypatch.setattr(mod, "_resolve_artifacts", AsyncMock(return_value=[artifact]))
+    monkeypatch.setattr(mod, "_resolve_artifact_selection", AsyncMock(return_value=_selection([artifact])))
     monkeypatch.setattr(mod, "_latest_delivery_content_hash", AsyncMock(return_value=None))
     monkeypatch.setattr(mod, "_send_subscription_email", send_helper)
     monkeypatch.setattr(mod, "_finalize_delivery_attempt", finalize)
