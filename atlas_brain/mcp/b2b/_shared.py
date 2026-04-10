@@ -129,6 +129,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "get_source_health",
         "get_source_telemetry",
         "get_source_capabilities",
+        "get_source_impact_ledger",
         "get_operational_overview",
         "get_parser_health",
     ],
