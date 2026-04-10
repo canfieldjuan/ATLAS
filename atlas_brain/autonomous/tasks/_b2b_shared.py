@@ -3996,7 +3996,6 @@ async def _fetch_vendor_churn_scores_from_signals(
             "vendor_name": r["vendor_name"],
             "product_category": r["product_category"],
             "total_reviews": int(r["total_reviews"] or 0),
-            "signal_reviews": int(r["signal_reviews"] or 0) or int(r["total_reviews"] or 0),
             "churn_intent": int(r["churn_intent"] or 0),
             "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] is not None else 0.0,
         }

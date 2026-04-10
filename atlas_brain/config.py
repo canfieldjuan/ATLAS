@@ -3382,7 +3382,7 @@ class B2BChurnConfig(BaseSettings):
     battle_card_high_priority_urgency_min: float = Field(default=5.0, ge=0.0, le=10.0, description="Min average urgency required before battle-card copy can use high-priority language")
     battle_card_feature_gap_headline_min_mentions: int = Field(default=5, ge=1, le=100, description="Min feature-gap mention count before a battle-card headline can elevate that gap directly")
     battle_card_quality_max_stale_days: int = Field(
-        default=7,
+        default=2,
         ge=0,
         le=30,
         description="Max allowed staleness (days) before battle-card quality gate hard-blocks publishing",

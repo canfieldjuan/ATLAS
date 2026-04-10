@@ -85,6 +85,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
             "b2b_dashboard._list_accounts_in_motion",
             "b2b_tenant_dashboard",
             "backfill_witness_primitives",
+            "cleanup_accounts_in_motion_pollution",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -203,6 +204,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_review_text_aggregates",
+            "backfill_derived_fields",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -232,6 +234,8 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "stranded": False,
         "approved_consumers": (
             "_b2b_shared._fetch_vendor_churn_scores",
+            "backfill_derived_fields",
+            "cleanup_accounts_in_motion_pollution",
         ),
         "migration_target": "read_vendor_evidence",
     },
@@ -340,6 +344,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
         "approved_consumers": (
             "_b2b_shared._fetch_budget_signals",
             "b2b_churn_intelligence._fetch_company_signal_review_context",
+            "backfill_derived_fields",
         ),
         "migration_target": "read_review_details",
     },
@@ -391,6 +396,7 @@ FIELD_CONTRACTS: dict[str, FieldContract] = {
             "_b2b_shared._fetch_vendor_witness_reviews",
             "admin_costs",
             "backfill_witness_primitives",
+            "backfill_derived_fields",
         ),
         "migration_target": None,
     },

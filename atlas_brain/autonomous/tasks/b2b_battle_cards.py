@@ -1305,7 +1305,7 @@ def _evaluate_battle_card_quality(
     hard_blockers: list[str] = []
     warnings: list[str] = []
     cfg = settings.b2b_churn
-    max_stale_days = int(getattr(cfg, "battle_card_quality_max_stale_days", 7))
+    max_stale_days = int(getattr(cfg, "battle_card_quality_max_stale_days", 2))
     eval_divergence_warn_delta = int(getattr(cfg, "battle_card_quality_eval_divergence_warn_delta", 25))
     min_high_intent_urgency = float(getattr(cfg, "battle_card_quality_min_high_intent_urgency", 7.0))
     required_stages = _quality_required_stages(cfg)

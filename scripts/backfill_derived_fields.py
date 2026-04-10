@@ -47,7 +47,7 @@ logger = logging.getLogger("backfill_derived_fields")
 BATCH_SIZE = 200
 
 # APPROVED-ENRICHMENT-READ: enrichment_schema_version, urgency_score, pain_category, would_recommend, competitors_mentioned
-# Reason: backfill/migration script — direct enrichment access required
+# Reason: backfill/migration script - direct enrichment access required
 _FILTER_QUERIES = {
     "all": """
         SELECT id, enrichment, rating, rating_max, raw_metadata, content_type,
@@ -97,6 +97,8 @@ _FILTER_QUERIES = {
           AND COALESCE(jsonb_array_length(enrichment->'competitors_mentioned'), 0) > 0
         ORDER BY enriched_at DESC NULLS LAST, imported_at DESC NULLS LAST
     """,
+    # APPROVED-ENRICHMENT-READ: pricing_phrases, contract_context.price_complaint, urgency_indicators.price_pressure_language, evidence_spans.signal_type
+    # Reason: backfill review selection for pricing false-positive cleanup
     "positive_pricing_false_positive": """
         SELECT id, enrichment, rating, rating_max, raw_metadata, content_type,
                summary, review_text, pros, cons, reviewer_title, reviewer_company,

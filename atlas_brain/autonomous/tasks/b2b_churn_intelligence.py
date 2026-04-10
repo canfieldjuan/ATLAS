@@ -190,6 +190,10 @@ def _should_persist_category_dynamics(scoped_vendors: list[str] | None) -> bool:
     return not bool(scoped_vendors)
 
 
+def _should_persist_cross_vendor_conclusions(scoped_vendors: list[str] | None) -> bool:
+    return not bool(scoped_vendors)
+
+
 def _should_use_cross_vendor_category(category: str) -> bool:
     text = str(category or "").strip()
     return bool(text) and not _is_generic_product_category(text)

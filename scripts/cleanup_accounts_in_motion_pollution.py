@@ -97,6 +97,8 @@ async def _fetch_company_signal_rows(
     if vendors:
         params.append([vendor.lower() for vendor in vendors])
         vendor_filter = "AND LOWER(cs.vendor_name) = ANY($2::text[])"
+    # APPROVED-ENRICHMENT-READ: churn_signals.intent_to_leave, churn_signals.actively_evaluating, churn_signals.contract_renewal_mentioned, urgency_indicators.explicit_cancel_language, urgency_indicators.active_migration_language, urgency_indicators.active_evaluation_language, urgency_indicators.completed_switch_language
+    # Reason: cleanup audit for accounts-in-motion signal pollution
     rows = await pool.fetch(
         f"""
         SELECT
