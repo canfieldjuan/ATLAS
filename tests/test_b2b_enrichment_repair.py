@@ -1923,14 +1923,15 @@ async def test_circuit_breaker_consecutive_no_progress(monkeypatch):
 
     monkeypatch.setattr(
         repair_mod, "_repair_rows",
-        AsyncMock(return_value={"promoted": 0, "shadowed": 0, "failed": 0,
-                                "exact_cache_hits": 0, "generated": 0,
+        AsyncMock(return_value={"promoted": 0, "shadowed": 1, "failed": 0,
+                                "exact_cache_hits": 0, "generated": 1,
                                 "witness_rows": 0, "witness_count": 0}),
     )
 
     result = await repair_mod.run(_task())
 
-    assert result["rounds"] == 2
+    # Breaks after 3 consecutive rounds with no promotions or shadows and no high-failure breaker.
+    assert result["rounds"] == 3
     assert result["circuit_breaker_reason"] is not None
     assert "no repair progress" in result["circuit_breaker_reason"]
 

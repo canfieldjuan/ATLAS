@@ -626,6 +626,36 @@ def _empty_repair_usage() -> dict[str, int]:
     }
 
 
+def _row_usage_result(status: Any, usage: dict[str, Any] | None = None) -> dict[str, Any]:
+    normalized = {"status": status}
+    usage_dict = usage or {}
+    for key in _empty_repair_usage():
+        normalized[key] = int(usage_dict.get(key, 0) or 0)
+    return normalized
+
+
+async def _defer_batch_row(
+    pool,
+    row: dict[str, Any],
+    *,
+    custom_id: str | None = None,
+) -> dict[str, Any]:
+    await pool.execute(
+        """
+        UPDATE b2b_reviews
+        SET enrichment_repair_status = NULL
+        WHERE id = $1 AND enrichment_repair_status = 'repairing'
+        """,
+        row["id"],
+    )
+    logger.info(
+        "Deferring B2B enrichment repair for %s; reset row to unclaimed while existing batch artifact %s remains pending",
+        row["id"],
+        custom_id or "unknown",
+    )
+    return _row_usage_result("deferred")
+
+
 async def _persist_repair_result(
     pool,
     row: dict[str, Any],
@@ -848,10 +878,7 @@ async def _repair_rows(
             if supports_run_id:
                 kwargs["run_id"] = run_id
             status = await _repair_single(pool, row, cfg, max_attempts, **kwargs)
-            return {
-                "status": status,
-                **usage,
-            }
+            return _row_usage_result(status, usage)
 
     async def _run_single_rows(target_rows: list[dict[str, Any]]) -> list[dict[str, Any] | Exception]:
         if not target_rows:
@@ -875,6 +902,7 @@ async def _repair_rows(
         "anthropic_batch_failed_items": 0,
         "anthropic_batch_reused_completed_items": 0,
         "anthropic_batch_reused_pending_items": 0,
+        "anthropic_batch_rows_deferred": 0,
     }
 
     from ...services.b2b.anthropic_batch import (
@@ -993,6 +1021,11 @@ async def _repair_rows(
             if existing and existing.get("state") == "succeeded":
                 parsed = _parse_batch_text(existing.get("response_text"))
                 if parsed is not None:
+                    usage = _empty_repair_usage()
+                    if existing.get("cached"):
+                        usage["exact_cache_hits"] += 1
+                    else:
+                        usage["generated"] += 1
                     status = await _persist_repair_result(
                         pool,
                         row,
@@ -1001,27 +1034,19 @@ async def _repair_rows(
                         entry["strategic_reasons"],
                         parsed,
                         model_id=repair_model,
-                        cache_usage=_empty_repair_usage(),
+                        cache_usage=usage,
                     )
-                    row_results[row["id"]] = {"status": status, **_empty_repair_usage()}
+                    row_results[row["id"]] = _row_usage_result(status, usage)
                     counts["anthropic_batch_reused_completed_items"] += 1
                     continue
             if existing and existing.get("state") == "pending":
-                logger.info(
-                    "Skipping duplicate enrichment-repair submission for %s; existing Anthropic batch item %s is still pending",
-                    row["id"],
-                    existing.get("custom_id"),
+                row_results[row["id"]] = await _defer_batch_row(
+                    pool,
+                    row,
+                    custom_id=str(existing.get("custom_id") or ""),
                 )
-                await pool.execute(
-                    """
-                    UPDATE b2b_reviews
-                    SET enrichment_repair_status = NULL
-                    WHERE id = $1 AND enrichment_repair_status = 'repairing'
-                    """,
-                    row["id"],
-                )
-                row_results[row["id"]] = {"status": "deferred"}
                 counts["anthropic_batch_reused_pending_items"] += 1
+                counts["anthropic_batch_rows_deferred"] += 1
                 continue
             remaining_entries.append(entry)
 
@@ -1120,7 +1145,7 @@ async def _repair_rows(
                     model_id=repair_model,
                     cache_usage=usage,
                 )
-                row_results[row["id"]] = {"status": status, **usage}
+                row_results[row["id"]] = _row_usage_result(status, usage)
 
             fallback_results = await _run_single_rows(fallback_rows)
             for row, result in zip(fallback_rows, fallback_results):
@@ -1745,6 +1770,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "anthropic_batch_fallback_single_call_items": 0,
         "anthropic_batch_completed_items": 0,
         "anthropic_batch_failed_items": 0,
+        "anthropic_batch_rows_deferred": 0,
     }
     strict_discussion_kept = 0
     strict_discussion_dropped = 0
@@ -1878,7 +1904,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         else:
             consecutive_no_progress = 0
 
-        if consecutive_no_progress >= 2:
+        if consecutive_no_progress >= 3:
             circuit_breaker_reason = f"{consecutive_no_progress} consecutive rounds with no repair progress"
             logger.warning("Enrichment repair circuit breaker: %s", circuit_breaker_reason)
             rounds += 1
@@ -1933,6 +1959,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             f"{failed} failed, {shadowed} shadowed, "
             f"{shadowed_hard_gap_quarantined} hard-gap quarantined"
         )
+    if circuit_breaker_reason:
+        error_message = f"{error_message or 'Circuit breaker tripped'}; circuit_breaker: {circuit_breaker_reason}"
     await record_attempt(
         pool,
         artifact_type="enrichment_repair",
@@ -1956,7 +1984,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             f"Repair: {promoted} promoted, {shadowed} shadowed, "
             f"{failed} failed, {shadowed_hard_gap_quarantined} hard-gap quarantined"
         ),
-        severity="warning" if failed > 0 or shadowed_hard_gap_quarantined > 0 else "info",
+        severity="warning" if failed > 0 or shadowed_hard_gap_quarantined > 0 or circuit_breaker_reason else "info",
         actionable=failed > 0 or shadowed_hard_gap_quarantined > 0 or shadowed > 5,
         run_id=run_id,
         reason_code=(
