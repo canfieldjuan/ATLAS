@@ -753,6 +753,60 @@ WHERE dedup_key = $1
   )
 """
 
+_PROMOTE_RAW_ONLY_DUPLICATE_SQL = """
+WITH candidate AS (
+    SELECT id
+    FROM b2b_reviews
+    WHERE vendor_name = $1
+      AND source = $2
+      AND duplicate_of_review_id IS NULL
+      AND enrichment_status = 'raw_only'
+      AND (
+        dedup_key = $3
+        OR ($4::text IS NOT NULL AND cross_source_identity_key = $4::text)
+        OR ($5::text IS NOT NULL AND cross_source_content_hash = $5::text)
+      )
+    ORDER BY
+      CASE
+        WHEN dedup_key = $3 THEN 0
+        WHEN ($4::text IS NOT NULL AND cross_source_identity_key = $4::text) THEN 1
+        WHEN ($5::text IS NOT NULL AND cross_source_content_hash = $5::text) THEN 2
+        ELSE 3
+      END,
+      imported_at DESC NULLS LAST,
+      id DESC
+    LIMIT 1
+)
+UPDATE b2b_reviews AS r
+SET summary = CASE
+        WHEN length(COALESCE($6::text, '')) > length(COALESCE(r.summary, ''))
+        THEN $6::text
+        ELSE r.summary
+    END,
+    review_text = CASE
+        WHEN length(COALESCE($7::text, '')) > length(COALESCE(r.review_text, ''))
+        THEN $7::text
+        ELSE r.review_text
+    END,
+    pros = CASE
+        WHEN length(COALESCE($8::text, '')) > length(COALESCE(r.pros, ''))
+        THEN $8::text
+        ELSE r.pros
+    END,
+    cons = CASE
+        WHEN length(COALESCE($9::text, '')) > length(COALESCE(r.cons, ''))
+        THEN $9::text
+        ELSE r.cons
+    END,
+    raw_metadata = ((COALESCE(r.raw_metadata, '{}'::jsonb) || $10::jsonb) - 'retention_lane' - 'retention_reasons'),
+    parser_version = COALESCE($11::text, r.parser_version),
+    cross_source_content_hash = COALESCE($5::text, r.cross_source_content_hash),
+    cross_source_identity_key = COALESCE($4::text, r.cross_source_identity_key),
+    enrichment_status = 'pending'
+FROM candidate
+WHERE r.id = candidate.id
+"""
+
 # Resolve parent_review_id for comments after all posts in the batch are inserted
 _RESOLVE_PARENT_SQL = """
 UPDATE b2b_reviews AS c
@@ -861,6 +915,26 @@ def _merge_scrape_raw_metadata(raw_meta: Any, target_context: dict[str, Any] | N
         if value is not None:
             merged[key] = value
     return merged
+
+
+def _build_scrape_review_metadata(
+    review: dict[str, Any],
+    *,
+    target_context: dict[str, Any] | None,
+    retention_reasons: list[str],
+    content_hash: str | None,
+) -> dict[str, Any]:
+    """Build stored raw_metadata for a scraped review row."""
+    raw_metadata = _merge_scrape_raw_metadata(review.get("raw_metadata", {}), target_context)
+    if retention_reasons:
+        raw_metadata["retention_lane"] = "raw_only"
+        raw_metadata["retention_reasons"] = retention_reasons
+    else:
+        raw_metadata.pop("retention_lane", None)
+        raw_metadata.pop("retention_reasons", None)
+    if content_hash is not None:
+        raw_metadata["review_content_hash"] = content_hash
+    return raw_metadata
 
 
 def _derive_runtime_scrape_mode(scrape_mode: str, metadata: dict[str, Any]) -> str:
@@ -1591,7 +1665,9 @@ async def _insert_reviews(
     duplicate_existing = 0
     cross_source_duplicates = 0
     repaired_existing = 0
+    promoted_existing = 0
     repair_candidates: list[tuple[str, str | None, str | None, str | None, str | None, str | None, str | None]] = []
+    promotion_candidates: list[tuple[str, str, str, str | None, str | None, str | None, str | None, str | None, str | None, str, str | None]] = []
     for r in reviews:
         source = str(r.get("source") or "").strip().lower()
         raw_vendor_name = str(r.get("vendor_name") or "").strip()
@@ -1645,6 +1721,12 @@ async def _insert_reviews(
         reviewer_company = r.get("reviewer_company")
         reviewer_title = sanitize_reviewer_title(r.get("reviewer_title"))
         reviewer_company_norm = normalize_company_name(reviewer_company or "") or None
+        raw_metadata = _build_scrape_review_metadata(
+            r,
+            target_context=target_context,
+            retention_reasons=retention_reasons,
+            content_hash=content_hash,
+        )
 
         # Skip reviews already known in DB or already seen in this batch.
         if (
@@ -1675,6 +1757,20 @@ async def _insert_reviews(
                         reviewer_company_norm,
                         r.get("company_size_raw"),
                         r.get("reviewer_industry"),
+                        parser_version,
+                    ))
+                if not retention_reasons:
+                    promotion_candidates.append((
+                        canonical_vendor,
+                        source,
+                        dedup_key,
+                        cross_source_identity_key,
+                        content_hash,
+                        r.get("summary"),
+                        review_text,
+                        pros,
+                        cons,
+                        json.dumps(raw_metadata),
                         parser_version,
                     ))
             else:
@@ -1751,12 +1847,6 @@ async def _insert_reviews(
                     enrichment_status = "duplicate"
                     cross_source_duplicates += 1
 
-        raw_metadata = _merge_scrape_raw_metadata(r.get("raw_metadata", {}), target_context)
-        if retention_reasons:
-            raw_metadata["retention_lane"] = "raw_only"
-            raw_metadata["retention_reasons"] = retention_reasons
-        if content_hash is not None:
-            raw_metadata["review_content_hash"] = content_hash
         if duplicate_of_review_id is not None:
             raw_metadata["duplicate_of_review_id"] = str(duplicate_of_review_id)
             raw_metadata["duplicate_reason"] = duplicate_reason
@@ -1882,6 +1972,11 @@ async def _insert_reviews(
             result = await pool.execute(_REPAIR_PARSER_FIELDS_SQL, *candidate)
             if str(result).split()[-1:] == ["1"]:
                 repaired_existing += 1
+    if promotion_candidates:
+        for candidate in promotion_candidates:
+            result = await pool.execute(_PROMOTE_RAW_ONLY_DUPLICATE_SQL, *candidate)
+            if str(result).split()[-1:] == ["1"]:
+                promoted_existing += 1
 
     if not rows:
         return {
@@ -1896,6 +1991,7 @@ async def _insert_reviews(
             "duplicate_db_conflict": 0,
             "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
+            "promoted_existing": promoted_existing,
             "retained_raw_only": retained_raw_only,
             "retained_pending": retained_pending,
             "named_company_reviews": 0,
@@ -1920,6 +2016,7 @@ async def _insert_reviews(
             "duplicate_db_conflict": len(rows),
             "cross_source_duplicates": cross_source_duplicates,
             "repaired_existing": repaired_existing,
+            "promoted_existing": promoted_existing,
             "retained_raw_only": retained_raw_only,
             "retained_pending": retained_pending,
             "named_company_reviews": 0,
@@ -1990,6 +2087,7 @@ async def _insert_reviews(
         "duplicate_db_conflict": duplicate_db_conflict,
         "cross_source_duplicates": cross_source_duplicates,
         "repaired_existing": repaired_existing,
+        "promoted_existing": promoted_existing,
         "retained_raw_only": retained_raw_only,
         "retained_pending": retained_pending,
         "named_company_reviews": named_company_reviews,

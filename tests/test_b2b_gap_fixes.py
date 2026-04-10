@@ -53,7 +53,7 @@ async def test_apply_missing_core_targets_inserts_empty_metadata_json():
 
 
 @pytest.mark.asyncio
-async def test_fetch_review_funnel_audit_includes_recent_scrape_intake_counts():
+async def test_fetch_review_funnel_audit_filters_recent_scrape_intake_counts_to_allowed_sources():
     from atlas_brain.autonomous.tasks import _b2b_shared as mod
 
     pool = SimpleNamespace(
@@ -68,16 +68,65 @@ async def test_fetch_review_funnel_audit_includes_recent_scrape_intake_counts():
                         "result_text": json.dumps(
                             {
                                 "funnel": {
-                                    "found": 12,
-                                    "filtered": 5,
-                                    "short_flagged": 2,
-                                    "quality_gated": 1,
-                                    "duplicate_or_existing": 3,
-                                    "retained_pending": 4,
-                                    "retained_raw_only": 2,
-                                    "inserted": 6,
-                                    "company_signal_eligible": 1,
+                                    "found": 99,
+                                    "filtered": 99,
+                                },
+                                "results": [
+                                    {
+                                        "source": "g2",
+                                        "found": 12,
+                                        "filtered": 5,
+                                        "short_flagged": 2,
+                                        "quality_gate_flagged": 1,
+                                        "duplicate_or_existing": 3,
+                                        "retained_pending": 4,
+                                        "retained_raw_only": 2,
+                                        "inserted": 6,
+                                        "company_signal_eligible_reviews": 1,
+                                    },
+                                    {
+                                        "source": "reddit",
+                                        "found": 40,
+                                        "filtered": 9,
+                                        "short_flagged": 8,
+                                        "quality_gate_flagged": 7,
+                                        "duplicate_or_existing": 6,
+                                        "retained_pending": 5,
+                                        "retained_raw_only": 4,
+                                        "inserted": 3,
+                                        "company_signal_eligible_reviews": 2,
+                                    },
+                                ],
+                            }
+                        )
+                    },
+                    {
+                        "result_text": json.dumps(
+                            {
+                                "funnel": {
+                                    "found": 50,
+                                    "filtered": 10,
                                 }
+                            }
+                        )
+                    },
+                    {
+                        "result_text": json.dumps(
+                            {
+                                "results": [
+                                    {
+                                        "source": "reddit",
+                                        "found": 8,
+                                        "filtered": 2,
+                                        "short_flagged": 1,
+                                        "quality_gate_flagged": 1,
+                                        "duplicate_or_existing": 1,
+                                        "retained_pending": 1,
+                                        "retained_raw_only": 1,
+                                        "inserted": 2,
+                                        "company_signal_eligible_reviews": 1,
+                                    }
+                                ]
                             }
                         )
                     },
