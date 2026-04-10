@@ -512,6 +512,50 @@ def _normalize_report_subscription_filter_payload(
     return normalized
 
 
+def _normalize_report_list_filter(name: str, value: Optional[str]) -> str | None:
+    if not isinstance(value, str):
+        value = getattr(value, "default", value)
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    if name == "freshness_state" and normalized not in {"fresh", "monitor", "stale"}:
+        raise HTTPException(status_code=400, detail="freshness_state must be fresh, monitor, or stale")
+    if name == "review_state" and normalized not in {"clean", "warnings", "open_review", "blocked"}:
+        raise HTTPException(status_code=400, detail="review_state must be clean, warnings, open_review, or blocked")
+    return normalized
+
+
+def _report_freshness_state_for_list(row) -> str:
+    return _report_freshness(
+        row["report_date"] or row["created_at"],
+        data_stale=bool(row["data_stale"]),
+    )["state"]
+
+
+def _report_review_state_for_list(row) -> str:
+    return _report_review_state(
+        row["blocker_count"] or 0,
+        row["warning_count"] or 0,
+        row["unresolved_issue_count"] or 0,
+    )["state"]
+
+
+def _report_matches_list_filters(
+    row,
+    *,
+    quality_status: str | None,
+    freshness_state: str | None,
+    review_state: str | None,
+) -> bool:
+    if quality_status and str(row["quality_status"] or "").strip().lower() != quality_status:
+        return False
+    if freshness_state and _report_freshness_state_for_list(row) != freshness_state:
+        return False
+    if review_state and _report_review_state_for_list(row) != review_state:
+        return False
+    return True
+
+
 def _normalize_report_subscription_recipients(values: list[EmailStr]) -> list[str]:
     seen: set[str] = set()
     recipients: list[str] = []
@@ -3430,6 +3474,9 @@ async def generate_tenant_battle_card_report(
 async def list_tenant_reports(
     report_type: Optional[str] = Query(None),
     vendor_filter: Optional[str] = Query(None),
+    quality_status: Optional[str] = Query(None),
+    freshness_state: Optional[str] = Query(None),
+    review_state: Optional[str] = Query(None),
     include_stale: bool = Query(False),
     limit: int = Query(10, ge=1, le=200),
     user: AuthUser = Depends(require_auth),
@@ -3437,6 +3484,9 @@ async def list_tenant_reports(
     """Reports scoped to tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
+    normalized_quality_status = _normalize_report_list_filter("quality_status", quality_status)
+    normalized_freshness_state = _normalize_report_list_filter("freshness_state", freshness_state)
+    normalized_review_state = _normalize_report_list_filter("review_state", review_state)
 
     t_params = _tenant_params(user)
     idx = 1
@@ -3473,7 +3523,10 @@ async def list_tenant_reports(
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     capped = min(limit, 200)
-    params.append(capped)
+    scan_limit = capped
+    if normalized_quality_status or normalized_freshness_state or normalized_review_state:
+        scan_limit = min(max(capped * 5, capped), 200)
+    params.append(scan_limit)
 
     rows = await pool.fetch(
         f"""
@@ -3508,6 +3561,17 @@ async def list_tenant_reports(
         *params,
     )
 
+    if normalized_quality_status or normalized_freshness_state or normalized_review_state:
+        rows = [
+            row for row in rows
+            if _report_matches_list_filters(
+                row,
+                quality_status=normalized_quality_status,
+                freshness_state=normalized_freshness_state,
+                review_state=normalized_review_state,
+            )
+        ][:capped]
+
     reports = []
     for r in rows:
         blocker_count = r["blocker_count"] or 0
@@ -3516,7 +3580,7 @@ async def list_tenant_reports(
         trust = _report_trust_payload(
             report_date=r["report_date"],
             created_at=r["created_at"],
-            data_stale=bool(r["data_stale"]),
+            data_stale=bool(r["data_stale"]) if "data_stale" in r else False,
             blocker_count=blocker_count,
             warning_count=warning_count,
             unresolved_issue_count=unresolved_issue_count,

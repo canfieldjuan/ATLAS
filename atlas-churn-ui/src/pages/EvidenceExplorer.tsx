@@ -3,7 +3,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import {
   Search, Fingerprint, Loader2, Database, GitBranch,
   ShieldCheck, ShieldAlert, ChevronDown, ChevronRight,
-  ArrowRight, FileText, Layers, Filter,
+  ArrowRight, FileText, Layers, Filter, ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import EvidenceDrawer, { SourceBadge, SIGNAL_COLORS } from '../components/EvidenceDrawer'
@@ -37,8 +37,7 @@ type Tab = 'witnesses' | 'vault' | 'trace'
 // -- Main component -----------------------------------------------------------
 
 export default function EvidenceExplorer() {
-  // Matches backend evidence_default_analysis_window_days config
-  const windowDays = 30
+  const windowDays = 90
 
   // Search state
   const [vendorInput, setVendorInput] = useState('')
@@ -264,12 +263,12 @@ export default function EvidenceExplorer() {
       {activeVendor && (
         <>
           {/* Vendor reports link */}
-          {activeVendor && (
+          {selectedVendor && (
             <Link
-              to={`/reports?vendor=${encodeURIComponent(activeVendor)}`}
+              to={`/reports?vendor_filter=${encodeURIComponent(selectedVendor)}`}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
-              View reports for {activeVendor} <ExternalLink className="h-3 w-3" />
+              View reports for {selectedVendor} <ExternalLink className="h-3 w-3" />
             </Link>
           )}
 

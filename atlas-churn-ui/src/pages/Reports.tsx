@@ -1,5 +1,5 @@
-import { useNavigate } from 'react-router-dom'
-import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell } from 'lucide-react'
+import { useNavigate, Link } from 'react-router-dom'
+import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell, Pencil } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
 import UpgradeGate from '../components/UpgradeGate'
@@ -12,11 +12,13 @@ import {
   generateAccountComparisonReport,
   generateAccountDeepDiveReport,
   generateVendorComparisonReport,
+  listReportSubscriptions,
   requestBattleCardReport,
   type ReportLibraryViewFilters,
+  type ReportSubscription,
   type ReportSubscriptionScopeType,
 } from '../api/client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { REPORT_TYPE_COLORS } from '../lib/reportConstants'
 import SubscriptionModal from '../components/SubscriptionModal'
 import type { Report } from '../types'
@@ -74,6 +76,11 @@ export default function Reports() {
   const [battleCardVendor, setBattleCardVendor] = useState('')
   const [creatingBattleCard, setCreatingBattleCard] = useState(false)
   const [libSubOpen, setLibSubOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState<'library' | 'subscriptions'>('library')
+  const [subscriptions, setSubscriptions] = useState<ReportSubscription[]>([])
+  const [subLoading, setSubLoading] = useState(false)
+  const [editingSub, setEditingSub] = useState<ReportSubscription | null>(null)
+  const activeVendorFilter = debouncedVendor.trim()
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
@@ -83,11 +90,14 @@ export default function Reports() {
   const { data, loading, error, refresh, refreshing } = useApiData(
     () => fetchReports({
       report_type: typeFilter || undefined,
-      vendor_filter: debouncedVendor || undefined,
+      vendor_filter: activeVendorFilter || undefined,
+      quality_status: qualityFilter || undefined,
+      freshness_state: freshnessFilter || undefined,
+      review_state: reviewFilter || undefined,
       include_stale: freshnessFilter === 'stale',
       limit: 100,
     }),
-    [typeFilter, debouncedVendor, freshnessFilter],
+    [typeFilter, activeVendorFilter, qualityFilter, freshnessFilter, reviewFilter],
   )
 
   const PAGE_SIZES = [25, 50, 100] as const
@@ -110,7 +120,7 @@ export default function Reports() {
 
   // Reset page when data or filters change
   const reportCount = filteredReports.length
-  useEffect(() => { setPage(0) }, [reportCount, typeFilter, debouncedVendor, qualityFilter, freshnessFilter, reviewFilter])
+  useEffect(() => { setPage(0) }, [reportCount, typeFilter, activeVendorFilter, qualityFilter, freshnessFilter, reviewFilter])
 
   const totalPages = Math.max(1, Math.ceil(filteredReports.length / perPage))
   const safePage = Math.min(page, totalPages - 1)
@@ -128,30 +138,47 @@ export default function Reports() {
     ? (Date.now() - new Date(newestReportAt).getTime()) / (1000 * 60 * 60)
     : null
   const reportsStale = newestReportAgeHours !== null && newestReportAgeHours > 24
-  const hasFilters = typeFilter !== '' || vendorSearch.trim() !== '' || qualityFilter !== '' || freshnessFilter !== '' || reviewFilter !== ''
+  const hasFilters = typeFilter !== '' || activeVendorFilter !== '' || qualityFilter !== '' || freshnessFilter !== '' || reviewFilter !== ''
   const debouncePending = vendorSearch !== debouncedVendor
   const libraryViewFilters = useMemo<ReportLibraryViewFilters>(
     () => ({
       report_type: typeFilter || undefined,
-      vendor_filter: vendorSearch.trim() || undefined,
+      vendor_filter: activeVendorFilter || undefined,
       quality_status: qualityFilter || undefined,
       freshness_state: freshnessFilter || undefined,
       review_state: reviewFilter || undefined,
     }),
-    [typeFilter, vendorSearch, qualityFilter, freshnessFilter, reviewFilter],
+    [typeFilter, activeVendorFilter, qualityFilter, freshnessFilter, reviewFilter],
   )
   const libraryScopeType: ReportSubscriptionScopeType = hasFilters ? 'library_view' : 'library'
   const libraryScopeKey = hasFilters ? buildReportLibraryViewScopeKey(libraryViewFilters) : 'library'
   const libraryScopeLabel = useMemo(() => {
     const parts: string[] = []
     if (typeFilter) parts.push(titleizeFilterValue(typeFilter))
-    if (vendorSearch.trim()) parts.push(vendorSearch.trim())
+    if (activeVendorFilter) parts.push(activeVendorFilter)
     if (qualityFilter) parts.push(titleizeFilterValue(qualityFilter))
     if (freshnessFilter) parts.push(titleizeFilterValue(freshnessFilter))
     if (reviewFilter) parts.push(titleizeFilterValue(reviewFilter))
     if (parts.length === 0) return 'Full Report Library'
     return `${parts.join(' • ')} Library`
-  }, [typeFilter, vendorSearch, qualityFilter, freshnessFilter, reviewFilter])
+  }, [typeFilter, activeVendorFilter, qualityFilter, freshnessFilter, reviewFilter])
+
+  const refreshSubs = useCallback(async () => {
+    setSubLoading(true)
+    try {
+      const res = await listReportSubscriptions()
+      setSubscriptions(res.subscriptions ?? [])
+    } catch (err) {
+      console.error('Failed to load report subscriptions', err)
+      setSubscriptions([])
+    } finally {
+      setSubLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshSubs()
+  }, [refreshSubs])
 
   function clearFilters() {
     setTypeFilter('')
@@ -372,333 +399,336 @@ export default function Reports() {
           </div>
         )}
 
-        <div style={activeTab !== 'library' ? { display: 'none' } : undefined} className="space-y-6">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap">
-          <div className="relative flex-1 max-w-xs w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-            <input
-              type="text"
-              placeholder="Filter by vendor..."
-              value={vendorSearch}
-              onChange={(e) => setVendorSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="">All Types</option>
-            <option value="weekly_churn_feed">Weekly Churn Feed</option>
-            <option value="vendor_scorecard">Vendor Scorecard</option>
-            <option value="displacement_report">Displacement Report</option>
-            <option value="category_overview">Category Overview</option>
-            <option value="exploratory_overview">Exploratory Overview</option>
-            <option value="vendor_comparison">Vendor Comparison</option>
-            <option value="account_comparison">Account Comparison</option>
-            <option value="account_deep_dive">Account Deep Dive</option>
-            <option value="vendor_retention">Vendor Retention</option>
-            <option value="challenger_intel">Challenger Intel</option>
-            <option value="battle_card">Battle Card</option>
-            <option value="vendor_deep_dive">Vendor Deep Dive</option>
-            <option value="challenger_brief">Challenger Brief</option>
-          </select>
-          <select
-            value={qualityFilter}
-            onChange={(e) => setQualityFilter(e.target.value)}
-            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="">All Quality</option>
-            <option value="sales_ready">Sales Ready</option>
-            <option value="needs_review">Needs Review</option>
-            <option value="thin_evidence">Thin Evidence</option>
-            <option value="deterministic_fallback">Fallback</option>
-          </select>
-          <select
-            value={freshnessFilter}
-            onChange={(e) => setFreshnessFilter(e.target.value)}
-            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="">All Freshness</option>
-            <option value="fresh">Fresh</option>
-            <option value="monitor">Monitor</option>
-            <option value="stale">Stale</option>
-          </select>
-          <select
-            value={reviewFilter}
-            onChange={(e) => setReviewFilter(e.target.value)}
-            className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-          >
-            <option value="">All Review States</option>
-            <option value="clean">Clean</option>
-            <option value="warnings">Warnings</option>
-            <option value="open_review">Open Review</option>
-            <option value="blocked">Blocked</option>
-          </select>
-          {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
-            >
-              <X className="h-3 w-3" />
-              Clear filters
-            </button>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2 text-sm text-slate-400">
-          {debouncePending || loading ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Searching...
-            </>
-          ) : (
-            <span>{filteredReports.length} report{filteredReports.length !== 1 ? 's' : ''} found{reports.length >= 200 ? ' (showing max 200)' : ''}</span>
-          )}
-        </div>
-        <div className="text-xs">
-          {newestReportAt ? (
-            <span className={reportsStale ? 'text-amber-400' : 'text-slate-500'}>
-              Latest report generated {new Date(newestReportAt).toLocaleString()}
-              {reportsStale ? ' (older than 24h)' : ''}
-            </span>
-          ) : (
-            <span className="text-slate-500">No report freshness timestamp available</span>
-          )}
-        </div>
-      </div>
-
-      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-400 mb-1">Primary vendor</label>
-            <input
-              value={primaryVendor}
-              onChange={(e) => setPrimaryVendor(e.target.value)}
-              placeholder="Example: Salesforce"
-              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-400 mb-1">Comparison vendor</label>
-            <input
-              value={comparisonVendor}
-              onChange={(e) => setComparisonVendor(e.target.value)}
-              placeholder="Example: HubSpot"
-              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <button
-            onClick={handleCreateComparison}
-            disabled={creatingComparison}
-            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-fuchsia-500/15 text-fuchsia-300 text-sm font-medium hover:bg-fuchsia-500/25 transition-colors disabled:opacity-50"
-          >
-            {creatingComparison ? 'Generating...' : 'Create Comparison'}
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-400 mb-1">Account deep dive company</label>
-            <input
-              value={deepDiveCompany}
-              onChange={(e) => setDeepDiveCompany(e.target.value)}
-              placeholder="Example: DataPulse Analytics"
-              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <button
-            onClick={handleCreateAccountDeepDive}
-            disabled={creatingAccountDeepDive}
-            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-pink-500/15 text-pink-300 text-sm font-medium hover:bg-pink-500/25 transition-colors disabled:opacity-50"
-          >
-            {creatingAccountDeepDive ? 'Generating...' : 'Create Account Deep Dive'}
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-400 mb-1">Primary company</label>
-            <input
-              value={primaryCompany}
-              onChange={(e) => setPrimaryCompany(e.target.value)}
-              placeholder="Example: DataPulse Analytics"
-              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-400 mb-1">Comparison company</label>
-            <input
-              value={comparisonCompany}
-              onChange={(e) => setComparisonCompany(e.target.value)}
-              placeholder="Example: FinEdge Capital"
-              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <button
-            onClick={handleCreateAccountComparison}
-            disabled={creatingAccountComparison}
-            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-rose-500/15 text-rose-300 text-sm font-medium hover:bg-rose-500/25 transition-colors disabled:opacity-50"
-          >
-            {creatingAccountComparison ? 'Generating...' : 'Create Account Comparison'}
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <div className="flex-1">
-            <label className="block text-xs font-medium text-slate-400 mb-1">Battle card vendor</label>
-            <input
-              value={battleCardVendor}
-              onChange={(e) => setBattleCardVendor(e.target.value)}
-              placeholder="Example: Zendesk"
-              className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <button
-            onClick={handleCreateBattleCard}
-            disabled={creatingBattleCard}
-            className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-red-500/15 text-red-300 text-sm font-medium hover:bg-red-500/25 transition-colors disabled:opacity-50"
-          >
-            {creatingBattleCard ? 'Generating...' : 'Create Battle Card'}
-          </button>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {Array.from({ length: 4 }, (_, i) => (
-            <CardSkeleton key={i} />
-          ))}
-        </div>
-      ) : filteredReports.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24 text-center">
-          <FileBarChart className="h-10 w-10 text-slate-600 mb-4" />
-          <p className="text-slate-500 mb-4">No reports found</p>
-          {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors"
-            >
-              Clear filters
-            </button>
-          )}
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {pagedReports.map((r: Report) => (
-              <button
-                key={r.id}
-                onClick={() => navigate(`/reports/${r.id}`)}
-                className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5 text-left hover:border-cyan-500/30 transition-colors"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-500/20 text-slate-400'
-                      }`}
-                    >
-                      {r.report_type.replace(/_/g, ' ')}
-                    </span>
-                  </div>
-                  <FileBarChart className="h-4 w-4 text-slate-500" />
-                </div>
-                {(r.vendor_filter || r.category_filter) && (
-                  <p className="text-sm text-white font-medium mb-1">
-                    {['vendor_comparison', 'account_comparison'].includes(r.report_type) && r.vendor_filter && r.category_filter
-                      ? `${r.vendor_filter} vs ${r.category_filter}`
-                      : r.report_type === 'challenger_brief' && r.vendor_filter && r.category_filter
-                        ? `${r.vendor_filter} → ${r.category_filter}`
-                        : r.vendor_filter}
-                  </p>
-                )}
-                <p className="text-sm text-slate-400 line-clamp-2">
-                  {r.executive_summary ?? 'No summary available'}
-                </p>
-                <div className="flex items-center gap-2 mt-3 mb-3">
-                  <p className="text-xs text-slate-500">
-                    {r.report_date ?? r.created_at ?? '--'}
-                  </p>
-                </div>
-                <ReportTrustPanel
-                  compact
-                  status={r.status}
-                  blockerCount={r.blocker_count}
-                  warningCount={r.warning_count}
-                  unresolvedIssueCount={r.unresolved_issue_count}
-                  qualityStatus={r.quality_status}
-                  latestFailureStep={r.latest_failure_step}
-                  latestErrorSummary={r.latest_error_summary}
-                  freshnessState={r.freshness_state ?? r.trust?.freshness_state}
-                  freshnessLabel={r.freshness_label ?? r.trust?.freshness_label}
-                  reviewState={r.review_state ?? r.trust?.review_state}
-                  reviewLabel={r.review_label ?? r.trust?.review_label}
-                  freshnessTimestamp={r.created_at ?? r.report_date}
+        {activeTab === 'library' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 flex-wrap">
+              <div className="relative flex-1 max-w-xs w-full">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Filter by vendor..."
+                  value={vendorSearch}
+                  onChange={(e) => setVendorSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
                 />
-              </button>
-            ))}
-          </div>
-
-          {showPagination && (
-            <div className="flex items-center justify-between px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl">
-              <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span>
-                  {safePage * perPage + 1}--{Math.min((safePage + 1) * perPage, filteredReports.length)} of {filteredReports.length}
-                </span>
-                <select
-                  value={perPage}
-                  onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0) }}
-                  className="bg-slate-800/50 border border-slate-700/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                >
-                  {PAGE_SIZES.map((s) => (
-                    <option key={s} value={s}>{s} / page</option>
-                  ))}
-                </select>
               </div>
-              <div className="flex items-center gap-1">
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+              >
+                <option value="">All Types</option>
+                <option value="weekly_churn_feed">Weekly Churn Feed</option>
+                <option value="vendor_scorecard">Vendor Scorecard</option>
+                <option value="displacement_report">Displacement Report</option>
+                <option value="category_overview">Category Overview</option>
+                <option value="exploratory_overview">Exploratory Overview</option>
+                <option value="vendor_comparison">Vendor Comparison</option>
+                <option value="account_comparison">Account Comparison</option>
+                <option value="account_deep_dive">Account Deep Dive</option>
+                <option value="vendor_retention">Vendor Retention</option>
+                <option value="challenger_intel">Challenger Intel</option>
+                <option value="battle_card">Battle Card</option>
+                <option value="vendor_deep_dive">Vendor Deep Dive</option>
+                <option value="challenger_brief">Challenger Brief</option>
+              </select>
+              <select
+                value={qualityFilter}
+                onChange={(e) => setQualityFilter(e.target.value)}
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+              >
+                <option value="">All Quality</option>
+                <option value="sales_ready">Sales Ready</option>
+                <option value="needs_review">Needs Review</option>
+                <option value="thin_evidence">Thin Evidence</option>
+                <option value="deterministic_fallback">Fallback</option>
+              </select>
+              <select
+                value={freshnessFilter}
+                onChange={(e) => setFreshnessFilter(e.target.value)}
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+              >
+                <option value="">All Freshness</option>
+                <option value="fresh">Fresh</option>
+                <option value="monitor">Monitor</option>
+                <option value="stale">Stale</option>
+              </select>
+              <select
+                value={reviewFilter}
+                onChange={(e) => setReviewFilter(e.target.value)}
+                className="bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+              >
+                <option value="">All Review States</option>
+                <option value="clean">Clean</option>
+                <option value="warnings">Warnings</option>
+                <option value="open_review">Open Review</option>
+                <option value="blocked">Blocked</option>
+              </select>
+              {hasFilters && (
                 <button
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  disabled={safePage === 0}
-                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  onClick={clearFilters}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
                 >
-                  <ChevronLeft className="h-4 w-4" />
+                  <X className="h-3 w-3" />
+                  Clear filters
                 </button>
-                <span className="text-xs text-slate-400 px-2">
-                  {safePage + 1} / {totalPages}
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              {debouncePending || loading ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Searching...
+                </>
+              ) : (
+                <span>{filteredReports.length} report{filteredReports.length !== 1 ? 's' : ''} found{reports.length >= 200 ? ' (showing max 200)' : ''}</span>
+              )}
+            </div>
+            <div className="text-xs">
+              {newestReportAt ? (
+                <span className={reportsStale ? 'text-amber-400' : 'text-slate-500'}>
+                  Latest report generated {new Date(newestReportAt).toLocaleString()}
+                  {reportsStale ? ' (older than 24h)' : ''}
                 </span>
+              ) : (
+                <span className="text-slate-500">No report freshness timestamp available</span>
+              )}
+            </div>
+
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Primary vendor</label>
+                  <input
+                    value={primaryVendor}
+                    onChange={(e) => setPrimaryVendor(e.target.value)}
+                    placeholder="Example: Salesforce"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Comparison vendor</label>
+                  <input
+                    value={comparisonVendor}
+                    onChange={(e) => setComparisonVendor(e.target.value)}
+                    placeholder="Example: HubSpot"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
                 <button
-                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                  disabled={safePage >= totalPages - 1}
-                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  onClick={handleCreateComparison}
+                  disabled={creatingComparison}
+                  className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-fuchsia-500/15 text-fuchsia-300 text-sm font-medium hover:bg-fuchsia-500/25 transition-colors disabled:opacity-50"
                 >
-                  <ChevronRight className="h-4 w-4" />
+                  {creatingComparison ? 'Generating...' : 'Create Comparison'}
                 </button>
               </div>
             </div>
-          )}
-        </>
-        </div>
 
-      {/* Edit subscription modal */}
-      {editingSub && (
-        <SubscriptionModal
-          open={true}
-          onClose={() => setEditingSub(null)}
-          scopeType={editingSub.scope_type}
-          scopeKey={editingSub.scope_key}
-          scopeLabel={editingSub.scope_label}
-          filterPayload={editingSub.filter_payload}
-          onSaved={() => { refreshSubs(); setEditingSub(null) }}
-        />
-      )}
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Account deep dive company</label>
+                  <input
+                    value={deepDiveCompany}
+                    onChange={(e) => setDeepDiveCompany(e.target.value)}
+                    placeholder="Example: DataPulse Analytics"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
+                <button
+                  onClick={handleCreateAccountDeepDive}
+                  disabled={creatingAccountDeepDive}
+                  className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-pink-500/15 text-pink-300 text-sm font-medium hover:bg-pink-500/25 transition-colors disabled:opacity-50"
+                >
+                  {creatingAccountDeepDive ? 'Generating...' : 'Create Account Deep Dive'}
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Primary company</label>
+                  <input
+                    value={primaryCompany}
+                    onChange={(e) => setPrimaryCompany(e.target.value)}
+                    placeholder="Example: DataPulse Analytics"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Comparison company</label>
+                  <input
+                    value={comparisonCompany}
+                    onChange={(e) => setComparisonCompany(e.target.value)}
+                    placeholder="Example: FinEdge Capital"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
+                <button
+                  onClick={handleCreateAccountComparison}
+                  disabled={creatingAccountComparison}
+                  className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-rose-500/15 text-rose-300 text-sm font-medium hover:bg-rose-500/25 transition-colors disabled:opacity-50"
+                >
+                  {creatingAccountComparison ? 'Generating...' : 'Create Account Comparison'}
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Battle card vendor</label>
+                  <input
+                    value={battleCardVendor}
+                    onChange={(e) => setBattleCardVendor(e.target.value)}
+                    placeholder="Example: Zendesk"
+                    className="w-full bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-white px-3 py-2 focus:outline-none focus:border-cyan-500/50"
+                  />
+                </div>
+                <button
+                  onClick={handleCreateBattleCard}
+                  disabled={creatingBattleCard}
+                  className="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-red-500/15 text-red-300 text-sm font-medium hover:bg-red-500/25 transition-colors disabled:opacity-50"
+                >
+                  {creatingBattleCard ? 'Generating...' : 'Create Battle Card'}
+                </button>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {Array.from({ length: 4 }, (_, i) => (
+                  <CardSkeleton key={i} />
+                ))}
+              </div>
+            ) : filteredReports.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 text-center">
+                <FileBarChart className="h-10 w-10 text-slate-600 mb-4" />
+                <p className="text-slate-500 mb-4">No reports found</p>
+                {hasFilters && (
+                  <button
+                    onClick={clearFilters}
+                    className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-sm font-medium hover:bg-cyan-500/20 transition-colors"
+                  >
+                    Clear filters
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {pagedReports.map((r: Report) => (
+                    <button
+                      key={r.id}
+                      onClick={() => navigate(`/reports/${r.id}`)}
+                      className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl p-5 text-left hover:border-cyan-500/30 transition-colors"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                              REPORT_TYPE_COLORS[r.report_type] ?? 'bg-slate-500/20 text-slate-400'
+                            }`}
+                          >
+                            {r.report_type.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                        <FileBarChart className="h-4 w-4 text-slate-500" />
+                      </div>
+                      {(r.vendor_filter || r.category_filter) && (
+                        <p className="text-sm text-white font-medium mb-1">
+                          {['vendor_comparison', 'account_comparison'].includes(r.report_type) && r.vendor_filter && r.category_filter
+                            ? `${r.vendor_filter} vs ${r.category_filter}`
+                            : r.report_type === 'challenger_brief' && r.vendor_filter && r.category_filter
+                              ? `${r.vendor_filter} → ${r.category_filter}`
+                              : r.vendor_filter}
+                        </p>
+                      )}
+                      <p className="text-sm text-slate-400 line-clamp-2">
+                        {r.executive_summary ?? 'No summary available'}
+                      </p>
+                      <div className="flex items-center gap-2 mt-3 mb-3">
+                        <p className="text-xs text-slate-500">
+                          {r.report_date ?? r.created_at ?? '--'}
+                        </p>
+                      </div>
+                      <ReportTrustPanel
+                        compact
+                        status={r.status}
+                        blockerCount={r.blocker_count}
+                        warningCount={r.warning_count}
+                        unresolvedIssueCount={r.unresolved_issue_count}
+                        qualityStatus={r.quality_status}
+                        latestFailureStep={r.latest_failure_step}
+                        latestErrorSummary={r.latest_error_summary}
+                        freshnessState={r.freshness_state ?? r.trust?.freshness_state}
+                        freshnessLabel={r.freshness_label ?? r.trust?.freshness_label}
+                        reviewState={r.review_state ?? r.trust?.review_state}
+                        reviewLabel={r.review_label ?? r.trust?.review_label}
+                        freshnessTimestamp={r.created_at ?? r.report_date}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                {showPagination && (
+                  <div className="flex items-center justify-between px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl">
+                    <div className="flex items-center gap-2 text-xs text-slate-400">
+                      <span>
+                        {safePage * perPage + 1}-{Math.min((safePage + 1) * perPage, filteredReports.length)} of {filteredReports.length}
+                      </span>
+                      <select
+                        value={perPage}
+                        onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0) }}
+                        className="bg-slate-800/50 border border-slate-700/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+                      >
+                        {PAGE_SIZES.map((s) => (
+                          <option key={s} value={s}>{s} / page</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setPage((p) => Math.max(0, p - 1))}
+                        disabled={safePage === 0}
+                        className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <span className="text-xs text-slate-400 px-2">
+                        {safePage + 1} / {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                        disabled={safePage >= totalPages - 1}
+                        className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Edit subscription modal */}
+        {editingSub && (
+          <SubscriptionModal
+            open={true}
+            onClose={() => setEditingSub(null)}
+            scopeType={editingSub.scope_type}
+            scopeKey={editingSub.scope_key}
+            scopeLabel={editingSub.scope_label}
+            filterPayload={editingSub.filter_payload}
+            onSaved={() => { void refreshSubs(); setEditingSub(null) }}
+          />
+        )}
+      </div>
 
       <SubscriptionModal
         open={libSubOpen}
@@ -707,6 +737,7 @@ export default function Reports() {
         scopeKey={libraryScopeKey}
         scopeLabel={libraryScopeLabel}
         filterPayload={libraryScopeType === 'library_view' ? libraryViewFilters : undefined}
+        onSaved={() => { void refreshSubs(); setLibSubOpen(false) }}
       />
     </div>
   )

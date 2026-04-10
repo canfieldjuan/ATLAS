@@ -251,6 +251,77 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_tenant_reports_applies_quality_freshness_and_review_filters(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    created_at = datetime.now(timezone.utc) - timedelta(days=10)
+    matching_id = uuid4()
+    nonmatching_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(return_value=[
+            {
+                "id": matching_id,
+                "report_date": created_at.date(),
+                "report_type": "battle_card",
+                "executive_summary": "Keep",
+                "vendor_filter": "Zendesk",
+                "category_filter": None,
+                "status": "published",
+                "created_at": created_at,
+                "latest_failure_step": None,
+                "latest_error_code": None,
+                "latest_error_summary": None,
+                "data_stale": True,
+                "blocker_count": 1,
+                "warning_count": 0,
+                "unresolved_issue_count": 0,
+                "quality_status": "sales_ready",
+                "quality_score": 92,
+            },
+            {
+                "id": nonmatching_id,
+                "report_date": created_at.date(),
+                "report_type": "battle_card",
+                "executive_summary": "Drop",
+                "vendor_filter": "HubSpot",
+                "category_filter": None,
+                "status": "published",
+                "created_at": created_at,
+                "latest_failure_step": None,
+                "latest_error_code": None,
+                "latest_error_summary": None,
+                "data_stale": False,
+                "blocker_count": 0,
+                "warning_count": 1,
+                "unresolved_issue_count": 0,
+                "quality_status": "sales_ready",
+                "quality_score": 90,
+            },
+        ]),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_tenant_reports(
+        report_type=None,
+        vendor_filter=None,
+        quality_status="sales_ready",
+        freshness_state="stale",
+        review_state="blocked",
+        include_stale=True,
+        limit=10,
+        user=user,
+    )
+
+    assert result["count"] == 1
+    assert [report["id"] for report in result["reports"]] == [str(matching_id)]
+    _, *fetch_params = pool.fetch.await_args.args
+    assert fetch_params[-1] == 50
+
+
+@pytest.mark.asyncio
 async def test_get_tenant_report_exposes_normalized_trust_fields(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 

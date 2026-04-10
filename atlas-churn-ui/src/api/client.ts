@@ -293,6 +293,9 @@ export async function compareVendorPeriods(vendorName: string, params?: {
 export async function fetchReports(params?: {
   report_type?: string
   vendor_filter?: string
+  quality_status?: string
+  freshness_state?: string
+  review_state?: string
   include_stale?: boolean
   limit?: number
 }) {
