@@ -216,8 +216,10 @@ async def delete_task(task_id: UUID):
 # -- Action endpoints -------------------------------------------------
 
 @router.post("/{task_id}/run", status_code=202)
-async def run_task_now(task_id: UUID, body: dict | None = None):
+async def run_task_now(task_id: str, body: dict | None = None):
     """Execute a task immediately (manual trigger). Returns 202 with execution ID.
+
+    task_id can be a UUID or a task name (e.g. 'b2b_watchlist_alert_delivery').
 
     Optional JSON body to pass runtime overrides merged into task.metadata:
     - test_vendors: list or comma-separated string of vendor names
@@ -229,7 +231,12 @@ async def run_task_now(task_id: UUID, body: dict | None = None):
     from ..autonomous.scheduler import get_task_scheduler
 
     repo = get_scheduled_task_repo()
-    task = await repo.get_by_id(task_id)
+    # Accept both UUID and task name
+    task = None
+    try:
+        task = await repo.get_by_id(UUID(task_id))
+    except (ValueError, AttributeError):
+        task = await repo.get_by_name(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
 
