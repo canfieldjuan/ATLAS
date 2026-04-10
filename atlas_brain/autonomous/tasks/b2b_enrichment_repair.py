@@ -1228,6 +1228,7 @@ async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
                 ELSE NULL
             END
         WHERE enrichment_repair_status = 'repairing'
+          AND enrichment_repaired_at < NOW() - INTERVAL '30 minutes'
         """,
         max_attempts,
     )
@@ -1797,7 +1798,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 FOR UPDATE SKIP LOCKED
             )
             UPDATE b2b_reviews r
-            SET enrichment_repair_status = 'repairing'
+            SET enrichment_repair_status = 'repairing',
+                enrichment_repaired_at = NOW()
             FROM batch
             WHERE r.id = batch.id
             RETURNING r.id, r.vendor_name, r.product_name, r.product_category,
