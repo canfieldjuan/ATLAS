@@ -4632,35 +4632,13 @@ async def _find_vendor_deep_dive_candidates(pool) -> list[dict[str, Any]]:
 
 async def _find_market_landscape_candidates(pool) -> list[dict[str, Any]]:
     """Categories with multiple vendors -- write a landscape overview."""
+    from ._b2b_shared import read_market_landscape_candidates
+
     min_vendor_profiles = _blog_min_vendor_profiles("market_landscape")
-    rows = await pool.fetch(
-        """
-        SELECT
-            pp.product_category AS category,
-            COUNT(DISTINCT pp.vendor_name) AS vendor_count,
-            COALESCE(SUM(cs.total_reviews), 0) AS total_reviews,
-            ROUND(AVG(cs.avg_urgency_score)::numeric, 1) AS avg_urgency
-        FROM b2b_product_profiles pp
-        JOIN b2b_churn_signals cs
-          ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
-         AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
-        WHERE pp.product_category IS NOT NULL AND pp.product_category != ''
-        GROUP BY pp.product_category
-        HAVING COUNT(DISTINCT pp.vendor_name) >= $1
-        ORDER BY COUNT(DISTINCT pp.vendor_name) DESC, COALESCE(SUM(cs.total_reviews), 0) DESC
-        LIMIT 10
-        """,
-        min_vendor_profiles,
+    return await read_market_landscape_candidates(
+        pool,
+        min_vendor_profiles=min_vendor_profiles,
     )
-    return [
-        {
-            "category": r["category"],
-            "vendor_count": r["vendor_count"],
-            "total_reviews": r["total_reviews"],
-            "avg_urgency": float(r["avg_urgency"]),
-        }
-        for r in rows
-    ]
 
 
 async def _batch_vendor_review_counts(

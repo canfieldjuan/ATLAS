@@ -1135,20 +1135,19 @@ def test_blueprint_best_fit_guide_adds_tradeoff_and_voice_sections():
 
 @pytest.mark.asyncio
 async def test_find_market_landscape_candidates_uses_configured_vendor_floor(monkeypatch):
-    seen: dict[str, object] = {}
-
-    class Pool:
-        async def fetch(self, query, *args):
-            seen["query"] = " ".join(str(query).split())
-            seen["args"] = args
-            return [
-                {
-                    "category": "CRM",
-                    "vendor_count": 4,
-                    "total_reviews": 220,
-                    "avg_urgency": 6.4,
-                }
-            ]
+    pool = object()
+    adapter = AsyncMock(return_value=[
+        {
+            "category": "CRM",
+            "vendor_count": 4,
+            "total_reviews": 220,
+            "avg_urgency": 6.4,
+        }
+    ])
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.read_market_landscape_candidates",
+        adapter,
+    )
 
     monkeypatch.setattr(
         blog_mod.settings.b2b_churn,
@@ -1157,11 +1156,11 @@ async def test_find_market_landscape_candidates_uses_configured_vendor_floor(mon
         raising=False,
     )
 
-    result = await blog_mod._find_market_landscape_candidates(Pool())
+    result = await blog_mod._find_market_landscape_candidates(pool)
 
-    assert seen["args"] == (4,)
-    assert "FROM b2b_product_profiles pp" in str(seen["query"])
-    assert "JOIN b2b_churn_signals cs" in str(seen["query"])
+    assert adapter.await_count == 1
+    assert adapter.await_args.kwargs == {"min_vendor_profiles": 4}
+    assert adapter.await_args.args == (pool,)
     assert result == [
         {
             "category": "CRM",

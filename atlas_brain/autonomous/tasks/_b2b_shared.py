@@ -4276,6 +4276,44 @@ async def read_vendor_scorecard_metrics(
     return dict(row) if row else None
 
 
+async def read_market_landscape_candidates(
+    pool,
+    *,
+    min_vendor_profiles: int,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Read category-level market landscape candidates from profile + scorecard joins."""
+    rows = await pool.fetch(
+        """
+        SELECT
+            pp.product_category AS category,
+            COUNT(DISTINCT pp.vendor_name) AS vendor_count,
+            COALESCE(SUM(cs.total_reviews), 0) AS total_reviews,
+            ROUND(AVG(cs.avg_urgency_score)::numeric, 1) AS avg_urgency
+        FROM b2b_product_profiles pp
+        JOIN b2b_churn_signals cs
+          ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
+         AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
+        WHERE pp.product_category IS NOT NULL AND pp.product_category != ''
+        GROUP BY pp.product_category
+        HAVING COUNT(DISTINCT pp.vendor_name) >= $1
+        ORDER BY COUNT(DISTINCT pp.vendor_name) DESC, COALESCE(SUM(cs.total_reviews), 0) DESC
+        LIMIT $2
+        """,
+        min_vendor_profiles,
+        limit,
+    )
+    return [
+        {
+            "category": row["category"],
+            "vendor_count": row["vendor_count"],
+            "total_reviews": row["total_reviews"],
+            "avg_urgency": float(row["avg_urgency"]),
+        }
+        for row in rows
+    ]
+
+
 async def _fetch_vendor_churn_scores_from_signals(
     pool,
     window_days: int,

@@ -327,6 +327,39 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
 
 
 @pytest.mark.asyncio
+async def test_read_market_landscape_candidates_uses_category_vendor_floor():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_product_profiles pp": [
+                {
+                    "category": "CRM",
+                    "vendor_count": 4,
+                    "total_reviews": 220,
+                    "avg_urgency": 6.4,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_market_landscape_candidates(
+        pool,
+        min_vendor_profiles=4,
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_product_profiles pp" in call[0])
+    assert score_call[1] == (4, 10)
+    assert "JOIN b2b_churn_signals cs" in score_call[0]
+    assert rows == [
+        {
+            "category": "CRM",
+            "vendor_count": 4,
+            "total_reviews": 220,
+            "avg_urgency": 6.4,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_fetch_all_pool_layers_prefers_specific_profile_category_over_generic_vault():
     pool = FakePool(
         fetch_map={
