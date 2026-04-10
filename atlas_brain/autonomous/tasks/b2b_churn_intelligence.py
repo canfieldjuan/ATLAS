@@ -528,6 +528,30 @@ async def _read_vendor_scorecard_archetypes(
     )
 
 
+async def _read_vendor_scorecard_metrics(
+    pool,
+    vendor_name: str,
+) -> dict[str, Any] | None:
+    from ._b2b_shared import read_vendor_scorecard_metrics
+
+    return await read_vendor_scorecard_metrics(
+        pool,
+        vendor_name=vendor_name,
+    )
+
+
+async def _read_vendor_intelligence_records_latest(
+    pool,
+    vendor_names: list[str],
+) -> list[dict[str, Any]]:
+    from ._b2b_shared import read_vendor_intelligence_records_latest
+
+    return await read_vendor_intelligence_records_latest(
+        pool,
+        vendor_names=vendor_names,
+    )
+
+
 async def _build_vendor_archetype_lookup(
     pool,
     vendor_names: list[str],
@@ -3690,17 +3714,7 @@ async def _vendor_snapshot_from_pools(
     ms = vault.get("metric_snapshot", {})
 
     # Churn signals (for fields not always in vault)
-    cs_row = await pool.fetchrow(
-        """
-        SELECT total_reviews, churn_intent_count, avg_urgency_score,
-               avg_rating_normalized
-        FROM b2b_churn_signals
-        WHERE LOWER(vendor_name) = LOWER($1)
-        ORDER BY last_computed_at DESC
-        LIMIT 1
-        """,
-        vendor_name,
-    )
+    cs_row = await _read_vendor_scorecard_metrics(pool, vendor_name)
 
     # Product profile (for competitors and categories)
     pp_row = await pool.fetchrow(
@@ -4218,17 +4232,9 @@ async def _company_snapshot_from_signals(
 
     # Feature gaps + quotes from evidence vault for each vendor
     if vendor_names:
-        vault_rows = await pool.fetch(
-            """
-            SELECT DISTINCT ON (vendor_name) vendor_name, vault
-            FROM b2b_evidence_vault
-            WHERE vendor_name = ANY($1)
-            ORDER BY vendor_name, as_of_date DESC, created_at DESC
-            """,
-            vendor_names,
-        )
+        vault_rows = await _read_vendor_intelligence_records_latest(pool, vendor_names)
         for vr in vault_rows:
-            vault = _safe_json(vr["vault"], default={})
+            vault = vr["vault"] or {}
             if not isinstance(vault, dict):
                 continue
             for ev in vault.get("weakness_evidence", []):

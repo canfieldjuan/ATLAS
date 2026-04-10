@@ -5046,6 +5046,7 @@ async def read_vendor_scorecard_metrics(
                signal_reviews,
                churn_intent_count,
                avg_urgency_score,
+               avg_rating_normalized,
                top_competitors,
                sentiment_distribution
         FROM b2b_churn_signals
@@ -5087,6 +5088,38 @@ async def read_vendor_scorecard_archetypes(
         for row in rows
         if row.get("vendor_name") and row.get("archetype")
     ]
+
+
+async def read_vendor_intelligence_records_latest(
+    pool,
+    *,
+    vendor_names: Iterable[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Read the latest canonical vendor intelligence row per vendor across all windows."""
+    requested_vendors = _canonicalize_vendor_name_filters(vendor_names)
+    if not requested_vendors:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT ON (vendor_name)
+               vendor_name,
+               as_of_date,
+               analysis_window_days,
+               schema_version,
+               vault,
+               created_at
+        FROM b2b_evidence_vault
+        WHERE LOWER(vendor_name) = ANY($1::text[])
+        ORDER BY vendor_name, as_of_date DESC, created_at DESC
+        """,
+        requested_vendors,
+    )
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        record = _normalize_vendor_intelligence_record(row)
+        if record is not None:
+            records.append(record)
+    return records
 
 
 async def read_market_landscape_candidates(
