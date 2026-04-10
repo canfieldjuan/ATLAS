@@ -67,6 +67,8 @@ async def test_fetch_review_funnel_audit_filters_recent_scrape_intake_counts_to_
                     {
                         "result_text": json.dumps(
                             {
+                                # Intentionally wrong aggregate values to prove the
+                                # source-filtered reducer ignores top-level funnel totals.
                                 "funnel": {
                                     "found": 99,
                                     "filtered": 99,
