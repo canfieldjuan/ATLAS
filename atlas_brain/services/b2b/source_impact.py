@@ -650,6 +650,20 @@ def _compute_coverage_ratio(
     return round(float(numerator) / float(denominator), 3)
 
 
+def _row_count(
+    row: Any,
+    key: str,
+    *,
+    fallback_key: str | None = None,
+) -> int:
+    """Read an integer count from a query row, optionally falling back to another alias."""
+    if key in row:
+        return int(row[key] or 0)
+    if fallback_key and fallback_key in row:
+        return int(row[fallback_key] or 0)
+    return 0
+
+
 def _build_non_empty_text_check(expression: str) -> str:
     return f"""
         NULLIF(
@@ -717,32 +731,74 @@ async def summarize_source_field_baseline(
             COUNT(*) AS total_reviews,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched_reviews,
             COUNT(*) FILTER (WHERE {title_present_sql}) AS title_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched' AND {title_present_sql}
+            ) AS enriched_title_rows,
             COUNT(*) FILTER (WHERE {company_present_sql}) AS company_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched' AND {company_present_sql}
+            ) AS enriched_company_rows,
             COUNT(*) FILTER (WHERE {company_size_present_sql}) AS company_size_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched' AND {company_size_present_sql}
+            ) AS enriched_company_size_rows,
             COUNT(*) FILTER (WHERE {industry_present_sql}) AS industry_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched' AND {industry_present_sql}
+            ) AS enriched_industry_rows,
             COUNT(*) FILTER (
                 WHERE enrichment->'reviewer_context'->>'decision_maker' = 'true'
             ) AS decision_maker_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched'
+                  AND enrichment->'reviewer_context'->>'decision_maker' = 'true'
+            ) AS enriched_decision_maker_rows,
             COUNT(*) FILTER (
                 WHERE jsonb_array_length(
                     COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)
                 ) > 0
             ) AS competitor_rows,
             COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched'
+                  AND jsonb_array_length(
+                      COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb)
+                  ) > 0
+            ) AS enriched_competitor_rows,
+            COUNT(*) FILTER (
                 WHERE {timing_present_sql}
             ) AS timing_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched' AND {timing_present_sql}
+            ) AS enriched_timing_rows,
             COUNT(*) FILTER (
                 WHERE jsonb_array_length(
                     COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
                 ) > 0
             ) AS quote_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched'
+                  AND jsonb_array_length(
+                      COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
+                  ) > 0
+            ) AS enriched_quote_rows,
             COUNT(*) FILTER (WHERE {pain_present_sql}) AS pain_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched' AND {pain_present_sql}
+            ) AS enriched_pain_rows,
             COUNT(*) FILTER (
                 WHERE {content_classification_present_sql}
             ) AS content_classification_rows,
             COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched'
+                  AND {content_classification_present_sql}
+            ) AS enriched_content_classification_rows,
+            COUNT(*) FILTER (
                 WHERE enrichment->>'support_escalation' = 'true'
-            ) AS support_escalation_rows
+            ) AS support_escalation_rows,
+            COUNT(*) FILTER (
+                WHERE enrichment_status = 'enriched'
+                  AND enrichment->>'support_escalation' = 'true'
+            ) AS enriched_support_escalation_rows
         FROM b2b_reviews
         WHERE {where}
         GROUP BY source
@@ -755,6 +811,82 @@ async def summarize_source_field_baseline(
     for row in rows:
         total = int(row["total_reviews"] or 0)
         enriched = int(row["enriched_reviews"] or 0)
+        enriched_counts = {
+            "title_rows": _row_count(
+                row,
+                "enriched_title_rows",
+                fallback_key="title_rows",
+            ),
+            "company_rows": _row_count(
+                row,
+                "enriched_company_rows",
+                fallback_key="company_rows",
+            ),
+            "company_size_rows": _row_count(
+                row,
+                "enriched_company_size_rows",
+                fallback_key="company_size_rows",
+            ),
+            "industry_rows": _row_count(
+                row,
+                "enriched_industry_rows",
+                fallback_key="industry_rows",
+            ),
+            "decision_maker_rows": _row_count(
+                row,
+                "enriched_decision_maker_rows",
+                fallback_key="decision_maker_rows",
+            ),
+            "competitor_rows": _row_count(
+                row,
+                "enriched_competitor_rows",
+                fallback_key="competitor_rows",
+            ),
+            "timing_rows": _row_count(
+                row,
+                "enriched_timing_rows",
+                fallback_key="timing_rows",
+            ),
+            "quote_rows": _row_count(
+                row,
+                "enriched_quote_rows",
+                fallback_key="quote_rows",
+            ),
+            "pain_rows": _row_count(
+                row,
+                "enriched_pain_rows",
+                fallback_key="pain_rows",
+            ),
+            "content_classification_rows": _row_count(
+                row,
+                "enriched_content_classification_rows",
+                fallback_key="content_classification_rows",
+            ),
+            "support_escalation_rows": _row_count(
+                row,
+                "enriched_support_escalation_rows",
+                fallback_key="support_escalation_rows",
+            ),
+        }
+        total_counts = {
+            "title_rows": _row_count(row, "title_rows"),
+            "company_rows": _row_count(row, "company_rows"),
+            "company_size_rows": _row_count(row, "company_size_rows"),
+            "industry_rows": _row_count(row, "industry_rows"),
+            "decision_maker_rows": _row_count(row, "decision_maker_rows"),
+            "competitor_rows": _row_count(row, "competitor_rows"),
+            "timing_rows": _row_count(row, "timing_rows"),
+            "quote_rows": _row_count(row, "quote_rows"),
+            "pain_rows": _row_count(row, "pain_rows"),
+            "content_classification_rows": _row_count(
+                row,
+                "content_classification_rows",
+            ),
+            "support_escalation_rows": _row_count(
+                row,
+                "support_escalation_rows",
+            ),
+        }
         baseline_rows.append(
             {
                 "source": row["source"],
@@ -763,78 +895,99 @@ async def summarize_source_field_baseline(
                 "enriched_reviews": enriched,
                 "enrichment_rate": _compute_coverage_ratio(enriched, total),
                 "coverage": {
-                    "title": _compute_coverage_ratio(row["title_rows"], enriched),
-                    "company": _compute_coverage_ratio(row["company_rows"], enriched),
-                    "company_size": _compute_coverage_ratio(
-                        row["company_size_rows"],
+                    "title": _compute_coverage_ratio(
+                        enriched_counts["title_rows"],
                         enriched,
                     ),
-                    "industry": _compute_coverage_ratio(row["industry_rows"], enriched),
+                    "company": _compute_coverage_ratio(
+                        enriched_counts["company_rows"],
+                        enriched,
+                    ),
+                    "company_size": _compute_coverage_ratio(
+                        enriched_counts["company_size_rows"],
+                        enriched,
+                    ),
+                    "industry": _compute_coverage_ratio(
+                        enriched_counts["industry_rows"],
+                        enriched,
+                    ),
                     "decision_maker": _compute_coverage_ratio(
-                        row["decision_maker_rows"],
+                        enriched_counts["decision_maker_rows"],
                         enriched,
                     ),
                     "competitors": _compute_coverage_ratio(
-                        row["competitor_rows"],
+                        enriched_counts["competitor_rows"],
                         enriched,
                     ),
-                    "timing": _compute_coverage_ratio(row["timing_rows"], enriched),
-                    "quotes": _compute_coverage_ratio(row["quote_rows"], enriched),
-                    "pain_category": _compute_coverage_ratio(row["pain_rows"], enriched),
+                    "timing": _compute_coverage_ratio(
+                        enriched_counts["timing_rows"],
+                        enriched,
+                    ),
+                    "quotes": _compute_coverage_ratio(
+                        enriched_counts["quote_rows"],
+                        enriched,
+                    ),
+                    "pain_category": _compute_coverage_ratio(
+                        enriched_counts["pain_rows"],
+                        enriched,
+                    ),
                     "content_classification": _compute_coverage_ratio(
-                        row["content_classification_rows"],
+                        enriched_counts["content_classification_rows"],
                         enriched,
                     ),
                     "support_escalation": _compute_coverage_ratio(
-                        row["support_escalation_rows"],
+                        enriched_counts["support_escalation_rows"],
                         enriched,
                     ),
                 },
                 "coverage_of_total_reviews": {
-                    "title": _compute_coverage_ratio(row["title_rows"], total),
-                    "company": _compute_coverage_ratio(row["company_rows"], total),
-                    "company_size": _compute_coverage_ratio(
-                        row["company_size_rows"],
+                    "title": _compute_coverage_ratio(
+                        total_counts["title_rows"],
                         total,
                     ),
-                    "industry": _compute_coverage_ratio(row["industry_rows"], total),
+                    "company": _compute_coverage_ratio(
+                        total_counts["company_rows"],
+                        total,
+                    ),
+                    "company_size": _compute_coverage_ratio(
+                        total_counts["company_size_rows"],
+                        total,
+                    ),
+                    "industry": _compute_coverage_ratio(
+                        total_counts["industry_rows"],
+                        total,
+                    ),
                     "decision_maker": _compute_coverage_ratio(
-                        row["decision_maker_rows"],
+                        total_counts["decision_maker_rows"],
                         total,
                     ),
                     "competitors": _compute_coverage_ratio(
-                        row["competitor_rows"],
+                        total_counts["competitor_rows"],
                         total,
                     ),
-                    "timing": _compute_coverage_ratio(row["timing_rows"], total),
-                    "quotes": _compute_coverage_ratio(row["quote_rows"], total),
-                    "pain_category": _compute_coverage_ratio(row["pain_rows"], total),
+                    "timing": _compute_coverage_ratio(
+                        total_counts["timing_rows"],
+                        total,
+                    ),
+                    "quotes": _compute_coverage_ratio(
+                        total_counts["quote_rows"],
+                        total,
+                    ),
+                    "pain_category": _compute_coverage_ratio(
+                        total_counts["pain_rows"],
+                        total,
+                    ),
                     "content_classification": _compute_coverage_ratio(
-                        row["content_classification_rows"],
+                        total_counts["content_classification_rows"],
                         total,
                     ),
                     "support_escalation": _compute_coverage_ratio(
-                        row["support_escalation_rows"],
+                        total_counts["support_escalation_rows"],
                         total,
                     ),
                 },
-                "raw_counts": {
-                    "title_rows": int(row["title_rows"] or 0),
-                    "company_rows": int(row["company_rows"] or 0),
-                    "company_size_rows": int(row["company_size_rows"] or 0),
-                    "industry_rows": int(row["industry_rows"] or 0),
-                    "decision_maker_rows": int(row["decision_maker_rows"] or 0),
-                    "competitor_rows": int(row["competitor_rows"] or 0),
-                    "timing_rows": int(row["timing_rows"] or 0),
-                    "quote_rows": int(row["quote_rows"] or 0),
-                    "pain_rows": int(row["pain_rows"] or 0),
-                    "content_classification_rows": int(
-                        row["content_classification_rows"] or 0
-                    ),
-                    "support_escalation_rows": int(
-                        row["support_escalation_rows"] or 0
-                    ),
-                },
+                "raw_counts": enriched_counts,
+                "raw_counts_of_total_reviews": total_counts,
             }
         )
 

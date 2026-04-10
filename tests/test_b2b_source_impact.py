@@ -152,16 +152,27 @@ async def test_summarize_source_field_baseline_shapes_coverage():
                 "total_reviews": 10,
                 "enriched_reviews": 8,
                 "title_rows": 6,
+                "enriched_title_rows": 6,
                 "company_rows": 5,
+                "enriched_company_rows": 5,
                 "company_size_rows": 4,
+                "enriched_company_size_rows": 4,
                 "industry_rows": 3,
+                "enriched_industry_rows": 3,
                 "decision_maker_rows": 2,
+                "enriched_decision_maker_rows": 2,
                 "competitor_rows": 7,
+                "enriched_competitor_rows": 7,
                 "timing_rows": 1,
+                "enriched_timing_rows": 1,
                 "quote_rows": 5,
+                "enriched_quote_rows": 5,
                 "pain_rows": 8,
+                "enriched_pain_rows": 8,
                 "content_classification_rows": 8,
+                "enriched_content_classification_rows": 8,
                 "support_escalation_rows": 2,
+                "enriched_support_escalation_rows": 2,
             }
         ]
     )
@@ -182,8 +193,57 @@ async def test_summarize_source_field_baseline_shapes_coverage():
     assert row["coverage"]["support_escalation"] == 0.25
     assert row["coverage_of_total_reviews"]["title"] == 0.6
     assert row["raw_counts"]["pain_rows"] == 8
+    assert row["raw_counts"]["title_rows"] == 6
+    assert row["raw_counts_of_total_reviews"]["title_rows"] == 6
     assert row["raw_counts"]["content_classification_rows"] == 8
     assert row["raw_counts"]["support_escalation_rows"] == 2
+
+
+@pytest.mark.asyncio
+async def test_summarize_source_field_baseline_scopes_coverage_to_enriched_rows():
+    pool = _mock_pool(
+        fetch_return=[
+            {
+                "source": "trustpilot",
+                "total_reviews": 10,
+                "enriched_reviews": 4,
+                "title_rows": 6,
+                "enriched_title_rows": 3,
+                "company_rows": 5,
+                "enriched_company_rows": 2,
+                "company_size_rows": 4,
+                "enriched_company_size_rows": 2,
+                "industry_rows": 4,
+                "enriched_industry_rows": 2,
+                "decision_maker_rows": 2,
+                "enriched_decision_maker_rows": 1,
+                "competitor_rows": 5,
+                "enriched_competitor_rows": 3,
+                "timing_rows": 2,
+                "enriched_timing_rows": 1,
+                "quote_rows": 5,
+                "enriched_quote_rows": 2,
+                "pain_rows": 5,
+                "enriched_pain_rows": 3,
+                "content_classification_rows": 6,
+                "enriched_content_classification_rows": 4,
+                "support_escalation_rows": 2,
+                "enriched_support_escalation_rows": 1,
+            }
+        ]
+    )
+
+    result = await summarize_source_field_baseline(pool, window_days=30, source="trustpilot")
+
+    row = result["rows"][0]
+    assert row["enrichment_rate"] == 0.4
+    assert row["coverage"]["title"] == 0.75
+    assert row["coverage"]["content_classification"] == 1.0
+    assert row["coverage"]["competitors"] == 0.75
+    assert row["coverage_of_total_reviews"]["title"] == 0.6
+    assert row["coverage_of_total_reviews"]["content_classification"] == 0.6
+    assert row["raw_counts"]["title_rows"] == 3
+    assert row["raw_counts_of_total_reviews"]["title_rows"] == 6
 
 
 @pytest.mark.asyncio
@@ -195,16 +255,27 @@ async def test_dashboard_source_impact_ledger_includes_field_baseline(monkeypatc
                 "total_reviews": 20,
                 "enriched_reviews": 15,
                 "title_rows": 0,
+                "enriched_title_rows": 0,
                 "company_rows": 0,
+                "enriched_company_rows": 0,
                 "company_size_rows": 0,
+                "enriched_company_size_rows": 0,
                 "industry_rows": 1,
+                "enriched_industry_rows": 1,
                 "decision_maker_rows": 0,
+                "enriched_decision_maker_rows": 0,
                 "competitor_rows": 9,
+                "enriched_competitor_rows": 9,
                 "timing_rows": 4,
+                "enriched_timing_rows": 4,
                 "quote_rows": 7,
+                "enriched_quote_rows": 7,
                 "pain_rows": 12,
+                "enriched_pain_rows": 12,
                 "content_classification_rows": 15,
+                "enriched_content_classification_rows": 15,
                 "support_escalation_rows": 3,
+                "enriched_support_escalation_rows": 3,
             }
         ]
     )
@@ -234,16 +305,27 @@ async def test_mcp_source_impact_ledger_returns_json_payload():
                 "total_reviews": 5,
                 "enriched_reviews": 5,
                 "title_rows": 4,
+                "enriched_title_rows": 4,
                 "company_rows": 4,
+                "enriched_company_rows": 4,
                 "company_size_rows": 3,
+                "enriched_company_size_rows": 3,
                 "industry_rows": 2,
+                "enriched_industry_rows": 2,
                 "decision_maker_rows": 2,
+                "enriched_decision_maker_rows": 2,
                 "competitor_rows": 1,
+                "enriched_competitor_rows": 1,
                 "timing_rows": 0,
+                "enriched_timing_rows": 0,
                 "quote_rows": 4,
+                "enriched_quote_rows": 4,
                 "pain_rows": 5,
+                "enriched_pain_rows": 5,
                 "content_classification_rows": 5,
+                "enriched_content_classification_rows": 5,
                 "support_escalation_rows": 1,
+                "enriched_support_escalation_rows": 1,
             }
         ]
     )
