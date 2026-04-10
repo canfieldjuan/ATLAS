@@ -114,7 +114,7 @@ async def apply_missing_core_targets(
         source, product_slug = validate_target_input(item["source"], product_slug)
         defaults = derive_seed_defaults(existing_targets, source, item.get("product_category"))
         product_name = item.get("verified_product_name") or item["vendor_name"]
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] = {}
         if item.get("source_fit_probation"):
             metadata = {
                 "source_fit_probation": True,
@@ -151,7 +151,7 @@ async def apply_missing_core_targets(
                 defaults["priority"],
                 defaults["scrape_interval_hours"],
                 defaults["scrape_mode"],
-                json.dumps(metadata) if metadata else None,
+                json.dumps(metadata),
             )
             action["target_id"] = str(row["id"]) if row else None
         applied.append(action)
