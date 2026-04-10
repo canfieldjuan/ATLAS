@@ -23,6 +23,7 @@ import {
   Bookmark,
   EyeOff,
   Clock,
+  Pencil,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -32,6 +33,8 @@ import SignalEffectivenessPanel from '../components/SignalEffectivenessPanel'
 import DataTable, { type Column } from '../components/DataTable'
 import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
+import CampaignFailureExplanation from '../components/CampaignFailureExplanation'
+import CampaignQualityTrends from '../components/CampaignQualityTrends'
 import useApiData from '../hooks/useApiData'
 import { usePlanGate } from '../hooks/usePlanGate'
 import {
@@ -46,6 +49,8 @@ import {
   setDisposition,
   bulkSetDisposition,
   removeDispositions,
+  fetchCampaignStats,
+  fetchCampaignQualityTrends,
 } from '../api/client'
 import type { Campaign, HighIntentCompany } from '../types'
 import type { OpportunityDisposition } from '../api/client'
@@ -88,6 +93,24 @@ const WINDOW_OPTIONS = [
 
 const DISPOSITION_TABS = ['active', 'saved', 'snoozed', 'dismissed', 'all'] as const
 type DispositionTab = (typeof DISPOSITION_TABS)[number]
+
+function CollapsibleSection({ title, defaultOpen = false, children }: {
+  title: string; defaultOpen?: boolean; children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="border border-slate-700/40 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-slate-300 hover:bg-slate-800/30 transition-colors"
+      >
+        {title}
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+      </button>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </div>
+  )
+}
 
 export default function Opportunities() {
   const [searchParams] = useSearchParams()
@@ -165,6 +188,13 @@ export default function Opportunities() {
   )
 
   const opportunities = useMemo(() => data ?? [], [data])
+
+  // -- Campaign stats --
+  const { data: campaignStats, loading: campaignStatsLoading, refresh: refreshCampaignStats } = useApiData(fetchCampaignStats, [])
+  const { data: qualityTrends, loading: qualityTrendsLoading } = useApiData(
+    () => fetchCampaignQualityTrends({ days: 14, top_n: 5 }),
+    [],
+  )
 
   // -- Campaign status lookup --
   const { data: campaignData, refresh: refreshCampaigns } = useApiData(
@@ -257,13 +287,14 @@ export default function Opportunities() {
       setGenResult(`Generated ${result.generated ?? 0} campaign(s) for ${row.company}`)
       refresh()
       refreshCampaigns()
+      refreshCampaignStats()
       setCampaignRefreshKey((k) => k + 1)
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Generation failed')
     } finally {
       setGenerating(null)
     }
-  }, [refresh, refreshCampaigns])
+  }, [refresh, refreshCampaigns, refreshCampaignStats])
 
   // -- Bulk generate --
   async function handleBulkGenerate() {
@@ -289,6 +320,7 @@ export default function Opportunities() {
       setSelectedIds(new Set())
       refresh()
       refreshCampaigns()
+      refreshCampaignStats()
       setCampaignRefreshKey((k) => k + 1)
     } catch (err) {
       setGenResult(err instanceof Error ? err.message : 'Bulk generation failed')
@@ -698,6 +730,23 @@ export default function Opportunities() {
         <StatCard label="Contract Known" value={stats.withContract} icon={<Target className="h-4 w-4 text-red-400" />} skeleton={loading} />
       </div>
 
+      {/* Campaign stats */}
+      {canAccessCampaigns && campaignStats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <StatCard label="Total Campaigns" value={campaignStats.total} icon={<Mail className="h-4 w-4" />} skeleton={campaignStatsLoading} />
+          <StatCard label="Drafts Pending" value={campaignStats.by_status['draft'] ?? 0} icon={<Clock className="h-4 w-4" />} skeleton={campaignStatsLoading} />
+          <StatCard label="Approved" value={(campaignStats.by_status['approved'] ?? 0) + (campaignStats.by_status['queued'] ?? 0)} icon={<CheckCircle2 className="h-4 w-4" />} skeleton={campaignStatsLoading} />
+          <StatCard label="Sent" value={campaignStats.by_status['sent'] ?? 0} icon={<Zap className="h-4 w-4" />} skeleton={campaignStatsLoading} />
+        </div>
+      )}
+
+      {/* Campaign quality trends */}
+      {canAccessCampaigns && (
+        <CollapsibleSection title="Campaign Quality Trends" defaultOpen={false}>
+          <CampaignQualityTrends data={qualityTrends} loading={qualityTrendsLoading} />
+        </CollapsibleSection>
+      )}
+
       {/* Signal effectiveness */}
       {canAccessCampaigns && <SignalEffectivenessPanel />}
 
@@ -897,7 +946,7 @@ export default function Opportunities() {
           onRestore={handleRemoveDisposition}
           generating={generating === rowKey(expandedRow)}
           campaignRefreshKey={campaignRefreshKey}
-          onCampaignAction={refreshCampaigns}
+          onCampaignAction={() => { refreshCampaigns(); refreshCampaignStats() }}
         />
       )}
     </div>
@@ -920,6 +969,9 @@ const CAMPAIGN_STATUS_COLORS: Record<string, string> = {
 function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: string; vendor: string; refreshKey?: number; onAction?: () => void }) {
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editFields, setEditFields] = useState({ subject: '', body: '', cta: '' })
+  const [editSaving, setEditSaving] = useState(false)
 
   const { data, loading, refresh } = useApiData(
     () => fetchCampaigns({ company, vendor, limit: 20 }),
@@ -964,6 +1016,31 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
     }
   }
 
+  function startEditing(c: Campaign) {
+    setEditingId(c.id)
+    setEditFields({ subject: c.subject ?? '', body: c.body ?? '', cta: c.cta ?? '' })
+  }
+
+  async function saveEditing() {
+    if (!editingId) return
+    setEditSaving(true)
+    try {
+      await updateCampaign(editingId, {
+        subject: editFields.subject,
+        body: editFields.body,
+        cta: editFields.cta || undefined,
+      })
+      setResult('Campaign updated')
+      setEditingId(null)
+      refresh()
+      onAction?.()
+    } catch (err) {
+      setResult(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-xs text-slate-500 py-3">
@@ -1002,34 +1079,96 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
                   </span>
                 )}
               </div>
-              {c.subject && <p className="text-sm font-medium text-white mb-1">{c.subject}</p>}
-              <CampaignReasoningSummary item={c} />
-              {c.body && (
-                <div
-                  className="text-xs text-slate-300 line-clamp-3 prose prose-invert prose-xs max-w-none mb-2"
-                  dangerouslySetInnerHTML={{ __html: c.body }}
-                />
+              {editingId === c.id ? (
+                <div className="space-y-2 mb-2">
+                  <input
+                    type="text"
+                    value={editFields.subject}
+                    onChange={(e) => setEditFields((f) => ({ ...f, subject: e.target.value }))}
+                    placeholder="Subject"
+                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                  />
+                  <textarea
+                    value={editFields.body}
+                    onChange={(e) => setEditFields((f) => ({ ...f, body: e.target.value }))}
+                    rows={6}
+                    placeholder="Body"
+                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-xs text-slate-200 font-mono placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                  />
+                  <input
+                    type="text"
+                    value={editFields.cta}
+                    onChange={(e) => setEditFields((f) => ({ ...f, cta: e.target.value }))}
+                    placeholder="CTA"
+                    className="w-full px-3 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded text-sm text-cyan-400 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={saveEditing}
+                      disabled={editSaving}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
+                    >
+                      {editSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingId(null)}
+                      className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {c.subject && <p className="text-sm font-medium text-white mb-1">{c.subject}</p>}
+                  <CampaignReasoningSummary item={c} />
+                  {c.body && (
+                    <div
+                      className="text-xs text-slate-300 line-clamp-3 prose prose-invert prose-xs max-w-none mb-2"
+                      dangerouslySetInnerHTML={{ __html: c.body }}
+                    />
+                  )}
+                  {c.cta && <p className="text-xs text-cyan-400 mb-2">{c.cta}</p>}
+                </>
               )}
-              {c.cta && <p className="text-xs text-cyan-400 mb-2">{c.cta}</p>}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleApprove(c)}
-                  disabled={actionLoading === c.id}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-600 hover:bg-green-500 text-white transition-colors disabled:opacity-50"
-                >
-                  <CheckCircle2 className="h-3 w-3" />
-                  Approve
-                </button>
-                <button
-                  onClick={() => handleReject(c)}
-                  disabled={actionLoading === c.id}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors disabled:opacity-50"
-                >
-                  <XCircle className="h-3 w-3" />
-                  Reject
-                </button>
-                {actionLoading === c.id && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
-              </div>
+              {c.quality_status === 'fail' && c.failure_explanation && (
+                <div className="mb-2">
+                  <CampaignFailureExplanation explanation={c.failure_explanation} />
+                </div>
+              )}
+              {c.blocker_count != null && c.blocker_count > 0 && (
+                <p className="text-[10px] text-red-400 mb-2">{c.blocker_count} blocker(s), {c.warning_count ?? 0} warning(s)</p>
+              )}
+              {editingId !== c.id && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleApprove(c)}
+                    disabled={actionLoading === c.id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-600 hover:bg-green-500 text-white transition-colors disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="h-3 w-3" />
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => handleReject(c)}
+                    disabled={actionLoading === c.id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600/20 hover:bg-red-600/30 text-red-400 transition-colors disabled:opacity-50"
+                  >
+                    <XCircle className="h-3 w-3" />
+                    Reject
+                  </button>
+                  <button
+                    onClick={() => startEditing(c)}
+                    disabled={actionLoading === c.id}
+                    className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors disabled:opacity-50"
+                    title="Edit content"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                  {actionLoading === c.id && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1042,6 +1181,14 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
             <div key={c.id} className="flex items-center gap-2 text-xs py-1 border-b border-slate-800/50 last:border-0">
               <span className={clsx('px-1.5 py-0.5 rounded-full text-[10px] font-medium', CAMPAIGN_STATUS_COLORS[c.status])}>{c.status}</span>
               <span className="text-slate-300 truncate">{c.subject ?? c.channel}</span>
+              {c.status === 'sent' && (
+                <Link
+                  to={`/campaign-review?company=${encodeURIComponent(company)}`}
+                  className="text-[10px] text-cyan-400 hover:text-cyan-300 shrink-0 ml-2"
+                >
+                  outcome
+                </Link>
+              )}
               {c.created_at && <span className="text-slate-500 shrink-0 ml-auto">{new Date(c.created_at).toLocaleDateString()}</span>}
             </div>
           ))}
