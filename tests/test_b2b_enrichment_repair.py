@@ -293,7 +293,7 @@ async def test_repair_single_quarantines_shadowed_technical_source(monkeypatch):
     args = pool.execute.await_args.args
     assert "enrichment_status = $6" in query
     assert args[6] == "quarantined"
-    assert args[7] is False
+    assert args[7] is True
     assert json.loads(args[8]) == ["repair_shadowed_technical_source"]
 
 

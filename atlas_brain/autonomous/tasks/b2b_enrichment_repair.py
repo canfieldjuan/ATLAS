@@ -584,7 +584,7 @@ async def _persist_shadow_result(
             repaired_at,
             json.dumps(applied_fields),
             target_status,
-            False,
+            bool(combined_shadow_reasons),
             json.dumps(combined_shadow_reasons),
             repaired_at if combined_shadow_reasons else None,
         )
@@ -610,7 +610,7 @@ async def _persist_shadow_result(
             repaired_at,
             json.dumps(applied_fields),
             target_status,
-            False,
+            bool(combined_shadow_reasons),
             json.dumps(combined_shadow_reasons),
             repaired_at if combined_shadow_reasons else None,
     )
@@ -635,7 +635,6 @@ async def _persist_repair_result(
     repair_result: dict[str, Any] | None,
     *,
     model_id: str | None,
-    max_attempts: int,
     cache_usage: dict[str, int],
 ) -> str:
     review_id = row["id"]
@@ -809,7 +808,6 @@ async def _repair_single(
                 strategic_reasons,
                 None,
                 model_id=model_id,
-                max_attempts=max_attempts,
                 cache_usage=usage,
             )
         )
@@ -823,7 +821,6 @@ async def _repair_single(
             strategic_reasons,
             repair_result,
             model_id=model_id,
-            max_attempts=max_attempts,
             cache_usage=usage,
         )
     )
@@ -1004,7 +1001,6 @@ async def _repair_rows(
                         entry["strategic_reasons"],
                         parsed,
                         model_id=repair_model,
-                        max_attempts=max_attempts,
                         cache_usage=_empty_repair_usage(),
                     )
                     row_results[row["id"]] = {"status": status, **_empty_repair_usage()}
@@ -1015,6 +1011,14 @@ async def _repair_rows(
                     "Skipping duplicate enrichment-repair submission for %s; existing Anthropic batch item %s is still pending",
                     row["id"],
                     existing.get("custom_id"),
+                )
+                await pool.execute(
+                    """
+                    UPDATE b2b_reviews
+                    SET enrichment_repair_status = NULL
+                    WHERE id = $1 AND enrichment_repair_status = 'repairing'
+                    """,
+                    row["id"],
                 )
                 row_results[row["id"]] = {"status": "deferred"}
                 counts["anthropic_batch_reused_pending_items"] += 1
@@ -1114,7 +1118,6 @@ async def _repair_rows(
                     entry["strategic_reasons"],
                     parsed,
                     model_id=repair_model,
-                    max_attempts=max_attempts,
                     cache_usage=usage,
                 )
                 row_results[row["id"]] = {"status": status, **usage}
