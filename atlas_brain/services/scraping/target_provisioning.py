@@ -153,7 +153,7 @@ async def apply_missing_core_targets(
     return applied
 
 
-def _is_search_or_signal_source(source: str) -> bool:
+def _is_signal_lane_source(source: str) -> bool:
     return str(source or "").strip().lower() in {member.value for member in SEARCH_SOURCES}
 
 
@@ -163,7 +163,7 @@ def _split_onboarding_candidates(
     core: list[dict[str, Any]] = []
     signal_lane: list[dict[str, Any]] = []
     for item in items:
-        if _is_search_or_signal_source(item.get("source")):
+        if _is_signal_lane_source(item.get("source")):
             signal_lane.append(item)
         else:
             core.append(item)
@@ -322,7 +322,7 @@ async def provision_vendor_onboarding_targets(
             break
 
     has_verified_or_slug_seed = any(
-        not _is_search_or_signal_source(item.get("source"))
+        not _is_signal_lane_source(item.get("source"))
         for item in candidates
     )
     if not has_verified_or_slug_seed:
@@ -331,7 +331,7 @@ async def provision_vendor_onboarding_targets(
                 continue
             if not item.get("can_probation_now"):
                 continue
-            if not _is_search_or_signal_source(item.get("source")):
+            if not _is_signal_lane_source(item.get("source")):
                 continue
             candidate = dict(item)
             candidate["source_fit_probation"] = True

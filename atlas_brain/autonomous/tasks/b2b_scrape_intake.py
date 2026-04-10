@@ -376,7 +376,7 @@ async def _load_existing_review_identity_sets(
     return known_keys, known_identities
 
 
-async def _load_vendor_cross_source_rows(
+async def _load_vendor_cross_source_index_data(
     pool,
     *,
     vendor_name: str,
@@ -403,6 +403,13 @@ def _build_vendor_cross_source_candidate_index(
     *,
     reviewer_stem_length: int,
 ) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Build vendor dedup indexes.
+
+    Returns a mapping with three buckets:
+    ``by_content_hash``, ``by_identity_key``, and ``by_reviewer_stem``.
+    Each bucket maps a normalized key to candidate review rows for survivor
+    selection in the cross-source dedup hot path.
+    """
     by_content_hash: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_identity_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_reviewer_stem: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -436,6 +443,12 @@ def _select_vendor_cross_source_candidates(
     max_candidates: int,
     reviewer_stem_length: int,
 ) -> list[dict[str, Any]]:
+    """Select dedup candidates in tiered priority order.
+
+    Candidate expansion prefers exact content-hash matches first, then exact
+    identity-key matches, and finally reviewer-stem neighbors when a review
+    date is available for downstream proximity checks.
+    """
     selected: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
 
@@ -1685,7 +1698,7 @@ async def _insert_reviews(
                 vendor_index = _vendor_candidate_indexes.get(canonical_vendor)
                 if vendor_index is None:
                     vendor_index = _build_vendor_cross_source_candidate_index(
-                        await _load_vendor_cross_source_rows(
+                        await _load_vendor_cross_source_index_data(
                             pool,
                             vendor_name=canonical_vendor,
                         ),
