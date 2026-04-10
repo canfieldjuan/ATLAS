@@ -1285,7 +1285,14 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     today = await _check_freshness(pool)
     if today is None:
-        return {"_skip_synthesis": "Core signals not fresh for today"}
+        from ._b2b_shared import describe_core_run_gap
+
+        return {
+            "_skip_synthesis": (
+                await describe_core_run_gap(pool, date.today())
+                or "Core signals not fresh for today"
+            )
+        }
 
     # Only generate for accounts with b2b_starter+ plans (reports require b2b_starter)
     accounts = await pool.fetch(

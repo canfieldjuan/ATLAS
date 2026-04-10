@@ -1208,7 +1208,14 @@ async def run(task: ScheduledTask, *, as_of: date | None = None) -> dict[str, An
     if today is None:
         today = await _check_freshness(pool)
         if today is None:
-            return {"_skip_synthesis": "Core signals not fresh for today"}
+            from ._b2b_shared import describe_core_run_gap
+
+            return {
+                "_skip_synthesis": (
+                    await describe_core_run_gap(pool, date.today())
+                    or "Core signals not fresh for today"
+                )
+            }
 
     from ._b2b_shared import (
         _build_competitor_lookup,

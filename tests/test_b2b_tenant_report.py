@@ -131,10 +131,14 @@ async def test_run_skips_when_core_signals_not_fresh(monkeypatch):
         "atlas_brain.autonomous.tasks._b2b_shared.has_complete_core_run_marker",
         AsyncMock(return_value=False),
     )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.describe_core_run_gap",
+        AsyncMock(return_value="Core churn materialization is incomplete for today"),
+    )
 
     result = await run(SimpleNamespace(id="task-id", metadata={}))
 
-    assert result == {"_skip_synthesis": "Core signals not fresh for today"}
+    assert result == {"_skip_synthesis": "Core churn materialization is incomplete for today"}
     assert pool.fetch.await_count == 0
 
 

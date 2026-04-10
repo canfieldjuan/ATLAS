@@ -234,6 +234,44 @@ async def test_latest_complete_core_report_date_filters_incomplete_markers():
     assert "materialization_complete" in marker_call[0]
 
 
+@pytest.mark.asyncio
+async def test_describe_core_run_gap_reports_incomplete_phase_details():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_intelligence": {
+                "status": "incomplete",
+                "intelligence_data": {
+                    "materialization_complete": False,
+                    "materialization_status": {
+                        "failed_phases": ["b2b_evidence_vault", "b2b_churn_signals"],
+                        "partial_phases": ["b2b_temporal_intelligence"],
+                    },
+                },
+            },
+        },
+    )
+
+    reason = await shared_mod.describe_core_run_gap(pool, date(2026, 4, 10))
+
+    assert reason == (
+        "Core churn materialization is incomplete for today "
+        "(failed: b2b_evidence_vault, b2b_churn_signals; partial: b2b_temporal_intelligence)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_describe_core_run_gap_reports_missing_marker_when_absent():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_intelligence": None,
+        },
+    )
+
+    reason = await shared_mod.describe_core_run_gap(pool, date(2026, 4, 10))
+
+    assert reason == "Core signals are not available for today"
+
+
 def test_align_vendor_intelligence_records_to_scorecards_filters_mismatched_runs():
     vendor_scores = [
         {

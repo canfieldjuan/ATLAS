@@ -78,6 +78,74 @@ async def latest_complete_core_report_date(pool) -> date | None:
     )
 
 
+def _core_marker_complete(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    return bool(default)
+
+
+def _core_phase_names(values: Any, *, limit: int = 3) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        names.append(text)
+        if len(names) >= limit:
+            break
+    return names
+
+
+async def describe_core_run_gap(pool, as_of: date) -> str | None:
+    """Return a user-facing reason when the canonical core run is unavailable."""
+    row = await pool.fetchrow(
+        """
+        SELECT status, intelligence_data
+        FROM b2b_intelligence
+        WHERE report_type = 'core_run_complete'
+          AND report_date = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        """,
+        as_of,
+    )
+    if not row:
+        return "Core signals are not available for today"
+    status = str(row["status"] or "").strip().lower()
+    intelligence_data = _safe_json(row["intelligence_data"], {})
+    if not isinstance(intelligence_data, dict):
+        intelligence_data = {}
+    materialization_complete = _core_marker_complete(
+        intelligence_data.get("materialization_complete"),
+        default=status == "published",
+    )
+    if status == "published" and materialization_complete:
+        return None
+    materialization_status = intelligence_data.get("materialization_status")
+    if isinstance(materialization_status, dict):
+        failed = _core_phase_names(materialization_status.get("failed_phases"))
+        partial = _core_phase_names(materialization_status.get("partial_phases"))
+        details: list[str] = []
+        if failed:
+            details.append(f"failed: {', '.join(failed)}")
+        if partial:
+            details.append(f"partial: {', '.join(partial)}")
+        if details:
+            return f"Core churn materialization is incomplete for today ({'; '.join(details)})"
+    return "Core churn materialization is incomplete for today"
+
+
 
 def filter_vendors_by_focus_categories(
     vendor_scores: list[dict],
