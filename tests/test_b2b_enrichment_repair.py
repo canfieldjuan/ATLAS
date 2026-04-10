@@ -1852,7 +1852,7 @@ async def test_circuit_breaker_high_failure_rate(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_consecutive_no_progress(monkeypatch):
-    """Loop should break after 2 consecutive rounds with zero promotions."""
+    """Loop should break after 2 consecutive rounds with no promotions or shadows."""
     monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
     monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_enabled", True, raising=False)
     monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_model", "test-model", raising=False)
@@ -1883,17 +1883,71 @@ async def test_circuit_breaker_consecutive_no_progress(monkeypatch):
     monkeypatch.setattr(repair_mod, "_quarantine_shadowed_hard_gap_rows", AsyncMock(return_value=0))
     monkeypatch.setattr(repair_mod, "_skip_low_signal_strict_discussion_rows", AsyncMock(return_value=0))
 
-    # All rounds: shadowed only, zero promoted
     monkeypatch.setattr(
         repair_mod, "_repair_rows",
-        AsyncMock(return_value={"promoted": 0, "shadowed": 1, "failed": 0,
-                                "exact_cache_hits": 0, "generated": 1,
+        AsyncMock(return_value={"promoted": 0, "shadowed": 0, "failed": 0,
+                                "exact_cache_hits": 0, "generated": 0,
                                 "witness_rows": 0, "witness_count": 0}),
     )
 
     result = await repair_mod.run(_task())
 
-    # Should break after round 2 (2 consecutive no-progress), not go to 10
     assert result["rounds"] == 2
     assert result["circuit_breaker_reason"] is not None
-    assert "no promotions" in result["circuit_breaker_reason"]
+    assert "no repair progress" in result["circuit_breaker_reason"]
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_shadowed_rounds_still_allow_later_promotions(monkeypatch):
+    """Shadowed rows are still progress and should not stop later promotable rows."""
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_enabled", True, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_model", "test-model", raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_per_batch", 10, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_rounds_per_run", 10, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_max_attempts", 3, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_concurrency", 2, raising=False)
+    monkeypatch.setattr(repair_mod.settings.b2b_churn, "enrichment_repair_strict_discussion_skip_limit", 100, raising=False)
+
+    call_count = 0
+
+    async def _mock_fetch(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 3:
+            return [{"id": uuid4(), "vendor_name": "V", "source": "g2", "content_type": "review",
+                      "enrichment": {}, "enrichment_repair_attempts": 0}]
+        return []
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        execute=AsyncMock(return_value="UPDATE 0"),
+        fetch=AsyncMock(side_effect=_mock_fetch),
+    )
+    monkeypatch.setattr(repair_mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(repair_mod, "_recover_orphaned_repairing", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_demote_stale_no_signal_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_quarantine_shadowed_hard_gap_rows", AsyncMock(return_value=0))
+    monkeypatch.setattr(repair_mod, "_skip_low_signal_strict_discussion_rows", AsyncMock(return_value=0))
+
+    monkeypatch.setattr(
+        repair_mod, "_repair_rows",
+        AsyncMock(side_effect=[
+            {"promoted": 0, "shadowed": 1, "failed": 0,
+             "exact_cache_hits": 0, "generated": 1,
+             "witness_rows": 0, "witness_count": 0},
+            {"promoted": 0, "shadowed": 1, "failed": 0,
+             "exact_cache_hits": 0, "generated": 1,
+             "witness_rows": 0, "witness_count": 0},
+            {"promoted": 1, "shadowed": 0, "failed": 0,
+             "exact_cache_hits": 0, "generated": 1,
+             "witness_rows": 0, "witness_count": 0},
+        ]),
+    )
+
+    result = await repair_mod.run(_task())
+
+    assert result["rounds"] == 3
+    assert result["promoted"] == 1
+    assert result["shadowed"] == 2
+    assert result["circuit_breaker_reason"] is None

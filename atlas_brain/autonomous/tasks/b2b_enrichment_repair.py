@@ -1863,8 +1863,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
         # --- circuit breaker ---
         round_promoted = result.get("promoted", 0)
+        round_shadowed = result.get("shadowed", 0)
         round_failed = result.get("failed", 0)
-        round_total = round_promoted + result.get("shadowed", 0) + round_failed
+        round_total = round_promoted + round_shadowed + round_failed
 
         if round_total > 0 and round_failed > round_total * 0.5:
             circuit_breaker_reason = f"high failure rate ({round_failed}/{round_total})"
@@ -1872,13 +1873,13 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             rounds += 1
             break
 
-        if round_promoted == 0:
+        if round_promoted == 0 and round_shadowed == 0:
             consecutive_no_progress += 1
         else:
             consecutive_no_progress = 0
 
         if consecutive_no_progress >= 2:
-            circuit_breaker_reason = f"{consecutive_no_progress} consecutive rounds with no promotions"
+            circuit_breaker_reason = f"{consecutive_no_progress} consecutive rounds with no repair progress"
             logger.warning("Enrichment repair circuit breaker: %s", circuit_breaker_reason)
             rounds += 1
             break
