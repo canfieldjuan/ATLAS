@@ -22,6 +22,7 @@ from starlette.responses import StreamingResponse
 
 from ..auth.dependencies import AuthUser, optional_auth, require_b2b_plan
 from ..config import settings
+from ..services.b2b.report_trust import report_trust_payload
 from ..services.tracing import (
     build_business_trace_context,
     build_reasoning_trace_context,
@@ -955,6 +956,7 @@ async def list_reports(
         f"""
         SELECT id, report_date, report_type, executive_summary,
              vendor_filter, category_filter, status, created_at,
+             COALESCE((intelligence_data->>'data_stale')::boolean, false) AS data_stale,
              latest_failure_step, latest_error_code, latest_error_summary,
              blocker_count, warning_count,
              (
@@ -986,27 +988,47 @@ async def list_reports(
         *params,
     )
 
-    reports = [
-        {
-            "id": str(r["id"]),
-            "report_date": str(r["report_date"]) if r["report_date"] else None,
-            "report_type": r["report_type"],
-            "executive_summary": r["executive_summary"],
-            "vendor_filter": r["vendor_filter"],
-            "category_filter": r["category_filter"],
-            "status": r["status"],
-            "latest_failure_step": r["latest_failure_step"],
-            "latest_error_code": r["latest_error_code"],
-            "latest_error_summary": r["latest_error_summary"],
-            "blocker_count": r["blocker_count"] or 0,
-            "warning_count": r["warning_count"] or 0,
-            "unresolved_issue_count": r["unresolved_issue_count"] or 0,
-            "quality_status": r["quality_status"],
-            "quality_score": r["quality_score"],
-            "created_at": str(r["created_at"]) if r["created_at"] else None,
-        }
-        for r in rows
-    ]
+    reports = []
+    for r in rows:
+        blocker_count = r["blocker_count"] or 0
+        warning_count = r["warning_count"] or 0
+        unresolved_issue_count = r["unresolved_issue_count"] or 0
+        trust = report_trust_payload(
+            report_date=r["report_date"],
+            created_at=r["created_at"],
+            data_stale=bool(r["data_stale"]),
+            blocker_count=blocker_count,
+            warning_count=warning_count,
+            unresolved_issue_count=unresolved_issue_count,
+            status=r["status"],
+        )
+        reports.append(
+            {
+                "id": str(r["id"]),
+                "report_date": str(r["report_date"]) if r["report_date"] else None,
+                "report_type": r["report_type"],
+                "executive_summary": r["executive_summary"],
+                "vendor_filter": r["vendor_filter"],
+                "category_filter": r["category_filter"],
+                "status": r["status"],
+                "latest_failure_step": r["latest_failure_step"],
+                "latest_error_code": r["latest_error_code"],
+                "latest_error_summary": r["latest_error_summary"],
+                "blocker_count": blocker_count,
+                "warning_count": warning_count,
+                "unresolved_issue_count": unresolved_issue_count,
+                "quality_status": r["quality_status"],
+                "quality_score": r["quality_score"],
+                "artifact_state": trust["artifact_state"],
+                "artifact_label": trust["artifact_label"],
+                "freshness_state": trust["freshness_state"],
+                "freshness_label": trust["freshness_label"],
+                "review_state": trust["review_state"],
+                "review_label": trust["review_label"],
+                "trust": trust,
+                "created_at": str(r["created_at"]) if r["created_at"] else None,
+            }
+        )
 
     return {"reports": reports, "count": len(reports)}
 
@@ -1056,6 +1078,21 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
     if isinstance(intelligence_data, dict):
         quality = _safe_dict(intelligence_data.get("battle_card_quality"))
         quality_status = intelligence_data.get("quality_status")
+    data_stale = False
+    if isinstance(intelligence_data, dict):
+        data_stale = bool(intelligence_data.get("data_stale") is True)
+    blocker_count = row["blocker_count"] or 0
+    warning_count = row["warning_count"] or 0
+    open_issue_count = unresolved_issue_count or 0
+    trust = report_trust_payload(
+        report_date=row["report_date"],
+        created_at=row["created_at"],
+        data_stale=data_stale,
+        blocker_count=blocker_count,
+        warning_count=warning_count,
+        unresolved_issue_count=open_issue_count,
+        status=row["status"],
+    )
 
     return {
         "id": str(row["id"]),
@@ -1070,11 +1107,18 @@ async def get_report(report_id: str, user: AuthUser | None = Depends(optional_au
         "latest_failure_step": row["latest_failure_step"],
         "latest_error_code": row["latest_error_code"],
         "latest_error_summary": row["latest_error_summary"],
-        "blocker_count": row["blocker_count"] or 0,
-        "warning_count": row["warning_count"] or 0,
-        "unresolved_issue_count": unresolved_issue_count or 0,
+        "blocker_count": blocker_count,
+        "warning_count": warning_count,
+        "unresolved_issue_count": open_issue_count,
         "quality_status": quality_status or quality.get("status"),
         "quality_score": quality.get("score"),
+        "artifact_state": trust["artifact_state"],
+        "artifact_label": trust["artifact_label"],
+        "freshness_state": trust["freshness_state"],
+        "freshness_label": trust["freshness_label"],
+        "review_state": trust["review_state"],
+        "review_label": trust["review_label"],
+        "trust": trust,
         "llm_model": row["llm_model"],
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }

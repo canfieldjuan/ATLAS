@@ -144,6 +144,8 @@ export default function ReportDetail() {
         <div className="mt-4">
           <ReportTrustPanel
             status={report.status}
+            artifactState={report.artifact_state ?? report.trust?.artifact_state}
+            artifactLabel={report.artifact_label ?? report.trust?.artifact_label}
             blockerCount={report.blocker_count}
             warningCount={report.warning_count}
             unresolvedIssueCount={report.unresolved_issue_count}

@@ -152,32 +152,32 @@ async def list_witnesses(
             },
         }
 
-    conditions = ["vendor_name = $1", "analysis_window_days = $2", "as_of_date = $3"]
+    conditions = ["w.vendor_name = $1", "w.analysis_window_days = $2", "w.as_of_date = $3"]
     params: list = [vendor_name, window_days, snapshot_date]
     idx = 4
 
     if pain_category:
-        conditions.append(f"pain_category = ${idx}")
+        conditions.append(f"w.pain_category = ${idx}")
         params.append(pain_category)
         idx += 1
 
     if source:
-        conditions.append(f"source = ${idx}")
+        conditions.append(f"w.source = ${idx}")
         params.append(source)
         idx += 1
 
     if competitor:
-        conditions.append(f"competitor = ${idx}")
+        conditions.append(f"w.competitor = ${idx}")
         params.append(competitor)
         idx += 1
 
     if witness_type:
-        conditions.append(f"witness_type = ${idx}")
+        conditions.append(f"w.witness_type = ${idx}")
         params.append(witness_type)
         idx += 1
 
     if min_salience is not None:
-        conditions.append(f"salience_score >= ${idx}")
+        conditions.append(f"w.salience_score >= ${idx}")
         params.append(min_salience)
         idx += 1
 

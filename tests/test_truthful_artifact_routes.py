@@ -237,12 +237,12 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
 
         async def fetchrow(self, query, *args):
             if "SELECT MAX(as_of_date) AS as_of_date" in query:
-                assert args == ("Salesforce", 90, date.today())
+                assert args == ("Salesforce", 30, date.today())
                 return {"as_of_date": date(2026, 4, 1)}
             if "COUNT(*) AS total FROM b2b_vendor_witnesses" in query:
                 assert args == (
                     "Salesforce",
-                    90,
+                    30,
                     date(2026, 4, 1),
                     evidence_api._uuid.UUID(user.account_id),
                 )
@@ -253,7 +253,7 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
             if "LIMIT $5 OFFSET $6" in query:
                 assert args == (
                     "Salesforce",
-                    90,
+                    30,
                     date(2026, 4, 1),
                     evidence_api._uuid.UUID(user.account_id),
                     50,
@@ -281,7 +281,7 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
             if "GROUP BY w.pain_category, w.source, w.witness_type" in query:
                 assert args == (
                     "Salesforce",
-                    90,
+                    30,
                     date(2026, 4, 1),
                     evidence_api._uuid.UUID(user.account_id),
                 )
@@ -300,7 +300,7 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
     body = response.json()
     assert body["vendor_name"] == "Salesforce"
     assert body["as_of_date"] == "2026-04-01"
-    assert body["analysis_window_days"] == 90
+    assert body["analysis_window_days"] == 30
     assert body["total"] == 1
     assert body["witnesses"][0]["witness_id"] == "w1"
 

@@ -448,9 +448,9 @@ export default function EvidenceExplorer() {
                               </span>
                             </div>
                           )}
-                          {w.signal_tags && w.signal_tags.length > 0 && (
+                          {w.signal_tags && Array.isArray(w.signal_tags) && w.signal_tags.length > 0 && (
                             <div className="flex gap-1 mt-2 flex-wrap">
-                              {w.signal_tags.slice(0, 3).map((tag, i) => (
+                              {(Array.isArray(w.signal_tags) ? w.signal_tags : []).slice(0, 3).map((tag, i) => (
                                 <span key={i} className={clsx(
                                   'text-xs px-1.5 py-0.5 rounded',
                                   SIGNAL_COLORS[tag] || 'bg-slate-700/50 text-slate-400',
@@ -458,8 +458,8 @@ export default function EvidenceExplorer() {
                                   {tag.replace(/_/g, ' ')}
                                 </span>
                               ))}
-                              {w.signal_tags.length > 3 && (
-                                <span className="text-xs text-slate-500">+{w.signal_tags.length - 3}</span>
+                              {(Array.isArray(w.signal_tags) ? w.signal_tags : []).length > 3 && (
+                                <span className="text-xs text-slate-500">+{(Array.isArray(w.signal_tags) ? w.signal_tags : []).length - 3}</span>
                               )}
                             </div>
                           )}

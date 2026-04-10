@@ -27,6 +27,12 @@ from ..services.scraping.target_provisioning import (
     provision_vendor_onboarding_targets,
 )
 from ..services.campaign_sender import get_campaign_sender
+from ..services.b2b.report_trust import (
+    REPORT_QUALITY_STATUSES,
+    report_freshness_payload,
+    report_review_payload,
+    report_trust_payload,
+)
 from ..services.b2b import watchlist_alerts as watchlist_alert_service
 from ..services.b2b_competitive_sets import (
     build_competitive_set_plan,
@@ -93,72 +99,6 @@ def _safe_float(val, default=None):
         return float(val)
     except (ValueError, TypeError):
         return default
-
-
-def _coerce_datetime(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, date):
-        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    return None
-
-
-def _report_freshness(anchor: Any, *, data_stale: bool = False) -> dict[str, str]:
-    if data_stale:
-        return {"state": "stale", "label": "Stale"}
-    dt = _coerce_datetime(anchor)
-    if not dt:
-        return {"state": "unknown", "label": "Freshness unknown"}
-    age_hours = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 3600
-    if age_hours < 24:
-        return {"state": "fresh", "label": "Fresh"}
-    if age_hours < 168:
-        return {"state": "monitor", "label": "Monitor"}
-    return {"state": "stale", "label": "Stale"}
-
-
-def _report_review_state(
-    blocker_count: int,
-    warning_count: int,
-    unresolved_issue_count: int,
-) -> dict[str, str]:
-    if blocker_count > 0:
-        return {"state": "blocked", "label": "Blocked"}
-    if unresolved_issue_count > 0:
-        return {"state": "open_review", "label": "Open Review"}
-    if warning_count > 0:
-        return {"state": "warnings", "label": "Warnings"}
-    return {"state": "clean", "label": "Clean"}
-
-
-def _report_trust_payload(
-    *,
-    report_date: Any,
-    created_at: Any,
-    data_stale: bool,
-    blocker_count: int,
-    warning_count: int,
-    unresolved_issue_count: int,
-) -> dict[str, Any]:
-    freshness = _report_freshness(report_date or created_at, data_stale=data_stale)
-    review = _report_review_state(blocker_count, warning_count, unresolved_issue_count)
-    return {
-        "freshness_state": freshness["state"],
-        "freshness_label": freshness["label"],
-        "review_state": review["state"],
-        "review_label": review["label"],
-    }
 
 
 def _matches_text_filter(candidate: Any, needle: str | None) -> bool:
@@ -495,6 +435,14 @@ def _normalize_report_subscription_filter_payload(
     if vendor_filter:
         normalized["vendor_filter"] = vendor_filter
     if quality_status:
+        if quality_status not in REPORT_QUALITY_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "quality_status must be sales_ready, needs_review, "
+                    "thin_evidence, or deterministic_fallback"
+                ),
+            )
         normalized["quality_status"] = quality_status
     if freshness_state:
         if freshness_state not in {"fresh", "monitor", "stale"}:
@@ -513,11 +461,17 @@ def _normalize_report_subscription_filter_payload(
 
 
 def _normalize_report_list_filter(name: str, value: Optional[str]) -> str | None:
-    if not isinstance(value, str):
-        value = getattr(value, "default", value)
     normalized = str(value or "").strip().lower()
     if not normalized:
         return None
+    if name == "quality_status" and normalized not in REPORT_QUALITY_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "quality_status must be sales_ready, needs_review, "
+                "thin_evidence, or deterministic_fallback"
+            ),
+        )
     if name == "freshness_state" and normalized not in {"fresh", "monitor", "stale"}:
         raise HTTPException(status_code=400, detail="freshness_state must be fresh, monitor, or stale")
     if name == "review_state" and normalized not in {"clean", "warnings", "open_review", "blocked"}:
@@ -526,14 +480,15 @@ def _normalize_report_list_filter(name: str, value: Optional[str]) -> str | None
 
 
 def _report_freshness_state_for_list(row) -> str:
-    return _report_freshness(
+    data_stale = bool(row["data_stale"]) if "data_stale" in row else False
+    return report_freshness_payload(
         row["report_date"] or row["created_at"],
-        data_stale=bool(row["data_stale"]),
+        data_stale=data_stale,
     )["state"]
 
 
 def _report_review_state_for_list(row) -> str:
-    return _report_review_state(
+    return report_review_payload(
         row["blocker_count"] or 0,
         row["warning_count"] or 0,
         row["unresolved_issue_count"] or 0,
@@ -3402,9 +3357,9 @@ async def generate_tenant_battle_card_report(
 async def list_tenant_reports(
     report_type: Optional[str] = Query(None),
     vendor_filter: Optional[str] = Query(None),
-    quality_status: Optional[str] = Query(None),
-    freshness_state: Optional[str] = Query(None),
-    review_state: Optional[str] = Query(None),
+    quality_status: Optional[str] = None,
+    freshness_state: Optional[str] = None,
+    review_state: Optional[str] = None,
     include_stale: bool = Query(False),
     limit: int = Query(10, ge=1, le=200),
     user: AuthUser = Depends(require_auth),
@@ -3505,13 +3460,14 @@ async def list_tenant_reports(
         blocker_count = r["blocker_count"] or 0
         warning_count = r["warning_count"] or 0
         unresolved_issue_count = r["unresolved_issue_count"] or 0
-        trust = _report_trust_payload(
+        trust = report_trust_payload(
             report_date=r["report_date"],
             created_at=r["created_at"],
-            data_stale=bool(r["data_stale"]),
+            data_stale=bool(r["data_stale"]) if "data_stale" in r else False,
             blocker_count=blocker_count,
             warning_count=warning_count,
             unresolved_issue_count=unresolved_issue_count,
+            status=r["status"],
         )
         reports.append(
             {
@@ -3530,6 +3486,8 @@ async def list_tenant_reports(
                 "unresolved_issue_count": unresolved_issue_count,
                 "quality_status": r["quality_status"],
                 "quality_score": r["quality_score"],
+                "artifact_state": trust["artifact_state"],
+                "artifact_label": trust["artifact_label"],
                 "freshness_state": trust["freshness_state"],
                 "freshness_label": trust["freshness_label"],
                 "review_state": trust["review_state"],
@@ -3582,13 +3540,14 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
     blocker_count = row["blocker_count"] or 0
     warning_count = row["warning_count"] or 0
     open_issue_count = unresolved_issue_count or 0
-    trust = _report_trust_payload(
+    trust = report_trust_payload(
         report_date=row["report_date"],
         created_at=row["created_at"],
         data_stale=data_stale,
         blocker_count=blocker_count,
         warning_count=warning_count,
         unresolved_issue_count=open_issue_count,
+        status=row["status"],
     )
 
     return {
@@ -3609,6 +3568,8 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         "unresolved_issue_count": open_issue_count,
         "quality_status": quality_status,
         "quality_score": quality_score,
+        "artifact_state": trust["artifact_state"],
+        "artifact_label": trust["artifact_label"],
         "freshness_state": trust["freshness_state"],
         "freshness_label": trust["freshness_label"],
         "review_state": trust["review_state"],

@@ -2,6 +2,8 @@ import { clsx } from 'clsx'
 
 interface ReportTrustPanelProps {
   status?: string | null
+  artifactState?: string | null
+  artifactLabel?: string | null
   blockerCount?: number
   warningCount?: number
   unresolvedIssueCount?: number
@@ -34,7 +36,24 @@ function freshnessMeta(
   return { label: `${Math.floor(hours / 24)}d old`, className: 'bg-red-500/15 text-red-300' }
 }
 
-function artifactStatusMeta(status: string | null | undefined): { label: string; className: string } {
+function artifactStatusMeta(
+  status: string | null | undefined,
+  artifactState?: string | null,
+  artifactLabel?: string | null,
+): { label: string; className: string } {
+  const stateKey = String(artifactState || '').trim().toLowerCase()
+  if (stateKey === 'ready') {
+    return { label: artifactLabel || 'Ready', className: 'bg-emerald-500/15 text-emerald-300' }
+  }
+  if (stateKey === 'failed') {
+    return { label: artifactLabel || 'Attention needed', className: 'bg-red-500/15 text-red-300' }
+  }
+  if (stateKey === 'processing') {
+    return { label: artifactLabel || 'Processing', className: 'bg-cyan-500/15 text-cyan-300' }
+  }
+  if (stateKey === 'unknown') {
+    return { label: artifactLabel || 'Status unknown', className: 'bg-slate-500/15 text-slate-300' }
+  }
   const key = String(status || '').trim().toLowerCase()
   if (!key) return { label: 'Status unknown', className: 'bg-slate-500/15 text-slate-300' }
   if (['completed', 'complete', 'succeeded', 'success', 'ready', 'published'].includes(key)) {
@@ -79,6 +98,8 @@ function qualityMeta(qualityStatus: string | null | undefined): { label: string;
 
 export default function ReportTrustPanel({
   status,
+  artifactState,
+  artifactLabel,
   blockerCount = 0,
   warningCount = 0,
   unresolvedIssueCount = 0,
@@ -93,7 +114,7 @@ export default function ReportTrustPanel({
   compact = false,
 }: ReportTrustPanelProps) {
   const freshness = freshnessMeta(freshnessState, freshnessLabel, freshnessTimestamp)
-  const artifact = artifactStatusMeta(status)
+  const artifact = artifactStatusMeta(status, artifactState, artifactLabel)
   const review = reviewMeta(reviewState, reviewLabel, blockerCount, warningCount, unresolvedIssueCount)
   const quality = qualityMeta(qualityStatus)
   const issueSummary = [

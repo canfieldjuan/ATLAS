@@ -11,6 +11,11 @@ from typing import Any
 from urllib.parse import quote
 
 from ...config import settings
+from ...services.b2b.report_trust import (
+    report_artifact_payload,
+    report_freshness_label,
+    report_review_payload,
+)
 from ...services.campaign_sender import get_campaign_sender
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
@@ -240,17 +245,6 @@ def _report_trust_label(row, intelligence_data: dict[str, Any]) -> str:
     return "In workflow"
 
 
-def _artifact_state(row) -> dict[str, str]:
-    status = str(row["status"] or "").strip().lower()
-    if status in {"completed", "complete", "succeeded", "success", "ready", "published", "sales_ready"}:
-        return {"state": "ready", "label": "Ready"}
-    if status in {"failed", "error", "cancelled", "blocked"}:
-        return {"state": "failed", "label": "Attention needed"}
-    if status in {"queued", "pending", "running", "processing", "enriching", "repairing"}:
-        return {"state": "processing", "label": "Processing"}
-    return {"state": "unknown", "label": "Status unknown"}
-
-
 def _artifact_ready(row, intelligence_data: dict[str, Any]) -> bool:
     report_type = str(row["report_type"] or "").strip().lower()
     status = str(row["status"] or "").strip().lower()
@@ -343,20 +337,20 @@ def _derive_freshness(row, intelligence_data: dict[str, Any], data_density: dict
     if age_hours <= fresh_hours:
         return {
             "state": "fresh",
-            "label": "Fresh",
+            "label": report_freshness_label("fresh"),
             "detail": f"Evidence window looks current ({_relative_age_label(age_hours)}).",
             "anchor": anchor,
         }
     if age_hours <= monitor_hours:
         return {
             "state": "monitor",
-            "label": "Monitor",
+            "label": report_freshness_label("monitor"),
             "detail": f"Artifact is aging ({_relative_age_label(age_hours)}). Recheck before external use.",
             "anchor": anchor,
         }
     return {
         "state": "stale",
-        "label": "Stale",
+        "label": report_freshness_label("stale"),
         "detail": f"Refresh recommended. Latest evidence is {_relative_age_label(age_hours)} old.",
         "anchor": anchor,
     }
@@ -422,17 +416,6 @@ def _review_state(row) -> str:
     if warning_count > 0:
         return "warnings"
     return "clean"
-
-
-def _review_payload(row) -> dict[str, str]:
-    state = _review_state(row)
-    if state == "blocked":
-        return {"state": state, "label": "Blocked"}
-    if state == "open_review":
-        return {"state": state, "label": "Open Review"}
-    if state == "warnings":
-        return {"state": state, "label": "Warnings"}
-    return {"state": state, "label": "Clean"}
 
 
 def _report_matches_subscription_filters(
@@ -983,8 +966,12 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
     if not isinstance(data_density, dict):
         data_density = {}
     freshness = _derive_freshness(row, intelligence_data, data_density)
-    artifact_state = _artifact_state(row)
-    review = _review_payload(row)
+    artifact_state = report_artifact_payload(row["status"])
+    review = report_review_payload(
+        _row_int(row, "blocker_count"),
+        _row_int(row, "warning_count"),
+        _row_int(row, "unresolved_issue_count"),
+    )
     executive_summary = str(
         row["executive_summary"]
         or intelligence_data.get("executive_summary")

@@ -190,11 +190,15 @@ export interface Report {
   unresolved_issue_count?: number
   quality_status?: string | null
   quality_score?: number | null
+  artifact_state?: 'ready' | 'processing' | 'failed' | 'unknown' | null
+  artifact_label?: string | null
   freshness_state?: 'fresh' | 'monitor' | 'stale' | 'unknown' | null
   freshness_label?: string | null
   review_state?: 'clean' | 'warnings' | 'open_review' | 'blocked' | null
   review_label?: string | null
   trust?: {
+    artifact_state?: 'ready' | 'processing' | 'failed' | 'unknown' | null
+    artifact_label?: string | null
     freshness_state?: 'fresh' | 'monitor' | 'stale' | 'unknown' | null
     freshness_label?: string | null
     review_state?: 'clean' | 'warnings' | 'open_review' | 'blocked' | null
