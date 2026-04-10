@@ -566,7 +566,12 @@ async def test_insert_reviews_skips_legacy_existing_identity_even_when_hash_diff
 
 @pytest.mark.asyncio
 async def test_insert_reviews_repairs_missing_fields_on_existing_duplicate(monkeypatch):
-    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews, _make_dedup_key
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import (
+        _PROMOTE_RAW_ONLY_DUPLICATE_SQL,
+        _REPAIR_PARSER_FIELDS_SQL,
+        _insert_reviews,
+        _make_dedup_key,
+    )
 
     async def _resolve(vendor_name):
         return vendor_name
@@ -577,7 +582,7 @@ async def test_insert_reviews_repairs_missing_fields_on_existing_duplicate(monke
     )
 
     pool = _FakeInsertPool()
-    pool.execute = AsyncMock(return_value="UPDATE 1")
+    pool.execute = AsyncMock(side_effect=["UPDATE 1", "UPDATE 0"])
     dedup_key = _make_dedup_key("capterra", "Trello", "rev-1", "Namratha C.", "2026-02-23")
     reviews = [
         {
@@ -607,9 +612,10 @@ async def test_insert_reviews_repairs_missing_fields_on_existing_duplicate(monke
     assert stats["eligible_rows"] == 0
     assert stats["duplicate_existing"] == 1
     assert stats["repaired_existing"] == 1
-    pool.execute.assert_awaited_once()
-    assert pool.execute.await_args.args[0].strip().startswith("UPDATE b2b_reviews")
-    assert pool.execute.await_args.args[1:] == (
+    assert stats["promoted_existing"] == 0
+    assert pool.execute.await_count == 2
+    assert pool.execute.await_args_list[0].args[0] == _REPAIR_PARSER_FIELDS_SQL
+    assert pool.execute.await_args_list[0].args[1:] == (
         dedup_key,
         "Product owner",
         None,
@@ -618,6 +624,58 @@ async def test_insert_reviews_repairs_missing_fields_on_existing_duplicate(monke
         "Insurance",
         "capterra:2",
     )
+    assert pool.execute.await_args_list[1].args[0] == _PROMOTE_RAW_ONLY_DUPLICATE_SQL
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_promotes_existing_raw_only_duplicate_with_fuller_payload(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import (
+        _PROMOTE_RAW_ONLY_DUPLICATE_SQL,
+        _insert_reviews,
+        _make_dedup_key,
+    )
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    pool.execute = AsyncMock(return_value="UPDATE 1")
+    dedup_key = _make_dedup_key("reddit", "HubSpot", "post-1", "Alex", "2026-03-20")
+    reviews = [
+        {
+            "source": "reddit",
+            "vendor_name": "HubSpot",
+            "source_review_id": "post-1",
+            "reviewer_name": "Alex",
+            "review_text": "A" * 160,
+            "pros": "B" * 40,
+            "cons": "C" * 30,
+            "reviewed_at": "2026-03-20",
+            "raw_metadata": {"source_weight": 0.4},
+        },
+    ]
+
+    stats = await _insert_reviews(
+        pool,
+        reviews,
+        "batch-promote",
+        parser_version="reddit:2",
+        known_keys={dedup_key},
+        known_identities=set(),
+    )
+
+    assert pool.inserted_rows == []
+    assert stats["inserted"] == 0
+    assert stats["duplicate_existing"] == 1
+    assert stats["promoted_existing"] == 1
+    pool.execute.assert_awaited_once()
+    assert pool.execute.await_args.args[0] == _PROMOTE_RAW_ONLY_DUPLICATE_SQL
+    assert pool.execute.await_args.args[1:4] == ("HubSpot", "reddit", dedup_key)
 
 
 @pytest.mark.asyncio

@@ -564,8 +564,53 @@ def _parse_task_result_payload(result_text: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-async def _fetch_recent_scrape_intake_funnel(pool, window_days: int) -> dict[str, int]:
-    """Aggregate recent scrape-intake funnel counts from task execution results."""
+def _extract_scrape_intake_funnel_from_result(
+    payload: dict[str, Any],
+    *,
+    allowed_sources: set[str],
+) -> dict[str, int] | None:
+    """Extract source-filtered scrape funnel totals from one task result payload."""
+    def _count(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    rows = payload.get("results")
+    if not isinstance(rows, list):
+        return None
+    totals = {
+        "found": 0,
+        "filtered": 0,
+        "short_flagged": 0,
+        "quality_gated": 0,
+        "duplicate_or_existing": 0,
+        "retained_pending": 0,
+        "retained_raw_only": 0,
+        "inserted": 0,
+        "company_signal_eligible": 0,
+    }
+    matched = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("source") or "").strip().lower() not in allowed_sources:
+            continue
+        matched += 1
+        totals["found"] += _count(row.get("found"))
+        totals["filtered"] += _count(row.get("filtered"))
+        totals["short_flagged"] += _count(row.get("short_flagged"))
+        totals["quality_gated"] += _count(row.get("quality_gate_flagged"))
+        totals["duplicate_or_existing"] += _count(row.get("duplicate_or_existing"))
+        totals["retained_pending"] += _count(row.get("retained_pending"))
+        totals["retained_raw_only"] += _count(row.get("retained_raw_only"))
+        totals["inserted"] += _count(row.get("inserted"))
+        totals["company_signal_eligible"] += _count(row.get("company_signal_eligible_reviews"))
+    return totals if matched else None
+
+
+async def _fetch_recent_scrape_intake_funnel(pool, window_days: int, sources: list[str]) -> dict[str, int]:
+    """Aggregate recent scrape-intake funnel counts from source-filtered task results."""
     rows = await pool.fetch(
         """
         SELECT e.result_text
@@ -590,10 +635,20 @@ async def _fetch_recent_scrape_intake_funnel(pool, window_days: int) -> dict[str
         "inserted": 0,
         "company_signal_eligible": 0,
     }
+    allowed_sources = {
+        str(source or "").strip().lower()
+        for source in sources
+        if str(source or "").strip()
+    }
+    if not allowed_sources:
+        return totals
     for row in rows:
         payload = _parse_task_result_payload(row.get("result_text"))
-        funnel = payload.get("funnel")
-        if not isinstance(funnel, dict):
+        funnel = _extract_scrape_intake_funnel_from_result(
+            payload,
+            allowed_sources=allowed_sources,
+        )
+        if funnel is None:
             continue
         totals["runs"] += 1
         for key in (
@@ -663,7 +718,7 @@ async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
     intelligence_eligible_reviews = _row_count("intelligence_eligible_reviews")
     company_signal_eligible_reviews = _row_count("company_signal_eligible_reviews")
     high_conf_named_account_reviews = _row_count("high_confidence_named_account_reviews")
-    scrape_intake = await _fetch_recent_scrape_intake_funnel(pool, window_days)
+    scrape_intake = await _fetch_recent_scrape_intake_funnel(pool, window_days, sources)
     return {
         "found": sum(status_counts.values()),
         "enriched": status_counts.get("enriched", 0),
