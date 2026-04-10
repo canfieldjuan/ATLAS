@@ -27,6 +27,7 @@ interface AccountMovementDrawerProps {
   open: boolean
   onClose: () => void
   onViewVendor: (vendorName: string) => void
+  onOpenWitness?: (witnessId: string, vendorName: string) => void
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
   onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
   generating?: boolean
@@ -73,6 +74,7 @@ export default function AccountMovementDrawer({
   open,
   onClose,
   onViewVendor,
+  onOpenWitness,
   onGenerateCampaign,
   onViewOpportunity,
   generating,
@@ -407,12 +409,14 @@ export default function AccountMovementDrawer({
                     <div className="text-xs uppercase tracking-wide text-slate-500">Witness IDs</div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {witnessIds.length > 0 ? witnessIds.map((witnessId) => (
-                        <span
+                        <button
                           key={witnessId}
-                          className="rounded-full bg-slate-800 px-2 py-0.5 font-mono text-[11px] text-slate-300"
+                          className="rounded-full bg-slate-800 px-2 py-0.5 font-mono text-[11px] text-slate-300 hover:bg-cyan-900/50 hover:text-cyan-300 transition-colors cursor-pointer"
+                          onClick={() => onOpenWitness?.(witnessId, item?.vendor ?? '')}
+                          title="View witness detail"
                         >
                           {witnessId}
-                        </span>
+                        </button>
                       )) : <span className="text-slate-500">--</span>}
                     </div>
                   </div>
