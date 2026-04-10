@@ -1999,6 +1999,7 @@ async def retry_quarantined_reviews(
 
     Returns counts of recovered, still_failed, skipped reviews.
     """
+    retryable_reasons = sorted(_RETRYABLE_QUARANTINE_REASONS)
     rows = await pool.fetch(
         """
         SELECT id, enrichment, source, rating, rating_max,
@@ -2009,10 +2010,12 @@ async def retry_quarantined_reviews(
         WHERE enrichment_status = 'quarantined'
           AND enrichment IS NOT NULL
           AND (enrichment->>'enrichment_schema_version')::int >= 1
+          AND low_fidelity_reasons ?| $2::text[]
         ORDER BY created_at DESC
         LIMIT $1
         """,
         limit,
+        retryable_reasons,
     )
 
     recovered = 0
@@ -2020,18 +2023,6 @@ async def retry_quarantined_reviews(
     skipped = 0
 
     for row in rows:
-        reasons = row.get("low_fidelity_reasons") or []
-        if isinstance(reasons, str):
-            try:
-                reasons = json.loads(reasons)
-            except Exception:
-                reasons = []
-
-        retryable = any(r in _RETRYABLE_QUARANTINE_REASONS for r in reasons)
-        if not retryable:
-            skipped += 1
-            continue
-
         enrichment = base_enrichment._coerce_json_dict(row.get("enrichment"))
         if not enrichment:
             skipped += 1
