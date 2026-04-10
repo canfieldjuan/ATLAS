@@ -4757,7 +4757,7 @@ async def read_ranked_vendor_signal_rows(
             ) snap ON TRUE
         """
         + where_clause
-        + """
+        + f"""
         )
         SELECT vendor_name,
                product_category,

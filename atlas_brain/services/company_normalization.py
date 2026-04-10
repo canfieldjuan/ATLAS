@@ -26,15 +26,17 @@ def normalize_company_name(name: str) -> str:
 
 def normalized_company_name_sql(column_sql: str) -> str:
     """Return a SQL expression that mirrors normalize_company_name() for a column."""
-    # Use $re$...$re$ dollar-quoting (not $$...$$) because _TRAILING_PUNCT_PATTERN
-    # ends with a literal $ anchor, which collides with $$ delimiters.
+    # Use E'...' escape string for _TRAILING_PUNCT_PATTERN because it ends with
+    # a regex $ anchor that collides with any dollar-quote delimiter.
+    # The other patterns have no $ so $$ is safe for them.
+    trailing_escaped = _TRAILING_PUNCT_PATTERN.replace("\\", "\\\\")
     return (
         "TRIM("
         "REGEXP_REPLACE("
         "REGEXP_REPLACE("
-        f"REGEXP_REPLACE(LOWER(COALESCE({column_sql}, '')), $re${_LEGAL_SUFFIX_PATTERN}$re$, '', 'gi'), "
-        f"$re${_MULTI_SPACE_PATTERN}$re$, ' ', 'g'), "
-        f"$re${_TRAILING_PUNCT_PATTERN}$re$, '', 'g'"
+        f"REGEXP_REPLACE(LOWER(COALESCE({column_sql}, '')), $${_LEGAL_SUFFIX_PATTERN}$$, '', 'gi'), "
+        f"$${_MULTI_SPACE_PATTERN}$$, ' ', 'g'), "
+        f"E'{trailing_escaped}', '', 'g'"
         ")"
         ")"
     )
