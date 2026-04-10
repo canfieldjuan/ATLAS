@@ -1027,8 +1027,8 @@ describe('Watchlists', () => {
     await waitFor(() => {
       expect(api.fetchCompetitiveSetPlan).toHaveBeenCalledWith('set-1')
     })
-    expect(screen.getByText('vendor forced')).toBeInTheDocument()
-    expect(screen.getByText('cross-vendor forced')).toBeInTheDocument()
+    expect(screen.getAllByText('vendor forced')).toHaveLength(2)
+    expect(screen.getAllByText('cross-vendor forced')).toHaveLength(2)
     expect(screen.getByText('No pool data available')).toBeInTheDocument()
 
     await user.click(screen.getByLabelText('Run changed vendors only'))
