@@ -37,7 +37,7 @@ type Tab = 'witnesses' | 'vault' | 'trace'
 // -- Main component -----------------------------------------------------------
 
 export default function EvidenceExplorer() {
-  const windowDays = 90
+  const windowDays = 30
 
   // Search state
   const [vendorInput, setVendorInput] = useState('')
