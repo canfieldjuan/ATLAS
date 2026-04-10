@@ -619,7 +619,10 @@ def get_consumer_wiring_baseline() -> dict[str, Any]:
     }
 
 
-def _pct(numerator: int | float | None, denominator: int | float | None) -> float | None:
+def _compute_coverage_ratio(
+    numerator: int | float | None,
+    denominator: int | float | None,
+) -> float | None:
     if numerator is None or denominator in (None, 0):
         return None
     return round(float(numerator) / float(denominator), 3)
@@ -631,6 +634,43 @@ async def summarize_source_field_baseline(
     window_days: int = 90,
     source: str | None = None,
 ) -> dict[str, Any]:
+    text_value_sql = """
+        NULLIF(
+            TRIM(
+                COALESCE(
+                    {expression},
+                    ''
+                )
+            ),
+            ''
+        ) IS NOT NULL
+    """
+    title_present_sql = text_value_sql.format(expression="reviewer_title")
+    company_present_sql = text_value_sql.format(expression="reviewer_company")
+    company_size_present_sql = text_value_sql.format(
+        expression="""
+            COALESCE(
+                company_size_raw,
+                enrichment->'reviewer_context'->>'company_size_segment'
+            )
+        """
+    )
+    industry_present_sql = text_value_sql.format(
+        expression="""
+            COALESCE(
+                reviewer_industry,
+                enrichment->'reviewer_context'->>'industry'
+            )
+        """
+    )
+    timing_present_sql = " OR ".join(
+        [
+            text_value_sql.format(expression="enrichment->'timeline'->>'contract_end'"),
+            text_value_sql.format(expression="enrichment->'timeline'->>'evaluation_deadline'"),
+            text_value_sql.format(expression="enrichment->'timeline'->>'decision_timeline'"),
+        ]
+    )
+    pain_present_sql = text_value_sql.format(expression="enrichment->>'pain_category'")
     conditions = [
         "duplicate_of_review_id IS NULL",
         "imported_at >= NOW() - make_interval(days => $1)",
@@ -647,36 +687,10 @@ async def summarize_source_field_baseline(
             source,
             COUNT(*) AS total_reviews,
             COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched_reviews,
-            COUNT(*) FILTER (
-                WHERE NULLIF(TRIM(COALESCE(reviewer_title, '')), '') IS NOT NULL
-            ) AS title_rows,
-            COUNT(*) FILTER (
-                WHERE NULLIF(TRIM(COALESCE(reviewer_company, '')), '') IS NOT NULL
-            ) AS company_rows,
-            COUNT(*) FILTER (
-                WHERE NULLIF(
-                    TRIM(
-                        COALESCE(
-                            company_size_raw,
-                            enrichment->'reviewer_context'->>'company_size_segment',
-                            ''
-                        )
-                    ),
-                    ''
-                ) IS NOT NULL
-            ) AS company_size_rows,
-            COUNT(*) FILTER (
-                WHERE NULLIF(
-                    TRIM(
-                        COALESCE(
-                            reviewer_industry,
-                            enrichment->'reviewer_context'->>'industry',
-                            ''
-                        )
-                    ),
-                    ''
-                ) IS NOT NULL
-            ) AS industry_rows,
+            COUNT(*) FILTER (WHERE {title_present_sql}) AS title_rows,
+            COUNT(*) FILTER (WHERE {company_present_sql}) AS company_rows,
+            COUNT(*) FILTER (WHERE {company_size_present_sql}) AS company_size_rows,
+            COUNT(*) FILTER (WHERE {industry_present_sql}) AS industry_rows,
             COUNT(*) FILTER (
                 WHERE enrichment->'reviewer_context'->>'decision_maker' = 'true'
             ) AS decision_maker_rows,
@@ -686,18 +700,14 @@ async def summarize_source_field_baseline(
                 ) > 0
             ) AS competitor_rows,
             COUNT(*) FILTER (
-                WHERE NULLIF(TRIM(COALESCE(enrichment->'timeline'->>'contract_end', '')), '') IS NOT NULL
-                   OR NULLIF(TRIM(COALESCE(enrichment->'timeline'->>'evaluation_deadline', '')), '') IS NOT NULL
-                   OR NULLIF(TRIM(COALESCE(enrichment->'timeline'->>'decision_timeline', '')), '') IS NOT NULL
+                WHERE {timing_present_sql}
             ) AS timing_rows,
             COUNT(*) FILTER (
                 WHERE jsonb_array_length(
                     COALESCE(enrichment->'quotable_phrases', '[]'::jsonb)
                 ) > 0
             ) AS quote_rows,
-            COUNT(*) FILTER (
-                WHERE NULLIF(TRIM(COALESCE(enrichment->>'pain_category', '')), '') IS NOT NULL
-            ) AS pain_rows
+            COUNT(*) FILTER (WHERE {pain_present_sql}) AS pain_rows
         FROM b2b_reviews
         WHERE {where}
         GROUP BY source
@@ -717,15 +727,24 @@ async def summarize_source_field_baseline(
                 "total_reviews": total,
                 "enriched_reviews": enriched,
                 "coverage": {
-                    "title": _pct(row["title_rows"], total),
-                    "company": _pct(row["company_rows"], total),
-                    "company_size": _pct(row["company_size_rows"], total),
-                    "industry": _pct(row["industry_rows"], total),
-                    "decision_maker": _pct(row["decision_maker_rows"], total),
-                    "competitors": _pct(row["competitor_rows"], total),
-                    "timing": _pct(row["timing_rows"], total),
-                    "quotes": _pct(row["quote_rows"], total),
-                    "pain_category": _pct(row["pain_rows"], total),
+                    "title": _compute_coverage_ratio(row["title_rows"], total),
+                    "company": _compute_coverage_ratio(row["company_rows"], total),
+                    "company_size": _compute_coverage_ratio(
+                        row["company_size_rows"],
+                        total,
+                    ),
+                    "industry": _compute_coverage_ratio(row["industry_rows"], total),
+                    "decision_maker": _compute_coverage_ratio(
+                        row["decision_maker_rows"],
+                        total,
+                    ),
+                    "competitors": _compute_coverage_ratio(
+                        row["competitor_rows"],
+                        total,
+                    ),
+                    "timing": _compute_coverage_ratio(row["timing_rows"], total),
+                    "quotes": _compute_coverage_ratio(row["quote_rows"], total),
+                    "pain_category": _compute_coverage_ratio(row["pain_rows"], total),
                 },
                 "raw_counts": {
                     "title_rows": int(row["title_rows"] or 0),
