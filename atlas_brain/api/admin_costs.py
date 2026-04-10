@@ -6,10 +6,12 @@ Aggregates LLM usage from the local llm_usage table for the cost dashboard.
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import logging
 import re
 import subprocess
+import sys
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -38,8 +40,47 @@ _REVIEW_BASIS_RAW_PROVENANCE = "raw_source_provenance"
 _SCRAPE_LOG_BASIS_RAW = "raw_scrape_log"
 
 
+def _ensure_real_numpy_loaded() -> None:
+    current = sys.modules.get("numpy")
+    if current is not None and isinstance(getattr(current, "bool_", None), type):
+        return
+    previous = current
+    if previous is not None:
+        sys.modules.pop("numpy", None)
+    try:
+        real_numpy = importlib.import_module("numpy")
+    except Exception:
+        if previous is not None:
+            sys.modules["numpy"] = previous
+    else:
+        sys.modules["numpy"] = real_numpy
+
+
+_ensure_real_numpy_loaded()
+
+
 def _campaign_batch_stale_minutes() -> int:
-    return int(getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30) or 30)
+    value = getattr(settings.b2b_campaign, "anthropic_batch_stale_minutes", 30)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value:
+            return 30
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return 30
+        try:
+            return int(text)
+        except ValueError:
+            try:
+                return int(float(text))
+            except ValueError:
+                return 30
+    return 30
 
 
 def _canonical_review_predicate(alias: str = "") -> str:

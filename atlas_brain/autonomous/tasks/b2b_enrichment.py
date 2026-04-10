@@ -53,6 +53,54 @@ _TIER2_INSIDER_SECTION_HEADER = "### insider_signals -- CLASSIFY + EXTRACT (only
 _TIER2_OUTPUT_SECTION_HEADER = "## Output"
 
 
+def _coerce_int_value(raw_value: Any, fallback: int) -> int:
+    if isinstance(raw_value, bool):
+        return int(raw_value)
+    if isinstance(raw_value, int):
+        return raw_value
+    if isinstance(raw_value, float):
+        if raw_value != raw_value:
+            return fallback
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return fallback
+        try:
+            return int(text)
+        except ValueError:
+            try:
+                return int(float(text))
+            except ValueError:
+                return fallback
+    return fallback
+
+
+def _coerce_float_value(raw_value: Any, fallback: float) -> float:
+    if isinstance(raw_value, bool):
+        return float(raw_value)
+    if isinstance(raw_value, (int, float)):
+        numeric = float(raw_value)
+    elif isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return fallback
+        try:
+            numeric = float(text)
+        except ValueError:
+            return fallback
+    else:
+        return fallback
+    if numeric != numeric:
+        return fallback
+    return numeric
+
+
+def _config_allowlist(raw_value: Any, fallback: str | list[str] | tuple[str, ...] | set[str] | frozenset[str] = "") -> list[str]:
+    candidate = raw_value if isinstance(raw_value, (str, list, tuple, set, frozenset)) else fallback
+    return list(parse_source_allowlist(candidate))
+
+
 def _enrichment_batch_custom_id(stage: str, review_id: Any) -> str:
     normalized_stage = re.sub(r"[^A-Za-z0-9_-]+", "_", str(stage or "").strip()).strip("_") or "stage"
     normalized_review = re.sub(r"[^A-Za-z0-9_-]+", "_", str(review_id or "").strip()).strip("_") or "review"
@@ -489,7 +537,10 @@ def _tier1_has_extraction_gaps(tier1: dict, *, source: str | None = None) -> boo
     has_evidence = bool(complaints or quotes or competitors or pricing or rec_lang)
     source_norm = str(source or "").strip().lower()
     strict_sources = set(
-        parse_source_allowlist(settings.b2b_churn.enrichment_tier2_strict_sources)
+        _config_allowlist(
+            getattr(settings.b2b_churn, "enrichment_tier2_strict_sources", ""),
+            "",
+        )
     )
     if source_norm in strict_sources:
         complaint_count = len(complaints) if isinstance(complaints, list) else 0
@@ -508,9 +559,15 @@ def _tier1_has_extraction_gaps(tier1: dict, *, source: str | None = None) -> boo
         has_strong_structured_evidence = (
             bool(competitors)
             or bool(pricing)
-            or complaint_count >= int(settings.b2b_churn.enrichment_tier2_strict_min_complaints)
+            or complaint_count >= _coerce_int_value(
+                getattr(settings.b2b_churn, "enrichment_tier2_strict_min_complaints", 2),
+                2,
+            )
             or (
-                quote_count >= int(settings.b2b_churn.enrichment_tier2_strict_min_quotes)
+                quote_count >= _coerce_int_value(
+                    getattr(settings.b2b_churn, "enrichment_tier2_strict_min_quotes", 2),
+                    2,
+                )
                 and evidence_groups >= 2
             )
         )
@@ -626,10 +683,12 @@ async def _call_vllm_tier2(
 
 def _get_tier2_client(cfg: Any) -> Any:
     """Get or create the httpx client for Tier 2 vLLM."""
-    tier2_url = cfg.enrichment_tier2_vllm_url or cfg.enrichment_tier1_vllm_url
-    timeout = cfg.enrichment_tier2_timeout_seconds
+    raw_tier2_url = getattr(cfg, "enrichment_tier2_vllm_url", "")
+    raw_tier1_url = getattr(cfg, "enrichment_tier1_vllm_url", "")
+    tier2_url = raw_tier2_url if isinstance(raw_tier2_url, str) and raw_tier2_url.strip() else raw_tier1_url
+    timeout = _coerce_float_value(getattr(cfg, "enrichment_tier2_timeout_seconds", 120.0), 120.0)
     # Reuse the Tier 1 client if same URL
-    if tier2_url == cfg.enrichment_tier1_vllm_url:
+    if not isinstance(tier2_url, str) or not tier2_url.strip() or tier2_url == raw_tier1_url:
         return _get_tier1_client(cfg)
     import httpx
     return httpx.AsyncClient(base_url=tier2_url, timeout=timeout)
@@ -2195,10 +2254,8 @@ def _coerce_int_override(
     max_value: int,
 ) -> int:
     """Return clamped integer override value, or default on parse failure."""
-    try:
-        coerced = int(raw_value)
-    except (TypeError, ValueError):
-        return default_value
+    default_coerced = _coerce_int_value(default_value, min_value)
+    coerced = _coerce_int_value(raw_value, default_coerced)
     return max(min_value, min(max_value, coerced))
 
 
@@ -2250,6 +2307,39 @@ def _witness_metrics(result: dict[str, Any] | None) -> tuple[int, int]:
             continue
         witness_count += 1
     return (1 if witness_count > 0 else 0), witness_count
+
+
+def _row_usage_result(status: Any, usage: dict[str, Any] | None = None) -> dict[str, Any]:
+    normalized = {"status": status}
+    usage_dict = usage or {}
+    for key in _empty_exact_cache_usage():
+        normalized[key] = int(usage_dict.get(key, 0) or 0)
+    return normalized
+
+
+async def _defer_batch_row(
+    pool,
+    row: dict[str, Any],
+    *,
+    tier: str,
+    usage: dict[str, Any] | None = None,
+    custom_id: str | None = None,
+) -> dict[str, Any]:
+    await pool.execute(
+        """
+        UPDATE b2b_reviews
+        SET enrichment_status = 'pending'
+        WHERE id = $1
+        """,
+        row["id"],
+    )
+    logger.info(
+        "Deferring B2B enrichment %s for %s; reset row to pending while existing batch artifact %s remains pending",
+        tier,
+        row["id"],
+        custom_id or "unknown",
+    )
+    return _row_usage_result("deferred", usage)
 
 
 async def _persist_enrichment_result(
@@ -2439,9 +2529,15 @@ async def _enrich_rows(
     task: ScheduledTask | Any | None = None,
 ) -> dict[str, Any]:
     """Enrich a list of claimed rows concurrently."""
-    max_attempts = cfg.enrichment_max_attempts
+    max_attempts = _coerce_int_value(getattr(cfg, "enrichment_max_attempts", 3), 3)
 
-    effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_concurrency))
+    effective_concurrency = max(
+        1,
+        _coerce_int_value(
+            concurrency_override if concurrency_override is not None else getattr(cfg, "enrichment_concurrency", 10),
+            10,
+        ),
+    )
     sem = asyncio.Semaphore(effective_concurrency)
     enrich_single_params = inspect.signature(_enrich_single).parameters
     supports_usage_out = "usage_out" in enrich_single_params
@@ -2454,7 +2550,7 @@ async def _enrich_rows(
             if supports_run_id:
                 kwargs["run_id"] = run_id
             if supports_usage_out:
-                await _enrich_single(
+                status = await _enrich_single(
                     pool,
                     row,
                     max_attempts,
@@ -2465,7 +2561,7 @@ async def _enrich_rows(
                     **kwargs,
                 )
             else:
-                await _enrich_single(
+                status = await _enrich_single(
                     pool,
                     row,
                     max_attempts,
@@ -2474,7 +2570,7 @@ async def _enrich_rows(
                     cfg.review_truncate_length,
                     **kwargs,
                 )
-            return usage
+            return _row_usage_result(status, usage)
 
     async def _run_single_rows(target_rows: list[dict[str, Any]]) -> list[dict[str, Any] | Exception]:
         if not target_rows:
@@ -2494,6 +2590,8 @@ async def _enrich_rows(
         "failed_items": 0,
         "reused_completed_items": 0,
         "reused_pending_items": 0,
+        "rows_deferred": 0,
+        "tier2_single_fallback_rows": 0,
     }
 
     from ...services.b2b.anthropic_batch import (
@@ -2548,9 +2646,9 @@ async def _enrich_rows(
         resolve_anthropic_batch_llm(
             current_llm=SimpleNamespace(
                 name="openrouter",
-                model=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
+                model=str(getattr(cfg, "enrichment_openrouter_model", "") or "anthropic/claude-haiku-4-5"),
             ),
-            target_model_candidates=(cfg.enrichment_openrouter_model,),
+            target_model_candidates=(getattr(cfg, "enrichment_openrouter_model", ""),),
         )
         if use_openrouter and batch_requested
         else None
@@ -2573,6 +2671,106 @@ async def _enrich_rows(
         tier1_batch_llm = None
     if not isinstance(tier2_batch_llm, AnthropicLLM):
         tier2_batch_llm = None
+
+    tier1_batch_model_id = str(
+        getattr(cfg, "enrichment_openrouter_model", "") or "anthropic/claude-haiku-4-5"
+    )
+    full_extraction_timeout = max(
+        0.0,
+        _coerce_float_value(
+            getattr(cfg, "enrichment_full_extraction_timeout_seconds", 120.0),
+            120.0,
+        ),
+    )
+    tier2_client = None
+
+    async def _persist_wrapped(
+        row: dict[str, Any],
+        result: dict[str, Any] | None,
+        *,
+        model_id: str,
+        usage: dict[str, int],
+    ) -> dict[str, Any]:
+        status = await _persist_enrichment_result(
+            pool,
+            row,
+            result,
+            model_id=model_id,
+            max_attempts=max_attempts,
+            run_id=run_id,
+            cache_usage=usage,
+        )
+        return _row_usage_result(status, usage)
+
+    async def _run_single_tier2_fallback(
+        row: dict[str, Any],
+        tier1: dict[str, Any],
+        usage: dict[str, int],
+    ) -> dict[str, Any]:
+        nonlocal tier2_client
+
+        logger.info(
+            "B2B enrichment: Tier 2 batch unavailable for %s; falling back to single-call Tier 2",
+            row["id"],
+        )
+        batch_metrics["tier2_single_fallback_rows"] += 1
+
+        trace_metadata = {
+            "run_id": run_id,
+            "vendor_name": str(row.get("vendor_name") or ""),
+            "review_id": str(row["id"]),
+            "source": str(row.get("source") or ""),
+            "tier": "tier2",
+            "workload": "single_call_fallback",
+            "batch_fallback_reason": "tier2_batch_unavailable",
+        }
+
+        if use_openrouter:
+            tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_openrouter_tier2(
+                    tier1,
+                    row,
+                    cfg,
+                    cfg.review_truncate_length,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata,
+                ),
+                timeout=full_extraction_timeout,
+            ))
+        else:
+            if tier2_client is None:
+                tier2_client = _get_tier2_client(cfg)
+            tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_vllm_tier2(
+                    tier1,
+                    row,
+                    cfg,
+                    tier2_client,
+                    cfg.review_truncate_length,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata,
+                ),
+                timeout=full_extraction_timeout,
+            ))
+
+        if tier2_cache_hit:
+            usage["tier2_exact_cache_hits"] += 1
+            usage["exact_cache_hits"] += 1
+        elif tier2_model is not None:
+            usage["tier2_generated_calls"] += 1
+            usage["generated"] += 1
+
+        if tier2 is not None:
+            model_id = f"hybrid:{tier1_batch_model_id}+{tier2_model}"
+        else:
+            model_id = tier1_batch_model_id
+
+        return await _persist_wrapped(
+            row,
+            _merge_tier1_tier2(tier1, tier2),
+            model_id=model_id,
+            usage=usage,
+        )
 
     if tier1_batch_llm is None:
         results = await _run_single_rows(rows)
@@ -2645,13 +2843,14 @@ async def _enrich_rows(
                         batch_metrics["reused_completed_items"] += 1
                         continue
                 if existing and existing.get("state") == "pending":
-                    row_results[row["id"]] = {"status": "deferred"}
-                    batch_metrics["reused_pending_items"] += 1
-                    logger.info(
-                        "Skipping duplicate enrichment Tier 1 submission for %s; existing Anthropic batch item %s is still pending",
-                        row["id"],
-                        existing.get("custom_id"),
+                    row_results[row["id"]] = await _defer_batch_row(
+                        pool,
+                        row,
+                        tier="tier1",
+                        custom_id=str(existing.get("custom_id") or ""),
                     )
+                    batch_metrics["reused_pending_items"] += 1
+                    batch_metrics["rows_deferred"] += 1
                     continue
                 remaining_tier1_entries.append(entry)
             tier1_entries = remaining_tier1_entries
@@ -2720,7 +2919,8 @@ async def _enrich_rows(
                     usage["tier1_generated_calls"] += 1
                     usage["generated"] += 1
                 per_row_batch_usage[row["id"]] = usage
-                if _tier1_has_extraction_gaps(ready_entry["tier1"], source=row.get("source")) and tier2_batch_llm is not None:
+                needs_tier2 = _tier1_has_extraction_gaps(ready_entry["tier1"], source=row.get("source"))
+                if needs_tier2 and tier2_batch_llm is not None:
                     payload = _build_classify_payload(row, cfg.review_truncate_length)
                     payload["tier1_specific_complaints"] = ready_entry["tier1"].get("specific_complaints", [])
                     payload["tier1_quotable_phrases"] = ready_entry["tier1"].get("quotable_phrases", [])
@@ -2753,15 +2953,18 @@ async def _enrich_rows(
                             "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
                         }
                     )
+                elif needs_tier2:
+                    row_results[row["id"]] = await _run_single_tier2_fallback(
+                        row,
+                        ready_entry["tier1"],
+                        usage,
+                    )
                 else:
-                    row_results[row["id"]] = await _persist_enrichment_result(
-                        pool,
+                    row_results[row["id"]] = await _persist_wrapped(
                         row,
                         _merge_tier1_tier2(ready_entry["tier1"], None),
-                        model_id=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
-                        max_attempts=max_attempts,
-                        run_id=run_id,
-                        cache_usage=usage,
+                        model_id=tier1_batch_model_id,
+                        usage=usage,
                     )
 
             for entry in tier1_entries:
@@ -2790,11 +2993,12 @@ async def _enrich_rows(
                     await store_b2b_exact_stage_text(
                         entry["request"],
                         response_text=clean_llm_output(outcome.response_text or ""),
-                metadata={"tier": 1, "backend": "anthropic_batch"},
-            )
+                        metadata={"tier": 1, "backend": "anthropic_batch"},
+                    )
 
                 per_row_batch_usage[row["id"]] = usage
-                if _tier1_has_extraction_gaps(tier1, source=row.get("source")) and tier2_batch_llm is not None:
+                needs_tier2 = _tier1_has_extraction_gaps(tier1, source=row.get("source"))
+                if needs_tier2 and tier2_batch_llm is not None:
                     payload = _build_classify_payload(row, cfg.review_truncate_length)
                     payload["tier1_specific_complaints"] = tier1.get("specific_complaints", [])
                     payload["tier1_quotable_phrases"] = tier1.get("quotable_phrases", [])
@@ -2827,15 +3031,14 @@ async def _enrich_rows(
                             "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
                         }
                     )
+                elif needs_tier2:
+                    row_results[row["id"]] = await _run_single_tier2_fallback(row, tier1, usage)
                 else:
-                    row_results[row["id"]] = await _persist_enrichment_result(
-                        pool,
+                    row_results[row["id"]] = await _persist_wrapped(
                         row,
                         _merge_tier1_tier2(tier1, None),
-                        model_id=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
-                        max_attempts=max_attempts,
-                        run_id=run_id,
-                        cache_usage=usage,
+                        model_id=tier1_batch_model_id,
+                        usage=usage,
                     )
 
             if tier2_entries:
@@ -2854,25 +3057,30 @@ async def _enrich_rows(
                     if existing and existing.get("state") == "succeeded":
                         tier2 = _parse_batch_text(existing.get("response_text"))
                         if tier2 is not None:
-                            row_results[row["id"]] = await _persist_enrichment_result(
-                                pool,
+                            if existing.get("cached"):
+                                usage["tier2_exact_cache_hits"] += 1
+                                usage["exact_cache_hits"] += 1
+                            else:
+                                usage["tier2_generated_calls"] += 1
+                                usage["generated"] += 1
+                            row_results[row["id"]] = await _persist_wrapped(
                                 row,
                                 _merge_tier1_tier2(entry["tier1"], tier2),
-                                model_id=f"hybrid:{cfg.enrichment_openrouter_model or 'anthropic/claude-haiku-4-5'}+{tier2_model_id}",
-                                max_attempts=max_attempts,
-                                run_id=run_id,
-                                cache_usage=usage,
+                                model_id=f"hybrid:{tier1_batch_model_id}+{tier2_model_id}",
+                                usage=usage,
                             )
                             batch_metrics["reused_completed_items"] += 1
                             continue
                     if existing and existing.get("state") == "pending":
-                        row_results[row["id"]] = {"status": "deferred"}
-                        batch_metrics["reused_pending_items"] += 1
-                        logger.info(
-                            "Skipping duplicate enrichment Tier 2 submission for %s; existing Anthropic batch item %s is still pending",
-                            row["id"],
-                            existing.get("custom_id"),
+                        row_results[row["id"]] = await _defer_batch_row(
+                            pool,
+                            row,
+                            tier="tier2",
+                            usage=usage,
+                            custom_id=str(existing.get("custom_id") or ""),
                         )
+                        batch_metrics["reused_pending_items"] += 1
+                        batch_metrics["rows_deferred"] += 1
                         continue
                     remaining_tier2_entries.append(entry)
                 tier2_entries = remaining_tier2_entries
@@ -2955,14 +3163,11 @@ async def _enrich_rows(
                             response_text=clean_llm_output(outcome.response_text or ""),
                             metadata={"tier": 2, "backend": "anthropic_batch"},
                         )
-                    row_results[row["id"]] = await _persist_enrichment_result(
-                        pool,
+                    row_results[row["id"]] = await _persist_wrapped(
                         row,
                         _merge_tier1_tier2(entry["tier1"], tier2),
-                        model_id=f"hybrid:{cfg.enrichment_openrouter_model or 'anthropic/claude-haiku-4-5'}+{tier2_model_id}",
-                        max_attempts=max_attempts,
-                        run_id=run_id,
-                        cache_usage=usage,
+                        model_id=f"hybrid:{tier1_batch_model_id}+{tier2_model_id}",
+                        usage=usage,
                     )
 
             fallback_results = await _run_single_rows(fallback_rows)
@@ -3017,6 +3222,8 @@ async def _enrich_rows(
         "anthropic_batch_failed_items": batch_metrics["failed_items"],
         "anthropic_batch_reused_completed_items": batch_metrics["reused_completed_items"],
         "anthropic_batch_reused_pending_items": batch_metrics["reused_pending_items"],
+        "anthropic_batch_rows_deferred": batch_metrics["rows_deferred"],
+        "anthropic_batch_tier2_single_fallback_rows": batch_metrics["tier2_single_fallback_rows"],
         **cache_usage,
     }
 
@@ -3197,15 +3404,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     requeued = requeued_parser + requeued_model
 
     task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
-    default_max_batch = min(cfg.enrichment_max_per_batch, 500)
+    default_max_batch = min(
+        _coerce_int_value(getattr(cfg, "enrichment_max_per_batch", 10), 10),
+        500,
+    )
     max_batch = _coerce_int_override(
         task_metadata.get("enrichment_max_per_batch"),
         default_max_batch,
         min_value=1,
         max_value=500,
     )
-    max_attempts = cfg.enrichment_max_attempts
-    default_max_rounds = max(1, cfg.enrichment_max_rounds_per_run)
+    max_attempts = _coerce_int_value(getattr(cfg, "enrichment_max_attempts", 3), 3)
+    default_max_rounds = max(
+        1,
+        _coerce_int_value(getattr(cfg, "enrichment_max_rounds_per_run", 1), 1),
+    )
     max_rounds = _coerce_int_override(
         task_metadata.get("enrichment_max_rounds_per_run"),
         default_max_rounds,
@@ -3214,17 +3427,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
     effective_concurrency = _coerce_int_override(
         task_metadata.get("enrichment_concurrency"),
-        max(1, cfg.enrichment_concurrency),
+        max(1, _coerce_int_value(getattr(cfg, "enrichment_concurrency", 10), 10)),
         min_value=1,
         max_value=100,
     )
     inter_batch_delay = max(
         0.0,
-        float(
+        _coerce_float_value(
             task_metadata.get(
                 "enrichment_inter_batch_delay_seconds",
-                cfg.enrichment_inter_batch_delay_seconds,
-            )
+                getattr(cfg, "enrichment_inter_batch_delay_seconds", 2.0),
+            ),
+            _coerce_float_value(getattr(cfg, "enrichment_inter_batch_delay_seconds", 2.0), 2.0),
         ),
     )
     priority_sources = [
@@ -3246,6 +3460,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "anthropic_batch_fallback_single_call_items": 0,
         "anthropic_batch_completed_items": 0,
         "anthropic_batch_failed_items": 0,
+        "anthropic_batch_rows_deferred": 0,
+        "anthropic_batch_tier2_single_fallback_rows": 0,
     }
     rounds = 0
 
@@ -3436,7 +3652,13 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
 
     try:
         cfg = settings.b2b_churn
-        full_extraction_timeout = cfg.enrichment_full_extraction_timeout_seconds
+        full_extraction_timeout = max(
+            0.0,
+            _coerce_float_value(
+                getattr(cfg, "enrichment_full_extraction_timeout_seconds", 120.0),
+                120.0,
+            ),
+        )
         payload = _build_classify_payload(row, truncate_length)
         payload_json = json.dumps(payload)
         trace_metadata = {
@@ -3491,32 +3713,39 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
         tier2_model = None
         tier2_cache_hit = False
         if _tier1_has_extraction_gaps(tier1, source=row.get("source")):
-            if use_openrouter:
-                tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                    _call_openrouter_tier2(
-                        tier1,
-                        row,
-                        cfg,
-                        truncate_length,
-                        include_cache_hit=True,
-                        trace_metadata=trace_metadata | {"tier": "tier2"},
-                    ),
-                    timeout=full_extraction_timeout,
-                ))
-            else:
-                tier2_client = _get_tier2_client(cfg)
-                tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
-                    _call_vllm_tier2(
-                        tier1,
-                        row,
-                        cfg,
-                        tier2_client,
-                        truncate_length,
-                        include_cache_hit=True,
-                        trace_metadata=trace_metadata | {"tier": "tier2"},
-                    ),
-                    timeout=full_extraction_timeout,
-                ))
+            try:
+                if use_openrouter:
+                    tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                        _call_openrouter_tier2(
+                            tier1,
+                            row,
+                            cfg,
+                            truncate_length,
+                            include_cache_hit=True,
+                            trace_metadata=trace_metadata | {"tier": "tier2"},
+                        ),
+                        timeout=full_extraction_timeout,
+                    ))
+                else:
+                    tier2_client = _get_tier2_client(cfg)
+                    tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                        _call_vllm_tier2(
+                            tier1,
+                            row,
+                            cfg,
+                            tier2_client,
+                            truncate_length,
+                            include_cache_hit=True,
+                            trace_metadata=trace_metadata | {"tier": "tier2"},
+                        ),
+                        timeout=full_extraction_timeout,
+                    ))
+            except Exception:
+                logger.warning(
+                    "Tier 2 enrichment failed for review %s; persisting tier 1 result only",
+                    review_id,
+                    exc_info=True,
+                )
         if tier2_cache_hit:
             cache_usage["tier2_exact_cache_hits"] += 1
             cache_usage["exact_cache_hits"] += 1
@@ -4258,15 +4487,24 @@ _REPAIR_CURRENCY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?", re.I)
 def _trusted_repair_sources() -> set[str]:
     return set(
         filter_deprecated_sources(
-            parse_source_allowlist(settings.b2b_churn.enrichment_priority_sources),
-            settings.b2b_churn.deprecated_review_sources,
+            _config_allowlist(getattr(settings.b2b_churn, "enrichment_priority_sources", ""), ""),
+            getattr(
+                settings.b2b_churn,
+                "deprecated_review_sources",
+                "capterra,software_advice,trustpilot,trustradius",
+            )
+            if isinstance(getattr(settings.b2b_churn, "deprecated_review_sources", ""), str)
+            else "capterra,software_advice,trustpilot,trustradius",
         )
     )
 
 
 def _effective_enrichment_skip_sources() -> set[str]:
-    configured = parse_source_allowlist(settings.b2b_churn.enrichment_skip_sources)
-    deprecated = parse_source_allowlist(settings.b2b_churn.deprecated_review_sources)
+    configured = _config_allowlist(getattr(settings.b2b_churn, "enrichment_skip_sources", ""), "")
+    deprecated = _config_allowlist(
+        getattr(settings.b2b_churn, "deprecated_review_sources", ""),
+        "capterra,software_advice,trustpilot,trustradius",
+    )
     return {
         source
         for source in [*configured, *deprecated]

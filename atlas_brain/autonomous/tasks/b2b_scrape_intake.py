@@ -68,6 +68,36 @@ _TWITTER_MARKETING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:now\s+available|product\s+update|release\s+notes|hiring)\b", re.I),
 )
 _CAPTERRA_AGGREGATE_METHOD = "jsonld_aggregate"
+_DEFAULT_SOURCE_QUALITY_GATE_SOURCES = frozenset({"quora", "twitter", "capterra"})
+
+
+def _coerce_config_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+    return default
+
+
+def _normalize_source_quality_gate_sources(raw: Any) -> set[str]:
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        values = list(raw)
+    else:
+        values = []
+    sources = {
+        str(part).strip().lower()
+        for part in values
+        if str(part).strip()
+    }
+    return sources or set(_DEFAULT_SOURCE_QUALITY_GATE_SOURCES)
 
 
 def _parse_date(raw: Any) -> datetime | None:
@@ -252,7 +282,10 @@ def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
             return "quora_non_question_url"
         return None
 
-    if source == "capterra" and cfg.source_quality_drop_capterra_aggregates:
+    if source == "capterra" and _coerce_config_bool(
+        getattr(cfg, "source_quality_drop_capterra_aggregates", True),
+        True,
+    ):
         meta = review.get("raw_metadata") or {}
         if str(meta.get("extraction_method") or "").strip().lower() == _CAPTERRA_AGGREGATE_METHOD:
             return "capterra_aggregate_page"
@@ -265,11 +298,14 @@ def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
             if str(value or "").strip()
         )
         intent = _review_has_twitter_intent(text)
-        if cfg.source_quality_twitter_require_intent and not intent:
+        if _coerce_config_bool(getattr(cfg, "source_quality_twitter_require_intent", True), True) and not intent:
             return "twitter_no_intent"
         if _review_looks_like_twitter_marketing(text) and not intent:
             return "twitter_marketing_post"
-        if cfg.source_quality_twitter_drop_vendor_self_posts and _is_vendor_self_tweet(
+        if _coerce_config_bool(
+            getattr(cfg, "source_quality_twitter_drop_vendor_self_posts", True),
+            True,
+        ) and _is_vendor_self_tweet(
             review, str(review.get("vendor_name") or "")
         ):
             return "twitter_vendor_self_post"
@@ -280,13 +316,11 @@ def _quality_gate_skip_reason(review: dict[str, Any], cfg) -> str | None:
 
 def _should_apply_source_quality_gate(source: str, cfg) -> bool:
     """Return True when source-specific quality gates should run."""
-    if not cfg.source_quality_gate_enabled:
+    if not _coerce_config_bool(getattr(cfg, "source_quality_gate_enabled", True), True):
         return False
-    gated_sources = {
-        part.strip().lower()
-        for part in str(cfg.source_quality_gate_sources or "").split(",")
-        if part.strip()
-    }
+    gated_sources = _normalize_source_quality_gate_sources(
+        getattr(cfg, "source_quality_gate_sources", _DEFAULT_SOURCE_QUALITY_GATE_SOURCES)
+    )
     return str(source or "").strip().lower() in gated_sources
 
 

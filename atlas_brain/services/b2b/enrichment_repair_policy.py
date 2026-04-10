@@ -126,11 +126,17 @@ def _parse_source_allowlist(raw: Any) -> set[str]:
 
 
 def strict_discussion_lists(cfg: Any) -> tuple[list[str], list[str]]:
-    sources = sorted(_parse_source_allowlist(getattr(cfg, "enrichment_repair_strict_discussion_sources", None)))
+    raw_sources = getattr(cfg, "enrichment_repair_strict_discussion_sources", None)
+    if not isinstance(raw_sources, (str, list, tuple, set, frozenset)):
+        raw_sources = "reddit"
+    sources = sorted(_parse_source_allowlist(raw_sources))
+    raw_content_types = getattr(cfg, "enrichment_repair_strict_discussion_content_types", None)
+    if not isinstance(raw_content_types, (list, tuple, set, frozenset)):
+        raw_content_types = ["community_discussion", "insider_account", "comment"]
     content_types = sorted(
         {
             str(value or "").strip().lower()
-            for value in (getattr(cfg, "enrichment_repair_strict_discussion_content_types", None) or [])
+            for value in (raw_content_types or [])
             if str(value or "").strip()
         }
     )

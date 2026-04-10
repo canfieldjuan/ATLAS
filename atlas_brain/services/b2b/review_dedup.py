@@ -6,6 +6,58 @@ from difflib import SequenceMatcher
 from typing import Any
 
 
+def _coerce_int(value: Any, default: int, *, minimum: int | None = None) -> int:
+    if isinstance(value, bool) or value is None:
+        numeric = default
+    elif isinstance(value, int):
+        numeric = value
+    elif isinstance(value, float):
+        if value != value:
+            numeric = default
+        else:
+            numeric = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            numeric = default
+        else:
+            try:
+                numeric = int(text)
+            except ValueError:
+                try:
+                    numeric = int(float(text))
+                except ValueError:
+                    numeric = default
+    else:
+        numeric = default
+    if minimum is not None and numeric < minimum:
+        return minimum
+    return numeric
+
+
+def _coerce_float(value: Any, default: float, *, minimum: float | None = None) -> float:
+    if isinstance(value, bool) or value is None:
+        numeric = default
+    elif isinstance(value, (int, float)):
+        numeric = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            numeric = default
+        else:
+            try:
+                numeric = float(text)
+            except ValueError:
+                numeric = default
+    else:
+        numeric = default
+    if numeric != numeric:
+        numeric = default
+    if minimum is not None and numeric < minimum:
+        return minimum
+    return numeric
+
+
 def normalize_review_text_for_hash(value: Any) -> str:
     text = re.sub(r"\s+", " ", str(value or "").strip())
     return text.lower()
@@ -60,7 +112,7 @@ def normalize_reviewer_stem_key(value: Any, *, stem_length: int) -> str | None:
     reviewer_key = normalize_reviewer_key(value)
     if not reviewer_key:
         return None
-    return reviewer_key[: max(1, int(stem_length))]
+    return reviewer_key[: _coerce_int(stem_length, 5, minimum=1)]
 
 
 def normalize_rating_key(value: Any) -> str:
@@ -130,6 +182,10 @@ async def load_cross_source_review_candidates(
     review_date_tolerance_days: int,
     rating_tolerance: float,
 ) -> list[dict[str, Any]]:
+    reviewer_stem_length = _coerce_int(reviewer_stem_length, 5, minimum=1)
+    review_date_tolerance_days = _coerce_int(review_date_tolerance_days, 1, minimum=0)
+    rating_tolerance = _coerce_float(rating_tolerance, 1.0, minimum=0.0)
+    max_candidates = _coerce_int(max_candidates, 20, minimum=1)
     if not content_hash and not identity_key and not (reviewer_stem and reviewed_date):
         return []
     rows = await pool.fetch(
@@ -169,10 +225,10 @@ async def load_cross_source_review_candidates(
         identity_key,
         reviewer_stem,
         reviewed_date,
-        int(review_date_tolerance_days),
+        review_date_tolerance_days,
         rating,
-        float(rating_tolerance),
-        int(reviewer_stem_length),
+        rating_tolerance,
+        reviewer_stem_length,
         max_candidates,
     )
     return [dict(row) for row in rows]
@@ -195,6 +251,11 @@ def choose_cross_source_duplicate_survivor(
     rating_tolerance: float = 1.0,
     require_source_difference: bool = True,
 ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+    similarity_threshold = _coerce_float(similarity_threshold, 0.82, minimum=0.0)
+    loose_similarity_threshold = _coerce_float(loose_similarity_threshold, 0.9, minimum=0.0)
+    reviewer_stem_length = _coerce_int(reviewer_stem_length, 5, minimum=1)
+    review_date_tolerance_days = _coerce_int(review_date_tolerance_days, 1, minimum=0)
+    rating_tolerance = _coerce_float(rating_tolerance, 1.0, minimum=0.0)
     ranked: list[tuple[tuple[int, int, float, str], dict[str, Any], str, dict[str, Any]]] = []
     for candidate in candidates:
         candidate_source = str(candidate.get("source") or "").strip().lower()
@@ -293,6 +354,7 @@ def _rating_value(value: Any) -> float | None:
 
 
 def review_dates_within_tolerance(left: Any, right: Any, *, tolerance_days: int) -> bool:
+    tolerance_days = _coerce_int(tolerance_days, 1, minimum=0)
     left_key = normalize_review_date_key(left)
     right_key = normalize_review_date_key(right)
     if not left_key or not right_key:
@@ -306,6 +368,7 @@ def review_dates_within_tolerance(left: Any, right: Any, *, tolerance_days: int)
 
 
 def rating_values_within_tolerance(left: Any, right: Any, *, tolerance: float) -> bool:
+    tolerance = _coerce_float(tolerance, 1.0, minimum=0.0)
     left_value = _rating_value(left)
     right_value = _rating_value(right)
     if left_value is None or right_value is None:

@@ -149,10 +149,29 @@ def _coerce_optional_int(value: Any) -> int | None:
         return None
     if isinstance(value, bool):
         return int(value)
-    try:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value:
+            return None
         return int(value)
-    except (TypeError, ValueError):
-        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            try:
+                return int(float(text))
+            except ValueError:
+                return None
+    return None
+
+
+def _coerce_int_with_default(value: Any, default: int) -> int:
+    coerced = _coerce_optional_int(value)
+    return coerced if coerced is not None else default
 
 
 def _parse_timestamp_value(value: Any) -> datetime | None:
@@ -1089,6 +1108,7 @@ async def push_to_crm(
     )
 
     cfg = settings.b2b_webhook
+    max_payload_bytes = _coerce_int_with_default(getattr(cfg, "max_payload_bytes", 65536), 65536)
     pushed = 0
     failed: list[dict[str, str]] = []
 
@@ -1101,11 +1121,11 @@ async def push_to_crm(
         failure_reason = "delivery_failed"
         for sub in subs:
             payload_bytes = _format_for_channel(sub["channel"], envelope)
-            if len(payload_bytes) > cfg.max_payload_bytes:
+            if len(payload_bytes) > max_payload_bytes:
                 logger.warning(
                     "CRM push payload too large (%d bytes, max %d) for account=%s vendor=%s company=%s channel=%s",
                     len(payload_bytes),
-                    cfg.max_payload_bytes,
+                    max_payload_bytes,
                     user.account_id,
                     opp.vendor,
                     opp.company,

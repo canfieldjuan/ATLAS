@@ -957,29 +957,86 @@ _CTA_CONFIG: dict[str, dict[str, str]] = {
 
 
 def _blog_length_policy(topic_type: str) -> dict[str, int]:
+    default_min_by_topic = {
+        "vendor_showdown": 2000,
+        "market_landscape": 1900,
+        "best_fit_guide": 1900,
+        "vendor_deep_dive": 1800,
+        "vendor_alternative": 1700,
+        "churn_report": 1700,
+        "pain_point_roundup": 1700,
+        "pricing_reality_check": 1600,
+        "migration_guide": 1500,
+        "switching_story": 1500,
+    }
+    default_target_by_topic = {
+        "vendor_showdown": 2600,
+        "market_landscape": 2600,
+        "best_fit_guide": 2500,
+        "vendor_deep_dive": 2400,
+        "vendor_alternative": 2300,
+        "churn_report": 2300,
+        "pain_point_roundup": 2300,
+        "pricing_reality_check": 2200,
+        "migration_guide": 2100,
+        "switching_story": 2100,
+    }
+
+    def _coerce_int_or_default(value: Any, default: int) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            if value != value:
+                return default
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return default
+            try:
+                return int(text)
+            except ValueError:
+                try:
+                    return int(float(text))
+                except ValueError:
+                    return default
+        return default
+
     cfg = settings.b2b_churn
     normalized_topic = str(topic_type or "").strip().lower()
-    default_min = max(1, int(getattr(cfg, "blog_post_min_words_default", 1800) or 1800))
+    default_min = max(
+        1,
+        _coerce_int_or_default(getattr(cfg, "blog_post_min_words_default", 1800), 1800),
+    )
     default_target = max(
         default_min,
-        int(getattr(cfg, "blog_post_target_words_default", default_min) or default_min),
+        _coerce_int_or_default(getattr(cfg, "blog_post_target_words_default", default_min), default_min),
     )
-    raw_min_by_topic = getattr(cfg, "blog_post_min_words_by_topic", {}) or {}
-    raw_target_by_topic = getattr(cfg, "blog_post_target_words_by_topic", {}) or {}
+    raw_min_by_topic = getattr(cfg, "blog_post_min_words_by_topic", default_min_by_topic) or default_min_by_topic
+    raw_target_by_topic = getattr(cfg, "blog_post_target_words_by_topic", default_target_by_topic) or default_target_by_topic
+    if not isinstance(raw_min_by_topic, dict):
+        raw_min_by_topic = default_min_by_topic
+    if not isinstance(raw_target_by_topic, dict):
+        raw_target_by_topic = default_target_by_topic
     min_by_topic = {
-        str(key or "").strip().lower(): int(value)
+        str(key or "").strip().lower(): _coerce_int_or_default(value, default_min)
         for key, value in raw_min_by_topic.items()
         if str(key or "").strip()
     }
     target_by_topic = {
-        str(key or "").strip().lower(): int(value)
+        str(key or "").strip().lower(): _coerce_int_or_default(value, default_target)
         for key, value in raw_target_by_topic.items()
         if str(key or "").strip()
     }
-    min_words = max(1, int(min_by_topic.get(normalized_topic, default_min) or default_min))
+    min_words = max(
+        1,
+        _coerce_int_or_default(min_by_topic.get(normalized_topic, default_min), default_min),
+    )
     target_words = max(
         min_words,
-        int(target_by_topic.get(normalized_topic, default_target) or default_target),
+        _coerce_int_or_default(target_by_topic.get(normalized_topic, default_target), default_target),
     )
     return {
         "min_words": min_words,
@@ -4619,6 +4676,28 @@ def _blog_slug_block_reason(
     now: datetime | None = None,
 ) -> str | None:
     """Return the reason a blog slug should be blocked from regeneration."""
+    def _coerce_int_or_default(value: Any, default: int) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            if value != value:
+                return default
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return default
+            try:
+                return int(text)
+            except ValueError:
+                try:
+                    return int(float(text))
+                except ValueError:
+                    return default
+        return default
+
     if not row:
         return None
     status = str(row.get("status") or "").strip().lower()
@@ -4630,13 +4709,17 @@ def _blog_slug_block_reason(
     if status != "rejected":
         return f"status:{status}"
 
-    max_retries = int(settings.b2b_churn.blog_post_max_rejection_retries)
+    max_retries = _coerce_int_or_default(
+        getattr(settings.b2b_churn, "blog_post_max_rejection_retries", 1),
+        1,
+    )
     rejection_count = int(row.get("rejection_count") or 0)
     if rejection_count > max_retries:
         return "retry_limit"
 
-    cooldown_hours = int(
-        getattr(settings.b2b_churn, "blog_post_rejection_cooldown_hours", 0) or 0
+    cooldown_hours = _coerce_int_or_default(
+        getattr(settings.b2b_churn, "blog_post_rejection_cooldown_hours", 24),
+        24,
     )
     rejected_at = row.get("rejected_at")
     if (

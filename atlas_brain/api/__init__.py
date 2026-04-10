@@ -2,6 +2,8 @@
 API routers for Atlas Brain.
 """
 
+import logging
+
 from fastapi import APIRouter
 
 from .alerts import router as alerts_router
@@ -13,7 +15,6 @@ from .models import router as models_router
 from .query import router as query_router
 from .session import router as session_router
 from .vision import router as vision_router
-from .video import router as video_router
 from .recognition import router as recognition_router
 from .speaker import router as speaker_router
 from .identity import router as identity_router
@@ -55,6 +56,14 @@ from .pipeline_visibility import router as pipeline_visibility_router
 from .b2b_win_loss import router as b2b_win_loss_router
 from .b2b_evidence import router as b2b_evidence_router
 
+logger = logging.getLogger("atlas.api")
+
+try:
+    from .video import router as video_router
+except Exception as exc:
+    video_router = None
+    logger.warning("Video router disabled during api package import: %s", exc)
+
 # Main router that aggregates all sub-routers
 router = APIRouter()
 
@@ -67,7 +76,8 @@ router.include_router(comms_router)
 router.include_router(llm_router)
 router.include_router(session_router)
 router.include_router(vision_router)
-router.include_router(video_router)
+if video_router is not None:
+    router.include_router(video_router)
 router.include_router(recognition_router)
 router.include_router(speaker_router)
 router.include_router(identity_router)
