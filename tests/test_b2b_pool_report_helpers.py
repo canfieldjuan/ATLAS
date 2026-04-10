@@ -395,6 +395,58 @@ async def test_fetch_vendor_vault_row_uses_shared_nearest_window_reader(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_vendor_snapshot_from_pools_uses_shared_scorecard_metrics(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "_fetch_vendor_vault_row",
+        AsyncMock(
+            return_value=(
+                {
+                    "metric_snapshot": {
+                        "total_reviews": 40,
+                        "churn_density": 20.0,
+                        "avg_urgency": 6.5,
+                        "positive_review_pct": 45.0,
+                        "recommend_ratio": 12.5,
+                    },
+                    "weakness_evidence": [],
+                    "company_signals": [{"company_name": "Acme", "urgency_score": 8.0}],
+                },
+                30,
+            ),
+        ),
+    )
+    scorecard = AsyncMock(
+        return_value={
+            "total_reviews": 40,
+            "churn_intent_count": 8,
+            "avg_urgency_score": 6.5,
+            "avg_rating_normalized": 0.81,
+        },
+    )
+    monkeypatch.setattr(mod, "_read_vendor_scorecard_metrics", scorecard)
+
+    class Pool:
+        async def fetchrow(self, query, *args):
+            assert "FROM b2b_product_profiles" in query
+            assert args == ("Zendesk",)
+            return {
+                "commonly_compared_to": json.dumps([
+                    {"vendor": "Freshdesk", "mentions": 23},
+                    {"vendor": "Intercom", "mentions": 13},
+                ]),
+                "product_category": "Support",
+            }
+
+    snapshot = await mod._vendor_snapshot_from_pools(Pool(), "Zendesk", 90)
+
+    scorecard.assert_awaited_once()
+    assert snapshot is not None
+    assert snapshot["avg_rating_normalized"] == 81.0
+    assert snapshot["top_competitors"][0]["competitor"] == "Freshdesk"
+
+
+@pytest.mark.asyncio
 async def test_generate_company_deep_dive_report_uses_shared_archetype_lookup(monkeypatch):
     pool = object()
     snapshot = {
@@ -524,6 +576,7 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
                 "signal_reviews": 20,
                 "churn_intent_count": 5,
                 "avg_urgency_score": 6.5,
+                "avg_rating_normalized": 0.81,
                 "top_competitors": [{"name": "Freshdesk"}],
                 "sentiment_distribution": {"declining": 4, "improving": 1},
             },
@@ -539,6 +592,7 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
         "signal_reviews": 20,
         "churn_intent_count": 5,
         "avg_urgency_score": 6.5,
+        "avg_rating_normalized": 0.81,
         "top_competitors": [{"name": "Freshdesk"}],
         "sentiment_distribution": {"declining": 4, "improving": 1},
     }
@@ -643,6 +697,44 @@ async def test_read_vendor_intelligence_record_nearest_window_prefers_closest_ma
     assert evidence_call[1] == ("Zendesk", 90)
     assert row["analysis_window_days"] == 60
     assert row["vault"]["metric_snapshot"]["avg_urgency"] == 7.2
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_intelligence_records_latest_returns_latest_rows():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_evidence_vault": [
+                {
+                    "vendor_name": "Zendesk",
+                    "as_of_date": date(2026, 3, 31),
+                    "analysis_window_days": 60,
+                    "schema_version": 2,
+                    "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+                    "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_intelligence_records_latest(
+        pool,
+        vendor_names=["Zendesk"],
+    )
+
+    evidence_call = next(call for call in pool.calls if "FROM b2b_evidence_vault" in call[0])
+    assert "SELECT DISTINCT ON (vendor_name)" in evidence_call[0]
+    assert "WHERE LOWER(vendor_name) = ANY($1::text[])" in evidence_call[0]
+    assert evidence_call[1] == (["zendesk"],)
+    assert rows == [
+        {
+            "vendor_name": "Zendesk",
+            "as_of_date": date(2026, 3, 31),
+            "analysis_window_days": 60,
+            "schema_version": 2,
+            "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+            "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+        },
+    ]
 
 
 @pytest.mark.asyncio
