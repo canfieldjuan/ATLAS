@@ -824,6 +824,54 @@ async def test_onboard_vendor_targets_endpoint_bootstraps_net_new_vendor():
 
 
 @pytest.mark.asyncio
+async def test_fetch_coverage_inputs_uses_shared_signal_inventory_adapter():
+    from atlas_brain.services.scraping.target_provisioning import fetch_coverage_inputs
+
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "vendor_name": "Linear",
+                    "product_category": "Project Management",
+                    "total_reviews_analyzed": 125,
+                    "confidence_score": 0.9,
+                    "last_computed_at": None,
+                    "inventory_source": "b2b_product_profiles",
+                }
+            ],
+            [],
+        ]
+    )
+    signal_adapter = AsyncMock(
+        return_value=[
+            {
+                "vendor_name": "OpenProject",
+                "product_category": "Project Management",
+                "total_reviews_analyzed": 80,
+                "confidence_score": 0.0,
+                "last_computed_at": None,
+                "inventory_source": "b2b_churn_signals",
+            }
+        ]
+    )
+
+    with patch(
+        "atlas_brain.autonomous.tasks._b2b_shared.read_vendor_scorecard_inventory_rows",
+        signal_adapter,
+    ):
+        inventory, targets = await fetch_coverage_inputs(pool)
+
+    signal_adapter.assert_awaited_once_with(pool)
+    assert [row["inventory_source"] for row in inventory] == [
+        "b2b_product_profiles",
+        "b2b_churn_signals",
+    ]
+    assert targets == []
+    assert pool.fetch.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_provision_missing_core_targets_uses_signal_inventory_fallback():
     from atlas_brain.services.scraping.target_provisioning import (
         provision_missing_core_targets_for_vendors,

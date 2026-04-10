@@ -4174,6 +4174,81 @@ async def read_vendor_top_competitor_map(
     return result
 
 
+async def read_company_churn_context(
+    pool,
+    *,
+    company_hint: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Read derived churn context rows matching a company hint."""
+    normalized_hint = str(company_hint or "").strip()
+    if not normalized_hint:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name,
+               product_category,
+               avg_urgency_score,
+               top_pain_categories,
+               top_competitors,
+               decision_maker_churn_rate,
+               price_complaint_rate
+        FROM b2b_churn_signals
+        WHERE EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(company_churn_list) AS company_row
+            WHERE company_row->>'company' ILIKE '%' || $1 || '%'
+        )
+        ORDER BY avg_urgency_score DESC
+        LIMIT $2
+        """,
+        normalized_hint,
+        limit,
+    )
+    return [
+        {
+            "vendor_name": row["vendor_name"],
+            "product_category": row["product_category"],
+            "avg_urgency_score": float(row["avg_urgency_score"]) if row["avg_urgency_score"] else 0.0,
+            "top_pain_categories": _safe_json(row.get("top_pain_categories"), default=[]),
+            "top_competitors": _safe_json(row.get("top_competitors"), default=[]),
+            "decision_maker_churn_rate": (
+                float(row["decision_maker_churn_rate"])
+                if row["decision_maker_churn_rate"] is not None
+                else None
+            ),
+            "price_complaint_rate": (
+                float(row["price_complaint_rate"])
+                if row["price_complaint_rate"] is not None
+                else None
+            ),
+        }
+        for row in rows
+        if row.get("vendor_name")
+    ]
+
+
+async def read_vendor_scorecard_inventory_rows(
+    pool,
+) -> list[dict[str, Any]]:
+    """Read scorecard-derived inventory rows for scrape coverage planning."""
+    rows = await pool.fetch(
+        """
+        SELECT vendor_name,
+               COALESCE(NULLIF(TRIM(product_category), ''), 'Unknown') AS product_category,
+               MAX(total_reviews) AS total_reviews_analyzed,
+               0.0::double precision AS confidence_score,
+               NULL::timestamptz AS last_computed_at,
+               'b2b_churn_signals' AS inventory_source
+        FROM b2b_churn_signals
+        WHERE vendor_name IS NOT NULL
+          AND TRIM(vendor_name) != ''
+        GROUP BY vendor_name, COALESCE(NULLIF(TRIM(product_category), ''), 'Unknown')
+        """
+    )
+    return [dict(row) for row in rows]
+
+
 async def _fetch_vendor_churn_scores_from_signals(
     pool,
     window_days: int,
