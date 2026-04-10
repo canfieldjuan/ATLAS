@@ -2068,15 +2068,26 @@ async def update_campaign(
     params: list[Any] = []
     idx = 1
 
+    content_changed = False
     for field in ("subject", "body", "cta", "status"):
         val = getattr(body, field)
         if val is not None:
             updates.append(f"{field} = ${idx}")
             params.append(val)
             idx += 1
+            if field in ("subject", "body", "cta"):
+                content_changed = True
 
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Reset quality fields when content changes so stale badges don't persist
+    if content_changed:
+        updates.append("quality_status = NULL")
+        updates.append("blocker_count = NULL")
+        updates.append("warning_count = NULL")
+        updates.append("failure_explanation = NULL")
+        updates.append("latest_error_summary = NULL")
 
     params.append(cid)
     result = await pool.execute(
