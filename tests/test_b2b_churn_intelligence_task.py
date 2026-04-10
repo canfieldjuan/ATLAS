@@ -112,6 +112,7 @@ async def test_upsert_churn_signals_persists_materialization_run_id():
         vendor_scores=[
             {
                 "vendor_name": "Zendesk",
+                "product_category": "Helpdesk",
                 "total_reviews": 12,
                 "churn_intent": 3,
                 "avg_urgency": 7.5,
@@ -133,4 +134,6 @@ async def test_upsert_churn_signals_persists_materialization_run_id():
     assert len(pool.execute_calls) == 1
     query, params = pool.execute_calls[0]
     assert "materialization_run_id" in query
+    assert "product_category = EXCLUDED.product_category" in query
+    assert params[1] == "Helpdesk"
     assert params[-2] == "run-123"

@@ -3407,6 +3407,7 @@ async def _upsert_churn_signals(
                           $38, $39, $40, $41,
                           $42, $43, $44)
                 ON CONFLICT (vendor_name) DO UPDATE SET
+                    product_category = EXCLUDED.product_category,
                     total_reviews = EXCLUDED.total_reviews,
                     negative_reviews = EXCLUDED.negative_reviews,
                     churn_intent_count = EXCLUDED.churn_intent_count,
