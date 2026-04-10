@@ -293,6 +293,7 @@ export async function compareVendorPeriods(vendorName: string, params?: {
 export async function fetchReports(params?: {
   report_type?: string
   vendor_filter?: string
+  include_stale?: boolean
   limit?: number
 }) {
   return get<{ reports: Report[]; count: number }>(TENANT_BASE, '/reports', params)
@@ -1973,12 +1974,57 @@ export function downloadReportPdf(reportId: string) {
 
 // -- Report Subscriptions -----------------------------------------------------
 
+export type ReportSubscriptionScopeType = 'library' | 'library_view' | 'report'
+
+export interface ReportLibraryViewFilters {
+  report_type?: string
+  vendor_filter?: string
+  quality_status?: string
+  freshness_state?: string
+  review_state?: string
+}
+
+function normalizeFilterPart(value?: string) {
+  const normalized = (value || '').trim().toLowerCase()
+  return normalized || 'all'
+}
+
+function slugifyFilterPart(value: string) {
+  return value.replace(/[^a-z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'all'
+}
+
+export function normalizeReportLibraryViewFilters(filters?: ReportLibraryViewFilters | null): ReportLibraryViewFilters {
+  const normalized: ReportLibraryViewFilters = {}
+  const reportType = (filters?.report_type || '').trim()
+  const vendorFilter = (filters?.vendor_filter || '').trim()
+  const qualityStatus = (filters?.quality_status || '').trim()
+  const freshnessState = (filters?.freshness_state || '').trim()
+  const reviewState = (filters?.review_state || '').trim()
+  if (reportType) normalized.report_type = reportType
+  if (vendorFilter) normalized.vendor_filter = vendorFilter
+  if (qualityStatus) normalized.quality_status = qualityStatus
+  if (freshnessState) normalized.freshness_state = freshnessState
+  if (reviewState) normalized.review_state = reviewState
+  return normalized
+}
+
+export function buildReportLibraryViewScopeKey(filters?: ReportLibraryViewFilters | null) {
+  const normalized = normalizeReportLibraryViewFilters(filters)
+  const typePart = slugifyFilterPart(normalizeFilterPart(normalized.report_type))
+  const vendorPart = slugifyFilterPart(normalizeFilterPart(normalized.vendor_filter))
+  const qualityPart = slugifyFilterPart(normalizeFilterPart(normalized.quality_status))
+  const freshnessPart = slugifyFilterPart(normalizeFilterPart(normalized.freshness_state))
+  const reviewPart = slugifyFilterPart(normalizeFilterPart(normalized.review_state))
+  return `library-view--type-${typePart}--vendor-${vendorPart}--quality-${qualityPart}--freshness-${freshnessPart}--review-${reviewPart}`
+}
+
 export interface ReportSubscription {
   id: string
   account_id: string
-  scope_type: 'library' | 'report'
+  scope_type: ReportSubscriptionScopeType
   scope_key: string
   scope_label: string
+  filter_payload: ReportLibraryViewFilters
   delivery_frequency: 'weekly' | 'monthly' | 'quarterly'
   deliverable_focus: 'all' | 'battle_cards' | 'executive_reports' | 'comparison_packs'
   freshness_policy: 'fresh_only' | 'fresh_or_monitor' | 'any'
@@ -1996,6 +2042,7 @@ export interface ReportSubscription {
 
 export interface ReportSubscriptionUpsert {
   scope_label: string
+  filter_payload?: ReportLibraryViewFilters
   delivery_frequency: 'weekly' | 'monthly' | 'quarterly'
   deliverable_focus: 'all' | 'battle_cards' | 'executive_reports' | 'comparison_packs'
   freshness_policy: 'fresh_only' | 'fresh_or_monitor' | 'any'
@@ -2004,13 +2051,17 @@ export interface ReportSubscriptionUpsert {
   enabled: boolean
 }
 
-export async function fetchReportSubscription(scopeType: string, scopeKey: string) {
+export async function fetchReportSubscription(scopeType: ReportSubscriptionScopeType, scopeKey: string) {
   return get<{ subscription: ReportSubscription | null }>(
     TENANT_BASE, `/report-subscriptions/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeKey)}`,
   )
 }
 
-export async function upsertReportSubscription(scopeType: string, scopeKey: string, body: ReportSubscriptionUpsert) {
+export async function listReportSubscriptions() {
+  return get<{ subscriptions: ReportSubscription[] }>(TENANT_BASE, '/report-subscriptions')
+}
+
+export async function upsertReportSubscription(scopeType: ReportSubscriptionScopeType, scopeKey: string, body: ReportSubscriptionUpsert) {
   return put<{ subscription: ReportSubscription }>(
     TENANT_BASE, `/report-subscriptions/${encodeURIComponent(scopeType)}/${encodeURIComponent(scopeKey)}`, body,
   )

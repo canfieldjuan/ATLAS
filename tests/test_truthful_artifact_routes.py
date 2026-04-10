@@ -1,5 +1,6 @@
 """Route-level tests for truthful blog/report artifact fields."""
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -836,6 +837,7 @@ def test_upsert_report_subscription_preserves_next_delivery_when_schedule_unchan
                     "scope_type": "library",
                     "scope_key": "library",
                     "scope_label": "Recurring brief library",
+                    "filter_payload": {},
                     "report_id": None,
                     "delivery_frequency": "weekly",
                     "deliverable_focus": "all",
@@ -876,7 +878,7 @@ def test_upsert_report_subscription_preserves_next_delivery_when_schedule_unchan
         )
 
     assert response.status_code == 200
-    assert captured_execute_args["args"][11] == existing_next_delivery_at
+    assert captured_execute_args["args"][12] == existing_next_delivery_at
 
 
 def test_upsert_report_subscription_recomputes_next_delivery_when_frequency_changes(monkeypatch):
@@ -898,12 +900,13 @@ def test_upsert_report_subscription_recomputes_next_delivery_when_frequency_chan
                     "next_delivery_at": existing_next_delivery_at,
                 }
             if "FROM b2b_report_subscriptions s" in query:
-                recomputed_next = captured_execute_args["args"][11]
+                recomputed_next = captured_execute_args["args"][12]
                 return {
                     "id": uuid4(),
                     "scope_type": "library",
                     "scope_key": "library",
                     "scope_label": "Recurring brief library",
+                    "filter_payload": {},
                     "report_id": None,
                     "delivery_frequency": "monthly",
                     "deliverable_focus": "all",
@@ -944,7 +947,7 @@ def test_upsert_report_subscription_recomputes_next_delivery_when_frequency_chan
         )
 
     assert response.status_code == 200
-    recomputed_next = captured_execute_args["args"][11]
+    recomputed_next = captured_execute_args["args"][12]
     assert recomputed_next is not None
     assert recomputed_next != existing_next_delivery_at
     assert recomputed_next > datetime.now(timezone.utc)
@@ -969,6 +972,7 @@ def test_get_report_subscription_uses_latest_delivery_attempt_not_live_preferenc
                     "scope_type": "library",
                     "scope_key": "library",
                     "scope_label": "Recurring brief library",
+                    "filter_payload": {},
                     "report_id": None,
                     "delivery_frequency": "weekly",
                     "deliverable_focus": "all",
@@ -997,6 +1001,97 @@ def test_get_report_subscription_uses_latest_delivery_attempt_not_live_preferenc
     assert subscription["last_delivery_status"] == "dry_run"
     assert subscription["last_delivery_summary"] == "Dry run preview completed"
     assert subscription["last_delivery_at"] == latest_attempt_at.isoformat()
+
+
+def test_upsert_report_subscription_library_view_persists_filter_payload(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    captured_execute_args = {}
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            if "SELECT enabled, delivery_frequency, next_delivery_at" in query:
+                return None
+            if "FROM b2b_report_subscriptions s" in query:
+                return {
+                    "id": uuid4(),
+                    "scope_type": "library_view",
+                    "scope_key": "library-view--type-battle_card--vendor-zendesk--quality-sales_ready",
+                    "scope_label": "Battle Cards • Zendesk Library",
+                    "filter_payload": {
+                        "report_type": "battle_card",
+                        "vendor_filter": "Zendesk",
+                        "quality_status": "sales_ready",
+                        "freshness_state": "stale",
+                        "review_state": "blocked",
+                    },
+                    "report_id": None,
+                    "delivery_frequency": "weekly",
+                    "deliverable_focus": "battle_cards",
+                    "freshness_policy": "fresh_or_monitor",
+                    "recipient_emails": ["ops@example.com"],
+                    "delivery_note": "Only reviewed assets",
+                    "enabled": True,
+                    "next_delivery_at": datetime(2026, 4, 17, 15, 0, tzinfo=timezone.utc),
+                    "created_at": datetime(2026, 4, 10, 15, 0, tzinfo=timezone.utc),
+                    "updated_at": datetime(2026, 4, 10, 15, 0, tzinfo=timezone.utc),
+                    "last_delivery_status": None,
+                    "last_delivery_at": None,
+                    "last_delivery_summary": None,
+                    "last_delivery_error": None,
+                    "last_delivery_report_count": 0,
+                }
+            return None
+
+        async def execute(self, query, *args):
+            if "INSERT INTO b2b_report_subscriptions" in query:
+                captured_execute_args["args"] = args
+            return "INSERT 0 1"
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/b2b/tenant/report-subscriptions/library_view/library-view--type-battle_card--vendor-zendesk--quality-sales_ready--freshness-stale--review-blocked",
+            json={
+                "scope_label": "Battle Cards • Zendesk Library",
+                "filter_payload": {
+                    "report_type": "battle_card",
+                    "vendor_filter": "Zendesk",
+                    "quality_status": "sales_ready",
+                    "freshness_state": "stale",
+                    "review_state": "blocked",
+                },
+                "delivery_frequency": "weekly",
+                "deliverable_focus": "battle_cards",
+                "freshness_policy": "fresh_or_monitor",
+                "recipients": ["ops@example.com"],
+                "delivery_note": "Only reviewed assets",
+                "enabled": True,
+            },
+        )
+
+    assert response.status_code == 200
+    assert json.loads(captured_execute_args["args"][5]) == {
+        "report_type": "battle_card",
+        "vendor_filter": "Zendesk",
+        "quality_status": "sales_ready",
+        "freshness_state": "stale",
+        "review_state": "blocked",
+    }
+    subscription = response.json()["subscription"]
+    assert subscription["scope_type"] == "library_view"
+    assert subscription["filter_payload"] == {
+        "report_type": "battle_card",
+        "vendor_filter": "Zendesk",
+        "quality_status": "sales_ready",
+        "freshness_state": "stale",
+        "review_state": "blocked",
+    }
 
 
 def test_blog_quality_diagnostics_returns_grouped_failures(monkeypatch):

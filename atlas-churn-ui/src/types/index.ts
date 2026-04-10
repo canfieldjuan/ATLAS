@@ -190,6 +190,16 @@ export interface Report {
   unresolved_issue_count?: number
   quality_status?: string | null
   quality_score?: number | null
+  freshness_state?: 'fresh' | 'monitor' | 'stale' | 'unknown' | null
+  freshness_label?: string | null
+  review_state?: 'clean' | 'warnings' | 'open_review' | 'blocked' | null
+  review_label?: string | null
+  trust?: {
+    freshness_state?: 'fresh' | 'monitor' | 'stale' | 'unknown' | null
+    freshness_label?: string | null
+    review_state?: 'clean' | 'warnings' | 'open_review' | 'blocked' | null
+    review_label?: string | null
+  } | null
   created_at: string | null
 }
 

@@ -76,6 +76,17 @@ def _safe_json(value: Any) -> Any:
     return value
 
 
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except Exception:
+        return default
+
+
 def _task_metadata(task: ScheduledTask | Any) -> dict[str, Any]:
     metadata = getattr(task, "metadata", None)
     return metadata if isinstance(metadata, dict) else {}
@@ -147,6 +158,30 @@ def _scope_manage_url(scope_type: str, scope_key: str) -> str | None:
     if scope_type == "report":
         return f"{base_url}/reports/{quote(scope_key, safe='')}"
     return f"{base_url}/reports"
+
+
+def _scope_manage_url_with_filters(scope_type: str, scope_key: str, filter_payload: Any) -> str | None:
+    base_url = _scope_manage_url(scope_type, scope_key)
+    if not base_url or scope_type != "library_view":
+        return base_url
+    normalized = _normalize_subscription_filter_payload(_safe_json(filter_payload))
+    if not normalized:
+        return base_url
+
+    params: list[str] = []
+    if normalized.get("report_type"):
+        params.append(f"report_type={quote(normalized['report_type'], safe='')}")
+    if normalized.get("vendor_filter"):
+        params.append(f"vendor_filter={quote(normalized['vendor_filter'], safe='')}")
+    if normalized.get("quality_status"):
+        params.append(f"quality_status={quote(normalized['quality_status'], safe='')}")
+    if normalized.get("freshness_state"):
+        params.append(f"freshness_state={quote(normalized['freshness_state'], safe='')}")
+    if normalized.get("review_state"):
+        params.append(f"review_state={quote(normalized['review_state'], safe='')}")
+    if not params:
+        return base_url
+    return f"{base_url}?{'&'.join(params)}"
 
 
 def _report_url(report_id: Any) -> str | None:
@@ -343,6 +378,78 @@ def _focus_allowed(scope_type: str, focus: str, report_type: str) -> bool:
     return report_type in allowed_types
 
 
+def _normalize_subscription_filter_payload(payload: Any) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    report_type = str(payload.get("report_type") or "").strip()
+    vendor_filter = str(payload.get("vendor_filter") or "").strip()
+    quality_status = str(payload.get("quality_status") or "").strip().lower()
+    freshness_state = str(payload.get("freshness_state") or "").strip().lower()
+    review_state = str(payload.get("review_state") or "").strip().lower()
+    if report_type:
+        normalized["report_type"] = report_type
+    if vendor_filter:
+        normalized["vendor_filter"] = vendor_filter
+    if quality_status:
+        normalized["quality_status"] = quality_status
+    if freshness_state:
+        normalized["freshness_state"] = freshness_state
+    if review_state:
+        normalized["review_state"] = review_state
+    return normalized
+
+
+def _review_state(row) -> str:
+    blocker_count = _row_int(row, "blocker_count")
+    warning_count = _row_int(row, "warning_count")
+    unresolved_issue_count = _row_int(row, "unresolved_issue_count")
+    if blocker_count > 0:
+        return "blocked"
+    if unresolved_issue_count > 0:
+        return "open_review"
+    if warning_count > 0:
+        return "warnings"
+    return "clean"
+
+
+def _report_matches_subscription_filters(
+    report_row,
+    intelligence_data: dict[str, Any],
+    filter_payload: dict[str, str],
+) -> bool:
+    report_type = str(report_row["report_type"] or "").strip()
+    vendor_filter = str(report_row["vendor_filter"] or "").strip().lower()
+    quality_status = _quality_status(report_row, intelligence_data)
+
+    requested_report_type = str(filter_payload.get("report_type") or "").strip()
+    if requested_report_type and report_type != requested_report_type:
+        return False
+
+    requested_vendor_filter = str(filter_payload.get("vendor_filter") or "").strip().lower()
+    if requested_vendor_filter and requested_vendor_filter not in vendor_filter:
+        return False
+
+    requested_quality_status = str(filter_payload.get("quality_status") or "").strip().lower()
+    if requested_quality_status and quality_status != requested_quality_status:
+        return False
+
+    freshness = _derive_freshness(
+        report_row,
+        intelligence_data,
+        _safe_json(_row_value(report_row, "data_density")) or {},
+    )
+    requested_freshness_state = str(filter_payload.get("freshness_state") or "").strip().lower()
+    if requested_freshness_state and freshness["state"] != requested_freshness_state:
+        return False
+
+    requested_review_state = str(filter_payload.get("review_state") or "").strip().lower()
+    if requested_review_state and _review_state(report_row) != requested_review_state:
+        return False
+
+    return True
+
+
 def _delivery_eligibility_reason(row, intelligence_data: dict[str, Any]) -> str | None:
     delivery_cfg = settings.b2b_report_delivery
     blocker_count = _row_int(row, "blocker_count")
@@ -477,6 +584,9 @@ def _delivery_content_hash(row, artifacts: list[dict[str, Any]]) -> str:
         "scope_type": str(row["scope_type"] or ""),
         "scope_key": str(row["scope_key"] or ""),
         "scope_label": str(row["scope_label"] or ""),
+        "filter_payload": _normalize_subscription_filter_payload(
+            _safe_json(_row_value(row, "filter_payload"))
+        ),
         "delivery_note": str(row["delivery_note"] or "").strip(),
         "artifacts": [
             {
@@ -658,7 +768,7 @@ async def _fetch_due_rows(pool, limit: int, canary_account_ids: set[str]) -> lis
         return await pool.fetch(
             """
             SELECT s.id, s.account_id, sa.name AS account_name,
-                   s.report_id, s.scope_type, s.scope_key, s.scope_label,
+                   s.report_id, s.scope_type, s.scope_key, s.scope_label, s.filter_payload,
                    s.delivery_frequency, s.deliverable_focus, s.freshness_policy,
                    s.recipient_emails, s.delivery_note, s.next_delivery_at
             FROM b2b_report_subscriptions s
@@ -678,7 +788,7 @@ async def _fetch_due_rows(pool, limit: int, canary_account_ids: set[str]) -> lis
     return await pool.fetch(
         """
         SELECT s.id, s.account_id, sa.name AS account_name,
-               s.report_id, s.scope_type, s.scope_key, s.scope_label,
+               s.report_id, s.scope_type, s.scope_key, s.scope_label, s.filter_payload,
                s.delivery_frequency, s.deliverable_focus, s.freshness_policy,
                s.recipient_emails, s.delivery_note, s.next_delivery_at
         FROM b2b_report_subscriptions s
@@ -783,8 +893,20 @@ async def _fetch_report_row(pool, report_id: Any) -> Any | None:
     )
 
 
-async def _fetch_library_rows(pool, account_id: Any, tracked_vendors: set[str], focus: str) -> list[Any]:
+async def _fetch_library_rows(
+    pool,
+    account_id: Any,
+    tracked_vendors: set[str],
+    focus: str,
+    filter_payload: dict[str, str] | None = None,
+) -> list[Any]:
     allowed_types = _REPORT_TYPE_FOCUS_MAP.get(focus)
+    requested_report_type = str((filter_payload or {}).get("report_type") or "").strip()
+    if requested_report_type:
+        if allowed_types and requested_report_type not in allowed_types:
+            return []
+        allowed_types = {requested_report_type}
+    requested_vendor_filter = str((filter_payload or {}).get("vendor_filter") or "").strip()
     scan_limit = settings.b2b_report_delivery.max_reports_per_delivery * 5
     return await pool.fetch(
         """
@@ -811,6 +933,7 @@ async def _fetch_library_rows(pool, account_id: Any, tracked_vendors: set[str], 
                 OR account_id = $1
           )
           AND ($3::text[] IS NULL OR report_type = ANY($3::text[]))
+          AND ($6::text = '' OR vendor_filter ILIKE '%' || $6 || '%')
         ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
         LIMIT $4
         """,
@@ -819,6 +942,7 @@ async def _fetch_library_rows(pool, account_id: Any, tracked_vendors: set[str], 
         list(allowed_types) if allowed_types else None,
         scan_limit,
         ["completed", "published", "sales_ready"],
+        requested_vendor_filter,
     )
 
 
@@ -856,6 +980,9 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
 async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[str, Any]]:
     scope_type = str(row["scope_type"] or "")
     freshness_policy = str(row["freshness_policy"] or "fresh_or_monitor")
+    filter_payload = _normalize_subscription_filter_payload(
+        _safe_json(_row_value(row, "filter_payload"))
+    )
 
     if scope_type == "report":
         report_row = await _fetch_report_row(pool, row["report_id"])
@@ -880,6 +1007,7 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
         row["account_id"],
         tracked_vendors,
         str(row["deliverable_focus"] or "all"),
+        filter_payload if scope_type == "library_view" else None,
     )
     overridden_report_ids: set[str] = set()
     if settings.b2b_report_delivery.report_scope_overrides_library:
@@ -894,6 +1022,12 @@ async def _resolve_artifacts(pool, row, tracked_vendors: set[str]) -> list[dict[
         intelligence_data = _safe_json(report_row["intelligence_data"])
         if not isinstance(intelligence_data, dict):
             intelligence_data = {}
+        if scope_type == "library_view" and not _report_matches_subscription_filters(
+            report_row,
+            intelligence_data,
+            filter_payload,
+        ):
+            continue
         if not _artifact_ready(report_row, intelligence_data):
             continue
         if _delivery_eligibility_reason(report_row, intelligence_data):
@@ -1066,7 +1200,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                         else f"{row['account_name']}: {len(artifacts)} report artifact(s) ready"
                     )
                     summary_line = _subscription_summary(str(row["scope_type"] or ""), artifacts)
-                    manage_url = _scope_manage_url(str(row["scope_type"] or ""), str(row["scope_key"] or ""))
+                    manage_url = _scope_manage_url_with_filters(
+                        str(row["scope_type"] or ""),
+                        str(row["scope_key"] or ""),
+                        _row_value(row, "filter_payload"),
+                    )
                     html_body = render_report_subscription_delivery_html(
                         account_name=str(row["account_name"] or ""),
                         scope_label=str(row["scope_label"] or "Recurring delivery"),

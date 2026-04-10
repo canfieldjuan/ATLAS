@@ -59,7 +59,7 @@ logger = logging.getLogger("atlas.api.b2b_tenant")
 
 router = APIRouter(prefix="/b2b/tenant", tags=["b2b-tenant"])
 _LEGACY_ALIAS_REGISTRATION_DONE = False
-_REPORT_SUBSCRIPTION_SCOPE_TYPES = {"library", "report"}
+_REPORT_SUBSCRIPTION_SCOPE_TYPES = {"library", "library_view", "report"}
 _REPORT_SUBSCRIPTION_FREQUENCIES = {
     "weekly": 7,
     "monthly": 30,
@@ -93,6 +93,72 @@ def _safe_float(val, default=None):
         return float(val)
     except (ValueError, TypeError):
         return default
+
+
+def _coerce_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _report_freshness(anchor: Any, *, data_stale: bool = False) -> dict[str, str]:
+    if data_stale:
+        return {"state": "stale", "label": "Stale"}
+    dt = _coerce_datetime(anchor)
+    if not dt:
+        return {"state": "unknown", "label": "Freshness unknown"}
+    age_hours = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 3600
+    if age_hours < 24:
+        return {"state": "fresh", "label": "Fresh"}
+    if age_hours < 168:
+        return {"state": "monitor", "label": "Monitor"}
+    return {"state": "stale", "label": "Stale"}
+
+
+def _report_review_state(
+    blocker_count: int,
+    warning_count: int,
+    unresolved_issue_count: int,
+) -> dict[str, str]:
+    if blocker_count > 0:
+        return {"state": "blocked", "label": "Blocked"}
+    if unresolved_issue_count > 0:
+        return {"state": "open_review", "label": "Open Review"}
+    if warning_count > 0:
+        return {"state": "warnings", "label": "Warnings"}
+    return {"state": "clean", "label": "Clean"}
+
+
+def _report_trust_payload(
+    *,
+    report_date: Any,
+    created_at: Any,
+    data_stale: bool,
+    blocker_count: int,
+    warning_count: int,
+    unresolved_issue_count: int,
+) -> dict[str, Any]:
+    freshness = _report_freshness(report_date or created_at, data_stale=data_stale)
+    review = _report_review_state(blocker_count, warning_count, unresolved_issue_count)
+    return {
+        "freshness_state": freshness["state"],
+        "freshness_label": freshness["label"],
+        "review_state": review["state"],
+        "review_label": review["label"],
+    }
 
 
 def _matches_text_filter(candidate: Any, needle: str | None) -> bool:
@@ -397,7 +463,7 @@ def _is_admin_user(user: AuthUser | None) -> bool:
 def _normalize_report_subscription_scope(scope_type: str, scope_key: str) -> tuple[str, str]:
     normalized_scope_type = scope_type.strip().lower()
     if normalized_scope_type not in _REPORT_SUBSCRIPTION_SCOPE_TYPES:
-        raise HTTPException(status_code=400, detail="scope_type must be library or report")
+        raise HTTPException(status_code=400, detail="scope_type must be library, library_view, or report")
 
     normalized_scope_key = scope_key.strip()
     if not normalized_scope_key:
@@ -407,6 +473,43 @@ def _normalize_report_subscription_scope(scope_type: str, scope_key: str) -> tup
         raise HTTPException(status_code=400, detail="Library scope_key must be 'library'")
 
     return normalized_scope_type, normalized_scope_key
+
+
+def _normalize_report_subscription_filter_payload(
+    scope_type: str,
+    payload: dict[str, Any] | None,
+) -> dict[str, str]:
+    if scope_type != "library_view":
+        return {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    normalized: dict[str, str] = {}
+    report_type = str(payload.get("report_type") or "").strip()
+    vendor_filter = str(payload.get("vendor_filter") or "").strip()
+    quality_status = str(payload.get("quality_status") or "").strip().lower()
+    freshness_state = str(payload.get("freshness_state") or "").strip().lower()
+    review_state = str(payload.get("review_state") or "").strip().lower()
+    if report_type:
+        normalized["report_type"] = report_type
+    if vendor_filter:
+        normalized["vendor_filter"] = vendor_filter
+    if quality_status:
+        normalized["quality_status"] = quality_status
+    if freshness_state:
+        if freshness_state not in {"fresh", "monitor", "stale"}:
+            raise HTTPException(status_code=400, detail="freshness_state must be fresh, monitor, or stale")
+        normalized["freshness_state"] = freshness_state
+    if review_state:
+        if review_state not in {"clean", "warnings", "open_review", "blocked"}:
+            raise HTTPException(status_code=400, detail="review_state must be clean, warnings, open_review, or blocked")
+        normalized["review_state"] = review_state
+    if not normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="library_view subscriptions require at least one active filter",
+        )
+    return normalized
 
 
 def _normalize_report_subscription_recipients(values: list[EmailStr]) -> list[str]:
@@ -456,11 +559,15 @@ def _resolve_report_subscription_next_delivery_at(
 
 
 def _serialize_report_subscription(row) -> dict[str, Any]:
+    filter_payload = _safe_json(row["filter_payload"])
+    if not isinstance(filter_payload, dict):
+        filter_payload = {}
     return {
         "id": str(row["id"]),
         "scope_type": row["scope_type"],
         "scope_key": row["scope_key"],
         "scope_label": row["scope_label"],
+        "filter_payload": filter_payload,
         "report_id": str(row["report_id"]) if row["report_id"] else None,
         "delivery_frequency": row["delivery_frequency"],
         "deliverable_focus": row["deliverable_focus"],
@@ -488,7 +595,7 @@ async def _fetch_report_subscription_row(
 ):
     return await pool.fetchrow(
         """
-        SELECT s.id, s.scope_type, s.scope_key, s.scope_label, s.report_id,
+        SELECT s.id, s.scope_type, s.scope_key, s.scope_label, s.filter_payload, s.report_id,
                s.delivery_frequency, s.deliverable_focus, s.freshness_policy,
                s.recipient_emails, s.delivery_note, s.enabled, s.next_delivery_at,
                s.created_at, s.updated_at,
@@ -729,6 +836,7 @@ class BattleCardRequest(BaseModel):
 
 class ReportSubscriptionUpsertRequest(BaseModel):
     scope_label: str = Field(..., min_length=1, max_length=255)
+    filter_payload: dict[str, Any] = Field(default_factory=dict)
     delivery_frequency: str = Field("weekly", pattern="^(weekly|monthly|quarterly)$")
     deliverable_focus: str = Field(
         "all",
@@ -3432,6 +3540,7 @@ async def list_tenant_reports(
         SELECT id, report_date, report_type, executive_summary,
                vendor_filter, category_filter, status, created_at,
                latest_failure_step, latest_error_code, latest_error_summary,
+               COALESCE((intelligence_data->>'data_stale')::boolean, false) AS data_stale,
                blocker_count, warning_count,
                (
                  SELECT COUNT(*)
@@ -3459,27 +3568,44 @@ async def list_tenant_reports(
         *params,
     )
 
-    reports = [
-        {
-            "id": str(r["id"]),
-            "report_date": str(r["report_date"]) if r["report_date"] else None,
-            "report_type": r["report_type"],
-            "executive_summary": r["executive_summary"],
-            "vendor_filter": r["vendor_filter"],
-            "category_filter": r["category_filter"],
-            "status": r["status"],
-            "latest_failure_step": r["latest_failure_step"],
-            "latest_error_code": r["latest_error_code"],
-            "latest_error_summary": r["latest_error_summary"],
-            "blocker_count": r["blocker_count"] or 0,
-            "warning_count": r["warning_count"] or 0,
-            "unresolved_issue_count": r["unresolved_issue_count"] or 0,
-            "quality_status": r["quality_status"],
-            "quality_score": r["quality_score"],
-            "created_at": str(r["created_at"]) if r["created_at"] else None,
-        }
-        for r in rows
-    ]
+    reports = []
+    for r in rows:
+        blocker_count = r["blocker_count"] or 0
+        warning_count = r["warning_count"] or 0
+        unresolved_issue_count = r["unresolved_issue_count"] or 0
+        trust = _report_trust_payload(
+            report_date=r["report_date"],
+            created_at=r["created_at"],
+            data_stale=bool(r["data_stale"]),
+            blocker_count=blocker_count,
+            warning_count=warning_count,
+            unresolved_issue_count=unresolved_issue_count,
+        )
+        reports.append(
+            {
+                "id": str(r["id"]),
+                "report_date": str(r["report_date"]) if r["report_date"] else None,
+                "report_type": r["report_type"],
+                "executive_summary": r["executive_summary"],
+                "vendor_filter": r["vendor_filter"],
+                "category_filter": r["category_filter"],
+                "status": r["status"],
+                "latest_failure_step": r["latest_failure_step"],
+                "latest_error_code": r["latest_error_code"],
+                "latest_error_summary": r["latest_error_summary"],
+                "blocker_count": blocker_count,
+                "warning_count": warning_count,
+                "unresolved_issue_count": unresolved_issue_count,
+                "quality_status": r["quality_status"],
+                "quality_score": r["quality_score"],
+                "freshness_state": trust["freshness_state"],
+                "freshness_label": trust["freshness_label"],
+                "review_state": trust["review_state"],
+                "review_label": trust["review_label"],
+                "trust": trust,
+                "created_at": str(r["created_at"]) if r["created_at"] else None,
+            }
+        )
 
     return {"reports": reports, "count": len(reports)}
 
@@ -3510,6 +3636,7 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         """,
         str(row["id"]),
     )
+    data_density = _safe_json(row["data_density"])
     if isinstance(intelligence_data, dict):
         quality = _safe_json(intelligence_data.get("battle_card_quality"))
         quality_status = intelligence_data.get("quality_status")
@@ -3517,6 +3644,20 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
             quality_status = quality.get("status")
         if isinstance(quality, dict):
             quality_score = quality.get("score")
+    data_stale = False
+    if isinstance(intelligence_data, dict):
+        data_stale = bool(intelligence_data.get("data_stale") is True)
+    blocker_count = row["blocker_count"] or 0
+    warning_count = row["warning_count"] or 0
+    open_issue_count = unresolved_issue_count or 0
+    trust = _report_trust_payload(
+        report_date=row["report_date"],
+        created_at=row["created_at"],
+        data_stale=data_stale,
+        blocker_count=blocker_count,
+        warning_count=warning_count,
+        unresolved_issue_count=open_issue_count,
+    )
 
     return {
         "id": str(row["id"]),
@@ -3526,16 +3667,21 @@ async def get_tenant_report(report_id: str, user: AuthUser = Depends(require_aut
         "category_filter": row["category_filter"],
         "executive_summary": row["executive_summary"],
         "intelligence_data": intelligence_data,
-        "data_density": _safe_json(row["data_density"]),
+        "data_density": data_density,
         "status": row["status"],
         "latest_failure_step": row["latest_failure_step"],
         "latest_error_code": row["latest_error_code"],
         "latest_error_summary": row["latest_error_summary"],
-        "blocker_count": row["blocker_count"] or 0,
-        "warning_count": row["warning_count"] or 0,
-        "unresolved_issue_count": unresolved_issue_count or 0,
+        "blocker_count": blocker_count,
+        "warning_count": warning_count,
+        "unresolved_issue_count": open_issue_count,
         "quality_status": quality_status,
         "quality_score": quality_score,
+        "freshness_state": trust["freshness_state"],
+        "freshness_label": trust["freshness_label"],
+        "review_state": trust["review_state"],
+        "review_label": trust["review_label"],
+        "trust": trust,
         "llm_model": row["llm_model"],
         "created_at": str(row["created_at"]) if row["created_at"] else None,
     }
@@ -3605,6 +3751,10 @@ async def upsert_report_subscription(
     scope_label = body.scope_label.strip()
     if not scope_label:
         raise HTTPException(status_code=400, detail="scope_label is required")
+    normalized_filter_payload = _normalize_report_subscription_filter_payload(
+        normalized_scope_type,
+        body.filter_payload,
+    )
 
     existing_subscription = await _fetch_report_subscription_schedule_row(
         pool,
@@ -3627,6 +3777,7 @@ async def upsert_report_subscription(
             scope_type,
             scope_key,
             scope_label,
+            filter_payload,
             delivery_frequency,
             deliverable_focus,
             freshness_policy,
@@ -3643,20 +3794,22 @@ async def upsert_report_subscription(
             $3,
             $4,
             $5,
-            $6,
+            $6::jsonb,
             $7,
             $8,
-            $9::text[],
-            $10,
+            $9,
+            $10::text[],
             $11,
             $12,
-            $13::uuid,
-            $13::uuid
+            $13,
+            $14::uuid,
+            $14::uuid
         )
         ON CONFLICT (account_id, scope_type, scope_key)
         DO UPDATE
         SET report_id = EXCLUDED.report_id,
             scope_label = EXCLUDED.scope_label,
+            filter_payload = EXCLUDED.filter_payload,
             delivery_frequency = EXCLUDED.delivery_frequency,
             deliverable_focus = EXCLUDED.deliverable_focus,
             freshness_policy = EXCLUDED.freshness_policy,
@@ -3672,6 +3825,7 @@ async def upsert_report_subscription(
         normalized_scope_type,
         normalized_scope_key,
         scope_label,
+        json.dumps(normalized_filter_payload),
         body.delivery_frequency,
         body.deliverable_focus,
         body.freshness_policy,

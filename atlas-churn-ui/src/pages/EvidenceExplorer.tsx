@@ -261,6 +261,16 @@ export default function EvidenceExplorer() {
 
       {activeVendor && (
         <>
+          {/* Vendor reports link */}
+          {selectedVendor && (
+            <Link
+              to={`/reports?vendor=${encodeURIComponent(selectedVendor)}`}
+              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              View reports for {selectedVendor} <ExternalLink className="h-3 w-3" />
+            </Link>
+          )}
+
           {/* Tab bar */}
           <div className="flex items-center gap-1 border-b border-slate-700/50 pb-px">
             {([

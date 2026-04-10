@@ -368,11 +368,11 @@ describe('Watchlists', () => {
 
     const feedControls = screen.getByRole('group', { name: 'Feed controls' })
 
-    await user.selectOptions(within(feedControls).getByLabelText('Vendor'), 'Intercom')
+    await user.selectOptions(within(feedControls).getByLabelText('Vendors'), 'Intercom')
     await waitFor(() => {
-      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({ vendor_name: 'Intercom', category: undefined })
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({ vendor_names: ['Intercom'], category: undefined })
       expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: undefined,
         source: undefined,
         min_urgency: undefined,
@@ -382,9 +382,9 @@ describe('Watchlists', () => {
 
     await user.selectOptions(within(feedControls).getByLabelText('Category'), 'Helpdesk')
     await waitFor(() => {
-      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({ vendor_name: 'Intercom', category: 'Helpdesk' })
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({ vendor_names: ['Intercom'], category: 'Helpdesk' })
       expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         source: undefined,
         min_urgency: undefined,
@@ -395,33 +395,39 @@ describe('Watchlists', () => {
     await user.selectOptions(within(feedControls).getByLabelText('Source'), 'reddit')
     await waitFor(() => {
       expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         source: 'reddit',
         min_urgency: undefined,
         include_stale: undefined,
+        account_alert_threshold: undefined,
+        stale_days_threshold: undefined,
       })
     })
 
     await user.selectOptions(within(feedControls).getByLabelText('Min Urgency'), '8')
     await waitFor(() => {
       expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         source: 'reddit',
         min_urgency: 8,
         include_stale: undefined,
+        account_alert_threshold: undefined,
+        stale_days_threshold: undefined,
       })
     })
 
     await user.click(within(feedControls).getByLabelText('Fresh only'))
     await waitFor(() => {
       expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         source: 'reddit',
         min_urgency: 8,
         include_stale: false,
+        account_alert_threshold: undefined,
+        stale_days_threshold: undefined,
       })
     })
 
@@ -437,7 +443,7 @@ describe('Watchlists', () => {
     await user.type(screen.getByLabelText('Stale days threshold'), '3')
     await waitFor(() => {
       expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         vendor_alert_threshold: 7.5,
         stale_days_threshold: 3,
@@ -449,6 +455,7 @@ describe('Watchlists', () => {
     api.createWatchlistView.mockResolvedValue({
       id: 'view-1',
       name: 'Intercom high urgency',
+      vendor_names: ['Intercom'],
       vendor_name: 'Intercom',
       category: 'Helpdesk',
       source: 'reddit',
@@ -472,7 +479,7 @@ describe('Watchlists', () => {
     await waitFor(() => {
       expect(api.createWatchlistView).toHaveBeenCalledWith({
         name: 'Intercom high urgency',
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         source: 'reddit',
         min_urgency: 8,
@@ -495,6 +502,7 @@ describe('Watchlists', () => {
         {
           id: 'view-1',
           name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
           vendor_name: 'Intercom',
           category: 'Helpdesk',
           source: 'reddit',
@@ -579,13 +587,13 @@ describe('Watchlists', () => {
     await user.click(screen.getAllByRole('button', { name: /Fresh named Intercom/i })[0])
     await waitFor(() => {
       expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         vendor_alert_threshold: 7.5,
         stale_days_threshold: 1,
       })
       expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         source: 'reddit',
         min_urgency: 8,
@@ -618,6 +626,7 @@ describe('Watchlists', () => {
         {
           id: 'view-2',
           name: 'CRM pressure',
+          vendor_names: ['Intercom'],
           vendor_name: 'Intercom',
           category: 'Helpdesk',
           source: 'reddit',
@@ -673,6 +682,7 @@ describe('Watchlists', () => {
         {
           id: 'view-3',
           name: 'Support pressure',
+          vendor_names: ['Intercom'],
           vendor_name: 'Intercom',
           category: 'Helpdesk',
           source: 'reddit',
@@ -756,6 +766,7 @@ describe('Watchlists', () => {
     api.updateWatchlistView.mockResolvedValue({
       id: 'view-1',
       name: 'Exec helpdesk watch',
+      vendor_names: ['Intercom'],
       vendor_name: 'Intercom',
       category: 'Helpdesk',
       source: 'reddit',
@@ -797,7 +808,7 @@ describe('Watchlists', () => {
     await waitFor(() => {
       expect(api.updateWatchlistView).toHaveBeenCalledWith('view-1', {
         name: 'Exec helpdesk watch',
-        vendor_name: 'Intercom',
+        vendor_names: ['Intercom'],
         category: 'Helpdesk',
         source: 'reddit',
         min_urgency: 8,
@@ -979,6 +990,7 @@ describe('Watchlists', () => {
           execution_id: 'exec-prev',
           summary: {
             vendors_reasoned: 2,
+            cross_vendor_succeeded: 1,
             vendors_skipped_hash_reuse: 1,
             vendors_failed: 0,
             total_tokens: 1234,
@@ -1000,6 +1012,7 @@ describe('Watchlists', () => {
           execution_id: 'exec-skip',
           summary: {
             vendors_reasoned: 0,
+            cross_vendor_failed: 1,
             vendors_skipped_hash_reuse: 0,
             vendors_failed: 0,
             total_tokens: 0,
@@ -1011,6 +1024,27 @@ describe('Watchlists', () => {
           started_at: '2026-04-07T12:05:00Z',
           completed_at: '2026-04-07T12:05:30Z',
           created_at: '2026-04-07T12:05:00Z',
+        },
+        {
+          id: 'run-3',
+          competitive_set_id: 'set-1',
+          account_id: 'acct-1',
+          run_id: 'scope-run-3',
+          trigger: 'manual',
+          status: 'running',
+          execution_id: 'exec-running',
+          summary: {
+            vendors_reasoned: 0,
+            vendors_skipped_hash_reuse: 0,
+            vendors_failed: 0,
+            total_tokens: 0,
+            force: false,
+            force_cross_vendor: true,
+            changed_vendors_only: true,
+          },
+          started_at: '2026-04-07T12:06:00Z',
+          completed_at: null,
+          created_at: '2026-04-07T12:06:00Z',
         },
       ],
     })
@@ -1028,7 +1062,11 @@ describe('Watchlists', () => {
       expect(api.fetchCompetitiveSetPlan).toHaveBeenCalledWith('set-1')
     })
     expect(screen.getAllByText('vendor forced')).toHaveLength(2)
-    expect(screen.getAllByText('cross-vendor forced')).toHaveLength(2)
+    expect(screen.getAllByText('cross-vendor forced')).toHaveLength(3)
+    expect(screen.getAllByText('changed only')).toHaveLength(2)
+    expect(screen.getByText('3 reasoned')).toBeInTheDocument()
+    expect(screen.getByText('1 failed')).toBeInTheDocument()
+    expect(screen.getByText('running')).toBeInTheDocument()
     expect(screen.getByText('No pool data available')).toBeInTheDocument()
 
     await user.click(screen.getByLabelText('Run changed vendors only'))
@@ -1044,7 +1082,308 @@ describe('Watchlists', () => {
       })
     })
 
+    expect(screen.getAllByText('running').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('vendor forced').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getAllByText('cross-vendor forced').length).toBeGreaterThanOrEqual(4)
+
     expect(await screen.findByText('Helpdesk core refresh started (exec-1)')).toBeInTheDocument()
+  })
+
+  it('shows last scoped-run markers on the competitive-set card without opening preview', async () => {
+    api.listCompetitiveSets.mockResolvedValue({
+      competitive_sets: [
+        {
+          id: 'set-1',
+          name: 'Helpdesk core',
+          focal_vendor_name: 'Intercom',
+          competitor_vendor_names: ['Zendesk', 'Freshdesk'],
+          active: true,
+          refresh_mode: 'manual',
+          refresh_interval_hours: null,
+          vendor_synthesis_enabled: true,
+          pairwise_enabled: true,
+          category_council_enabled: false,
+          asymmetry_enabled: true,
+          last_run_at: '2026-04-07T12:05:00Z',
+          last_success_at: null,
+          last_run_status: 'failed',
+          last_run_summary: {
+            changed_vendors_only: true,
+            force_cross_vendor: true,
+            _skip_synthesis: 'No pool data available',
+          },
+          created_at: '2026-04-07T12:00:00Z',
+          updated_at: '2026-04-07T12:05:30Z',
+        },
+      ],
+      count: 1,
+      defaults: {
+        default_refresh_interval_hours: 24,
+        max_competitors: 5,
+        default_changed_vendors_only: true,
+      },
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Helpdesk core')
+    expect(screen.getAllByText('changed only').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('cross-vendor forced').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('No pool data available').length).toBeGreaterThan(0)
+  })
+
+  it('shows an optimistic running state on the card immediately after starting a competitive-set run', async () => {
+    const user = userEvent.setup()
+    api.listCompetitiveSets.mockResolvedValue({
+      competitive_sets: [
+        {
+          id: 'set-1',
+          name: 'Helpdesk core',
+          focal_vendor_name: 'Intercom',
+          competitor_vendor_names: ['Zendesk', 'Freshdesk'],
+          active: true,
+          refresh_mode: 'manual',
+          refresh_interval_hours: null,
+          vendor_synthesis_enabled: true,
+          pairwise_enabled: true,
+          category_council_enabled: false,
+          asymmetry_enabled: true,
+          last_run_at: null,
+          last_success_at: null,
+          last_run_status: null,
+          last_run_summary: {},
+          created_at: '2026-04-07T12:00:00Z',
+          updated_at: '2026-04-07T12:00:00Z',
+        },
+      ],
+      count: 1,
+      defaults: {
+        default_refresh_interval_hours: 24,
+        max_competitors: 5,
+        default_changed_vendors_only: true,
+      },
+    })
+    api.fetchCompetitiveSetPlan
+      .mockResolvedValueOnce({
+      competitive_set: { id: 'set-1', name: 'Helpdesk core' },
+      plan: {
+        competitive_set_id: 'set-1',
+        focal_vendor_name: 'Intercom',
+        vendor_names: ['Intercom', 'Zendesk', 'Freshdesk'],
+        pairwise_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        category_names: [],
+        asymmetry_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        vendor_synthesis_enabled: true,
+        pairwise_enabled: true,
+        category_council_enabled: false,
+        asymmetry_enabled: true,
+        vendor_job_count: 3,
+        pairwise_job_count: 2,
+        category_job_count: 0,
+        asymmetry_job_count: 2,
+        estimated_total_jobs: 7,
+        estimate: {
+          lookback_days: 30,
+          vendor_jobs_planned: 3,
+          pairwise_jobs_planned: 2,
+          category_jobs_planned: 0,
+          asymmetry_jobs_planned: 2,
+          estimated_vendor_tokens: 1200,
+          estimated_cross_vendor_tokens: 2400,
+          estimated_total_tokens: 3600,
+          estimated_vendor_cost_usd: 0.12,
+          estimated_cross_vendor_cost_usd: 0.24,
+          estimated_total_cost_usd: 0.36,
+          estimated_vendor_tokens_likely_to_reason: 800,
+          estimated_vendor_cost_usd_likely_to_reason: 0.08,
+          vendor_jobs_with_history: 2,
+          vendor_jobs_using_fallback: 1,
+          cross_vendor_jobs_with_history: 3,
+          cross_vendor_jobs_using_fallback: 1,
+          vendor_jobs_with_matching_pools: 2,
+          vendor_jobs_missing_pools: 1,
+          vendor_jobs_likely_to_reason: 2,
+          vendor_jobs_likely_hash_reuse: 1,
+          vendor_jobs_likely_stale_reuse: 0,
+          vendor_jobs_likely_missing_prior: 0,
+          vendor_jobs_likely_hash_changed: 1,
+          vendor_jobs_likely_prior_quality_weak: 0,
+          vendor_jobs_likely_missing_packet_artifacts: 0,
+          vendor_jobs_likely_missing_reference_ids: 0,
+          likely_rerun_vendors: ['Intercom:changed'],
+          likely_reuse_vendors: ['Zendesk:reuse'],
+          recent_vendor_sample_count: 3,
+          recent_cross_vendor_sample_count: 2,
+          note: 'Estimated from recent runs.',
+        },
+      },
+      recent_runs: [],
+    })
+    api.runCompetitiveSetNow.mockResolvedValue({
+      execution_id: 'exec-new',
+      status: 'started',
+      message: 'queued',
+      competitive_set_id: 'set-1',
+      plan: {
+        competitive_set_id: 'set-1',
+      },
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Helpdesk core')
+    await user.click(screen.getByRole('button', { name: 'Preview cost' }))
+    await screen.findByRole('button', { name: 'Run now' })
+    await user.click(screen.getByRole('button', { name: 'Run now' }))
+
+    expect(screen.getAllByText('running')).toHaveLength(2)
+    expect(screen.getAllByText('changed only').length).toBeGreaterThanOrEqual(2)
+    expect(await screen.findByText('Helpdesk core refresh started (exec-new)')).toBeInTheDocument()
+  })
+
+  it('does not inject a new optimistic run when the competitive set is already running', async () => {
+    const user = userEvent.setup()
+    api.listCompetitiveSets.mockResolvedValue({
+      competitive_sets: [
+        {
+          id: 'set-1',
+          name: 'Helpdesk core',
+          focal_vendor_name: 'Intercom',
+          competitor_vendor_names: ['Zendesk', 'Freshdesk'],
+          active: true,
+          refresh_mode: 'manual',
+          refresh_interval_hours: null,
+          vendor_synthesis_enabled: true,
+          pairwise_enabled: true,
+          category_council_enabled: false,
+          asymmetry_enabled: true,
+          last_run_at: '2026-04-07T12:06:00Z',
+          last_success_at: null,
+          last_run_status: 'running',
+          last_run_summary: {
+            changed_vendors_only: true,
+            force_cross_vendor: true,
+          },
+          created_at: '2026-04-07T12:00:00Z',
+          updated_at: '2026-04-07T12:06:00Z',
+        },
+      ],
+      count: 1,
+      defaults: {
+        default_refresh_interval_hours: 24,
+        max_competitors: 5,
+        default_changed_vendors_only: true,
+      },
+    })
+    api.fetchCompetitiveSetPlan.mockResolvedValue({
+      competitive_set: { id: 'set-1', name: 'Helpdesk core' },
+      plan: {
+        competitive_set_id: 'set-1',
+        focal_vendor_name: 'Intercom',
+        vendor_names: ['Intercom', 'Zendesk', 'Freshdesk'],
+        pairwise_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        category_names: [],
+        asymmetry_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        vendor_synthesis_enabled: true,
+        pairwise_enabled: true,
+        category_council_enabled: false,
+        asymmetry_enabled: true,
+        vendor_job_count: 3,
+        pairwise_job_count: 2,
+        category_job_count: 0,
+        asymmetry_job_count: 2,
+        estimated_total_jobs: 7,
+        estimate: {
+          lookback_days: 30,
+          vendor_jobs_planned: 3,
+          pairwise_jobs_planned: 2,
+          category_jobs_planned: 0,
+          asymmetry_jobs_planned: 2,
+          estimated_vendor_tokens: 1200,
+          estimated_cross_vendor_tokens: 2400,
+          estimated_total_tokens: 3600,
+          estimated_vendor_cost_usd: 0.12,
+          estimated_cross_vendor_cost_usd: 0.24,
+          estimated_total_cost_usd: 0.36,
+          estimated_vendor_tokens_likely_to_reason: 800,
+          estimated_vendor_cost_usd_likely_to_reason: 0.08,
+          vendor_jobs_with_history: 2,
+          vendor_jobs_using_fallback: 1,
+          cross_vendor_jobs_with_history: 3,
+          cross_vendor_jobs_using_fallback: 1,
+          vendor_jobs_with_matching_pools: 2,
+          vendor_jobs_missing_pools: 1,
+          vendor_jobs_likely_to_reason: 2,
+          vendor_jobs_likely_hash_reuse: 1,
+          vendor_jobs_likely_stale_reuse: 0,
+          vendor_jobs_likely_missing_prior: 0,
+          vendor_jobs_likely_hash_changed: 1,
+          vendor_jobs_likely_prior_quality_weak: 0,
+          vendor_jobs_likely_missing_packet_artifacts: 0,
+          vendor_jobs_likely_missing_reference_ids: 0,
+          likely_rerun_vendors: ['Intercom:changed'],
+          likely_reuse_vendors: ['Zendesk:reuse'],
+          recent_vendor_sample_count: 3,
+          recent_cross_vendor_sample_count: 2,
+          note: 'Estimated from recent runs.',
+        },
+      },
+      recent_runs: [
+        {
+          id: 'run-1',
+          competitive_set_id: 'set-1',
+          account_id: 'acct-1',
+          run_id: 'scope-run-running',
+          trigger: 'manual',
+          status: 'running',
+          execution_id: 'exec-existing',
+          summary: {
+            changed_vendors_only: true,
+            force_cross_vendor: true,
+          },
+          started_at: '2026-04-07T12:06:00Z',
+          completed_at: null,
+          created_at: '2026-04-07T12:06:00Z',
+        },
+      ],
+    })
+    api.runCompetitiveSetNow.mockResolvedValue({
+      execution_id: 'exec-existing',
+      status: 'running',
+      message: "Task 'b2b_reasoning_synthesis' is already running.",
+      already_running: true,
+      competitive_set_id: 'set-1',
+      plan: {
+        competitive_set_id: 'set-1',
+      },
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Helpdesk core')
+    await user.click(screen.getByRole('button', { name: 'Preview cost' }))
+    await screen.findByRole('button', { name: 'Run now' })
+    await user.click(screen.getByLabelText('Run changed vendors only'))
+    await user.click(screen.getByLabelText('Force vendor rerun'))
+    await user.click(screen.getByRole('button', { name: 'Run now' }))
+
+    await waitFor(() => expect(api.fetchCompetitiveSetPlan).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getAllByText('running')).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByText('cross-vendor forced')).toHaveLength(2))
+    expect(screen.queryAllByText('vendor forced')).toHaveLength(0)
+    expect(await screen.findByText("Task 'b2b_reasoning_synthesis' is already running.")).toBeInTheDocument()
   })
 
   it('matches the active saved view using alert delivery settings too', async () => {
@@ -1054,6 +1393,7 @@ describe('Watchlists', () => {
         {
           id: 'view-1',
           name: 'Intercom no email',
+          vendor_names: ['Intercom'],
           vendor_name: 'Intercom',
           category: '',
           source: '',
@@ -1076,6 +1416,7 @@ describe('Watchlists', () => {
         {
           id: 'view-2',
           name: 'Intercom weekly email',
+          vendor_names: ['Intercom'],
           vendor_name: 'Intercom',
           category: '',
           source: '',
@@ -1101,6 +1442,7 @@ describe('Watchlists', () => {
     api.updateWatchlistView.mockResolvedValue({
       id: 'view-2',
       name: 'Intercom weekly email',
+      vendor_names: ['Intercom'],
       vendor_name: 'Intercom',
       category: '',
       source: '',

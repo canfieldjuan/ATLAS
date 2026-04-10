@@ -5342,7 +5342,7 @@ class TestReasoningSynthesisTask:
             "HubSpot": vendor_b_layers,
             "Dynamics": vendor_c_layers,
         }
-        scoped_category_name = "CRM"
+        scoped_category_name = "crm"
         prior_synthesis = {
             "reasoning_contracts": {
                 "vendor_core_reasoning": {
@@ -5466,9 +5466,9 @@ class TestReasoningSynthesisTask:
             "scope_type": "competitive_set",
             "scope_id": "scope-set-1",
             "scope_vendor_names": ["Salesforce", "HubSpot", "Dynamics"],
-            "scope_pairwise_pairs": [["Salesforce", "HubSpot"], ["Salesforce", "Dynamics"]],
+            "scope_pairwise_pairs": [["salesforce", "hubspot"], ["salesforce", "dynamics"]],
             "scope_category_names": [scoped_category_name],
-            "scope_asymmetry_pairs": [["Salesforce", "HubSpot"], ["Salesforce", "Dynamics"]],
+            "scope_asymmetry_pairs": [["salesforce", "hubspot"], ["salesforce", "dynamics"]],
             "changed_vendors_only": True,
         }))
 

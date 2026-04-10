@@ -5,6 +5,15 @@ import SubscriptionModal from './SubscriptionModal'
 const api = vi.hoisted(() => ({
   fetchReportSubscription: vi.fn(),
   upsertReportSubscription: vi.fn(),
+  normalizeReportLibraryViewFilters: vi.fn((filters?: Record<string, string>) => {
+    const normalized: Record<string, string> = {}
+    if (filters?.report_type) normalized.report_type = filters.report_type
+    if (filters?.vendor_filter) normalized.vendor_filter = filters.vendor_filter
+    if (filters?.quality_status) normalized.quality_status = filters.quality_status
+    if (filters?.freshness_state) normalized.freshness_state = filters.freshness_state
+    if (filters?.review_state) normalized.review_state = filters.review_state
+    return normalized
+  }),
 }))
 
 vi.mock('../api/client', () => api)
@@ -28,6 +37,7 @@ describe('SubscriptionModal', () => {
           scope_type: 'report',
           scope_key: 'report-1',
           scope_label: 'Existing report sub',
+          filter_payload: {},
           report_id: 'report-1',
           delivery_frequency: 'monthly',
           deliverable_focus: 'battle_cards',
@@ -138,6 +148,7 @@ describe('SubscriptionModal', () => {
           scope_type: 'report',
           scope_key: 'report-1',
           scope_label: 'Stale report subscription',
+          filter_payload: {},
           report_id: 'report-1',
           delivery_frequency: 'monthly',
           deliverable_focus: 'battle_cards',
@@ -174,6 +185,7 @@ describe('SubscriptionModal', () => {
         scope_type: 'report',
         scope_key: 'report-1',
         scope_label: 'Report One',
+        filter_payload: {},
         report_id: 'report-1',
         delivery_frequency: 'weekly',
         deliverable_focus: 'all',
@@ -234,4 +246,86 @@ describe('SubscriptionModal', () => {
     expect(onClose).not.toHaveBeenCalled()
     vi.useRealTimers()
   }, 10000)
+
+  it('persists filter-backed library view subscriptions', async () => {
+    api.fetchReportSubscription.mockResolvedValue({ subscription: null })
+    api.upsertReportSubscription.mockResolvedValue({
+      subscription: {
+        id: 'sub-view-1',
+        scope_type: 'library_view',
+        scope_key: 'library-view--type-battle_card--vendor-zendesk--quality-sales_ready--freshness-stale--review-blocked',
+        scope_label: 'Battle Cards • Zendesk Library',
+        filter_payload: {
+          report_type: 'battle_card',
+          vendor_filter: 'Zendesk',
+          quality_status: 'sales_ready',
+          freshness_state: 'stale',
+          review_state: 'blocked',
+        },
+        report_id: null,
+        delivery_frequency: 'weekly',
+        deliverable_focus: 'battle_cards',
+        freshness_policy: 'fresh_or_monitor',
+        recipient_emails: ['team@example.com'],
+        delivery_note: '',
+        enabled: true,
+        next_delivery_at: null,
+        last_delivery_at: null,
+        last_delivery_status: null,
+        last_delivery_report_count: null,
+        last_delivery_summary: null,
+        created_at: null,
+        updated_at: null,
+      },
+    })
+
+    render(
+      <SubscriptionModal
+        open
+        onClose={vi.fn()}
+        scopeType="library_view"
+        scopeKey="library-view--type-battle_card--vendor-zendesk--quality-sales_ready--freshness-stale--review-blocked"
+        scopeLabel="Battle Cards • Zendesk Library"
+        filterPayload={{
+          report_type: 'battle_card',
+          vendor_filter: 'Zendesk',
+          quality_status: 'sales_ready',
+          freshness_state: 'stale',
+          review_state: 'blocked',
+        }}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Subscribed View')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('Type: battle card')).toBeInTheDocument()
+    expect(screen.getByText('Vendor: Zendesk')).toBeInTheDocument()
+    expect(screen.getByText('Quality: sales ready')).toBeInTheDocument()
+    expect(screen.getByText('Freshness: stale')).toBeInTheDocument()
+    expect(screen.getByText('Review: blocked')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Recipient Emails'), {
+      target: { value: 'team@example.com' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Subscribe' }))
+
+    await waitFor(() => {
+      expect(api.upsertReportSubscription).toHaveBeenCalledWith(
+        'library_view',
+        'library-view--type-battle_card--vendor-zendesk--quality-sales_ready--freshness-stale--review-blocked',
+        expect.objectContaining({
+          scope_label: 'Battle Cards • Zendesk Library',
+          filter_payload: {
+            report_type: 'battle_card',
+            vendor_filter: 'Zendesk',
+            quality_status: 'sales_ready',
+            freshness_state: 'stale',
+            review_state: 'blocked',
+          },
+        }),
+      )
+    })
+  })
 })

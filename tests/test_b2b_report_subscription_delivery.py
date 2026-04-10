@@ -211,6 +211,73 @@ async def test_resolve_artifacts_skips_overridden_library_reports(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_artifacts_applies_library_view_filters(monkeypatch):
+    monkeypatch.setattr(mod, "_fetch_library_rows", AsyncMock(return_value=[
+        {
+            "id": "report-1",
+            "report_type": "battle_card",
+            "vendor_filter": "Zendesk",
+            "status": "sales_ready",
+            "quality_status": "sales_ready",
+            "intelligence_data": {},
+            "data_density": {},
+            "created_at": datetime.now(timezone.utc) - timedelta(days=10),
+            "report_date": datetime.now(timezone.utc) - timedelta(days=10),
+            "blocker_count": 1,
+            "warning_count": 0,
+            "unresolved_issue_count": 0,
+        },
+        {
+            "id": "report-2",
+            "report_type": "battle_card",
+            "vendor_filter": "Intercom",
+            "status": "sales_ready",
+            "quality_status": "sales_ready",
+            "intelligence_data": {},
+            "data_density": {},
+            "created_at": datetime.now(timezone.utc) - timedelta(hours=6),
+            "report_date": datetime.now(timezone.utc) - timedelta(hours=6),
+            "blocker_count": 0,
+            "warning_count": 0,
+            "unresolved_issue_count": 0,
+        },
+    ]))
+    monkeypatch.setattr(
+        mod.settings.b2b_report_delivery,
+        "report_scope_overrides_library",
+        False,
+        raising=False,
+    )
+    monkeypatch.setattr(mod, "_delivery_eligibility_reason", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        mod,
+        "_build_delivery_artifact",
+        lambda report_row: {"report_id": report_row["id"], "freshness_state": "fresh"},
+    )
+
+    artifacts = await mod._resolve_artifacts(
+        None,
+        {
+            "account_id": "acct-1",
+            "scope_type": "library_view",
+            "scope_key": "library-view--type-battle_card--vendor-zendesk--quality-sales_ready--freshness-stale--review-blocked",
+            "filter_payload": {
+                "report_type": "battle_card",
+                "vendor_filter": "Zendesk",
+                "quality_status": "sales_ready",
+                "freshness_state": "stale",
+                "review_state": "blocked",
+            },
+            "deliverable_focus": "all",
+            "freshness_policy": "any",
+        },
+        {"zendesk", "intercom"},
+    )
+
+    assert [artifact["report_id"] for artifact in artifacts] == ["report-1"]
+
+
+@pytest.mark.asyncio
 async def test_run_skips_unchanged_delivery_without_sending(monkeypatch):
     scheduled_for = datetime.now(timezone.utc) - timedelta(minutes=5)
     pool = _DuePool(
