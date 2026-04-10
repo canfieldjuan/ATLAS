@@ -4226,6 +4226,90 @@ async def read_vendor_signal_detail(
     return dict(row) if row else None
 
 
+async def read_vendor_signal_detail_exact(
+    pool,
+    *,
+    vendor_name: str,
+    product_category: str | None = None,
+    tracked_account_id: Any | None = None,
+    include_snapshot_metrics: bool = False,
+    exclude_suppressed: bool = False,
+) -> dict[str, Any] | None:
+    """Read one exact-match vendor signal detail row with optional scope."""
+    normalized_vendor = _canonicalize_vendor(vendor_name) or str(vendor_name or "").strip()
+    if not normalized_vendor:
+        return None
+
+    conditions = ["LOWER(sig.vendor_name) = LOWER($1)"]
+    params: list[Any] = [normalized_vendor]
+    idx = 2
+
+    if product_category:
+        conditions.append(f"sig.product_category = ${idx}")
+        params.append(product_category)
+        idx += 1
+
+    if tracked_account_id is not None:
+        conditions.append(
+            f"sig.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+        )
+        params.append(tracked_account_id)
+        idx += 1
+
+    if exclude_suppressed:
+        conditions.append(
+            suppress_predicate(
+                "churn_signal",
+                id_expr="sig.id",
+                vendor_expr="sig.vendor_name",
+            )
+        )
+
+    snapshot_select = ""
+    snapshot_join = ""
+    if include_snapshot_metrics:
+        snapshot_select = """
+               , snap.support_sentiment AS support_sentiment
+               , snap.legacy_support_score AS legacy_support_score
+               , snap.new_feature_velocity AS new_feature_velocity
+               , snap.employee_growth_rate AS employee_growth_rate
+        """
+        snapshot_join = """
+        LEFT JOIN LATERAL (
+            SELECT support_sentiment,
+                   legacy_support_score,
+                   new_feature_velocity,
+                   employee_growth_rate
+            FROM b2b_vendor_snapshots snap
+            WHERE snap.vendor_name = sig.vendor_name
+            ORDER BY snap.snapshot_date DESC
+            LIMIT 1
+        ) snap ON TRUE
+        """
+
+    row = await pool.fetchrow(
+        """
+        SELECT sig.*
+               """
+        + snapshot_select
+        + """
+        FROM b2b_churn_signals sig
+        """
+        + snapshot_join
+        + """
+        WHERE """
+        + " AND ".join(conditions)
+        + """
+        ORDER BY sig.last_computed_at DESC NULLS LAST,
+                 sig.total_reviews DESC NULLS LAST,
+                 sig.product_category ASC NULLS LAST
+        LIMIT 1
+        """,
+        *params,
+    )
+    return dict(row) if row else None
+
+
 def _normalize_vendor_name_list(vendor_names: Iterable[Any] | None) -> list[str]:
     return _canonicalize_vendor_name_filters(vendor_names)
 
