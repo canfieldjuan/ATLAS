@@ -29,11 +29,11 @@ from ...services.vendor_registry import resolve_vendor_name_cached
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_shared")
 
-_COMPLETE_CORE_RUN_MARKER_WHERE = """
-report_type = 'core_run_complete'
-AND status = 'published'
-AND COALESCE(LOWER(intelligence_data->>'materialization_complete'), 'true') = 'true'
-"""
+_INTELLIGENCE_ELIGIBLE_STATUSES: tuple[str, ...] = (
+    "enriched",
+    "no_signal",
+    "quarantined",
+)
 
 
 def _reasoning_int(value: Any) -> int | None:
@@ -48,102 +48,6 @@ def _reasoning_int(value: Any) -> int | None:
             return int(float(raw))
         except (TypeError, ValueError):
             return None
-
-
-async def has_complete_core_run_marker(pool, as_of: date) -> bool:
-    """Return whether the core run marker is complete and published for a date."""
-    marker = await pool.fetchval(
-        f"""
-        SELECT 1
-        FROM b2b_intelligence
-        WHERE {_COMPLETE_CORE_RUN_MARKER_WHERE}
-          AND report_date = $1
-        LIMIT 1
-        """,
-        as_of,
-    )
-    return bool(marker)
-
-
-async def latest_complete_core_report_date(pool) -> date | None:
-    """Return the latest date with a complete published core-run marker."""
-    return await pool.fetchval(
-        f"""
-        SELECT report_date
-        FROM b2b_intelligence
-        WHERE {_COMPLETE_CORE_RUN_MARKER_WHERE}
-        ORDER BY report_date DESC, created_at DESC
-        LIMIT 1
-        """
-    )
-
-
-def _core_marker_complete(value: Any, *, default: bool) -> bool:
-    if value is None:
-        return bool(default)
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"true", "1", "yes", "y"}:
-        return True
-    if text in {"false", "0", "no", "n"}:
-        return False
-    return bool(default)
-
-
-def _core_phase_names(values: Any, *, limit: int = 3) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    names: list[str] = []
-    seen: set[str] = set()
-    for item in values:
-        text = str(item or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        names.append(text)
-        if len(names) >= limit:
-            break
-    return names
-
-
-async def describe_core_run_gap(pool, as_of: date) -> str | None:
-    """Return a user-facing reason when the canonical core run is unavailable."""
-    row = await pool.fetchrow(
-        """
-        SELECT status, intelligence_data
-        FROM b2b_intelligence
-        WHERE report_type = 'core_run_complete'
-          AND report_date = $1
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1
-        """,
-        as_of,
-    )
-    if not row:
-        return "Core signals are not available for today"
-    status = str(row["status"] or "").strip().lower()
-    intelligence_data = _safe_json(row["intelligence_data"], {})
-    if not isinstance(intelligence_data, dict):
-        intelligence_data = {}
-    materialization_complete = _core_marker_complete(
-        intelligence_data.get("materialization_complete"),
-        default=status == "published",
-    )
-    if status == "published" and materialization_complete:
-        return None
-    materialization_status = intelligence_data.get("materialization_status")
-    if isinstance(materialization_status, dict):
-        failed = _core_phase_names(materialization_status.get("failed_phases"))
-        partial = _core_phase_names(materialization_status.get("partial_phases"))
-        details: list[str] = []
-        if failed:
-            details.append(f"failed: {', '.join(failed)}")
-        if partial:
-            details.append(f"partial: {', '.join(partial)}")
-        if details:
-            return f"Core churn materialization is incomplete for today ({'; '.join(details)})"
-    return "Core churn materialization is incomplete for today"
 
 
 
@@ -625,7 +529,8 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
     """
     p = f"{alias}." if alias else ""
     time_expr = _eligible_review_timestamp_expr(alias=alias)
-    parts = [f"{p}enrichment_status = 'enriched'"]
+    status_list = ", ".join(f"'{status}'" for status in _INTELLIGENCE_ELIGIBLE_STATUSES)
+    parts = [f"{p}enrichment_status IN ({status_list})"]
     parts.append(f"{p}duplicate_of_review_id IS NULL")
     if window_param is not None:
         parts.append(f"{time_expr} > NOW() - make_interval(days => ${window_param})")
@@ -647,6 +552,65 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
         f")"
     )
     return "\n          AND ".join(parts)
+
+
+async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
+    """Return end-to-end review funnel counts for the active intelligence sources."""
+    sources = _intelligence_source_allowlist()
+    eligible_filters = _eligible_review_filters(window_param=1, source_param=2)
+    status_rows = await pool.fetch(
+        """
+        SELECT enrichment_status, count(*) AS ct
+        FROM b2b_reviews
+        WHERE duplicate_of_review_id IS NULL
+          AND source = ANY($1::text[])
+          AND COALESCE(reviewed_at, imported_at, enriched_at) > NOW() - make_interval(days => $2)
+        GROUP BY enrichment_status
+        """,
+        sources,
+        window_days,
+    )
+    status_counts = {
+        str(row["enrichment_status"] or ""): int(row["ct"] or 0)
+        for row in status_rows
+    }
+    eligible_row = await pool.fetchrow(
+        f"""
+        SELECT
+            count(*) AS intelligence_eligible_reviews,
+            count(*) FILTER (
+                WHERE reviewer_company_norm IS NOT NULL
+                  AND reviewer_company_norm <> ''
+            ) AS company_signal_eligible_reviews,
+            count(*) FILTER (
+                WHERE reviewer_company_norm IS NOT NULL
+                  AND reviewer_company_norm <> ''
+                  AND source <> ALL($3::text[])
+            ) AS high_confidence_named_account_reviews
+        FROM b2b_reviews
+        WHERE {eligible_filters}
+        """,
+        window_days,
+        sources,
+        list(_company_signal_low_trust_sources()),
+    )
+    intelligence_eligible_reviews = int((eligible_row["intelligence_eligible_reviews"] if eligible_row else 0) or 0)
+    company_signal_eligible_reviews = int((eligible_row["company_signal_eligible_reviews"] if eligible_row else 0) or 0)
+    high_conf_named_account_reviews = int((eligible_row["high_confidence_named_account_reviews"] if eligible_row else 0) or 0)
+    return {
+        "found": sum(status_counts.values()),
+        "enriched": status_counts.get("enriched", 0),
+        "no_signal": status_counts.get("no_signal", 0),
+        "quarantined": status_counts.get("quarantined", 0),
+        "raw_only": status_counts.get("raw_only", 0),
+        "pending": status_counts.get("pending", 0),
+        "failed": status_counts.get("failed", 0),
+        "not_applicable": status_counts.get("not_applicable", 0),
+        "duplicate": status_counts.get("duplicate", 0),
+        "intelligence_eligible": intelligence_eligible_reviews,
+        "company_signal_eligible": company_signal_eligible_reviews,
+        "high_confidence_named_account": high_conf_named_account_reviews,
+    }
 
 
 def _quote_text(q: Any) -> str | None:
@@ -3798,6 +3762,7 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
     """Compute temporal metadata and source composition for the LLM."""
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=None, source_param=2)
+    funnel_audit = await _fetch_review_funnel_audit(pool, window_days)
     row = await pool.fetchrow(
         f"""
         SELECT
@@ -3847,6 +3812,7 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
         "unique_vendors": row["vendor_count"],
         "unique_companies": row["company_count"],
         "source_distribution": source_dist,
+        "funnel_audit": funnel_audit,
     }
 
 
@@ -4073,11 +4039,6 @@ def _canonicalize_vendor_name_filters(vendor_names: Iterable[Any] | None) -> lis
     )
 
 
-def _normalize_materialization_run_id(value: Any) -> str | None:
-    text = str(value or "").strip()
-    return text or None
-
-
 async def read_vendor_scorecards(
     pool,
     *,
@@ -4101,7 +4062,6 @@ async def read_vendor_scorecards(
                signal_reviews,
                churn_intent_count AS churn_intent,
                avg_urgency_score AS avg_urgency,
-               materialization_run_id,
                last_computed_at,
                review_window_end
         FROM b2b_churn_signals
@@ -4114,27 +4074,17 @@ async def read_vendor_scorecards(
         min_reviews,
         *([requested_vendors] if requested_vendors else []),
     )
-    mapped = []
-    for row in rows:
-        if not row.get("vendor_name"):
-            continue
-        mapped_row = {
-            "vendor_name": row["vendor_name"],
-            "product_category": row["product_category"],
-            "total_reviews": int(row["total_reviews"] or 0),
-            "churn_intent": int(row["churn_intent"] or 0),
-            "avg_urgency": (
-                float(row["avg_urgency"])
-                if row["avg_urgency"] is not None
-                else 0.0
-            ),
+    mapped = [
+        {
+            "vendor_name": r["vendor_name"],
+            "product_category": r["product_category"],
+            "total_reviews": int(r["total_reviews"] or 0),
+            "churn_intent": int(r["churn_intent"] or 0),
+            "avg_urgency": float(r["avg_urgency"]) if r["avg_urgency"] is not None else 0.0,
         }
-        materialization_run_id = _normalize_materialization_run_id(
-            row.get("materialization_run_id"),
-        )
-        if materialization_run_id is not None:
-            mapped_row["materialization_run_id"] = materialization_run_id
-        mapped.append(mapped_row)
+        for r in rows
+        if r.get("vendor_name")
+    ]
 
     categories_by_vendor: dict[str, set[str]] = {}
     for row in mapped:
@@ -4158,94 +4108,6 @@ async def read_vendor_scorecards(
             continue
         filtered.append(row)
     return filtered
-
-
-def _align_vendor_intelligence_records_to_scorecards(
-    vendor_scores: list[dict[str, Any]],
-    records: list[dict[str, Any]],
-) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    """Filter vault overlays to vendors whose current scorecard run still matches.
-
-    We only suppress a vault overlay when both sides carry explicit
-    ``materialization_run_id`` values and those values disagree. Legacy rows
-    without a run id are allowed through for backward compatibility.
-    """
-    scorecards_by_vendor: dict[str, dict[str, Any]] = {}
-    for row in vendor_scores:
-        vendor = _canonicalize_vendor(
-            row.get("vendor_name") or row.get("vendor") or "",
-        )
-        if vendor and vendor not in scorecards_by_vendor:
-            scorecards_by_vendor[vendor] = row
-
-    aligned_lookup: dict[str, dict[str, Any]] = {}
-    mismatched_vendors: list[str] = []
-    legacy_scorecard_vendors: list[str] = []
-    legacy_vault_vendors: list[str] = []
-
-    for record in records:
-        vendor = _canonicalize_vendor(record.get("vendor_name") or "")
-        if not vendor:
-            continue
-        scorecard = scorecards_by_vendor.get(vendor)
-        if scorecard is None:
-            continue
-        score_run_id = _normalize_materialization_run_id(
-            scorecard.get("materialization_run_id"),
-        )
-        vault_run_id = _normalize_materialization_run_id(
-            record.get("materialization_run_id"),
-        )
-        if score_run_id and vault_run_id and score_run_id != vault_run_id:
-            mismatched_vendors.append(vendor)
-            continue
-        if score_run_id is None:
-            legacy_scorecard_vendors.append(vendor)
-        if vault_run_id is None:
-            legacy_vault_vendors.append(vendor)
-        vault = record.get("vault")
-        aligned_lookup[vendor] = vault if isinstance(vault, dict) else {}
-
-    return aligned_lookup, {
-        "matched_vendor_count": len(aligned_lookup),
-        "mismatched_vendor_count": len(mismatched_vendors),
-        "mismatched_vendors": sorted(mismatched_vendors),
-        "legacy_scorecard_vendor_count": len(set(legacy_scorecard_vendors)),
-        "legacy_scorecard_vendors": sorted(set(legacy_scorecard_vendors)),
-        "legacy_vault_vendor_count": len(set(legacy_vault_vendors)),
-        "legacy_vault_vendors": sorted(set(legacy_vault_vendors)),
-    }
-
-
-def _align_vendor_intelligence_record_to_scorecard(
-    scorecard: dict[str, Any] | None,
-    record: dict[str, Any] | None,
-) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """Align one vendor-intelligence record against one scorecard row."""
-    if not isinstance(record, dict):
-        return None, {
-            "matched_vendor_count": 0,
-            "mismatched_vendor_count": 0,
-            "mismatched_vendors": [],
-            "legacy_scorecard_vendor_count": 0,
-            "legacy_scorecard_vendors": [],
-            "legacy_vault_vendor_count": 0,
-            "legacy_vault_vendors": [],
-        }
-
-    aligned_lookup, alignment = _align_vendor_intelligence_records_to_scorecards(
-        [scorecard] if isinstance(scorecard, dict) else [],
-        [record],
-    )
-    vendor_name = _canonicalize_vendor(
-        record.get("vendor_name")
-        or (scorecard or {}).get("vendor_name")
-        or (scorecard or {}).get("vendor")
-        or "",
-    )
-    if not vendor_name:
-        return None, alignment
-    return aligned_lookup.get(vendor_name), alignment
 
 
 async def read_vendor_scorecard(
