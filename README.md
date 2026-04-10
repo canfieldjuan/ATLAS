@@ -1,6 +1,6 @@
 # Atlas
 
-A multi-modal AI platform that combines personal automation, voice control, B2B sales intelligence, and consumer product analytics into a single extensible system. Atlas runs as a central "Brain" server backed by local LLMs, with edge nodes for distributed sensing, 4 web dashboards, 8 MCP servers (130+ tools), 57 autonomous scheduled tasks, a full telephony stack, and 476 REST/WebSocket API endpoints.
+A multi-modal AI platform that combines personal automation, voice control, B2B sales intelligence, and consumer product analytics into a single extensible system. Atlas runs as a central "Brain" server backed by local LLMs, with edge nodes for distributed sensing, 4 web dashboards, 8 MCP servers (130+ tools), 57 autonomous scheduled tasks, a full telephony stack, and 500+ REST/WebSocket API endpoints.
 
 ---
 
@@ -9,7 +9,7 @@ A multi-modal AI platform that combines personal automation, voice control, B2B 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                          ATLAS BRAIN                                  │
-│                   (FastAPI · 476 API endpoints)                    │
+│                   (FastAPI · 500+ API endpoints)                    │
 │                                                                       │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────┐   │
 │  │  LLM Pool  │  │    STT     │  │    TTS     │  │   Intent     │   │
@@ -96,7 +96,7 @@ A multi-modal AI platform that combines personal automation, voice control, B2B 
 ## Project Structure
 
 ```
-atlas_brain/                    # Core server (FastAPI, 476 endpoints)
+atlas_brain/                    # Core server (FastAPI, 500+ endpoints)
 ├── api/                        # REST + WebSocket endpoints
 │   ├── query/                  #   Text inference
 │   ├── devices/                #   Device control + intent dispatch
@@ -471,9 +471,9 @@ curl http://127.0.0.1:8001/api/v1/vision/events
 
 ## API Reference
 
-Below is a curated API overview for the main route families. For the exhaustive generated inventory of all **476 discovered routes**, see [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md).
+Below is a curated API overview for the main route families. For a generated mounted-route snapshot from importing `atlas_brain.main:app` in the current checkout, see [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md).
 
-Most REST endpoints are served under `/api/v1/` (port 8001 by default). Root-level exceptions include OpenAI compatibility (`/v1/...`), Ollama compatibility (`/`, `/api/...`), and webhooks (`/webhooks/...`). Most authenticated endpoints use a JWT Bearer token obtained via `/api/v1/auth/login`. B2B-specific routes additionally require the `b2b_plan` claim.
+Most REST endpoints are served under `/api/v1/` (port 8001 by default). Root-level exceptions include OpenAI compatibility (`/v1/...`), Ollama compatibility (`/`, `/api/...`), and webhooks (`/webhooks/...`). Most authenticated endpoints use a JWT Bearer token obtained via `/api/v1/auth/login`. B2B-specific routes additionally require the `b2b_plan` claim. Exact mounted route counts can vary with optional routers and local build artifacts.
 
 ### Authentication
 
