@@ -435,14 +435,17 @@ async def build_accounts_in_motion(
             _fetch_feature_gaps,
             _fetch_high_intent_companies,
             _fetch_latest_account_intelligence,
-            _fetch_latest_evidence_vault,
             _fetch_price_complaint_rates,
             _fetch_quotable_evidence,
             _fetch_timeline_signals,
+            read_vendor_intelligence_map,
         )
         from atlas_brain.autonomous.tasks._b2b_synthesis_reader import (
             build_reasoning_lookup_from_views,
             load_best_reasoning_view,
+        )
+        from atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis import (
+            load_best_cross_vendor_lookup,
         )
         from atlas_brain.config import settings
 
@@ -479,7 +482,7 @@ async def build_accounts_in_motion(
             _fetch_competitive_displacement(pool, window),
             _fetch_company_signal_metadata(pool, window),
             _fetch_apollo_org_lookup(pool),
-            _fetch_latest_evidence_vault(pool, as_of=today, analysis_window_days=window),
+            read_vendor_intelligence_map(pool, as_of=today, analysis_window_days=window),
             _fetch_latest_account_intelligence(pool, as_of=today, analysis_window_days=window),
         )
 
