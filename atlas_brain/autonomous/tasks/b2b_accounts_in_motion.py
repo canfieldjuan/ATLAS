@@ -448,7 +448,7 @@ async def _fetch_company_signal_metadata(pool, window_days: int = 90) -> list[di
                cs.review_id,
                r.content_type
         FROM b2b_company_signals cs
-        LEFT JOIN b2b_reviews r ON r.id = cs.review_id
+        LEFT JOIN b2b_reviews r ON r.id = cs.review_id AND r.duplicate_of_review_id IS NULL
         WHERE last_seen_at > NOW() - make_interval(days => $1)
         """,
         window_days,
