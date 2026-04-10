@@ -1682,7 +1682,7 @@ async def get_source_impact_ledger(
     window_days: int = Query(90, ge=1, le=3650),
     include_field_baseline: bool = Query(True),
     include_consumer_wiring: bool = Query(True),
-    user: AuthUser | None = Depends(optional_auth),
+    user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
 ):
     """Return source-to-pool impact mappings plus live field and wiring baselines."""
     if source:
