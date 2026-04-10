@@ -95,6 +95,20 @@ describe('Reports', () => {
     const selects = screen.getAllByRole('combobox')
     fireEvent.change(selects[0], { target: { value: 'battle_card' } })
     fireEvent.change(selects[1], { target: { value: 'sales_ready' } })
+    fireEvent.change(selects[2], { target: { value: 'stale' } })
+    fireEvent.change(selects[3], { target: { value: 'blocked' } })
+
+    await waitFor(() => {
+      expect(api.fetchReports).toHaveBeenLastCalledWith({
+        report_type: 'battle_card',
+        vendor_filter: 'Zendesk',
+        quality_status: 'sales_ready',
+        freshness_state: 'stale',
+        review_state: 'blocked',
+        include_stale: true,
+        limit: 100,
+      })
+    })
 
     expect(screen.getByRole('button', { name: 'Subscribe to View' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Subscribe to View' }))
@@ -104,22 +118,26 @@ describe('Reports', () => {
     })
 
     await waitFor(() => {
-      expect(api.buildReportLibraryViewScopeKey).toHaveBeenLastCalledWith(expect.objectContaining({
+      expect(api.buildReportLibraryViewScopeKey).toHaveBeenLastCalledWith({
         report_type: 'battle_card',
         vendor_filter: 'Zendesk',
         quality_status: 'sales_ready',
-      }))
+        freshness_state: 'stale',
+        review_state: 'blocked',
+      })
     })
     expect(modalState.lastProps.scopeType).toBe('library_view')
     expect(modalState.lastProps.scopeKey).toBe('library-view::battle_card::Zendesk::sales_ready')
-    expect(modalState.lastProps.scopeLabel).toBe('Battle Card • Zendesk • Sales Ready Library')
-    expect(modalState.lastProps.filterPayload).toEqual(expect.objectContaining({
+    expect(modalState.lastProps.scopeLabel).toBe('Battle Card • Zendesk • Sales Ready • Stale • Blocked Library')
+    expect(modalState.lastProps.filterPayload).toEqual({
       report_type: 'battle_card',
       vendor_filter: 'Zendesk',
       quality_status: 'sales_ready',
-    }))
+      freshness_state: 'stale',
+      review_state: 'blocked',
+    })
     expect(screen.getByTestId('subscription-modal')).toHaveTextContent(
-      'library_view:library-view::battle_card::Zendesk::sales_ready:Battle Card • Zendesk • Sales Ready Library',
+      'library_view:library-view::battle_card::Zendesk::sales_ready:Battle Card • Zendesk • Sales Ready • Stale • Blocked Library',
     )
   })
 })

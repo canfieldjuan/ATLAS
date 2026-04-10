@@ -240,6 +240,17 @@ def _report_trust_label(row, intelligence_data: dict[str, Any]) -> str:
     return "In workflow"
 
 
+def _artifact_state(row) -> dict[str, str]:
+    status = str(row["status"] or "").strip().lower()
+    if status in {"completed", "complete", "succeeded", "success", "ready", "published", "sales_ready"}:
+        return {"state": "ready", "label": "Ready"}
+    if status in {"failed", "error", "cancelled", "blocked"}:
+        return {"state": "failed", "label": "Attention needed"}
+    if status in {"queued", "pending", "running", "processing", "enriching", "repairing"}:
+        return {"state": "processing", "label": "Processing"}
+    return {"state": "unknown", "label": "Status unknown"}
+
+
 def _artifact_ready(row, intelligence_data: dict[str, Any]) -> bool:
     report_type = str(row["report_type"] or "").strip().lower()
     status = str(row["status"] or "").strip().lower()
@@ -411,6 +422,17 @@ def _review_state(row) -> str:
     if warning_count > 0:
         return "warnings"
     return "clean"
+
+
+def _review_payload(row) -> dict[str, str]:
+    state = _review_state(row)
+    if state == "blocked":
+        return {"state": state, "label": "Blocked"}
+    if state == "open_review":
+        return {"state": state, "label": "Open Review"}
+    if state == "warnings":
+        return {"state": state, "label": "Warnings"}
+    return {"state": state, "label": "Clean"}
 
 
 def _report_matches_subscription_filters(
@@ -594,9 +616,16 @@ def _delivery_content_hash(row, artifacts: list[dict[str, Any]]) -> str:
                 "report_type": str(artifact["report_type"] or ""),
                 "title": str(artifact["title"] or ""),
                 "trust_label": str(artifact["trust_label"] or ""),
+                "artifact_state": str(artifact.get("artifact_state") or ""),
+                "artifact_label": str(artifact.get("artifact_label") or ""),
                 "quality_status": str(artifact.get("quality_status") or ""),
                 "blocker_count": int(artifact.get("blocker_count") or 0),
+                "warning_count": int(artifact.get("warning_count") or 0),
                 "unresolved_issue_count": int(artifact.get("unresolved_issue_count") or 0),
+                "freshness_state": str(artifact.get("freshness_state") or ""),
+                "freshness_label": str(artifact.get("freshness_label") or ""),
+                "review_state": str(artifact.get("review_state") or ""),
+                "review_label": str(artifact.get("review_label") or ""),
                 "executive_summary": str(artifact["executive_summary"] or ""),
                 "evidence_highlights": [str(item or "") for item in artifact.get("evidence_highlights") or []],
             }
@@ -954,6 +983,8 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
     if not isinstance(data_density, dict):
         data_density = {}
     freshness = _derive_freshness(row, intelligence_data, data_density)
+    artifact_state = _artifact_state(row)
+    review = _review_payload(row)
     executive_summary = str(
         row["executive_summary"]
         or intelligence_data.get("executive_summary")
@@ -965,12 +996,25 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
         "title": _report_display_title(row),
         "type_label": _format_report_type_label(str(row["report_type"] or "")),
         "trust_label": _report_trust_label(row, intelligence_data),
+        "artifact_state": artifact_state["state"],
+        "artifact_label": artifact_state["label"],
         "quality_status": _quality_status(row, intelligence_data),
         "blocker_count": _row_int(row, "blocker_count"),
+        "warning_count": _row_int(row, "warning_count"),
         "unresolved_issue_count": _row_int(row, "unresolved_issue_count"),
         "freshness_state": freshness["state"],
         "freshness_label": freshness["label"],
         "freshness_detail": freshness["detail"],
+        "review_state": review["state"],
+        "review_label": review["label"],
+        "trust": {
+            "artifact_state": artifact_state["state"],
+            "artifact_label": artifact_state["label"],
+            "freshness_state": freshness["state"],
+            "freshness_label": freshness["label"],
+            "review_state": review["state"],
+            "review_label": review["label"],
+        },
         "executive_summary": executive_summary,
         "evidence_highlights": _extract_evidence_highlights(intelligence_data),
         "report_url": _report_url(row["id"]),

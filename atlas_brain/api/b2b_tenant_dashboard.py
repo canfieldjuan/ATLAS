@@ -513,6 +513,8 @@ def _normalize_report_subscription_filter_payload(
 
 
 def _normalize_report_list_filter(name: str, value: Optional[str]) -> str | None:
+    if not isinstance(value, str):
+        value = getattr(value, "default", value)
     normalized = str(value or "").strip().lower()
     if not normalized:
         return None

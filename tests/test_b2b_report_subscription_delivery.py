@@ -164,6 +164,35 @@ def test_artifact_ready_accepts_published_and_sales_ready():
     ) is False
 
 
+def test_build_delivery_artifact_includes_normalized_trust_fields():
+    row = {
+        "id": "report-1",
+        "report_type": "battle_card",
+        "vendor_filter": "Zendesk",
+        "category_filter": None,
+        "status": "sales_ready",
+        "quality_status": "sales_ready",
+        "blocker_count": 0,
+        "warning_count": 1,
+        "unresolved_issue_count": 0,
+        "report_date": datetime.now(timezone.utc) - timedelta(hours=8),
+        "created_at": datetime.now(timezone.utc) - timedelta(hours=8),
+        "executive_summary": "Summary",
+        "intelligence_data": {},
+        "data_density": {},
+    }
+
+    artifact = mod._build_delivery_artifact(row)
+
+    assert artifact["artifact_state"] == "ready"
+    assert artifact["artifact_label"] == "Ready"
+    assert artifact["review_state"] == "warnings"
+    assert artifact["review_label"] == "Warnings"
+    assert artifact["freshness_state"] == "fresh"
+    assert artifact["trust"]["review_state"] == "warnings"
+    assert artifact["trust"]["artifact_state"] == "ready"
+
+
 @pytest.mark.asyncio
 async def test_resolve_artifacts_skips_overridden_library_reports(monkeypatch):
     monkeypatch.setattr(
