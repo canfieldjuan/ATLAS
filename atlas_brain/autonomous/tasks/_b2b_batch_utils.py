@@ -129,7 +129,12 @@ def is_anthropic_llm(value: Any) -> bool:
         return True
     if provider:
         return False
-    return anthropic_model_name(getattr(value, "model", "") or getattr(value, "model_id", "")) is not None
+    model = getattr(value, "model", "") or getattr(value, "model_id", "")
+    if anthropic_model_name(model) is not None:
+        return True
+    class_name = type(value).__name__.strip().lower()
+    module_name = str(getattr(type(value), "__module__", "") or "").strip().lower()
+    return "anthropic" in class_name or module_name.endswith(".anthropic") or ".anthropic." in module_name
 
 
 def anthropic_model_candidates(*values: Any, current_llm: Any | None = None) -> list[str]:
