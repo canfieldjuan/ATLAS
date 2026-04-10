@@ -4249,6 +4249,32 @@ async def read_vendor_scorecard_inventory_rows(
     return [dict(row) for row in rows]
 
 
+async def read_vendor_scorecard_metrics(
+    pool,
+    *,
+    vendor_name: str,
+) -> dict[str, Any] | None:
+    """Read the latest scorecard metrics row for one vendor."""
+    row = await pool.fetchrow(
+        """
+        SELECT price_complaint_rate,
+               decision_maker_churn_rate,
+               total_reviews,
+               signal_reviews,
+               churn_intent_count,
+               avg_urgency_score,
+               top_competitors,
+               sentiment_distribution
+        FROM b2b_churn_signals
+        WHERE LOWER(vendor_name) = LOWER($1)
+        ORDER BY last_computed_at DESC
+        LIMIT 1
+        """,
+        vendor_name,
+    )
+    return dict(row) if row else None
+
+
 async def _fetch_vendor_churn_scores_from_signals(
     pool,
     window_days: int,

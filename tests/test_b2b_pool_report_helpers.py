@@ -296,6 +296,37 @@ async def test_read_vendor_scorecard_inventory_rows_matches_provisioning_shape()
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_churn_signals": {
+                "price_complaint_rate": 0.2,
+                "decision_maker_churn_rate": 0.4,
+                "total_reviews": 40,
+                "signal_reviews": 20,
+                "churn_intent_count": 5,
+                "avg_urgency_score": 6.5,
+                "top_competitors": [{"name": "Freshdesk"}],
+                "sentiment_distribution": {"declining": 4, "improving": 1},
+            },
+        },
+    )
+
+    row = await shared_mod.read_vendor_scorecard_metrics(pool, vendor_name="Zendesk")
+
+    assert row == {
+        "price_complaint_rate": 0.2,
+        "decision_maker_churn_rate": 0.4,
+        "total_reviews": 40,
+        "signal_reviews": 20,
+        "churn_intent_count": 5,
+        "avg_urgency_score": 6.5,
+        "top_competitors": [{"name": "Freshdesk"}],
+        "sentiment_distribution": {"declining": 4, "improving": 1},
+    }
+
+
+@pytest.mark.asyncio
 async def test_fetch_all_pool_layers_prefers_specific_profile_category_over_generic_vault():
     pool = FakePool(
         fetch_map={
