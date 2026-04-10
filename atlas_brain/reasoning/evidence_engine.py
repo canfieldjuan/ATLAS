@@ -65,6 +65,11 @@ class EvidenceEngine:
             re.compile(p, re.IGNORECASE)
             for p in rec.get("negative_patterns", [])
         ]
+        price = self._enrichment.get("price_complaint_derivation", {})
+        self._price_positive = [
+            re.compile(p, re.IGNORECASE)
+            for p in price.get("positive_patterns", [])
+        ]
 
     # ------------------------------------------------------------------
     # Per-review: enrichment-time compute
@@ -121,10 +126,14 @@ class EvidenceEngine:
         feature_gaps: list[str] | None = None,
         recommendation_language: list[str] | None = None,
     ) -> str:
-        """Override 'other' pain_category using keyword scan."""
+        """Override generic pain_category using keyword scan."""
         cfg = self._enrichment.get("pain_override", {})
         trigger = cfg.get("trigger", {})
-        if pain_category != trigger.get("eq", "other"):
+        trigger_values = trigger.get("in")
+        if isinstance(trigger_values, list):
+            if pain_category not in {str(v).strip().lower() for v in trigger_values if str(v).strip()}:
+                return pain_category
+        elif pain_category != trigger.get("eq", "other"):
             return pain_category
 
         keyword_map: dict[str, list[str]] = cfg.get("keyword_map", {})
@@ -143,18 +152,23 @@ class EvidenceEngine:
             texts.extend(recommendation_language or [])
 
         if not texts:
-            return cfg.get("fallback", "other")
+            return cfg.get("fallback", "overall_dissatisfaction")
 
         combined = " ".join(texts).lower()
+
+        def _keyword_hits(keyword: str) -> bool:
+            pattern = rf"(?<!\w){re.escape(str(keyword or '').lower())}(?!\w)"
+            return bool(re.search(pattern, combined))
+
         scores: dict[str, int] = {}
         for category, keywords in keyword_map.items():
-            count = sum(1 for kw in keywords if kw in combined)
+            count = sum(1 for kw in keywords if _keyword_hits(str(kw)))
             if count > 0:
                 scores[category] = count
 
         if scores:
             return max(scores, key=scores.get)
-        return cfg.get("fallback", "other")
+        return cfg.get("fallback", "overall_dissatisfaction")
 
     def derive_recommend(
         self,
@@ -210,7 +224,22 @@ class EvidenceEngine:
     ) -> bool:
         """Derive price_complaint from Tier 1 flags + extracted phrases."""
         cfg = self._enrichment.get("price_complaint_derivation", {})
+        pricing_phrases = [
+            str(phrase or "").strip()
+            for phrase in enrichment.get("pricing_phrases") or []
+            if str(phrase or "").strip()
+        ]
+        all_pricing_phrases_positive = bool(pricing_phrases) and all(
+            any(pattern.search(phrase) for pattern in self._price_positive)
+            for phrase in pricing_phrases
+        )
         for rule in cfg.get("true_if_any", []):
+            if (
+                rule.get("field") == "pricing_phrases"
+                and "min_count" in rule
+                and all_pricing_phrases_positive
+            ):
+                continue
             if self._check_derivation_rule(rule, enrichment):
                 return True
         return False

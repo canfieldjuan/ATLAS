@@ -17,6 +17,29 @@ def _task_execution_id(task: ScheduledTask) -> UUID | None:
         return None
 
 
+def task_run_id(task: ScheduledTask | Any) -> str | None:
+    """Return the best correlation id for a task execution.
+
+    Prefer the scheduler-injected execution id so one scheduled task can be
+    correlated across multiple runs. Fall back to explicit metadata keys and
+    finally the task id for ad-hoc/manual contexts that do not have an
+    execution row.
+    """
+    exec_id = _task_execution_id(task)
+    if exec_id is not None:
+        return str(exec_id)
+    metadata = getattr(task, "metadata", None)
+    if isinstance(metadata, dict):
+        for key in ("run_id", "task_id", "invocation_id"):
+            value = metadata.get(key)
+            if value:
+                return str(value)
+    task_id = getattr(task, "id", None)
+    if task_id:
+        return str(task_id)
+    return None
+
+
 async def _update_execution_progress(
     task: ScheduledTask,
     *,

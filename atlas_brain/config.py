@@ -24,6 +24,30 @@ class SaaSAuthConfig(BaseSettings):
     jwt_expiry_hours: int = Field(default=24, description="Access token expiry in hours")
     jwt_refresh_expiry_days: int = Field(default=30, description="Refresh token expiry in days")
     trial_days: int = Field(default=14, description="Trial period length in days")
+    frontend_base_url: str = Field(
+        default="http://localhost:5173",
+        description="Frontend base URL used in SaaS auth emails",
+    )
+    email_product_name: str = Field(
+        default="Churn Signals",
+        description="Display product name used in SaaS auth emails",
+    )
+    email_company_name: str = Field(
+        default="Atlas Intelligence",
+        description="Display company name used in SaaS auth emails",
+    )
+    b2b_welcome_product_name: str = Field(
+        default="Atlas B2B Intelligence",
+        description="Display product name used in B2B welcome email subjects",
+    )
+    b2b_welcome_heading: str = Field(
+        default="B2B Churn Intelligence",
+        description="Heading used in B2B welcome emails",
+    )
+    consumer_welcome_product_name: str = Field(
+        default="Amazon Seller Intelligence",
+        description="Display product name used in consumer welcome emails",
+    )
 
     # CORS -- extra origins to allow (comma-separated), e.g. "https://my-app.vercel.app"
     cors_origins: str = Field(default="", description="Extra CORS origins (comma-separated)")
@@ -1617,8 +1641,12 @@ class ModelPricingConfig(BaseModel):
     # Anthropic (per 1M tokens)
     anthropic_sonnet_input: float = 3.00
     anthropic_sonnet_output: float = 15.00
+    anthropic_sonnet_cache_read_input: float = 0.30
+    anthropic_sonnet_cache_write_input: float = 3.75
     anthropic_haiku_input: float = 0.25
     anthropic_haiku_output: float = 1.25
+    anthropic_haiku_cache_read_input: float = 0.03
+    anthropic_haiku_cache_write_input: float = 0.30
 
     # Groq (per 1M tokens -- hosted inference)
     groq_llama70b_input: float = 0.59
@@ -1636,16 +1664,43 @@ class ModelPricingConfig(BaseModel):
     local_input: float = 0.0
     local_output: float = 0.0
 
-    def cost_usd(self, provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
+    def cost_usd(
+        self,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        cached_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        billable_input_tokens: int | None = None,
+    ) -> float:
         """Calculate cost in USD for a given call."""
         p = (provider or "").lower()
         m = (model or "").lower()
+        cache_read = max(int(cached_tokens or 0), 0)
+        cache_write = max(int(cache_write_tokens or 0), 0)
+        base_input = (
+            max(int(billable_input_tokens), 0)
+            if billable_input_tokens is not None
+            else max(int(input_tokens or 0), 0)
+        )
         if p in ("ollama", "vllm", "transformers-flash", "llama-cpp") or "local" in p:
             return 0.0
         if p == "anthropic" or "claude" in m:
             if "haiku" in m:
-                return (input_tokens * self.anthropic_haiku_input + output_tokens * self.anthropic_haiku_output) / 1_000_000
-            return (input_tokens * self.anthropic_sonnet_input + output_tokens * self.anthropic_sonnet_output) / 1_000_000
+                return (
+                    base_input * self.anthropic_haiku_input
+                    + cache_read * self.anthropic_haiku_cache_read_input
+                    + cache_write * self.anthropic_haiku_cache_write_input
+                    + output_tokens * self.anthropic_haiku_output
+                ) / 1_000_000
+            return (
+                base_input * self.anthropic_sonnet_input
+                + cache_read * self.anthropic_sonnet_cache_read_input
+                + cache_write * self.anthropic_sonnet_cache_write_input
+                + output_tokens * self.anthropic_sonnet_output
+            ) / 1_000_000
         if p == "groq":
             return (input_tokens * self.groq_llama70b_input + output_tokens * self.groq_llama70b_output) / 1_000_000
         if p == "openrouter":
@@ -2030,6 +2085,9 @@ class InvoicingConfig(BaseSettings):
     auto_invoice_enabled: bool = Field(default=True, description="Monthly auto-invoice generation")
     auto_invoice_send_email: bool = Field(default=True, description="Auto-send invoices via email")
     auto_invoice_due_days: int = Field(default=30, ge=1, le=365, description="Payment terms for auto-invoices")
+    auto_invoice_calendar_id: str = Field(default="", description="Google Calendar ID for commercial cleaning events")
+    auto_invoice_review_mode: bool = Field(default=True, description="Hold invoices as draft for review instead of auto-sending")
+    auto_invoice_save_path: str = Field(default="~/Desktop/Atlas-Invoices", description="Base path for saving invoice PDFs")
 
 
 class ExternalDataConfig(BaseSettings):
@@ -2233,17 +2291,16 @@ class B2BChurnConfig(BaseSettings):
     enrichment_max_tokens: int = Field(default=2048, description="Max LLM output tokens")
     enrichment_local_only: bool = Field(default=False, description="Force local LLM only")
     enrichment_openrouter_model: str = Field(
-        default="",
+        default="anthropic/claude-haiku-4-5",
         description=(
-            "OpenRouter model for B2B enrichment (structured extraction). "
-            "Empty = inherit ATLAS_LLM__OPENROUTER_REASONING_MODEL."
+            "OpenRouter model for B2B enrichment (structured extraction)."
         ),
     )
 
     # Hybrid two-pass enrichment (Tier 1 local + Tier 2 local)
     enrichment_schema_version: int = Field(
         default=3,
-        description="Current enrichment schema version (1 = original LLM inference, 2 = extract plus Tier 2 LLM, 3 = single-pass extract plus deterministic compute)",
+        description="Current enrichment schema version (1 = original LLM inference, 2 = extract plus Tier 2 LLM, 3 = Tier 1 extract plus conditional Tier 2 plus deterministic compute)",
     )
     evidence_map_path: str = Field(
         default="",
@@ -2273,17 +2330,49 @@ class B2BChurnConfig(BaseSettings):
     )
     enrichment_tier2_model: str = Field(
         default="",
-        description="Model for Tier 2 extraction (empty = reuse Tier 1 model)",
+        description="Model for Tier 2 vLLM extraction (empty = reuse Tier 1 model)",
+    )
+    enrichment_tier2_openrouter_model: str = Field(
+        default="",
+        description="OpenRouter model for Tier 2 extraction (empty = reuse enrichment_openrouter_model)",
     )
     enrichment_tier2_max_tokens: int = Field(
         default=1536,
-        description="Max output tokens for Tier 2 vLLM extraction",
+        description="Max output tokens for Tier 2 extraction",
+    )
+    enrichment_tier2_strict_sources: str = Field(
+        default="gartner,peerspot",
+        description=(
+            "Comma-separated sources that require stronger Tier 1 evidence before Tier 2 classification fires"
+        ),
+    )
+    enrichment_tier2_strict_min_complaints: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Minimum Tier 1 complaint count that qualifies strict sources for Tier 2",
+    )
+    enrichment_tier2_strict_min_quotes: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Minimum Tier 1 quote count that helps qualify strict sources for Tier 2",
     )
     enrichment_tier2_timeout_seconds: float = Field(
         default=60.0,
         ge=5.0,
         le=600.0,
-        description="HTTP timeout for Tier 2 vLLM extraction requests",
+        description="HTTP timeout for Tier 2 extraction requests",
+    )
+    enrichment_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow B2B enrichment extraction to use Anthropic Message Batches when available",
+    )
+    enrichment_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of enrichment rows required before using Anthropic batching",
     )
     enrichment_tier1_connect_timeout_seconds: float = Field(
         default=10.0,
@@ -2293,27 +2382,63 @@ class B2BChurnConfig(BaseSettings):
     )
     # Account resolution
     account_resolution_batch_size: int = Field(
-        default=100,
+        default=1000,
         ge=1,
-        le=1000,
+        le=5000,
         description="Max reviews to resolve per batch in account resolution task",
     )
     account_resolution_backfill_min_confidence: str = Field(
         default="medium",
         description="Minimum confidence label to backfill reviewer_company (high/medium/low)",
     )
+    account_resolution_eligible_statuses: list[str] = Field(
+        default=["enriched", "no_signal", "quarantined"],
+        description=(
+            "Review enrichment statuses eligible for deterministic account resolution"
+        ),
+    )
+    account_resolution_source_priority: list[str] = Field(
+        default=["g2", "gartner", "capterra", "software_advice", "trustpilot"],
+        description=(
+            "Preferred source order when draining deterministic account-resolution candidates"
+        ),
+    )
+    account_resolution_excluded_sources: list[str] = Field(
+        default=["capterra", "software_advice", "trustpilot", "trustradius"],
+        description=(
+            "Sources excluded from deterministic account resolution because they lack reliable identity signals"
+        ),
+    )
     account_resolution_interval_seconds: int = Field(
         default=600,
         description="Account resolution task polling interval (seconds)",
     )
+    account_resolution_max_profile_fetches: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Max profile fetches per batch (HN + GitHub combined). GitHub free tier allows 60 req/hr.",
+    )
+    account_resolution_profile_fetch_concurrency: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max concurrent HN/GitHub profile fetches. 10 concurrent x 5s timeout ~= 25s for 50 profiles.",
+    )
+    account_resolution_profile_fetch_timeout: float = Field(
+        default=5.0,
+        ge=0.5,
+        le=30.0,
+        description="Per-request timeout (seconds) for HN and GitHub profile fetches.",
+    )
 
     enrichment_repair_enabled: bool = Field(
         default=False,
-        description="Enable structural repair pass for already-enriched B2B reviews",
+        description="Enable strategic adjudication pass for already-enriched B2B reviews",
     )
     enrichment_repair_interval_seconds: int = Field(
         default=900,
-        description="Repair polling interval for structurally weak enriched reviews",
+        description="Polling interval for weak or high-salience enriched reviews",
     )
     enrichment_repair_max_per_batch: int = Field(
         default=25,
@@ -2333,11 +2458,11 @@ class B2BChurnConfig(BaseSettings):
     )
     enrichment_repair_max_attempts: int = Field(
         default=2,
-        description="Max structural repair attempts per enriched review",
+        description="Max adjudication attempts per enriched review",
     )
     enrichment_repair_model: str = Field(
         default="",
-        description="Local vLLM model for structural repair pass",
+        description="Local vLLM model for strategic adjudication pass",
     )
     enrichment_repair_max_tokens: int = Field(
         default=512,
@@ -2345,11 +2470,59 @@ class B2BChurnConfig(BaseSettings):
         le=4096,
         description="Max completion tokens for the narrow field-repair extraction pass",
     )
+    enrichment_repair_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow B2B enrichment repair extraction to use Anthropic Message Batches when available",
+    )
+    enrichment_repair_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of repair rows required before using Anthropic batching",
+    )
+    enrichment_repair_strict_discussion_sources: str = Field(
+        default="reddit",
+        description=(
+            "Comma-separated community discussion sources that require stronger commercial signal before repair"
+        ),
+    )
+    enrichment_repair_strict_discussion_content_types: list[str] = Field(
+        default=["community_discussion", "insider_account", "comment"],
+        description=(
+            "Content types subject to strict discussion-source repair gating"
+        ),
+    )
+    enrichment_repair_strict_discussion_skip_limit: int = Field(
+        default=500,
+        ge=1,
+        le=5000,
+        description=(
+            "Max low-signal strict-discussion reviews to terminally skip per repair run"
+        ),
+    )
     enrichment_repair_min_urgency: int = Field(
         default=3,
         ge=0,
         le=10,
         description="Minimum urgency score for repair unless leave/eval pressure is already present",
+    )
+    enrichment_repair_orphan_timeout_minutes: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="Minutes before a row stuck in repairing status is recovered as orphaned",
+    )
+    enrichment_repair_failure_rate_threshold: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=1.0,
+        description="Fraction of failed rows in a single round that triggers the circuit breaker",
+    )
+    enrichment_repair_no_progress_max_rounds: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Consecutive rounds with zero promotions before circuit breaker trips",
     )
     enrichment_low_fidelity_enabled: bool = Field(
         default=True,
@@ -2402,6 +2575,10 @@ class B2BChurnConfig(BaseSettings):
         default="g2,capterra,trustradius,gartner,peerspot",
         description="High-signal sources for executive-facing outputs (weekly_churn_feed, displacement, timeline)",
     )
+    deprecated_review_sources: str = Field(
+        default="capterra,software_advice,trustpilot,trustradius",
+        description="Sources deprecated from churn intelligence, blogs, and related downstream B2B review selection",
+    )
     intelligence_llm_backend: str = Field(
         default="vllm",
         description=(
@@ -2427,9 +2604,9 @@ class B2BChurnConfig(BaseSettings):
         default=18,
         description="Max vendor score rows to include in exploratory_overview payload",
     )
-    stratified_reasoning_vendor_limit: int = Field(
+    temporal_analysis_vendor_limit: int = Field(
         default=100,
-        description="Max vendors for temporal analysis + stratified reasoning per intel run (independent of LLM payload trimming)",
+        description="Max vendors for temporal analysis per intelligence run (independent of LLM payload trimming)",
     )
     intelligence_exploratory_high_intent_limit: int = Field(
         default=8,
@@ -2510,6 +2687,20 @@ class B2BChurnConfig(BaseSettings):
         default="openai/gpt-oss-120b",
         description="OpenRouter model for product profile synthesis",
     )
+    product_profile_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow B2B product profile synthesis to use Anthropic Message Batches when available",
+    )
+    product_profile_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of vendor profiles required before using Anthropic batching",
+    )
+    product_profile_cache_trace_enabled: bool = Field(
+        default=False,
+        description="Emit info-level exact-cache fingerprint logs for product profile synthesis debugging",
+    )
 
     # Blog post generation
     blog_post_enabled: bool = Field(default=False, description="Enable B2B blog post generation")
@@ -2520,6 +2711,64 @@ class B2BChurnConfig(BaseSettings):
     blog_post_ui_path: str = Field(default="", description="Path to atlas-churn-ui blog content dir")
     blog_base_url: str = Field(default="https://churnsignals.co", description="Base URL for B2B blog (full URLs in campaign emails)")
     blog_post_openrouter_model: str = Field(default="openai/gpt-oss-120b", description="OpenRouter model for blog generation")
+    blog_post_temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Sampling temperature for B2B blog post generation",
+    )
+    blog_post_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow first-pass B2B blog generation to use Anthropic Message Batches when Anthropic is available",
+    )
+    blog_post_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum number of blog posts required before using Anthropic batching for first-pass generation",
+    )
+    blog_quality_pass_score: int = Field(
+        default=70,
+        ge=0,
+        le=100,
+        description="Minimum blog quality score required to pass the deterministic quality gate",
+    )
+    blog_specificity_require_anchor_support: bool = Field(
+        default=True,
+        description="Require blog drafts to use witness-backed anchors when concrete reasoning anchors are available",
+    )
+    blog_specificity_min_anchor_hits: int = Field(
+        default=1,
+        ge=1,
+        le=5,
+        description="Minimum number of witness-backed specificity signal groups a blog draft must hit when anchors are available",
+    )
+    blog_specificity_require_timing_or_numeric_when_available: bool = Field(
+        default=True,
+        description="Require blog drafts to mention a timing or numeric anchor when one is available in the reasoning packet",
+    )
+    blog_evidence_anchor_low_signal_labels: list[str] = Field(
+        default_factory=lambda: [
+            "ux",
+            "ui",
+            "review_context",
+            "named_org",
+            "positive_anchor",
+            "complaint",
+            "overall_dissatisfaction",
+        ],
+        description="Low-signal witness labels that should not appear as customer-facing blog evidence anchors",
+    )
+    blog_publish_revalidate_enabled: bool = Field(
+        default=True,
+        description="Re-run the deterministic blog quality and specificity gate before admin publish",
+    )
+    blog_quality_backfill_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Default lookback window in days for recent blog quality backfills",
+    )
     # Blog auto-deploy (git push + Vercel deploy hook)
     blog_auto_deploy_enabled: bool = Field(default=False, description="Auto git-push + Vercel deploy after B2B blog publish")
     blog_auto_deploy_branch: str = Field(default="main", description="Git branch to push B2B blog commits to")
@@ -2534,6 +2783,93 @@ class B2BChurnConfig(BaseSettings):
     )
     # Regeneration mode -- re-process existing drafts through fixed pipeline
     blog_post_regenerate_mode: bool = Field(default=False, description="When True, regenerate existing draft posts instead of selecting new topics")
+    blog_post_min_words_default: int = Field(
+        default=1800,
+        ge=500,
+        le=5000,
+        description="Default minimum word count required for a blog draft to pass the deterministic quality gate",
+    )
+    blog_post_target_words_default: int = Field(
+        default=2300,
+        ge=500,
+        le=5000,
+        description="Default SEO target word count used as a warning threshold for blog drafts",
+    )
+    blog_post_min_words_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 2000,
+            "market_landscape": 1900,
+            "best_fit_guide": 1900,
+            "vendor_deep_dive": 1800,
+            "vendor_alternative": 1700,
+            "churn_report": 1700,
+            "pain_point_roundup": 1700,
+            "pricing_reality_check": 1600,
+            "migration_guide": 1500,
+            "switching_story": 1500,
+        },
+        description="Per-topic minimum word counts for the blog quality gate",
+    )
+    blog_post_target_words_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 2600,
+            "market_landscape": 2600,
+            "best_fit_guide": 2500,
+            "vendor_deep_dive": 2400,
+            "vendor_alternative": 2300,
+            "churn_report": 2300,
+            "pain_point_roundup": 2300,
+            "pricing_reality_check": 2200,
+            "migration_guide": 2100,
+            "switching_story": 2100,
+        },
+        description="Per-topic SEO target word counts used as warning thresholds for blog drafts",
+    )
+    blog_post_max_rejection_retries: int = Field(
+        default=1,
+        ge=0,
+        le=10,
+        description="Max rejected reruns allowed after an initial rejection before permanent block",
+    )
+    blog_post_rejection_cooldown_hours: int = Field(
+        default=24,
+        ge=0,
+        le=720,
+        description="Minimum hours before an autonomously rejected blog slug can be attempted again",
+    )
+    blog_post_borderline_shortfall_max_words: int = Field(
+        default=60,
+        ge=0,
+        le=500,
+        description="Maximum word-count shortfall eligible for deterministic coverage-snapshot repair during blog quality cleanup",
+    )
+    blog_min_quotes_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 4,
+            "vendor_deep_dive": 3,
+            "market_landscape": 4,
+            "best_fit_guide": 4,
+            "migration_guide": 3,
+        },
+        description="Per-topic minimum quotable-review counts required before blog generation is allowed",
+    )
+    blog_min_vendor_profiles_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "market_landscape": 4,
+            "best_fit_guide": 4,
+        },
+        description="Per-topic minimum vendor-profile breadth required before multi-vendor blog generation is allowed",
+    )
+    blog_min_sections_by_topic: dict[str, int] = Field(
+        default_factory=lambda: {
+            "vendor_showdown": 6,
+            "vendor_deep_dive": 6,
+            "market_landscape": 7,
+            "best_fit_guide": 7,
+            "migration_guide": 5,
+        },
+        description="Per-topic minimum blueprint section counts required before blog generation is allowed",
+    )
 
     # Historical snapshots
     snapshot_enabled: bool = Field(default=True, description="Enable daily vendor health snapshots")
@@ -2584,14 +2920,71 @@ class B2BChurnConfig(BaseSettings):
         le=8192,
         description="Max output tokens for vendor scorecard narratives when the synthesis model is DeepSeek",
     )
+    llm_exact_cache_enabled: bool = Field(
+        default=False,
+        description="Enable exact-match Postgres caching for B2B/reporting LLM calls",
+    )
+    anthropic_batch_enabled: bool = Field(
+        default=False,
+        description="Enable Anthropic Message Batches for eligible B2B workloads",
+    )
+    anthropic_batch_poll_interval_seconds: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=60.0,
+        description="Polling interval for Anthropic Message Batch reconciliation",
+    )
+    anthropic_batch_timeout_seconds: float = Field(
+        default=900.0,
+        ge=30.0,
+        le=86400.0,
+        description="Max time to wait for an Anthropic Message Batch before falling back",
+    )
+    scorecard_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow vendor scorecard narratives to use Anthropic Message Batches when available",
+    )
+    scorecard_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum uncached scorecard narratives required before using Anthropic batching",
+    )
+    reasoning_synthesis_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow vendor reasoning synthesis to use Anthropic Message Batches when available",
+    )
+    reasoning_synthesis_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum vendor reasoning items required before using Anthropic batching",
+    )
+    cross_vendor_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow cross-vendor reasoning synthesis to use Anthropic Message Batches when available",
+    )
+    cross_vendor_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum cross-vendor reasoning items required before using Anthropic batching",
+    )
+    tenant_report_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow tenant report synthesis chunks to use Anthropic Message Batches when available",
+    )
+    tenant_report_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum tenant report synthesis chunks required before using Anthropic batching",
+    )
 
     # Briefing gate (email capture for full report)
     vendor_briefing_gate_base_url: str = Field(default="https://churnsignals.co/report", description="Base URL for briefing gate landing page")
     vendor_briefing_gate_expiry_days: int = Field(default=7, description="Gate token expiry in days")
 
-    # Stratified reasoning integration (global intelligence run)
-    stratified_reasoning_enabled: bool = Field(default=False, description="Route vendors through stratified reasoner during global intelligence run")
-    stratified_reasoning_concurrency: int = Field(default=5, description="Max concurrent vendor reasoning tasks")
     reasoning_synthesis_attempts: int = Field(
         default=2,
         ge=1,
@@ -2604,30 +2997,237 @@ class B2BChurnConfig(BaseSettings):
         le=30.0,
         description="Delay between vendor reasoning synthesis retry attempts",
     )
+    reasoning_synthesis_timeout_seconds: float = Field(
+        default=180.0,
+        ge=1.0,
+        le=3600.0,
+        description="Timeout for each vendor or cross-vendor reasoning LLM call",
+    )
+    reasoning_synthesis_max_stale_days: int = Field(
+        default=3,
+        ge=0,
+        le=90,
+        description="Classify unchanged vendor reasoning rows newer than this as fresh reuse and older rows as stale reuse",
+    )
+    reasoning_synthesis_max_input_tokens: int = Field(
+        default=20000,
+        ge=512,
+        le=50000,
+        description="Approximate max input tokens allowed for a single vendor reasoning synthesis prompt before lean fallback or rejection",
+    )
+    reasoning_synthesis_max_items_per_pool: int = Field(
+        default=8,
+        ge=1,
+        le=20,
+        description="Max scored items per pool in the default vendor reasoning payload",
+    )
+    reasoning_synthesis_max_tokens: int = Field(
+        default=4096,
+        ge=256,
+        le=16384,
+        description="Max completion tokens for vendor or cross-vendor reasoning synthesis calls",
+    )
+    reasoning_synthesis_model: str = Field(
+        default="",
+        description=(
+            "OpenRouter model override for vendor reasoning synthesis. "
+            "Empty = prefer settings.llm.openrouter_reasoning_model before "
+            "falling back to the legacy reasoning-model defaults."
+        ),
+    )
+    reasoning_synthesis_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Temperature for vendor and cross-vendor reasoning synthesis calls",
+    )
     reasoning_synthesis_feedback_limit: int = Field(
         default=5,
         ge=1,
         le=10,
         description="Max validator issues to feed back into synthesis repair retries",
     )
-    stratified_reasoning_vendor_cap: int = Field(default=60, description="Max vendors to send through stratified reasoning (top N by urgency)")
-    intelligence_focus_categories: str = Field(
-        default="all",
+    reasoning_retry_escalation_window_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="Rolling window for escalating repeated recovered synthesis validation retries",
+    )
+    reasoning_retry_repeat_rule_threshold: int = Field(
+        default=3,
+        ge=2,
+        le=20,
+        description="Escalate when the same vendor and validation rule hit this many recovered retries within the escalation window",
+    )
+    reasoning_retry_cost_min_retries: int = Field(
+        default=2,
+        ge=1,
+        le=20,
+        description="Minimum recovered retry count before token-cost escalation can trigger",
+    )
+    reasoning_retry_cost_tokens_threshold: int = Field(
+        default=80000,
+        ge=1000,
+        le=1000000,
+        description="Escalate recovered retry churn when retry-token spend crosses this threshold within the escalation window",
+    )
+    reasoning_witness_max_witnesses: int = Field(
+        default=12,
+        ge=1,
+        le=50,
+        description="Max witnesses included in each vendor reasoning packet",
+    )
+    reasoning_synthesis_lean_max_items_per_pool: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Max scored items per pool when vendor reasoning falls back to lean prompt mode",
+    )
+    reasoning_synthesis_lean_max_witnesses: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description="Max witnesses included when vendor reasoning falls back to lean prompt mode",
+    )
+    reasoning_synthesis_segment_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max segment shortlist candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_temporal_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max temporal trigger candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_displacement_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max displacement destination candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_account_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max account shortlist candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_category_candidate_limit: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="Max category regime candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_retention_candidate_limit: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Max retention strength candidates included in witness-first section packets",
+    )
+    reasoning_synthesis_rerun_if_missing_packet_artifacts: bool = Field(
+        default=True,
+        description="Rerun vendor reasoning when the latest unchanged row is missing packet artifacts",
+    )
+    reasoning_synthesis_rerun_if_missing_reference_ids: bool = Field(
+        default=True,
+        description="Rerun vendor reasoning when the latest unchanged row is missing canonical reference ids",
+    )
+    reasoning_witness_highlight_limit: int = Field(
+        default=4,
+        ge=1,
+        le=20,
+        description="Max witness highlights surfaced to downstream render consumers",
+    )
+    witness_specificity_min_score: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=10.0,
+        description="Minimum deterministic specificity score required before a witness can enter the normal witness pack",
+    )
+    witness_specificity_fallback_min_witnesses: int = Field(
+        default=4,
+        ge=0,
+        le=20,
+        description="Minimum witness count to recover with generic fallback when the specific witness pool is too thin",
+    )
+    witness_specificity_generic_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "great tool",
+            "great platform",
+            "good tool",
+            "good platform",
+            "easy to use",
+            "easy-to-use",
+            "works well",
+            "working well",
+            "very helpful",
+            "super helpful",
+        ],
+        description="Boilerplate phrases that reduce witness specificity",
+    )
+    witness_specificity_concrete_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "pricing",
+            "renewal",
+            "seat",
+            "integration",
+            "workflow",
+            "contract",
+            "budget",
+            "support",
+            "security",
+            "migration",
+            "implementation",
+            "downtime",
+            "latency",
+        ],
+        description="Concrete pain or workflow anchors that increase witness specificity",
+    )
+    witness_specificity_short_excerpt_chars: int = Field(
+        default=55,
+        ge=1,
+        le=500,
+        description="Excerpt length below which anchor-free witnesses incur a specificity penalty",
+    )
+    witness_specificity_long_excerpt_chars: int = Field(
+        default=80,
+        ge=1,
+        le=1000,
+        description="Excerpt length above which a witness receives a small specificity bonus",
+    )
+    witness_specificity_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "currency": 2.0,
+            "number": 1.0,
+            "timing": 1.0,
+            "competitor": 1.0,
+            "reviewer_company": 1.0,
+            "pain_category": 0.75,
+            "replacement_mode": 0.75,
+            "operating_model_shift": 0.75,
+            "productivity_delta_claim": 0.75,
+            "signal_type": 0.5,
+            "long_excerpt": 0.5,
+            "concrete_pattern": 0.5,
+            "generic_phrase_penalty": 2.5,
+            "short_excerpt_penalty": 1.5,
+        },
+        description="Deterministic witness specificity scoring weights and penalties",
+    )
+    reasoning_synthesis_enabled: bool = Field(
+        default=True,
         description=(
-            "Comma-separated product categories to include in reasoning phase. "
-            "'all' = no filter (default). Only affects stratified reasoning and "
-            "cross-vendor analysis. Signals, vaults, and segments still build "
-            "for all vendors."
+            "Enable vendor reasoning synthesis as the canonical post-core reasoning pass. "
+            "When true, legacy stratified vendor reasoning inside b2b_churn_intelligence "
+            "is skipped to avoid duplicate LLM spend."
         ),
     )
     executive_summary_llm_enabled: bool = Field(default=False, description="Use LLM-synthesized executive summaries instead of deterministic templates")
 
-    # Cross-vendor reasoning (battles, category councils, asymmetry)
-    cross_vendor_reasoning_enabled: bool = Field(default=False, description="Enable cross-vendor LLM reasoning (battles, category councils, asymmetry)")
     cross_vendor_max_battles: int = Field(default=5, ge=0, le=20, description="Max pairwise battle reasoning calls per run")
     cross_vendor_max_categories: int = Field(default=3, ge=0, le=10, description="Max category council reasoning calls per run")
     cross_vendor_max_asymmetry: int = Field(default=3, ge=0, le=10, description="Max resource-asymmetry reasoning calls per run")
-    cross_vendor_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor LLM calls")
     cross_vendor_battle_min_context_score: float = Field(default=2.0, ge=0.0, le=10.0, description="Min deterministic overlap score before a displacement pair gets battle reasoning")
     cross_vendor_category_min_vendors: int = Field(default=3, ge=1, le=20, description="Min reasoned vendors in a category before council reasoning")
     cross_vendor_category_min_context_vendors: int = Field(default=2, ge=1, le=20, description="Min context-rich vendors in a category before council reasoning")
@@ -2638,10 +3238,84 @@ class B2BChurnConfig(BaseSettings):
     cross_vendor_asymmetry_min_divergence_score: float = Field(default=2.0, ge=0.0, le=50.0, description="Min divergence score before asymmetry reasoning")
     cross_vendor_asymmetry_min_context_score: float = Field(default=2.0, ge=0.0, le=10.0, description="Min deterministic overlap score before asymmetry reasoning")
 
+    # Cross-vendor synthesis (runs in b2b_reasoning_synthesis after vendor synthesis)
+    cross_vendor_synthesis_enabled: bool = Field(default=True, description="Enable cross-vendor synthesis (battles, councils, asymmetry) in the reasoning synthesis task")
+    cross_vendor_synthesis_concurrency: int = Field(default=3, ge=1, le=10, description="Max concurrent cross-vendor synthesis LLM calls")
+    cross_vendor_synthesis_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per cross-vendor packet")
+    cross_vendor_synthesis_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back per retry")
+    cross_vendor_llm_max_input_tokens: int = Field(
+        default=12000,
+        ge=512,
+        le=50000,
+        description="Approximate max input tokens allowed for a single cross-vendor synthesis prompt before the run is rejected to control spend",
+    )
+    cross_vendor_category_vendor_summary_limit: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Max vendor summaries included in a category-council packet",
+    )
+    cross_vendor_category_flow_limit: int = Field(
+        default=3,
+        ge=0,
+        le=50,
+        description="Max displacement flows included in a category-council packet",
+    )
+    competitive_set_max_competitors: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max competitors allowed in one scoped competitive set",
+    )
+    competitive_set_refresh_interval_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86400,
+        description="How often the scheduled competitive-set refresher scans for due scoped synthesis runs",
+    )
+    competitive_set_refresh_batch_size: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Max competitive sets processed in one scheduled synthesis scanner run",
+    )
+    competitive_set_preview_lookback_days: int = Field(
+        default=14,
+        ge=1,
+        le=90,
+        description="Lookback window for competitive-set run cost previews based on recent synthesis history",
+    )
+    competitive_set_changed_vendors_only_default: bool = Field(
+        default=True,
+        description=(
+            "Default changed-vendors-only policy for scoped competitive-set runs "
+            "when the caller does not explicitly choose full refresh behavior"
+        ),
+    )
+    reasoning_synthesis_scheduled_scope_strategy: str = Field(
+        default="competitive_sets",
+        description=(
+            "Runtime strategy for scheduled b2b_reasoning_synthesis runs: "
+            "'competitive_sets' scans due scoped sets, 'full_universe' keeps the legacy global run path"
+        ),
+    )
+
+    scorecard_narrative_concurrency: int = Field(default=6, description="Max concurrent LLM calls during scorecard narrative generation")
+
     battle_card_llm_concurrency: int = Field(default=3, description="Max concurrent battle card sales copy LLM calls")
     battle_card_llm_attempts: int = Field(default=2, ge=1, le=5, description="Max generation attempts per battle card, including repair retries")
     battle_card_llm_retry_delay_seconds: float = Field(default=1.0, ge=0.0, le=30.0, description="Delay between battle card LLM attempts")
     battle_card_llm_feedback_limit: int = Field(default=5, ge=1, le=10, description="Max validator issues to feed back into battle card repair attempts")
+    battle_card_anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow battle-card sales copy to use Anthropic Message Batches when the battle-card backend is set to anthropic",
+    )
+    battle_card_anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum battle-card sales-copy items required before using Anthropic batching",
+    )
     battle_card_llm_backend: str = Field(
         default="auto",
         description=(
@@ -2659,6 +3333,66 @@ class B2BChurnConfig(BaseSettings):
         ),
     )
     battle_card_llm_max_tokens: int = Field(default=16384, ge=256, le=32768, description="Max output tokens for battle card sales copy (reasoning models need extra budget)")
+    battle_card_llm_max_input_tokens: int = Field(
+        default=25000,
+        ge=512,
+        le=50000,
+        description="Approximate max input tokens allowed for a single battle-card sales-copy prompt before the LLM step falls back deterministically",
+    )
+    battle_card_render_anchor_examples_per_bucket: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description="Max witness-backed anchor examples to surface per anchor bucket in battle-card sales-copy prompts",
+    )
+    battle_card_render_witness_highlights_limit: int = Field(
+        default=4,
+        ge=0,
+        le=12,
+        description="Max witness highlights to include in battle-card sales-copy prompts",
+    )
+    battle_card_render_reference_ids_limit: int = Field(
+        default=12,
+        ge=0,
+        le=40,
+        description="Max metric or witness reference ids to include per list in battle-card sales-copy prompts",
+    )
+    battle_card_render_cross_vendor_battles_limit: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Max cross-vendor battle summaries to include in battle-card sales-copy prompts",
+    )
+    battle_card_render_high_intent_companies_limit: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Max high-intent accounts to include in battle-card sales-copy prompts",
+    )
+    battle_card_render_reframes_limit: int = Field(
+        default=3,
+        ge=0,
+        le=8,
+        description="Max competitive reframes to include in compact displacement reasoning for battle-card sales-copy prompts",
+    )
+    battle_card_render_priority_segments_limit: int = Field(
+        default=3,
+        ge=0,
+        le=8,
+        description="Max priority segments to include in compact vendor reasoning for battle-card sales-copy prompts",
+    )
+    battle_card_render_strengths_limit: int = Field(
+        default=3,
+        ge=0,
+        le=8,
+        description="Max incumbent strengths to include in compact battle-card retention context",
+    )
+    battle_card_render_data_gaps_limit: int = Field(
+        default=4,
+        ge=0,
+        le=12,
+        description="Max data gaps or confidence-limit notes to include per compact battle-card reasoning section",
+    )
     battle_card_llm_temperature: float = Field(default=0.5, ge=0.0, le=1.5, description="Sampling temperature for battle card sales copy generation")
     battle_card_llm_timeout_seconds: float = Field(default=90.0, ge=5.0, le=300.0, description="Timeout for a single battle card LLM generation attempt")
     battle_card_cache_confidence: float = Field(default=0.95, ge=0.0, le=1.0, description="Confidence assigned to validated battle card sales copy cache entries")
@@ -2666,7 +3400,7 @@ class B2BChurnConfig(BaseSettings):
     battle_card_high_priority_urgency_min: float = Field(default=5.0, ge=0.0, le=10.0, description="Min average urgency required before battle-card copy can use high-priority language")
     battle_card_feature_gap_headline_min_mentions: int = Field(default=5, ge=1, le=100, description="Min feature-gap mention count before a battle-card headline can elevate that gap directly")
     battle_card_quality_max_stale_days: int = Field(
-        default=1,
+        default=2,
         ge=0,
         le=30,
         description="Max allowed staleness (days) before battle-card quality gate hard-blocks publishing",
@@ -2705,6 +3439,12 @@ class B2BChurnConfig(BaseSettings):
     )
     synthesis_reference_confidence_min: float = Field(default=0.6, ge=0.0, le=1.0, description="Min reasoning or cross-vendor confidence before synthesis may reference a structured conclusion directly")
     synthesis_expert_take_max_words: int = Field(default=80, ge=20, le=200, description="Max word count for synthesized scorecard expert_take narratives")
+    vendor_scorecard_limit: int = Field(
+        default=15,
+        ge=1,
+        le=500,
+        description="Default max vendors included in the unscoped vendor_scorecard report artifact",
+    )
     battle_card_leaving_patterns: list[str] = Field(
         default=[
             "customers are leaving",
@@ -2718,9 +3458,30 @@ class B2BChurnConfig(BaseSettings):
     )
 
     # Accounts in motion
+    company_signal_skip_deprecated_sources: bool = Field(
+        default=True,
+        description="Exclude globally deprecated review sources from canonical company-signal and named-account products",
+    )
+    company_signal_low_trust_sources: list[str] = Field(
+        default=["reddit"],
+        description="Low-trust sources that require a higher confidence threshold before becoming canonical named-account signals",
+    )
+    company_signal_low_trust_min_confidence: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum unit-confidence required for low-trust company signals to enter canonical named-account products",
+    )
+    high_intent_require_signal_evidence: bool = Field(
+        default=True,
+        description="Require explicit churn/evaluation/renewal signal evidence before reviewer-company rows enter named-account high-intent products",
+    )
     accounts_in_motion_cron: str = Field(default="35 21 * * *", description="Cron for accounts-in-motion prospecting lists")
     accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
+    accounts_in_motion_feed_max_total: int = Field(default=100, ge=1, le=200, description="Max total tenant feed rows returned by the aggregated accounts_in_motion endpoint")
     accounts_in_motion_min_urgency: float = Field(default=5.0, ge=0, le=10, description="Min urgency to include an account in motion")
+    accounts_in_motion_signal_metadata_min_confidence: float = Field(default=6.0, ge=0, le=10, description="Minimum normalized confidence required for company-signal metadata fallback rows to seed accounts_in_motion")
+    accounts_in_motion_reddit_insider_min_confidence: float = Field(default=6.0, ge=0, le=10, description="Minimum normalized confidence required for reddit insider_account company signals to seed accounts_in_motion")
     accounts_in_motion_repeat_evidence_bonus: int = Field(default=3, ge=0, le=20, description="Bonus points added per extra supporting review for an account in motion")
     accounts_in_motion_repeat_evidence_bonus_max: int = Field(default=6, ge=0, le=30, description="Max total repeat-evidence bonus for an account in motion")
     accounts_in_motion_low_confidence_threshold: float = Field(default=6.0, ge=0, le=10, description="Confidence below this threshold incurs a quality penalty in accounts_in_motion scoring")
@@ -2754,10 +3515,90 @@ class B2BAlertConfig(BaseSettings):
     )
 
     enabled: bool = Field(default=False, description="Enable churn signal spike alerts")
+    email_enabled: bool = Field(default=True, description="Send churn alerts to tenant owners via email when configured")
+    sender_name: str = Field(default="Atlas Intelligence", description="Display name for churn alert emails")
+    dashboard_base_url: str = Field(default="", description="Optional dashboard URL included in churn alert emails")
     signal_count_threshold: int = Field(default=3, description="New signals to trigger alert")
     urgency_spike_threshold: float = Field(default=1.5, description="Avg urgency increase to trigger alert")
+    min_reviews_for_urgency: int = Field(default=10, ge=1, le=100, description="Min reviews in 7-day window before avg_urgency can trigger alerts")
     cooldown_hours: int = Field(default=24, description="Min hours between alerts for same vendor")
     interval_seconds: int = Field(default=3600, description="Alert check interval (1 hour)")
+
+
+class B2BWatchlistDeliveryConfig(BaseSettings):
+    """Recurring email delivery for saved-view watchlist alerts."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_WATCHLIST_DELIVERY_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable recurring saved-view watchlist alert delivery")
+    interval_seconds: int = Field(default=3600, ge=60, le=86400, description="How often to check for due watchlist alert deliveries")
+    max_views_per_run: int = Field(default=25, ge=1, le=250, description="Max saved views processed in a single watchlist alert delivery run")
+    stale_claim_seconds: int = Field(default=900, ge=60, le=86400, description="How long a scheduled watchlist delivery claim can remain processing before another worker may reclaim it")
+    failed_retry_seconds: int = Field(default=3600, ge=60, le=86400 * 7, description="Delay before retrying a failed scheduled watchlist delivery")
+
+
+class B2BReportDeliveryConfig(BaseSettings):
+    """Recurring report-subscription delivery configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_B2B_REPORT_DELIVERY_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable recurring report-subscription delivery")
+    sender_name: str = Field(default="Atlas Intelligence", description="Display name for recurring report emails")
+    dashboard_base_url: str = Field(default="", description="Optional frontend base URL used in report-delivery links")
+    interval_seconds: int = Field(default=3600, ge=60, le=86400, description="How often to check for due report subscriptions")
+    max_subscriptions_per_run: int = Field(default=25, ge=1, le=250, description="Max due subscriptions processed in a single task run")
+    max_reports_per_delivery: int = Field(default=6, ge=1, le=20, description="Max persisted artifacts included in one recurring library delivery")
+    stale_claim_seconds: int = Field(default=900, ge=60, le=86400, description="How long an in-flight delivery claim can sit before another worker may reclaim it")
+    fresh_hours: int = Field(default=72, ge=1, le=24 * 30, description="Artifacts newer than this are treated as fresh for delivery-policy checks")
+    monitor_hours: int = Field(default=24 * 7, ge=1, le=24 * 90, description="Artifacts newer than this but older than fresh_hours are treated as monitor state")
+    require_sales_ready_for_competitive: bool = Field(
+        default=True,
+        description="Require sales_ready quality status for battle-card style deliverables when quality metadata exists",
+    )
+    max_blocker_count: int = Field(
+        default=0,
+        ge=0,
+        le=50,
+        description="Maximum blocker_count allowed for a deliverable to remain eligible",
+    )
+    max_open_review_count: int = Field(
+        default=0,
+        ge=0,
+        le=50,
+        description="Maximum unresolved operator-review count allowed for a deliverable to remain eligible",
+    )
+    report_scope_overrides_library: bool = Field(
+        default=True,
+        description="Exclude artifacts from library deliveries when an enabled report-scoped subscription exists for the same artifact",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="Resolve due subscriptions and record delivery outcomes without sending email or advancing schedules",
+    )
+    canary_account_ids: str = Field(
+        default="",
+        description="Comma-separated or JSON list of account IDs allowed for live recurring delivery sends",
+    )
+    suppress_unchanged_deliveries: bool = Field(
+        default=True,
+        description="Skip recurring sends when the eligible artifact package has not materially changed since the last completed delivery",
+    )
+    max_send_attempts_per_recipient: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Maximum send attempts per recipient before the delivery is marked partial or failed",
+    )
+    retry_backoff_seconds: int = Field(
+        default=3,
+        ge=0,
+        le=300,
+        description="Delay between recipient send retries",
+    )
 
 
 class B2BWebhookConfig(BaseSettings):
@@ -2838,6 +3679,10 @@ class B2BScrapeConfig(BaseSettings):
             "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
         ),
         description="Sources allowed for automated scrape intake (comma-separated)",
+    )
+    deprecated_sources: str = Field(
+        default="capterra,software_advice,trustpilot,trustradius",
+        description="Sources deprecated from automated scrape intake and target planning",
     )
     source_fit_filter_enabled: bool = Field(
         default=True,
@@ -3009,6 +3854,46 @@ class B2BScrapeConfig(BaseSettings):
         default=True,
         description="Drop Capterra JSON-LD aggregate pages that are not real reviews",
     )
+    cross_source_dedup_enabled: bool = Field(
+        default=True,
+        description="Detect and suppress duplicate B2B reviews syndicated across multiple sources",
+    )
+    cross_source_dedup_similarity_threshold: float = Field(
+        default=0.82,
+        ge=0.5,
+        le=1.0,
+        description="Minimum normalized text similarity for reviewer/date cross-source duplicate matches",
+    )
+    cross_source_dedup_max_candidates: int = Field(
+        default=20,
+        ge=1,
+        le=500,
+        description="Max existing vendor review candidates to compare when checking cross-source duplicates",
+    )
+    cross_source_dedup_loose_similarity_threshold: float = Field(
+        default=0.9,
+        ge=0.5,
+        le=1.0,
+        description="Minimum normalized text similarity for reviewer-prefix/date-tolerant duplicate matches",
+    )
+    cross_source_dedup_review_date_tolerance_days: int = Field(
+        default=1,
+        ge=0,
+        le=7,
+        description="Allowed review-date drift when matching syndicated duplicates across sources",
+    )
+    cross_source_dedup_rating_tolerance: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=5.0,
+        description="Allowed rating delta when matching syndicated duplicates across sources",
+    )
+    cross_source_dedup_reviewer_stem_length: int = Field(
+        default=5,
+        ge=2,
+        le=12,
+        description="Reviewer-name prefix length used for loose cross-source duplicate candidate matching",
+    )
 
     # Exhaustive scrape mode
     exhaustive_lookback_days: int = Field(default=365, description="Date cutoff for exhaustive mode (days)")
@@ -3074,7 +3959,57 @@ class B2BCampaignConfig(BaseSettings):
     schedule_cron: str = Field(default="0 22 * * *", description="Campaign generation schedule (daily 10 PM)")
     dedup_days: int = Field(default=7, ge=1, description="Days before re-targeting same company")
     retention_days: int = Field(default=90, ge=1, description="Days to retain expired/sent campaigns before cleanup")
+    concurrency: int = Field(default=8, description="Max concurrent LLM calls during campaign generation")
     max_tokens: int = Field(default=2048, description="Max tokens per LLM generation call")
+    llm_timeout_seconds: float = Field(
+        default=120.0,
+        ge=5.0,
+        le=300.0,
+        description="Timeout for a single campaign LLM generation call",
+    )
+    anthropic_batch_enabled: bool = Field(
+        default=True,
+        description="Allow campaign generation to use Anthropic Message Batches when eligible",
+    )
+    anthropic_batch_detached_enabled: bool = Field(
+        default=False,
+        description="Submit campaign batches for later reconciliation instead of waiting inline for completion",
+    )
+    anthropic_batch_stale_minutes: int = Field(
+        default=30,
+        ge=5,
+        le=1440,
+        description="Minutes before a detached campaign batch job or claim is considered stale",
+    )
+    anthropic_batch_min_items: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        description="Minimum uncached campaign items required before using Anthropic batching",
+    )
+    word_limits: dict[str, dict[str, list[int]]] = Field(
+        default_factory=lambda: {
+            "default": {
+                "email_cold": [50, 150],
+                "email_followup": [75, 150],
+                "linkedin": [0, 100],
+            },
+            "vendor_retention": {
+                "email_cold": [50, 125],
+                "email_followup": [75, 150],
+            },
+            "challenger_intel": {
+                "email_cold": [50, 125],
+                "email_followup": [75, 150],
+            },
+            "churning_company": {
+                "email_cold": [75, 150],
+                "email_followup": [75, 125],
+                "linkedin": [0, 100],
+            },
+        },
+        description="Per-target-mode campaign word limits by channel as [min_words, max_words]",
+    )
     temperature: float = Field(default=0.7, description="LLM sampling temperature")
     default_sender_name: str = Field(default="", description="Sender name for outreach")
     default_sender_title: str = Field(default="", description="Sender title for outreach")
@@ -3113,6 +4048,38 @@ class B2BCampaignConfig(BaseSettings):
         default=["executive", "technical", "operations", "evaluator", "champion"],
         description="Persona types to generate campaigns for (buying committee coverage)",
     )
+    specificity_require_anchor_support: bool = Field(
+        default=True,
+        description="Require campaign drafts to use witness-backed anchors when briefing-backed concrete anchors are available",
+    )
+    specificity_min_anchor_hits: int = Field(
+        default=1,
+        ge=1,
+        le=5,
+        description="Minimum number of witness-backed specificity signal groups a campaign draft must hit when anchors are available",
+    )
+    specificity_require_timing_or_numeric_when_available: bool = Field(
+        default=True,
+        description="Require campaign drafts to mention a timing or numeric anchor when one is available in briefing-backed witnesses",
+    )
+    specificity_revision_term_limit: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        description="Max exact witness-backed proof terms to surface in campaign prompt retries",
+    )
+    revalidate_before_manual_approval: bool = Field(
+        default=True,
+        description="Re-run deterministic witness-backed specificity checks before manual campaign approval",
+    )
+    revalidate_before_queue_send: bool = Field(
+        default=True,
+        description="Re-run deterministic witness-backed specificity checks before queueing a campaign for send",
+    )
+    revalidate_before_send: bool = Field(
+        default=True,
+        description="Re-run deterministic witness-backed specificity checks immediately before campaign auto-send",
+    )
 
 
 class CampaignSequenceConfig(BaseSettings):
@@ -3124,6 +4091,26 @@ class CampaignSequenceConfig(BaseSettings):
 
     enabled: bool = Field(default=False, description="Enable stateful campaign sequences")
     max_steps: int = Field(default=4, ge=2, le=8, description="Max emails per sequence")
+    progression_batch_limit: int = Field(
+        default=10, ge=1, le=250,
+        description="Max due sequences to progress in one task run",
+    )
+    onboarding_max_steps: int = Field(
+        default=4, ge=1, le=8,
+        description="Max emails in the onboarding sequence",
+    )
+    onboarding_sender_name: str = Field(
+        default="Atlas Intel",
+        description="Sender name used in onboarding sequences",
+    )
+    onboarding_sender_company: str = Field(
+        default="Atlas Intelligence",
+        description="Sender company used in onboarding sequences",
+    )
+    onboarding_product_name: str = Field(
+        default="Atlas Intel",
+        description="Display product name used in onboarding sequence prompts",
+    )
     step_delay_days: list[int] = Field(
         default=[3, 5, 7],
         description="Days between steps 1->2, 2->3, 3->4",
@@ -3136,6 +4123,26 @@ class CampaignSequenceConfig(BaseSettings):
     )
     check_interval_seconds: int = Field(
         default=3600, ge=600, description="How often to check for due sequence steps"
+    )
+    prompt_max_tokens: int = Field(
+        default=512, ge=128, le=2048,
+        description="Max completion tokens for next-step sequence generation",
+    )
+    prompt_list_limit: int = Field(
+        default=5, ge=1, le=20,
+        description="Max list items to keep when compacting sequence context for storage and prompts",
+    )
+    prompt_quote_limit: int = Field(
+        default=3, ge=1, le=10,
+        description="Max quotes or short signal items to keep in compact sequence context",
+    )
+    prompt_blog_post_limit: int = Field(
+        default=3, ge=1, le=10,
+        description="Max blog posts to keep in compact sequence selling context",
+    )
+    prompt_email_body_preview_chars: int = Field(
+        default=220, ge=80, le=1000,
+        description="Max plain-text characters to keep per previous-email preview in sequence prompts",
     )
     resend_api_key: str = Field(default="", description="Resend ESP API key")
     resend_from_email: str = Field(default="", description="Resend sender email address")
@@ -3669,6 +4676,65 @@ class NewsIntelligenceConfig(BaseSettings):
     )
 
 
+class ProviderCostConfig(BaseSettings):
+    """Provider billing sync configuration for cost reconciliation."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_PROVIDER_COST_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable periodic sync of provider billing totals for reconciliation",
+    )
+    interval_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86400,
+        description="How often to sync provider billing totals",
+    )
+    sync_timeout_seconds: int = Field(
+        default=20,
+        ge=5,
+        le=300,
+        description="HTTP timeout for provider billing sync requests",
+    )
+    snapshot_retention_days: int = Field(
+        default=90,
+        ge=7,
+        le=730,
+        description="Days to retain cumulative provider usage snapshots",
+    )
+    daily_retention_days: int = Field(
+        default=365,
+        ge=30,
+        le=1825,
+        description="Days to retain imported provider daily cost rows",
+    )
+    openrouter_enabled: bool = Field(
+        default=True,
+        description="Sync OpenRouter cumulative usage snapshots when a management key is available",
+    )
+    openrouter_api_key: str = Field(
+        default="",
+        description="Optional OpenRouter management key override for credits snapshots",
+    )
+    anthropic_enabled: bool = Field(
+        default=False,
+        description="Sync Anthropic admin daily cost reports when an admin key is available",
+    )
+    anthropic_admin_api_key: str = Field(
+        default="",
+        description="Anthropic Admin API key for usage and cost reporting",
+    )
+    anthropic_lookback_days: int = Field(
+        default=7,
+        ge=1,
+        le=31,
+        description="Lookback window for Anthropic daily cost report sync",
+    )
+
+
 class Settings(BaseSettings):
     """Application-wide settings."""
 
@@ -3745,6 +4811,8 @@ class Settings(BaseSettings):
     external_data: ExternalDataConfig = Field(default_factory=ExternalDataConfig)
     b2b_churn: B2BChurnConfig = Field(default_factory=B2BChurnConfig)
     b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
+    b2b_watchlist_delivery: B2BWatchlistDeliveryConfig = Field(default_factory=B2BWatchlistDeliveryConfig)
+    b2b_report_delivery: B2BReportDeliveryConfig = Field(default_factory=B2BReportDeliveryConfig)
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)
@@ -3760,6 +4828,7 @@ class Settings(BaseSettings):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     alert_monitor: AlertMonitorConfig = Field(default_factory=AlertMonitorConfig)
     news_intel: NewsIntelligenceConfig = Field(default_factory=NewsIntelligenceConfig)
+    provider_cost: ProviderCostConfig = Field(default_factory=ProviderCostConfig)
     saas_auth: SaaSAuthConfig = Field(default_factory=SaaSAuthConfig)
 
     # Reasoning agent (cross-domain event-driven intelligence)

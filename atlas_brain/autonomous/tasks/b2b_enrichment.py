@@ -1,26 +1,46 @@
 """
-B2B review enrichment: extract churn signals from pending reviews via LLM
-using the b2b_churn_extraction skill.
+B2B review enrichment: extract churn signals from pending reviews via the
+current two-tier pipeline.
 
-Single-pass enrichment (one LLM call per review). Polls b2b_reviews WHERE
-enrichment_status = 'pending', calls LLM, stores result in enrichment JSONB
-column, sets status to 'enriched'.
+Flow:
+  1. Tier 1 extraction for base factual fields
+  2. Conditional Tier 2 classification when Tier 1 leaves extraction gaps
+  3. Deterministic finalize/validation before persistence
+
+Polls b2b_reviews WHERE enrichment_status = 'pending', stores the finalized
+enrichment JSONB payload, and sets status to `enriched`, `no_signal`, or
+`quarantined`.
 
 Runs on an interval (default 5 min). Returns _skip_synthesis so the
 runner does not double-synthesize.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import re
+import time
+import unicodedata
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from ...config import settings
+from ...services.b2b.reviewer_identity import sanitize_reviewer_title
 from ...services.company_normalization import normalize_company_name
+from ...services.scraping.sources import filter_deprecated_sources, parse_source_allowlist
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
+from ._b2b_witnesses import (
+    derive_evidence_spans,
+    derive_operating_model_shift,
+    derive_org_pressure_type,
+    derive_productivity_delta_claim,
+    derive_replacement_mode,
+    derive_salience_flags,
+)
+from ._execution_progress import task_run_id as _task_run_id
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_enrichment")
 
@@ -29,6 +49,62 @@ _TIER1_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": True,
 }
+_TIER2_INSIDER_SECTION_HEADER = "### insider_signals -- CLASSIFY + EXTRACT (only for insider_account)"
+_TIER2_OUTPUT_SECTION_HEADER = "## Output"
+
+
+def _coerce_int_value(raw_value: Any, fallback: int) -> int:
+    if isinstance(raw_value, bool):
+        return int(raw_value)
+    if isinstance(raw_value, int):
+        return raw_value
+    if isinstance(raw_value, float):
+        if raw_value != raw_value:
+            return fallback
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return fallback
+        try:
+            return int(text)
+        except ValueError:
+            try:
+                return int(float(text))
+            except ValueError:
+                return fallback
+    return fallback
+
+
+def _coerce_float_value(raw_value: Any, fallback: float) -> float:
+    if isinstance(raw_value, bool):
+        return float(raw_value)
+    if isinstance(raw_value, (int, float)):
+        numeric = float(raw_value)
+    elif isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return fallback
+        try:
+            numeric = float(text)
+        except ValueError:
+            return fallback
+    else:
+        return fallback
+    if numeric != numeric:
+        return fallback
+    return numeric
+
+
+def _config_allowlist(raw_value: Any, fallback: str | list[str] | tuple[str, ...] | set[str] | frozenset[str] = "") -> list[str]:
+    candidate = raw_value if isinstance(raw_value, (str, list, tuple, set, frozenset)) else fallback
+    return list(parse_source_allowlist(candidate))
+
+
+def _enrichment_batch_custom_id(stage: str, review_id: Any) -> str:
+    normalized_stage = re.sub(r"[^A-Za-z0-9_-]+", "_", str(stage or "").strip()).strip("_") or "stage"
+    normalized_review = re.sub(r"[^A-Za-z0-9_-]+", "_", str(review_id or "").strip()).strip("_") or "review"
+    return f"{normalized_stage}_{normalized_review}"[:64]
 
 def _get_base_enrichment_llm(local_only: bool):
     """Resolve the deterministic local enrichment model from vLLM only."""
@@ -39,6 +115,19 @@ def _get_base_enrichment_llm(local_only: bool):
         try_openrouter=False,
         auto_activate_ollama=False,
     )
+
+
+def _tier2_system_prompt_for_content_type(prompt: str, content_type: str | None) -> str:
+    """Skip insider-account instructions for non-insider rows to save tokens."""
+    if str(content_type or "").strip().lower() == "insider_account":
+        return prompt
+    before, marker, after = prompt.partition(_TIER2_INSIDER_SECTION_HEADER)
+    if not marker:
+        return prompt
+    _insider_body, output_marker, output_tail = after.partition(_TIER2_OUTPUT_SECTION_HEADER)
+    if not output_marker:
+        return prompt
+    return f"{before.rstrip()}\n\n{_TIER2_OUTPUT_SECTION_HEADER}{output_tail}"
 
 
 _tier1_client = None
@@ -80,28 +169,199 @@ def _get_tier1_client(cfg):
     return _tier1_client
 
 
-async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None, str | None]:
+async def _lookup_cached_json_response(
+    namespace: str,
+    *,
+    provider: str,
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    max_tokens: int,
+    temperature: float,
+    response_format: dict[str, Any] | None = None,
+    guided_json: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
+    """Lookup a cached structured response and return the envelope either way."""
+    from ...pipelines.llm import clean_llm_output, parse_json_response
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+    )
+
+    request = prepare_b2b_exact_stage_request(
+        namespace,
+        provider=provider,
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        response_format=response_format,
+        guided_json=guided_json,
+    )
+    cached = await lookup_b2b_exact_stage_text(request)
+    if cached is None:
+        return None, request.request_envelope, False
+
+    text = clean_llm_output(cached["response_text"])
+    parsed = parse_json_response(text, recover_truncated=True)
+    if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+        return parsed, request.request_envelope, True
+    return None, request.request_envelope, False
+
+
+def _unpack_cached_lookup_result(
+    result: tuple[Any, ...],
+) -> tuple[dict[str, Any] | None, dict[str, Any], bool]:
+    if len(result) == 3:
+        cached, request_envelope, cache_hit = result
+        return cached, request_envelope, bool(cache_hit)
+    if len(result) == 2:
+        cached, request_envelope = result
+        return cached, request_envelope, cached is not None
+    raise ValueError(f"Unexpected cached lookup result shape: {len(result)}")
+
+
+def _unpack_stage_result(
+    result: tuple[Any, ...],
+) -> tuple[dict[str, Any] | None, str | None, bool]:
+    if len(result) == 3:
+        parsed, model_id, cache_hit = result
+        return parsed, model_id, bool(cache_hit)
+    if len(result) == 2:
+        parsed, model_id = result
+        return parsed, model_id, False
+    raise ValueError(f"Unexpected stage result shape: {len(result)}")
+
+
+def _pack_stage_result(
+    parsed: dict[str, Any] | None,
+    model_id: str | None,
+    cache_hit: bool,
+    *,
+    include_cache_hit: bool,
+) -> tuple[dict[str, Any] | None, str | None] | tuple[dict[str, Any] | None, str | None, bool]:
+    if include_cache_hit:
+        return parsed, model_id, cache_hit
+    return parsed, model_id
+
+
+def _trace_enrichment_llm_call(
+    span_name: str,
+    *,
+    provider: str,
+    model: str | None,
+    messages: list[dict[str, str]],
+    usage: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+    duration_ms: float,
+    api_endpoint: str | None = None,
+    provider_request_id: str | None = None,
+) -> None:
+    from ...pipelines.llm import _trace_cache_metrics, trace_llm_call
+
+    usage_dict = usage if isinstance(usage, dict) else {}
+    normalized_usage = {
+        "input_tokens": usage_dict.get("input_tokens", usage_dict.get("prompt_tokens", 0)),
+        "output_tokens": usage_dict.get("output_tokens", usage_dict.get("completion_tokens", 0)),
+        "billable_input_tokens": usage_dict.get("billable_input_tokens", usage_dict.get("prompt_tokens")),
+    }
+    cached_tokens, cache_write_tokens, billable_input_tokens = _trace_cache_metrics(normalized_usage, {})
+    trace_llm_call(
+        span_name,
+        input_tokens=int(normalized_usage.get("input_tokens") or 0),
+        output_tokens=int(normalized_usage.get("output_tokens") or 0),
+        cached_tokens=cached_tokens,
+        cache_write_tokens=cache_write_tokens,
+        billable_input_tokens=billable_input_tokens,
+        model=str(model or ""),
+        provider=provider,
+        duration_ms=duration_ms,
+        metadata=metadata or {},
+        input_data={"messages": [{"role": msg["role"], "content": (msg["content"] or "")[:500]} for msg in messages]},
+        api_endpoint=api_endpoint,
+        provider_request_id=provider_request_id,
+    )
+
+
+async def _store_cached_json_response(
+    namespace: str,
+    request_envelope: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    response_text: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Store a validated structured response for later exact reuse."""
+    from ...services.b2b.cache_runner import (
+        bind_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
+    )
+
+    request = bind_b2b_exact_stage_request(
+        namespace,
+        provider=provider,
+        model=model,
+        request_envelope=request_envelope,
+    )
+    await store_b2b_exact_stage_text(
+        request,
+        response_text=response_text,
+        metadata=metadata,
+    )
+
+
+async def _call_vllm_tier1(
+    payload_json: str,
+    cfg,
+    client,
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     """Tier 1 extraction: deterministic fields via local vLLM.
 
-    Returns (result_dict, model_id) or (None, None) on failure.
+    Returns (result_dict, model_id, cache_hit) or (None, None, False) on failure.
     """
     from ...skills import get_skill_registry
 
     skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     model_id = cfg.enrichment_tier1_model
+    request_envelope: dict[str, Any] | None = None
+    messages = [
+        {"role": "system", "content": skill.content},
+        {"role": "user", "content": payload_json},
+    ]
     try:
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
+            "b2b_enrichment.tier1",
+            provider="vllm",
+            model=model_id,
+            system_prompt=skill.content,
+            user_content=payload_json,
+            max_tokens=cfg.enrichment_tier1_max_tokens,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            guided_json=_TIER1_JSON_SCHEMA,
+            )
+        )
+        if cached is not None:
+            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
+
+        call_started = time.monotonic()
         resp = await client.post(
             "/v1/chat/completions",
             json={
                 "model": cfg.enrichment_tier1_model,
-                "messages": [
-                    {"role": "system", "content": skill.content},
-                    {"role": "user", "content": payload_json},
-                ],
+                "messages": messages,
                 "max_tokens": cfg.enrichment_tier1_max_tokens,
                 "temperature": 0.0,
                 "guided_json": _TIER1_JSON_SCHEMA,
@@ -109,25 +369,51 @@ async def _call_vllm_tier1(payload_json: str, cfg, client) -> tuple[dict | None,
             },
         )
         resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        _trace_enrichment_llm_call(
+            "task.b2b_enrichment.tier1",
+            provider="vllm",
+            model=model_id,
+            messages=messages,
+            usage=body.get("usage", {}),
+            metadata=trace_metadata,
+            duration_ms=(time.monotonic() - call_started) * 1000,
+            api_endpoint=f"{str(getattr(client, 'base_url', '')).rstrip('/')}/v1/chat/completions",
+        )
+        text = body["choices"][0]["message"]["content"].strip()
         if not text:
-            return None, model_id
+            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
 
         from ...pipelines.llm import clean_llm_output, parse_json_response
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)
         if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-            return parsed, model_id
-        return None, model_id
+            if request_envelope is not None:
+                await _store_cached_json_response(
+                    "b2b_enrichment.tier1",
+                    request_envelope,
+                    provider="vllm",
+                    model=model_id,
+                    response_text=text,
+                    metadata={"tier": 1, "backend": "vllm"},
+                )
+            return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
+        return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
     except (json.JSONDecodeError, ValueError):
         logger.warning("Tier 1 vLLM returned invalid JSON")
-        return None, model_id
+        return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
     except Exception:
         logger.exception("Tier 1 vLLM call failed")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
-async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, str | None]:
+async def _call_openrouter_tier1(
+    payload_json: str,
+    cfg,
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     """Tier 1 extraction via OpenRouter (cloud model, no guided_json)."""
     import httpx
     from ...skills import get_skill_registry
@@ -135,16 +421,37 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
     skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction_tier1' not found")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     api_key = cfg.openrouter_api_key
     if not api_key:
         logger.warning("OpenRouter API key not configured for enrichment")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
-    model_id = cfg.enrichment_openrouter_model or "openai/gpt-oss-120b"
+    model_id = cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"
+    request_envelope: dict[str, Any] | None = None
+    messages = [
+        {"role": "system", "content": skill.content},
+        {"role": "user", "content": payload_json},
+    ]
     try:
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
+            "b2b_enrichment.tier1",
+            provider="openrouter",
+            model=model_id,
+            system_prompt=skill.content,
+            user_content=payload_json,
+            max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            )
+        )
+        if cached is not None:
+            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
+
         async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
+            call_started = time.monotonic()
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -153,10 +460,7 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
                 },
                 json={
                     "model": model_id,
-                    "messages": [
-                        {"role": "system", "content": skill.content},
-                        {"role": "user", "content": payload_json},
-                    ],
+                    "messages": messages,
                     "max_tokens": max(cfg.enrichment_tier1_max_tokens, 4096),
                     "temperature": 0.0,
                     "response_format": {"type": "json_object"},
@@ -164,10 +468,21 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
             )
             resp.raise_for_status()
             body = resp.json()
+            _trace_enrichment_llm_call(
+                "task.b2b_enrichment.tier1",
+                provider="openrouter",
+                model=model_id,
+                messages=messages,
+                usage=body.get("usage", {}),
+                metadata=trace_metadata,
+                duration_ms=(time.monotonic() - call_started) * 1000,
+                api_endpoint="https://openrouter.ai/api/v1/chat/completions",
+                provider_request_id=resp.headers.get("x-request-id") or body.get("id"),
+            )
             choices = body.get("choices") or []
             if not choices:
                 logger.warning("OpenRouter returned no choices")
-                return None, model_id
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
             msg = choices[0].get("message") or {}
             text = msg.get("content") or ""
             # Reasoning models (o1/o3/gpt-oss) may put output in reasoning field
@@ -181,21 +496,30 @@ async def _call_openrouter_tier1(payload_json: str, cfg) -> tuple[dict | None, s
             text = text.strip()
             if not text:
                 logger.warning("OpenRouter returned empty content")
-                return None, model_id
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
 
             from ...pipelines.llm import clean_llm_output, parse_json_response
             text = clean_llm_output(text)
             parsed = parse_json_response(text, recover_truncated=True)
             if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-                return parsed, model_id
+                if request_envelope is not None:
+                    await _store_cached_json_response(
+                        "b2b_enrichment.tier1",
+                        request_envelope,
+                        provider="openrouter",
+                        model=model_id,
+                        response_text=text,
+                        metadata={"tier": 1, "backend": "openrouter"},
+                    )
+                return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
             logger.warning("OpenRouter tier 1 returned unparseable JSON")
-            return None, model_id
+            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
     except Exception:
         logger.exception("OpenRouter tier 1 call failed")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
-def _tier1_has_extraction_gaps(tier1: dict) -> bool:
+def _tier1_has_extraction_gaps(tier1: dict, *, source: str | None = None) -> bool:
     """Check if tier 1 left gaps that tier 2 should fill.
 
     Tier 2 adds: pain_categories, competitor classification, buyer_authority,
@@ -211,6 +535,43 @@ def _tier1_has_extraction_gaps(tier1: dict) -> bool:
     churn = tier1.get("churn_signals") or {}
     has_churn = any(bool(v) for v in churn.values())
     has_evidence = bool(complaints or quotes or competitors or pricing or rec_lang)
+    source_norm = str(source or "").strip().lower()
+    strict_sources = set(
+        _config_allowlist(
+            getattr(settings.b2b_churn, "enrichment_tier2_strict_sources", ""),
+            "",
+        )
+    )
+    if source_norm in strict_sources:
+        complaint_count = len(complaints) if isinstance(complaints, list) else 0
+        quote_count = len(quotes) if isinstance(quotes, list) else 0
+        evidence_groups = sum(
+            1
+            for present in (
+                bool(complaints),
+                bool(quotes),
+                bool(competitors),
+                bool(pricing),
+                bool(rec_lang),
+            )
+            if present
+        )
+        has_strong_structured_evidence = (
+            bool(competitors)
+            or bool(pricing)
+            or complaint_count >= _coerce_int_value(
+                getattr(settings.b2b_churn, "enrichment_tier2_strict_min_complaints", 2),
+                2,
+            )
+            or (
+                quote_count >= _coerce_int_value(
+                    getattr(settings.b2b_churn, "enrichment_tier2_strict_min_quotes", 2),
+                    2,
+                )
+                and evidence_groups >= 2
+            )
+        )
+        return has_churn or has_strong_structured_evidence
     # Tier 2 fires when the review has substance worth classifying:
     # 1. Any churn signal or negative evidence -> need pain classification
     # 2. Competitors mentioned -> need evidence_type + displacement scoring
@@ -224,19 +585,22 @@ async def _call_vllm_tier2(
     cfg: Any,
     client: Any,
     truncate_length: int,
-) -> tuple[dict | None, str | None]:
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
     """Tier 2 extraction: classify + extract via local vLLM.
 
     Receives Tier 1 output as context so it can reference extracted complaints
     and quotes when classifying pain and detecting indicators.
-    Returns (result_dict, model_id) or (None, None) on failure.
+    Returns (result_dict, model_id, cache_hit) or (None, None, False) on failure.
     """
     from ...skills import get_skill_registry
 
     skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
     if not skill:
         logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found")
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
     tier2_model = cfg.enrichment_tier2_model or cfg.enrichment_tier1_model
     payload = _build_classify_payload(row, truncate_length)
@@ -244,46 +608,212 @@ async def _call_vllm_tier2(
     payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
     payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
     payload_json = json.dumps(payload)
+    system_prompt = _tier2_system_prompt_for_content_type(
+        skill.content,
+        payload.get("content_type"),
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": payload_json},
+    ]
 
     try:
+        request_envelope: dict[str, Any] | None
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
+            "b2b_enrichment.tier2",
+            provider="vllm",
+            model=tier2_model,
+            system_prompt=system_prompt,
+            user_content=payload_json,
+            max_tokens=cfg.enrichment_tier2_max_tokens,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            )
+        )
+        if cached is not None:
+            return _pack_stage_result(cached, tier2_model, cache_hit, include_cache_hit=include_cache_hit)
+
+        call_started = time.monotonic()
         resp = await client.post(
             "/v1/chat/completions",
             json={
                 "model": tier2_model,
-                "messages": [
-                    {"role": "system", "content": skill.content},
-                    {"role": "user", "content": payload_json},
-                ],
+                "messages": messages,
                 "max_tokens": cfg.enrichment_tier2_max_tokens,
                 "temperature": 0.0,
                 "response_format": {"type": "json_object"},
             },
         )
         resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"].strip()
+        body = resp.json()
+        _trace_enrichment_llm_call(
+            "task.b2b_enrichment.tier2",
+            provider="vllm",
+            model=tier2_model,
+            messages=messages,
+            usage=body.get("usage", {}),
+            metadata=trace_metadata,
+            duration_ms=(time.monotonic() - call_started) * 1000,
+            api_endpoint=f"{str(getattr(client, 'base_url', '')).rstrip('/')}/v1/chat/completions",
+        )
+        text = body["choices"][0]["message"]["content"].strip()
         if not text:
-            return None, tier2_model
+            return _pack_stage_result(None, tier2_model, False, include_cache_hit=include_cache_hit)
 
         from ...pipelines.llm import clean_llm_output, parse_json_response
         text = clean_llm_output(text)
         parsed = parse_json_response(text, recover_truncated=True)
         if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
-            return parsed, tier2_model
-        return None, tier2_model
+            if request_envelope is not None:
+                await _store_cached_json_response(
+                    "b2b_enrichment.tier2",
+                    request_envelope,
+                    provider="vllm",
+                    model=tier2_model,
+                    response_text=text,
+                    metadata={"tier": 2, "backend": "vllm"},
+                )
+            return _pack_stage_result(parsed, tier2_model, False, include_cache_hit=include_cache_hit)
+        return _pack_stage_result(None, tier2_model, False, include_cache_hit=include_cache_hit)
     except Exception:
         logger.warning("Tier 2 vLLM call failed", exc_info=True)
-        return None, None
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
 def _get_tier2_client(cfg: Any) -> Any:
     """Get or create the httpx client for Tier 2 vLLM."""
-    tier2_url = cfg.enrichment_tier2_vllm_url or cfg.enrichment_tier1_vllm_url
-    timeout = cfg.enrichment_tier2_timeout_seconds
+    raw_tier2_url = getattr(cfg, "enrichment_tier2_vllm_url", "")
+    raw_tier1_url = getattr(cfg, "enrichment_tier1_vllm_url", "")
+    tier2_url = raw_tier2_url if isinstance(raw_tier2_url, str) and raw_tier2_url.strip() else raw_tier1_url
+    timeout = _coerce_float_value(getattr(cfg, "enrichment_tier2_timeout_seconds", 120.0), 120.0)
     # Reuse the Tier 1 client if same URL
-    if tier2_url == cfg.enrichment_tier1_vllm_url:
+    if not isinstance(tier2_url, str) or not tier2_url.strip() or tier2_url == raw_tier1_url:
         return _get_tier1_client(cfg)
     import httpx
     return httpx.AsyncClient(base_url=tier2_url, timeout=timeout)
+
+
+async def _call_openrouter_tier2(
+    tier1_result: dict,
+    row: dict,
+    cfg: Any,
+    truncate_length: int,
+    *,
+    include_cache_hit: bool = False,
+    trace_metadata: dict[str, Any] | None = None,
+) -> tuple[dict | None, str | None] | tuple[dict | None, str | None, bool]:
+    """Tier 2 extraction via OpenRouter (cloud model).
+
+    Mirrors _call_openrouter_tier1 but uses the tier2 skill and injects
+    Tier 1 extractions for context so the model can classify pain categories
+    and evidence types against already-extracted complaints and quotes.
+    """
+    import httpx
+    from ...skills import get_skill_registry
+
+    skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
+    if not skill:
+        logger.warning("Skill 'digest/b2b_churn_extraction_tier2' not found for OpenRouter tier 2")
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
+
+    api_key = cfg.openrouter_api_key
+    if not api_key:
+        logger.warning("OpenRouter API key not configured for tier 2 enrichment")
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
+
+    model_id = (
+        cfg.enrichment_tier2_openrouter_model
+        or cfg.enrichment_openrouter_model
+        or "anthropic/claude-haiku-4-5"
+    )
+    payload = _build_classify_payload(row, truncate_length)
+    payload["tier1_specific_complaints"] = tier1_result.get("specific_complaints", [])
+    payload["tier1_quotable_phrases"] = tier1_result.get("quotable_phrases", [])
+    payload_json = json.dumps(payload)
+    system_prompt = _tier2_system_prompt_for_content_type(
+        skill.content,
+        payload.get("content_type"),
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": payload_json},
+    ]
+
+    try:
+        request_envelope: dict[str, Any] | None
+        cached, request_envelope, cache_hit = _unpack_cached_lookup_result(
+            await _lookup_cached_json_response(
+            "b2b_enrichment.tier2",
+            provider="openrouter",
+            model=model_id,
+            system_prompt=system_prompt,
+            user_content=payload_json,
+            max_tokens=cfg.enrichment_tier2_max_tokens,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            )
+        )
+        if cached is not None:
+            return _pack_stage_result(cached, model_id, cache_hit, include_cache_hit=include_cache_hit)
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.enrichment_tier2_timeout_seconds, connect=10.0)) as client:
+            call_started = time.monotonic()
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_id,
+                    "messages": messages,
+                    "max_tokens": cfg.enrichment_tier2_max_tokens,
+                    "temperature": 0.0,
+                    "response_format": {"type": "json_object"},
+                },
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            _trace_enrichment_llm_call(
+                "task.b2b_enrichment.tier2",
+                provider="openrouter",
+                model=model_id,
+                messages=messages,
+                usage=body.get("usage", {}),
+                metadata=trace_metadata,
+                duration_ms=(time.monotonic() - call_started) * 1000,
+                api_endpoint="https://openrouter.ai/api/v1/chat/completions",
+                provider_request_id=resp.headers.get("x-request-id") or body.get("id"),
+            )
+            choices = body.get("choices") or []
+            if not choices:
+                logger.warning("OpenRouter tier 2 returned no choices")
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
+            text = (choices[0].get("message") or {}).get("content") or ""
+            text = text.strip()
+            if not text:
+                logger.warning("OpenRouter tier 2 returned empty content")
+                return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
+            from ...pipelines.llm import clean_llm_output, parse_json_response
+            text = clean_llm_output(text)
+            parsed = parse_json_response(text, recover_truncated=True)
+            if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                if request_envelope is not None:
+                    await _store_cached_json_response(
+                        "b2b_enrichment.tier2",
+                        request_envelope,
+                        provider="openrouter",
+                        model=model_id,
+                        response_text=text,
+                        metadata={"tier": 2, "backend": "openrouter"},
+                    )
+                return _pack_stage_result(parsed, model_id, False, include_cache_hit=include_cache_hit)
+            logger.warning("OpenRouter tier 2 returned unparseable JSON")
+            return _pack_stage_result(None, model_id, False, include_cache_hit=include_cache_hit)
+    except Exception:
+        logger.warning("OpenRouter tier 2 call failed", exc_info=True)
+        return _pack_stage_result(None, None, False, include_cache_hit=include_cache_hit)
 
 
 def _merge_tier1_tier2(tier1: dict, tier2: dict | None) -> dict:
@@ -443,7 +973,7 @@ def _derive_pain_categories(result: dict) -> list[dict[str, str]]:
     ranked = [(score, category) for category, score in scored.items() if score > 0]
     ranked.sort(reverse=True)
     if not ranked:
-        return [{"category": "other", "severity": "primary"}]
+        return [{"category": "overall_dissatisfaction", "severity": "primary"}]
     categories = [{"category": ranked[0][1], "severity": "primary"}]
     for _score, category in ranked[1:3]:
         if category != categories[0]["category"]:
@@ -460,13 +990,53 @@ _COMPETITOR_RECOVERY_BLOCKLIST = {
     "a", "an", "the", "another tool", "another vendor", "other tool", "other vendor",
     "new tool", "new vendor", "options", "alternative", "alternatives",
     "alternative platform", "alternative platforms", "crm",
+    "provider", "providers", "competing provider", "competing providers",
 }
 
 _GENERIC_COMPETITOR_TOKENS = {
     "alternative", "alternatives", "platform", "platforms", "tool", "tools",
     "vendor", "vendors", "software", "solutions", "solution", "service",
     "services", "system", "systems", "crm", "suite", "app", "apps",
+    "provider", "providers", "competing",
 }
+
+_COMPETITOR_CONTEXT_PATTERNS = (
+    "switched to", "moved to", "replaced with", "migrating to", "migration to",
+    "evaluating", "looking at", "considering", "shortlisting", "shortlisted",
+    "poc with", "proof of concept with", "instead of", "compared to", "versus", " vs ",
+)
+
+
+def _is_generic_competitor_name(name: str) -> bool:
+    normalized = normalize_company_name(name) or str(name or "").strip().lower()
+    if not normalized:
+        return True
+    if normalized in _COMPETITOR_RECOVERY_BLOCKLIST:
+        return True
+    tokens = [
+        token.lower()
+        for token in re.findall(r"[A-Za-z0-9]+", str(name or ""))
+        if token
+    ]
+    return bool(tokens) and all(token in _GENERIC_COMPETITOR_TOKENS for token in tokens)
+
+
+def _has_named_competitor_context(name: str, source_row: dict[str, Any]) -> bool:
+    candidate = str(name or "").strip()
+    if not candidate:
+        return False
+    review_blob = " ".join(
+        str(source_row.get(field) or "")
+        for field in ("summary", "review_text", "pros", "cons")
+    ).lower()
+    name_lower = candidate.lower()
+    for match in re.finditer(re.escape(name_lower), review_blob):
+        start = max(0, match.start() - 96)
+        end = min(len(review_blob), match.end() + 96)
+        window = review_blob[start:end]
+        if any(pattern in window for pattern in _COMPETITOR_CONTEXT_PATTERNS):
+            return True
+    return False
 
 
 def _recover_competitor_mentions(result: dict, source_row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -524,11 +1094,14 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
             continue
         merged = dict(comp)
         name = str(comp.get("name") or "").strip()
+        if _is_generic_competitor_name(name):
+            continue
         comp_blob = " ".join(
             [name]
             + _normalize_text_list(comp.get("features"))
             + [str(comp.get("reason_detail") or "")]
         ).lower()
+        named_context = _has_named_competitor_context(name, source_row)
         switch_patterns = (
             f"switched to {name.lower()}",
             f"moved to {name.lower()}",
@@ -554,6 +1127,8 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
             evidence_type = "active_evaluation"
         elif merged.get("reason_detail") or merged.get("features"):
             evidence_type = "implied_preference"
+        elif named_context:
+            evidence_type = "implied_preference"
         else:
             evidence_type = "neutral_mention"
         confidence = "low"
@@ -569,11 +1144,310 @@ def _derive_competitor_annotations(result: dict, source_row: dict[str, Any]) -> 
             str(merged.get("reason_detail") or ""),
             comp_blob,
         )
+        if (
+            merged["evidence_type"] == "neutral_mention"
+            and merged["displacement_confidence"] == "low"
+            and not str(merged.get("reason_detail") or "").strip()
+            and not str(merged.get("reason_category") or "").strip()
+            and not _normalize_text_list(merged.get("features"))
+            and not named_context
+        ):
+            continue
         comps.append(merged)
     return comps
 
 
-def _derive_decision_timeline(result: dict) -> str:
+_TIMELINE_IMMEDIATE_PATTERNS = ("asap", "immediately", "right away", "this week", "today", "urgent")
+_TIMELINE_QUARTER_PATTERNS = ("next quarter", "this quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days")
+_TIMELINE_YEAR_PATTERNS = ("this year", "next year", "12 months", "end of year", "2026", "2027")
+_TIMELINE_DECISION_PATTERNS = (
+    "decide", "decision", "renewal", "contract", "evaluate", "evaluation",
+    "considering", "switch", "switching", "migration", "migrate",
+    "deadline", "cutover", "go live", "go-live",
+)
+_TIMELINE_EXPLICIT_ANCHOR_PHRASES = (
+    "end of quarter", "quarter end", "end of month", "month end",
+    "end of year", "next quarter", "this quarter", "next month", "this month",
+    "this week", "next week", "a few weeks", "few weeks", "a few days", "few days",
+    "30 days", "60 days", "90 days", "12 months", "next year", "this year",
+    "asap", "immediately", "right away", "today", "tomorrow",
+)
+_TIMELINE_RELATIVE_ANCHOR_RE = re.compile(
+    r"\b(?:\d+\s*-\s*\d+|\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few|few)"
+    r"(?:\s+to\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))?"
+    r"\s+(?:business\s+days?|days?|weeks?|months?)\b",
+    re.IGNORECASE,
+)
+_TIMELINE_MONTH_DAY_RE = re.compile(
+    r"\b(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|"
+    r"aug|august|sep|sept|september|oct|october|nov|november|dec|december)\.?"
+    r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b",
+    re.IGNORECASE,
+)
+_TIMELINE_SLASH_DATE_RE = re.compile(r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b")
+_TIMELINE_ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_TIMELINE_CONTRACT_END_PATTERNS = (
+    "contract end", "contract ends", "contract expires", "expiration date",
+    "expiry date", "renewal date", "renewal window", "term ends", "term expires",
+    "auto renew", "auto-renew", "automatic renewal", "at renewal", "upon renewal",
+    "final month of", "current contract",
+)
+_TIMELINE_DECISION_DEADLINE_PATTERNS = (
+    "notice", "notice period", "before renewal", "before the contract ends",
+    "before the contract expires", "deadline", "decide", "decision", "evaluating",
+    "evaluation", "considering", "switch", "switching", "migrate", "migration",
+    "cutover", "go live", "go-live", "cancel by",
+)
+_TIMELINE_CONTRACT_EVENT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:at|upon)\s+(?:the\s+)?renewal\b", re.I),
+    re.compile(r"\b(?:auto[- ]?renew(?:al)?|annual renewal|next renewal|renewal date|renewal window)\b", re.I),
+    re.compile(r"\bfinal month of (?:my|our|the) current contract\b", re.I),
+    re.compile(r"\b(?:current|existing)\s+contract\b", re.I),
+)
+_TIMELINE_AMBIGUOUS_VENDOR_TOKENS = {"copper", "close"}
+_TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS = (
+    "crm", "sales", "pipeline", "lead", "leads", "deal", "deals", "account",
+    "contact", "contacts", "prospect", "prospects", "software", "saas",
+)
+_BUDGET_CURRENCY_TOKEN_RE = re.compile(
+    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)",
+    re.IGNORECASE,
+)
+_BUDGET_ANY_AMOUNT_TOKEN_RE = re.compile(
+    r"(?:\$|usd\s*|\u20ac|eur\s*|\u00a3|gbp\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?",
+    re.IGNORECASE,
+)
+_BUDGET_ANNUAL_AMOUNT_RE = re.compile(
+    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)"
+    r"\s*(?P<period>(?:/\s*|\bper\b\s*|\ba\b\s*)?(?:yr|year)\b|annually\b|annual\b|yearly\b)",
+    re.IGNORECASE,
+)
+_BUDGET_PRICE_PER_SEAT_RE = re.compile(
+    r"(?P<raw>(?:\$|usd\s*)\s?\d[\d,]*(?:\.\d+)?\s*(?:[km])?)"
+    r"\s*(?:/|\bper\b)\s*(?:seat|user|license|licence)\b"
+    r"(?:\s*(?:/|\bper\b)\s*(?:monthly|month|mo|annually|annual|year|yr))?",
+    re.IGNORECASE,
+)
+_BUDGET_SEAT_COUNT_RE = re.compile(
+    r"\b(?P<count>\d[\d,]{0,6})\s+(?P<unit>seats?|users?|licenses?|licences?)\b",
+    re.IGNORECASE,
+)
+_BUDGET_PRICE_INCREASE_RE = re.compile(
+    r"\b(?:\d+(?:\.\d+)?%\s+(?:price\s+)?(?:increase|higher|more|jump|hike)"
+    r"|(?:price|pricing|renewal)\s+(?:increase|jump|hike)"
+    r"|(?:raised|increased)\s+(?:our\s+)?(?:price|pricing|renewal|invoice))\b",
+    re.IGNORECASE,
+)
+_BUDGET_PRICE_INCREASE_DETAIL_RE = re.compile(
+    r"\b(?:\d+(?:\.\d+)?%\s+(?:price\s+)?(?:increase|higher|more|jump|hike)"
+    r"|(?:price|pricing|renewal)\s+(?:increase|jump|hike)[^.!,;]{0,80}"
+    r"|(?:raised|increased)[^.!,;]{0,80})",
+    re.IGNORECASE,
+)
+_BUDGET_COMMERCIAL_CONTEXT_PATTERNS = (
+    "pricing", "price", "priced", "cost", "costs", "costly", "expensive",
+    "budget", "billing", "invoice", "overcharg", "renewal", "quote", "quoted",
+    "contract", "subscription", "license", "licence", "plan", "seat", "user",
+)
+_BUDGET_ANNUAL_CONTEXT_PATTERNS = (
+    "renewal", "quote", "quoted", "contract", "subscription", "license",
+    "licence", "annual", "annually", "yearly", "per year", "/year", "/yr",
+)
+_BUDGET_MONTHLY_PERIOD_PATTERNS = (
+    "monthly", "per month", "/month", "/mo", "a month",
+)
+_BUDGET_ANNUAL_PERIOD_PATTERNS = (
+    "annual", "annually", "yearly", "per year", "/year", "/yr", "a year", "a yr",
+)
+_BUDGET_PER_UNIT_PATTERNS = (
+    "per seat", "/seat", "per user", "/user", "per license", "/license",
+    "per licence", "/licence", "per agent", "/agent", "per person", "/person",
+    "per employee", "/employee", "per endpoint", "/endpoint", "per device", "/device",
+    "per member", "/member", "per contact", "/contact",
+)
+_BUDGET_NOISE_PATTERNS = (
+    "salary", "salaries", "compensation", "bonus", "payroll", "hourly",
+    "per hour", "an hour", "wage", "wages", "job offer", "interview", "intern",
+    "income", "revenue", "profit", "arr", "mrr", "valuation", "mortgage",
+    "rent", "tuition", "commission",
+)
+
+
+def _normalize_timeline_anchor(anchor: Any) -> str | None:
+    text = re.sub(r"\s+", " ", str(anchor or "")).strip(" \t\r\n'\".,;:()[]{}")
+    return text.lower() if text else None
+
+
+def _extract_concrete_timeline_anchor(text: Any) -> str | None:
+    raw_text = str(text or "")
+    if not raw_text.strip():
+        return None
+    for pattern in (_TIMELINE_MONTH_DAY_RE, _TIMELINE_SLASH_DATE_RE, _TIMELINE_ISO_DATE_RE):
+        match = pattern.search(raw_text)
+        if match:
+            return _normalize_timeline_anchor(match.group(0))
+    lowered = raw_text.lower()
+    for phrase in _TIMELINE_EXPLICIT_ANCHOR_PHRASES:
+        index = lowered.find(phrase)
+        if index >= 0:
+            return _normalize_timeline_anchor(raw_text[index:index + len(phrase)])
+    match = _TIMELINE_RELATIVE_ANCHOR_RE.search(raw_text)
+    if match:
+        return _normalize_timeline_anchor(match.group(0))
+    return None
+
+
+def _extract_contract_end_event_anchor(text: Any) -> str | None:
+    raw_text = str(text or "")
+    if not raw_text.strip():
+        return None
+    for pattern in _TIMELINE_CONTRACT_EVENT_PATTERNS:
+        match = pattern.search(raw_text)
+        if not match:
+            continue
+        anchor = _normalize_timeline_anchor(match.group(0))
+        if not anchor:
+            continue
+        if "renew" in anchor:
+            return "renewal"
+        if "current contract" in anchor:
+            return "current contract end"
+        return anchor
+    return None
+
+
+def _has_timeline_commercial_signal(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> bool:
+    churn = result.get("churn_signals") or {}
+    review_norm = ""
+    review_blob = ""
+    source = ""
+    if source_row is not None:
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        )
+        source = str(source_row.get("source") or "").strip().lower()
+        review_norm = _normalize_compare_text(review_blob)
+
+    structured_churn = any((
+        bool(churn.get("intent_to_leave")),
+        bool(churn.get("actively_evaluating")),
+        bool(churn.get("migration_in_progress")),
+        bool(churn.get("contract_renewal_mentioned")),
+    ))
+    strong_signal = any((
+        structured_churn,
+        bool(result.get("competitors_mentioned")),
+        bool(result.get("pricing_phrases")),
+        _has_strong_commercial_context(review_norm),
+    ))
+    soft_signal = any((
+        bool(result.get("specific_complaints")),
+        bool(result.get("event_mentions")),
+    ))
+    if source_row is not None:
+        noisy_sources = {
+            item.strip().lower()
+            for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
+            if item.strip()
+        }
+        if source in noisy_sources:
+            vendor_norm = _normalize_compare_text(source_row.get("vendor_name"))
+            product_norm = _normalize_compare_text(source_row.get("product_name"))
+            product_hit = (
+                bool(source_row.get("product_name"))
+                and product_norm != vendor_norm
+                and _text_mentions_name(review_norm, source_row.get("product_name"))
+            )
+            vendor_hit = (
+                bool(source_row.get("vendor_name"))
+                and _text_mentions_name(review_norm, source_row.get("vendor_name"))
+            )
+            if vendor_norm in _TIMELINE_AMBIGUOUS_VENDOR_TOKENS and vendor_hit:
+                vendor_hit = _contains_any(review_blob, _TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS)
+            vendor_reference = product_hit or vendor_hit
+            if not vendor_reference and not structured_churn:
+                return False
+
+    return any((
+        strong_signal,
+        soft_signal and _has_commercial_context(review_norm),
+    ))
+
+
+def _derive_concrete_timeline_fields(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None]:
+    churn = result.get("churn_signals") or {}
+    timeline = result.get("timeline") or {}
+    contract_end = _normalize_timeline_anchor(timeline.get("contract_end"))
+    evaluation_deadline = _normalize_timeline_anchor(timeline.get("evaluation_deadline"))
+    if contract_end and evaluation_deadline:
+        return contract_end, evaluation_deadline
+
+    candidates: list[tuple[str, str]] = []
+    for event in result.get("event_mentions") or []:
+        if not isinstance(event, dict):
+            continue
+        anchor = _extract_concrete_timeline_anchor(event.get("timeframe"))
+        if not anchor:
+            continue
+        context = " ".join(
+            str(event.get(key) or "")
+            for key in ("event", "detail", "timeframe")
+        )
+        candidates.append((anchor, context.lower()))
+
+    if source_row is not None and _has_timeline_commercial_signal(result, source_row):
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        )
+        anchor = _extract_concrete_timeline_anchor(review_blob)
+        if anchor:
+            candidates.append((anchor, review_blob.lower()))
+
+    for anchor, context in candidates:
+        if not evaluation_deadline and (
+            _contains_any(context, _TIMELINE_DECISION_DEADLINE_PATTERNS)
+            or " before " in context
+        ):
+            evaluation_deadline = anchor
+            continue
+        if not contract_end and (
+            _contains_any(context, _TIMELINE_CONTRACT_END_PATTERNS)
+            or bool(churn.get("contract_renewal_mentioned"))
+        ):
+            contract_end = anchor
+            continue
+        if not evaluation_deadline and (
+            bool(churn.get("actively_evaluating"))
+            or bool(churn.get("migration_in_progress"))
+            or bool(churn.get("intent_to_leave"))
+        ):
+            evaluation_deadline = anchor
+            continue
+
+    if not contract_end and source_row is not None and _has_timeline_commercial_signal(result, source_row):
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        )
+        contract_event_anchor = _extract_contract_end_event_anchor(review_blob)
+        if contract_event_anchor:
+            contract_end = contract_event_anchor
+
+    return contract_end, evaluation_deadline
+
+
+def _derive_decision_timeline(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> str:
     churn = result.get("churn_signals") or {}
     timeline = result.get("timeline") or {}
     event_mentions = result.get("event_mentions") or []
@@ -586,20 +1460,328 @@ def _derive_decision_timeline(result: dict) -> str:
         if isinstance(event, dict):
             parts.append(str(event.get("timeframe") or ""))
     text = " ".join(parts).lower()
-    if _contains_any(text, ("asap", "immediately", "right away", "this week", "today", "urgent")):
+    if _contains_any(text, _TIMELINE_IMMEDIATE_PATTERNS):
         return "immediate"
-    if _contains_any(text, ("next quarter", "this quarter", "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days")):
+    if _contains_any(text, _TIMELINE_QUARTER_PATTERNS):
         return "within_quarter"
-    if _contains_any(text, ("this year", "next year", "12 months", "end of year", "2026", "2027")):
+    if _contains_any(text, _TIMELINE_YEAR_PATTERNS):
         return "within_year"
+
+    if source_row is not None:
+        review_blob = " ".join(
+            str(source_row.get(field) or "")
+            for field in ("summary", "review_text", "pros", "cons")
+        ).lower()
+        has_commercial_signal = _has_timeline_commercial_signal(result, source_row)
+        if has_commercial_signal and _contains_any(review_blob, _TIMELINE_DECISION_PATTERNS):
+            if _contains_any(review_blob, _TIMELINE_IMMEDIATE_PATTERNS):
+                return "immediate"
+            if _contains_any(review_blob, _TIMELINE_QUARTER_PATTERNS):
+                return "within_quarter"
+            if _contains_any(review_blob, _TIMELINE_YEAR_PATTERNS):
+                return "within_year"
     return "unknown"
+
+
+def _budget_match_window(text: str, match: re.Match[str], radius: int = 56) -> str:
+    start = max(0, match.start() - radius)
+    end = min(len(text), match.end() + radius)
+    return text[start:end].lower()
+
+
+def _normalize_budget_value_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.lower()
+    text = re.sub(r"\busd\b\s*", "$", text)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\$\s+", "$", text)
+    text = re.sub(r"(?<=[0-9km])a(year|yr)\b", r" a \1", text)
+    text = re.sub(r"\s*/\s*", "/", text)
+    text = re.sub(r"\bper\s+", "per ", text)
+    text = re.sub(r"\ba\s+(year|yr)\b", r"a \1", text)
+    text = text.strip()
+    return text or None
+
+
+def _normalize_budget_detail_text(value: Any) -> str | None:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n'\".,;:()[]{}")
+    return text or None
+
+
+def _extract_budget_currency_marker(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered.startswith("usd") or "$" in text:
+        return "$"
+    if lowered.startswith("eur") or "\u20ac" in text:
+        return "\u20ac"
+    if lowered.startswith("gbp") or "\u00a3" in text:
+        return "\u00a3"
+    return None
+
+
+def _extract_single_budget_amount(value: Any) -> tuple[str | None, float | None]:
+    text = str(value or "").strip()
+    if not text:
+        return None, None
+    matches = list(_BUDGET_ANY_AMOUNT_TOKEN_RE.finditer(text))
+    if len(matches) != 1:
+        return None, None
+    raw_amount = matches[0].group(0)
+    currency = _extract_budget_currency_marker(raw_amount)
+    amount = _extract_numeric_amount(raw_amount)
+    if currency is None or amount is None:
+        return None, None
+    return currency, amount
+
+
+def _extract_budget_period_multiplier(value: Any) -> int | None:
+    text = str(value or "").lower()
+    if not text:
+        return None
+    if _contains_any(text, _BUDGET_ANNUAL_PERIOD_PATTERNS):
+        return 1
+    if _contains_any(text, _BUDGET_MONTHLY_PERIOD_PATTERNS):
+        return 12
+    return None
+
+
+def _format_annual_budget_amount(currency: str, amount: float) -> str | None:
+    if amount <= 0 or amount > 1_000_000_000_000:
+        return None
+    if amount >= 1_000_000:
+        scaled = amount / 1_000_000
+        suffix = "m"
+    elif amount >= 1_000:
+        scaled = amount / 1_000
+        suffix = "k"
+    else:
+        scaled = amount
+        suffix = ""
+
+    if abs(scaled - round(scaled)) < 1e-9:
+        value_text = str(int(round(scaled)))
+    elif scaled >= 100:
+        value_text = f"{scaled:.0f}"
+    elif scaled >= 10:
+        value_text = f"{scaled:.1f}".rstrip("0").rstrip(".")
+    else:
+        value_text = f"{scaled:.2f}".rstrip("0").rstrip(".")
+    return f"{currency}{value_text}{suffix}/year"
+
+
+def _derive_annual_spend_from_unit_price(budget: dict[str, Any]) -> str | None:
+    try:
+        seat_count = int(budget.get("seat_count"))
+    except (TypeError, ValueError):
+        return None
+    if not (1 <= seat_count <= 1_000_000):
+        return None
+
+    currency, unit_amount = _extract_single_budget_amount(budget.get("price_per_seat"))
+    if currency is None or unit_amount is None:
+        return None
+
+    period_multiplier = _extract_budget_period_multiplier(budget.get("price_per_seat"))
+    if period_multiplier is None:
+        return None
+
+    return _format_annual_budget_amount(currency, unit_amount * seat_count * period_multiplier)
+
+
+def _has_budget_noise_context(text: str) -> bool:
+    return _contains_any(str(text or "").lower(), _BUDGET_NOISE_PATTERNS)
+
+
+def _has_budget_commercial_signal(
+    result: dict,
+    source_row: dict[str, Any] | None = None,
+) -> bool:
+    churn = result.get("churn_signals") or {}
+    pricing_phrases = _normalize_text_list(result.get("pricing_phrases"))
+    summary_text = str((source_row or {}).get("summary") or "").strip().lower()
+    review_blob = _combined_source_text(source_row)
+    review_norm = _normalize_compare_text(review_blob)
+    structured_churn = any((
+        bool(churn.get("intent_to_leave")),
+        bool(churn.get("actively_evaluating")),
+        bool(churn.get("migration_in_progress")),
+        bool(churn.get("contract_renewal_mentioned")),
+    ))
+    if not (pricing_phrases or structured_churn or _has_commercial_context(review_norm)):
+        return False
+    if source_row is None:
+        return True
+
+    noisy_sources = {
+        item.strip().lower()
+        for item in str(settings.b2b_churn.enrichment_low_fidelity_noisy_sources or "").split(",")
+        if item.strip()
+    }
+    source = str(source_row.get("source") or "").strip().lower()
+    if source not in noisy_sources:
+        return True
+
+    vendor_norm = _normalize_compare_text(source_row.get("vendor_name"))
+    product_norm = _normalize_compare_text(source_row.get("product_name"))
+    product_hit = (
+        bool(source_row.get("product_name"))
+        and product_norm != vendor_norm
+        and _text_mentions_name(review_norm, source_row.get("product_name"))
+    )
+    vendor_hit = (
+        bool(source_row.get("vendor_name"))
+        and _text_mentions_name(review_norm, source_row.get("vendor_name"))
+    )
+    if vendor_norm in _TIMELINE_AMBIGUOUS_VENDOR_TOKENS and vendor_hit:
+        vendor_hit = _contains_any(review_blob, _TIMELINE_AMBIGUOUS_VENDOR_PRODUCT_CONTEXT_PATTERNS)
+    if _has_consumer_context(review_norm) and not (product_hit or vendor_hit or structured_churn):
+        return False
+    if _has_technical_context(summary_text, review_norm) and not structured_churn:
+        return False
+    return any((
+        product_hit,
+        vendor_hit,
+        structured_churn,
+        _has_strong_commercial_context(review_norm) and not _has_budget_noise_context(review_blob),
+    ))
+
+
+def _derive_budget_signals(result: dict, source_row: dict[str, Any]) -> dict[str, Any]:
+    budget = result.get("budget_signals")
+    if not isinstance(budget, dict):
+        budget = {}
+        result["budget_signals"] = budget
+
+    if not _has_budget_commercial_signal(result, source_row):
+        return budget
+
+    candidates: list[str] = []
+    seen_candidates: set[str] = set()
+    for phrase in _normalize_text_list(result.get("pricing_phrases")):
+        lowered = phrase.lower()
+        if lowered not in seen_candidates:
+            seen_candidates.add(lowered)
+            candidates.append(phrase)
+    review_blob = _combined_source_text(source_row)
+    if review_blob.strip():
+        candidates.append(review_blob)
+
+    if not budget.get("price_per_seat"):
+        for text in candidates:
+            match = _BUDGET_PRICE_PER_SEAT_RE.search(text)
+            if not match:
+                continue
+            window = _budget_match_window(text, match)
+            if _has_budget_noise_context(window):
+                continue
+            normalized = _normalize_budget_value_text(match.group(0))
+            if normalized:
+                budget["price_per_seat"] = normalized
+                break
+
+    if not budget.get("annual_spend_estimate"):
+        for text in candidates:
+            match = _BUDGET_ANNUAL_AMOUNT_RE.search(text)
+            if not match:
+                continue
+            window = _budget_match_window(text, match)
+            if _has_budget_noise_context(window):
+                continue
+            normalized = _normalize_budget_value_text(match.group(0))
+            if normalized:
+                budget["annual_spend_estimate"] = normalized
+                break
+        if not budget.get("annual_spend_estimate"):
+            for text in candidates:
+                for match in _BUDGET_CURRENCY_TOKEN_RE.finditer(text):
+                    window = _budget_match_window(text, match)
+                    if _has_budget_noise_context(window):
+                        continue
+                    if _contains_any(window, _BUDGET_PER_UNIT_PATTERNS):
+                        continue
+                    if _contains_any(window, _BUDGET_MONTHLY_PERIOD_PATTERNS):
+                        continue
+                    if not _contains_any(window, _BUDGET_ANNUAL_CONTEXT_PATTERNS):
+                        continue
+                    normalized = _normalize_budget_value_text(match.group("raw"))
+                    if normalized:
+                        budget["annual_spend_estimate"] = normalized
+                        break
+                if budget.get("annual_spend_estimate"):
+                    break
+
+    if not budget.get("seat_count"):
+        for text in candidates:
+            for match in _BUDGET_SEAT_COUNT_RE.finditer(text):
+                window = _budget_match_window(text, match)
+                if _has_budget_noise_context(window):
+                    continue
+                if not _contains_any(window, _BUDGET_COMMERCIAL_CONTEXT_PATTERNS):
+                    continue
+                try:
+                    count = int(match.group("count").replace(",", ""))
+                except ValueError:
+                    continue
+                if 1 <= count <= 1_000_000:
+                    budget["seat_count"] = count
+                    break
+            if budget.get("seat_count"):
+                break
+
+    if not budget.get("annual_spend_estimate"):
+        derived_annual_spend = _derive_annual_spend_from_unit_price(budget)
+        if derived_annual_spend:
+            budget["annual_spend_estimate"] = derived_annual_spend
+
+    if not _coerce_bool(budget.get("price_increase_mentioned")):
+        for text in candidates:
+            match = _BUDGET_PRICE_INCREASE_RE.search(text)
+            if not match:
+                continue
+            window = _budget_match_window(text, match)
+            if _has_budget_noise_context(window):
+                continue
+            if not _contains_any(window, _BUDGET_COMMERCIAL_CONTEXT_PATTERNS):
+                continue
+            budget["price_increase_mentioned"] = True
+            if not budget.get("price_increase_detail"):
+                detail_match = _BUDGET_PRICE_INCREASE_DETAIL_RE.search(text)
+                detail = _normalize_budget_detail_text(
+                    detail_match.group(0) if detail_match else match.group(0)
+                )
+                if detail:
+                    budget["price_increase_detail"] = detail
+            break
+    elif not budget.get("price_increase_detail"):
+        for text in candidates:
+            detail_match = _BUDGET_PRICE_INCREASE_DETAIL_RE.search(text)
+            if detail_match:
+                detail = _normalize_budget_detail_text(detail_match.group(0))
+                if detail:
+                    budget["price_increase_detail"] = detail
+                    break
+
+    return budget
 
 
 def _extract_numeric_amount(value: Any) -> float | None:
     if value in (None, ""):
         return None
-    match = re.search(r"(\d+(?:\.\d+)?)", str(value))
-    return float(match.group(1)) if match else None
+    match = re.search(r"(\d[\d,]*(?:\.\d+)?)(?:\s*([km]))?", str(value).lower())
+    if not match:
+        return None
+    amount = float(match.group(1).replace(",", ""))
+    suffix = match.group(2)
+    if suffix == "k":
+        amount *= 1_000
+    elif suffix == "m":
+        amount *= 1_000_000
+    return amount
 
 
 def _derive_contract_value_signal(result: dict) -> str:
@@ -663,7 +1845,12 @@ def _derive_buyer_authority_fields(result: dict, source_row: dict[str, Any]) -> 
     return role_type, executive_sponsor_mentioned, buying_stage
 
 
-def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict[str, bool]:
+def _derive_urgency_indicators(
+    result: dict,
+    source_row: dict[str, Any],
+    *,
+    price_complaint: bool = False,
+) -> dict[str, bool]:
     churn = result.get("churn_signals") or {}
     budget = result.get("budget_signals") or {}
     timeline = result.get("timeline") or {}
@@ -673,7 +1860,6 @@ def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict
         str(source_row.get(field) or "")
         for field in ("summary", "review_text", "pros", "cons")
     ).lower()
-    pricing_phrases = result.get("pricing_phrases") or []
     price_text = " ".join(_normalize_text_list(result.get("pricing_phrases"))).lower()
     recommendation_text = " ".join(_normalize_text_list(result.get("recommendation_language"))).lower()
     named_alt_with_reason = any(
@@ -695,7 +1881,7 @@ def _derive_urgency_indicators(result: dict, source_row: dict[str, Any]) -> dict
         "comparison_shopping_language": _contains_any(review_blob, ("vs ", "alternative", "which should", "looking for options")),
         "named_alternative_with_reason": named_alt_with_reason,
         "frustration_without_alternative": bool(complaints) and not competitors,
-        "price_pressure_language": bool(result.get("pricing_phrases")) or _contains_any(
+        "price_pressure_language": bool(price_complaint) or _contains_any(
             review_blob + " " + price_text,
             (
                 "price increase",
@@ -742,6 +1928,9 @@ def _is_no_signal_result(result: dict, source_row: dict[str, Any]) -> bool:
         return False
     if result.get("event_mentions") or result.get("feature_gaps"):
         return False
+    content_type = str(source_row.get("content_type") or "").strip().lower()
+    if content_type in {"community_discussion", "comment"}:
+        return True
     rating = source_row.get("rating")
     try:
         return float(rating or 0) >= 3.0
@@ -773,13 +1962,13 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     pricing_phrases = result.get("pricing_phrases", [])
     rec_lang = result.get("recommendation_language", [])
     events = result.get("event_mentions", [])
-    budget = result.get("budget_signals", {})
     reviewer = result.get("reviewer_context", {})
 
     # 0. deterministic replacements for deprecated Tier 2 classify path
     result["pain_categories"] = _derive_pain_categories(result)
     result["competitors_mentioned"] = _recover_competitor_mentions(result, source_row)
     result["competitors_mentioned"] = _derive_competitor_annotations(result, source_row)
+    _derive_budget_signals(result, source_row)
 
     ba = result.get("buyer_authority")
     if not isinstance(ba, dict):
@@ -796,14 +1985,24 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     if not isinstance(timeline, dict):
         timeline = {}
         result["timeline"] = timeline
-    timeline["decision_timeline"] = _derive_decision_timeline(result)
+    contract_end, evaluation_deadline = _derive_concrete_timeline_fields(result, source_row)
+    if contract_end and not str(timeline.get("contract_end") or "").strip():
+        timeline["contract_end"] = contract_end
+    if evaluation_deadline and not str(timeline.get("evaluation_deadline") or "").strip():
+        timeline["evaluation_deadline"] = evaluation_deadline
+    timeline["decision_timeline"] = _derive_decision_timeline(result, source_row)
 
     cc = result.get("contract_context")
     if not isinstance(cc, dict):
         cc = {}
         result["contract_context"] = cc
     cc["contract_value_signal"] = _derive_contract_value_signal(result)
-    result["urgency_indicators"] = _derive_urgency_indicators(result, source_row)
+    price_complaint = engine.derive_price_complaint(result)
+    result["urgency_indicators"] = _derive_urgency_indicators(
+        result,
+        source_row,
+        price_complaint=price_complaint,
+    )
 
     indicators = result.get("urgency_indicators", {})
     pain_cats = result.get("pain_categories", [])
@@ -814,15 +2013,15 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     )
 
     # 2. pain_category (backward compat top-level field)
-    primary_pain = "other"
+    primary_pain = "overall_dissatisfaction"
     if pain_cats:
         primary_list = [p for p in pain_cats if isinstance(p, dict) and p.get("severity") == "primary"]
         if primary_list:
-            primary_pain = primary_list[0].get("category", "other")
+            primary_pain = primary_list[0].get("category", "overall_dissatisfaction")
         elif isinstance(pain_cats[0], dict):
-            primary_pain = pain_cats[0].get("category", "other")
+            primary_pain = pain_cats[0].get("category", "overall_dissatisfaction")
     result["pain_category"] = engine.override_pain(
-        primary_pain,
+        _normalize_pain_category(primary_pain),
         complaints,
         quotable,
         _normalize_text_list(result.get("pricing_phrases")),
@@ -833,12 +2032,29 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     # 3. would_recommend
     result["would_recommend"] = engine.derive_recommend(rec_lang, rating, rating_max)
 
-    # 4. sentiment_trajectory.direction = "unknown" per-review (cross-review later)
+    # 4. sentiment_trajectory.direction -- derived deterministically from rating,
+    #    churn signals, and would_recommend. "declining" / "improving" require
+    #    multi-review time context and are left for future cross-review jobs;
+    #    per-review we classify as positive, negative, or unknown.
     st = result.get("sentiment_trajectory")
     if not isinstance(st, dict):
         st = {}
         result["sentiment_trajectory"] = st
-    st["direction"] = "unknown"
+    rating_norm = (rating / rating_max) if rating is not None and rating_max else None
+    churn_signals_raw = result.get("churn_signals") or {}
+    intent_to_leave = bool(churn_signals_raw.get("intent_to_leave")) if isinstance(churn_signals_raw, dict) else False
+    would_rec = result.get("would_recommend")
+    if rating_norm is not None:
+        if rating_norm <= 0.4 or (rating_norm <= 0.6 and intent_to_leave):
+            st["direction"] = "consistently_negative"
+        elif rating_norm >= 0.8 and would_rec is True:
+            st["direction"] = "stable_positive"
+        elif rating_norm >= 0.7 and would_rec is not False:
+            st["direction"] = "stable_positive"
+        else:
+            st["direction"] = "unknown"
+    else:
+        st["direction"] = "unknown"
 
     # 5. sentiment_trajectory.turning_point from event_mentions
     if events and isinstance(events, list) and len(events) > 0:
@@ -858,14 +2074,92 @@ def _compute_derived_fields(result: dict, source_row: dict[str, Any]) -> dict:
     ba["has_budget_authority"] = engine.derive_budget_authority(result)
 
     # 7. contract_context.price_complaint + price_context
-    cc["price_complaint"] = engine.derive_price_complaint(result)
+    cc["price_complaint"] = price_complaint
     cc["price_context"] = pricing_phrases[0] if pricing_phrases else None
+
+    # 8. witness-oriented deterministic evidence primitives
+    result["replacement_mode"] = derive_replacement_mode(result, source_row)
+    result["operating_model_shift"] = derive_operating_model_shift(result, source_row)
+    result["productivity_delta_claim"] = derive_productivity_delta_claim(source_row)
+    result["org_pressure_type"] = derive_org_pressure_type(source_row)
+    result["salience_flags"] = derive_salience_flags(result, source_row)
+    result["evidence_spans"] = derive_evidence_spans(result, source_row)
 
     # Mark schema version + evidence map hash for recomputation tracking
     result["enrichment_schema_version"] = 3
     result["evidence_map_hash"] = engine.map_hash
 
     return result
+
+
+def _missing_witness_primitives(result: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+
+    if str(result.get("replacement_mode") or "").strip() not in _KNOWN_REPLACEMENT_MODES:
+        missing.append("replacement_mode")
+    if str(result.get("operating_model_shift") or "").strip() not in _KNOWN_OPERATING_MODEL_SHIFTS:
+        missing.append("operating_model_shift")
+    if str(result.get("productivity_delta_claim") or "").strip() not in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS:
+        missing.append("productivity_delta_claim")
+    if str(result.get("org_pressure_type") or "").strip() not in _KNOWN_ORG_PRESSURE_TYPES:
+        missing.append("org_pressure_type")
+
+    salience_flags = result.get("salience_flags")
+    if not isinstance(salience_flags, list):
+        missing.append("salience_flags")
+
+    evidence_spans = result.get("evidence_spans")
+    if not isinstance(evidence_spans, list):
+        missing.append("evidence_spans")
+
+    if not str(result.get("evidence_map_hash") or "").strip():
+        missing.append("evidence_map_hash")
+
+    return missing
+
+
+def _schema_version(result: dict[str, Any]) -> int:
+    try:
+        return int(result.get("enrichment_schema_version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _finalize_enrichment_for_persist(
+    result: dict[str, Any],
+    source_row: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(result, dict):
+        return None, "invalid_payload"
+
+    payload = json.loads(json.dumps(result))
+    try:
+        payload = _compute_derived_fields(payload, source_row)
+    except Exception:
+        logger.warning(
+            "Evidence engine compute failed while finalizing enrichment for %s",
+            source_row.get("id"),
+            exc_info=True,
+        )
+        return None, "compute_failed"
+
+    if not _validate_enrichment(payload, source_row):
+        return None, "validation_failed"
+
+    return payload, None
+
+
+def _trusted_reviewer_company_name(source_row: dict[str, Any] | None) -> str | None:
+    """Return a safe reviewer company candidate from trusted raw fields."""
+    row = source_row if isinstance(source_row, dict) else {}
+    company = str(row.get("reviewer_company") or "").strip()
+    if not company:
+        return None
+    company_norm = normalize_company_name(company) or company.lower()
+    vendor_norm = normalize_company_name(str(row.get("vendor_name") or "")) or ""
+    if vendor_norm and company_norm == vendor_norm:
+        return None
+    return company
 
 
 async def _notify_high_urgency(
@@ -960,11 +2254,269 @@ def _coerce_int_override(
     max_value: int,
 ) -> int:
     """Return clamped integer override value, or default on parse failure."""
-    try:
-        coerced = int(raw_value)
-    except (TypeError, ValueError):
-        return default_value
+    default_coerced = _coerce_int_value(default_value, min_value)
+    coerced = _coerce_int_value(raw_value, default_coerced)
     return max(min_value, min(max_value, coerced))
+
+
+def _empty_exact_cache_usage() -> dict[str, int]:
+    return {
+        "exact_cache_hits": 0,
+        "tier1_exact_cache_hits": 0,
+        "tier2_exact_cache_hits": 0,
+        "generated": 0,
+        "tier1_generated_calls": 0,
+        "tier2_generated_calls": 0,
+        "witness_rows": 0,
+        "witness_count": 0,
+        "secondary_write_hits": 0,
+    }
+
+
+def _accumulate_exact_cache_usage(
+    totals: dict[str, int],
+    usage: dict[str, Any] | None,
+) -> None:
+    if not usage:
+        return
+    for key in (
+        "exact_cache_hits",
+        "tier1_exact_cache_hits",
+        "tier2_exact_cache_hits",
+        "generated",
+        "tier1_generated_calls",
+        "tier2_generated_calls",
+        "witness_rows",
+        "witness_count",
+        "secondary_write_hits",
+    ):
+        totals[key] = int(totals.get(key, 0) or 0) + int(usage.get(key, 0) or 0)
+
+
+def _witness_metrics(result: dict[str, Any] | None) -> tuple[int, int]:
+    if not isinstance(result, dict):
+        return 0, 0
+    spans = result.get("evidence_spans")
+    if not isinstance(spans, list):
+        return 0, 0
+    witness_count = 0
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        if not str(span.get("text") or "").strip():
+            continue
+        witness_count += 1
+    return (1 if witness_count > 0 else 0), witness_count
+
+
+def _row_usage_result(status: Any, usage: dict[str, Any] | None = None) -> dict[str, Any]:
+    normalized = {"status": status}
+    usage_dict = usage or {}
+    for key in _empty_exact_cache_usage():
+        normalized[key] = int(usage_dict.get(key, 0) or 0)
+    return normalized
+
+
+async def _defer_batch_row(
+    pool,
+    row: dict[str, Any],
+    *,
+    tier: str,
+    usage: dict[str, Any] | None = None,
+    custom_id: str | None = None,
+) -> dict[str, Any]:
+    await pool.execute(
+        """
+        UPDATE b2b_reviews
+        SET enrichment_status = 'pending'
+        WHERE id = $1
+        """,
+        row["id"],
+    )
+    logger.info(
+        "Deferring B2B enrichment %s for %s; reset row to pending while existing batch artifact %s remains pending",
+        tier,
+        row["id"],
+        custom_id or "unknown",
+    )
+    return _row_usage_result("deferred", usage)
+
+
+async def _persist_enrichment_result(
+    pool,
+    row: dict[str, Any],
+    result: dict[str, Any] | None,
+    *,
+    model_id: str,
+    max_attempts: int,
+    run_id: str | None,
+    cache_usage: dict[str, int],
+) -> bool | str:
+    review_id = row["id"]
+    cfg = settings.b2b_churn
+
+    if result:
+        result, finalize_error = _finalize_enrichment_for_persist(result, row)
+        if finalize_error == "compute_failed":
+            logger.warning(
+                "Evidence engine compute failed for %s -- quarantining to prevent model-dependent output",
+                review_id, exc_info=True,
+            )
+            await pool.execute(
+                """
+                UPDATE b2b_reviews
+                SET enrichment_status = 'quarantined',
+                    enrichment_attempts = enrichment_attempts + 1,
+                    low_fidelity = true,
+                    low_fidelity_reasons = $2::jsonb
+                WHERE id = $1
+                """,
+                review_id,
+                json.dumps(["evidence_engine_compute_failure"]),
+            )
+            from ..visibility import record_quarantine
+
+            await record_quarantine(
+                pool,
+                review_id=str(review_id),
+                vendor_name=row.get("vendor_name"),
+                source=row.get("source"),
+                reason_code="evidence_engine_compute_failure",
+                severity="error",
+                actionable=True,
+                summary=f"Evidence engine failed for {row.get('vendor_name')} review",
+                run_id=run_id,
+            )
+            return "quarantined"
+        if finalize_error == "validation_failed":
+            logger.warning(
+                "Enrichment validation failed for %s -- quarantining",
+                review_id,
+            )
+            await pool.execute(
+                """
+                UPDATE b2b_reviews
+                SET enrichment_status = 'quarantined',
+                    enrichment_attempts = enrichment_attempts + 1,
+                    low_fidelity = true,
+                    low_fidelity_reasons = $2::jsonb
+                WHERE id = $1
+                """,
+                review_id,
+                json.dumps(["enrichment_validation_failed"]),
+            )
+            from ..visibility import record_quarantine
+
+            await record_quarantine(
+                pool,
+                review_id=str(review_id),
+                vendor_name=row.get("vendor_name"),
+                source=row.get("source"),
+                reason_code="enrichment_validation_failed",
+                severity="warning",
+                actionable=True,
+                summary=f"Validation failed for {row.get('vendor_name')} review",
+                run_id=run_id,
+            )
+            return "quarantined"
+
+    if result:
+        st = result.get("sentiment_trajectory") or {}
+        st_direction = st.get("direction") if isinstance(st, dict) else None
+        st_tenure = st.get("tenure") if isinstance(st, dict) else None
+        st_turning = st.get("turning_point") if isinstance(st, dict) else None
+        witness_rows, witness_count = _witness_metrics(result)
+        cache_usage["witness_rows"] += witness_rows
+        cache_usage["witness_count"] += witness_count
+        low_fidelity_reasons = (
+            _detect_low_fidelity_reasons(row, result)
+            if cfg.enrichment_low_fidelity_enabled
+            else []
+        )
+        detected_at = datetime.now(timezone.utc)
+        if not low_fidelity_reasons and _is_no_signal_result(result, row):
+            target_status = "no_signal"
+        else:
+            target_status = "quarantined" if low_fidelity_reasons else "enriched"
+
+        await pool.execute(
+            """
+            UPDATE b2b_reviews
+            SET enrichment = $1,
+                enrichment_status = $8,
+                enrichment_attempts = enrichment_attempts + 1,
+                enriched_at = $2,
+                enrichment_model = $4,
+                sentiment_direction = $5,
+                sentiment_tenure = $6,
+                sentiment_turning_point = $7,
+                low_fidelity = $9,
+                low_fidelity_reasons = $10::jsonb,
+                low_fidelity_detected_at = $11
+            WHERE id = $3
+            """,
+            json.dumps(result),
+            detected_at,
+            review_id,
+            model_id,
+            st_direction,
+            st_tenure,
+            st_turning if st_turning and st_turning != "null" else None,
+            target_status,
+            bool(low_fidelity_reasons),
+            json.dumps(low_fidelity_reasons),
+            detected_at if low_fidelity_reasons else None,
+        )
+
+        if low_fidelity_reasons:
+            from ..visibility import record_quarantine
+
+            await record_quarantine(
+                pool,
+                review_id=str(review_id),
+                vendor_name=row.get("vendor_name"),
+                source=row.get("source"),
+                reason_code=low_fidelity_reasons[0],
+                severity="warning",
+                summary=f"Low-fidelity: {', '.join(low_fidelity_reasons[:3])}",
+                evidence={"reasons": low_fidelity_reasons, "source": row.get("source")},
+                run_id=run_id,
+            )
+
+        try:
+            urgency = result.get("urgency_score", 0)
+            threshold = settings.b2b_churn.high_churn_urgency_threshold
+            if urgency >= threshold:
+                signals = result.get("churn_signals", {})
+                await _notify_high_urgency(
+                    vendor_name=row["vendor_name"],
+                    reviewer_company=row.get("reviewer_company") or "",
+                    urgency=urgency,
+                    pain_category=result.get("pain_category", ""),
+                    intent_to_leave=bool(signals.get("intent_to_leave")),
+                )
+        except Exception:
+            logger.warning("ntfy notification failed for review %s, enrichment preserved", review_id)
+
+        try:
+            _ctx = result.get("reviewer_context") or {}
+            _extracted_company = (_ctx.get("company_name") or "").strip()
+            if _extracted_company and not (row.get("reviewer_company") or "").strip():
+                _extracted_company_norm = normalize_company_name(_extracted_company) or None
+                await pool.execute(
+                    "UPDATE b2b_reviews SET reviewer_company = $1, reviewer_company_norm = $2 WHERE id = $3",
+                    _extracted_company,
+                    _extracted_company_norm,
+                    review_id,
+                )
+                cache_usage["secondary_write_hits"] += 1
+        except Exception:
+            logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
+
+        return "quarantined" if target_status == "quarantined" else True
+
+    await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
+    return False
 
 
 async def _enrich_rows(
@@ -973,26 +2525,667 @@ async def _enrich_rows(
     pool,
     *,
     concurrency_override: int | None = None,
+    run_id: str | None = None,
+    task: ScheduledTask | Any | None = None,
 ) -> dict[str, Any]:
     """Enrich a list of claimed rows concurrently."""
-    max_attempts = cfg.enrichment_max_attempts
+    max_attempts = _coerce_int_value(getattr(cfg, "enrichment_max_attempts", 3), 3)
 
-    effective_concurrency = max(1, int(concurrency_override or cfg.enrichment_concurrency))
+    effective_concurrency = max(
+        1,
+        _coerce_int_value(
+            concurrency_override if concurrency_override is not None else getattr(cfg, "enrichment_concurrency", 10),
+            10,
+        ),
+    )
     sem = asyncio.Semaphore(effective_concurrency)
+    enrich_single_params = inspect.signature(_enrich_single).parameters
+    supports_usage_out = "usage_out" in enrich_single_params
+    supports_run_id = "run_id" in enrich_single_params
 
     async def _bounded_enrich(row):
         async with sem:
-            return await _enrich_single(pool, row, max_attempts, cfg.enrichment_local_only,
-                                        cfg.enrichment_max_tokens, cfg.review_truncate_length)
+            usage = _empty_exact_cache_usage()
+            kwargs: dict[str, Any] = {}
+            if supports_run_id:
+                kwargs["run_id"] = run_id
+            if supports_usage_out:
+                status = await _enrich_single(
+                    pool,
+                    row,
+                    max_attempts,
+                    cfg.enrichment_local_only,
+                    cfg.enrichment_max_tokens,
+                    cfg.review_truncate_length,
+                    usage_out=usage,
+                    **kwargs,
+                )
+            else:
+                status = await _enrich_single(
+                    pool,
+                    row,
+                    max_attempts,
+                    cfg.enrichment_local_only,
+                    cfg.enrichment_max_tokens,
+                    cfg.review_truncate_length,
+                    **kwargs,
+                )
+            return _row_usage_result(status, usage)
 
-    results = await asyncio.gather(
-        *[_bounded_enrich(row) for row in rows],
-        return_exceptions=True,
+    async def _run_single_rows(target_rows: list[dict[str, Any]]) -> list[dict[str, Any] | Exception]:
+        if not target_rows:
+            return []
+        return await asyncio.gather(
+            *[_bounded_enrich(row) for row in target_rows],
+            return_exceptions=True,
+        )
+
+    results: list[dict[str, Any] | Exception] = []
+    batch_metrics = {
+        "jobs": 0,
+        "submitted_items": 0,
+        "cache_prefiltered_items": 0,
+        "fallback_single_call_items": 0,
+        "completed_items": 0,
+        "failed_items": 0,
+        "reused_completed_items": 0,
+        "reused_pending_items": 0,
+        "rows_deferred": 0,
+        "tier2_single_fallback_rows": 0,
+    }
+
+    from ...services.b2b.anthropic_batch import (
+        AnthropicBatchItem,
+        mark_batch_fallback_result,
+        run_anthropic_message_batch,
     )
+    from ...services.b2b.cache_runner import (
+        lookup_b2b_exact_stage_text,
+        prepare_b2b_exact_stage_request,
+        store_b2b_exact_stage_text,
+    )
+    from ...services.llm.anthropic import AnthropicLLM
+    from ...services.protocols import Message
+    from ...pipelines.llm import clean_llm_output, parse_json_response
+    from ...skills import get_skill_registry
+    from ._b2b_batch_utils import (
+        anthropic_batch_min_items,
+        anthropic_batch_requested,
+        reconcile_existing_batch_artifacts,
+        resolve_anthropic_batch_llm,
+    )
+
+    def _eligible_for_batch(row: dict[str, Any]) -> bool:
+        review_text = row.get("review_text") or ""
+        if len(review_text) < _MIN_REVIEW_TEXT_LENGTH:
+            return False
+        source = str(row.get("source") or "").strip().lower()
+        return source not in _effective_enrichment_skip_sources()
+
+    def _parse_batch_text(text: str | None) -> dict[str, Any] | None:
+        if not text:
+            return None
+        cleaned = clean_llm_output(text)
+        parsed = parse_json_response(cleaned, recover_truncated=True)
+        if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+            return parsed
+        return None
+
+    use_openrouter = (
+        not cfg.enrichment_local_only
+        and bool(getattr(cfg, "enrichment_openrouter_model", ""))
+        and bool(getattr(cfg, "openrouter_api_key", ""))
+    )
+    batch_requested = anthropic_batch_requested(
+        task,
+        global_default=bool(getattr(settings.b2b_churn, "anthropic_batch_enabled", False)),
+        task_default=True,
+        task_keys=("enrichment_anthropic_batch_enabled",),
+    )
+    tier1_batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=SimpleNamespace(
+                name="openrouter",
+                model=str(getattr(cfg, "enrichment_openrouter_model", "") or "anthropic/claude-haiku-4-5"),
+            ),
+            target_model_candidates=(getattr(cfg, "enrichment_openrouter_model", ""),),
+        )
+        if use_openrouter and batch_requested
+        else None
+    )
+    tier2_model_id = (
+        getattr(cfg, "enrichment_tier2_openrouter_model", "")
+        or getattr(cfg, "enrichment_openrouter_model", "")
+        or "anthropic/claude-haiku-4-5"
+    )
+    tier2_batch_llm = (
+        resolve_anthropic_batch_llm(
+            current_llm=SimpleNamespace(name="openrouter", model=str(tier2_model_id)),
+            target_model_candidates=(tier2_model_id,),
+        )
+        if use_openrouter and batch_requested
+        else None
+    )
+
+    if not isinstance(tier1_batch_llm, AnthropicLLM):
+        tier1_batch_llm = None
+    if not isinstance(tier2_batch_llm, AnthropicLLM):
+        tier2_batch_llm = None
+
+    tier1_batch_model_id = str(
+        getattr(cfg, "enrichment_openrouter_model", "") or "anthropic/claude-haiku-4-5"
+    )
+    full_extraction_timeout = max(
+        0.0,
+        _coerce_float_value(
+            getattr(cfg, "enrichment_full_extraction_timeout_seconds", 120.0),
+            120.0,
+        ),
+    )
+    tier2_client = None
+
+    async def _persist_wrapped(
+        row: dict[str, Any],
+        result: dict[str, Any] | None,
+        *,
+        model_id: str,
+        usage: dict[str, int],
+    ) -> dict[str, Any]:
+        status = await _persist_enrichment_result(
+            pool,
+            row,
+            result,
+            model_id=model_id,
+            max_attempts=max_attempts,
+            run_id=run_id,
+            cache_usage=usage,
+        )
+        return _row_usage_result(status, usage)
+
+    async def _run_single_tier2_fallback(
+        row: dict[str, Any],
+        tier1: dict[str, Any],
+        usage: dict[str, int],
+    ) -> dict[str, Any]:
+        nonlocal tier2_client
+
+        logger.info(
+            "B2B enrichment: Tier 2 batch unavailable for %s; falling back to single-call Tier 2",
+            row["id"],
+        )
+        batch_metrics["tier2_single_fallback_rows"] += 1
+
+        trace_metadata = {
+            "run_id": run_id,
+            "vendor_name": str(row.get("vendor_name") or ""),
+            "review_id": str(row["id"]),
+            "source": str(row.get("source") or ""),
+            "tier": "tier2",
+            "workload": "single_call_fallback",
+            "batch_fallback_reason": "tier2_batch_unavailable",
+        }
+
+        if use_openrouter:
+            tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_openrouter_tier2(
+                    tier1,
+                    row,
+                    cfg,
+                    cfg.review_truncate_length,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata,
+                ),
+                timeout=full_extraction_timeout,
+            ))
+        else:
+            if tier2_client is None:
+                tier2_client = _get_tier2_client(cfg)
+            tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_vllm_tier2(
+                    tier1,
+                    row,
+                    cfg,
+                    tier2_client,
+                    cfg.review_truncate_length,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata,
+                ),
+                timeout=full_extraction_timeout,
+            ))
+
+        if tier2_cache_hit:
+            usage["tier2_exact_cache_hits"] += 1
+            usage["exact_cache_hits"] += 1
+        elif tier2_model is not None:
+            usage["tier2_generated_calls"] += 1
+            usage["generated"] += 1
+
+        if tier2 is not None:
+            model_id = f"hybrid:{tier1_batch_model_id}+{tier2_model}"
+        else:
+            model_id = tier1_batch_model_id
+
+        return await _persist_wrapped(
+            row,
+            _merge_tier1_tier2(tier1, tier2),
+            model_id=model_id,
+            usage=usage,
+        )
+
+    if tier1_batch_llm is None:
+        results = await _run_single_rows(rows)
+    else:
+        tier1_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier1")
+        tier2_skill = get_skill_registry().get("digest/b2b_churn_extraction_tier2")
+        if not tier1_skill or not tier2_skill:
+            results = await _run_single_rows(rows)
+        else:
+            direct_rows = [row for row in rows if not _eligible_for_batch(row)]
+            batched_rows = [row for row in rows if _eligible_for_batch(row)]
+            row_results: dict[Any, dict[str, Any] | Exception] = {}
+
+            if direct_rows:
+                direct_results = await _run_single_rows(direct_rows)
+                for row, result in zip(direct_rows, direct_results):
+                    row_results[row["id"]] = result
+
+            tier1_entries: list[dict[str, Any]] = []
+            for row in batched_rows:
+                payload_json = json.dumps(_build_classify_payload(row, cfg.review_truncate_length))
+                messages = [
+                    {"role": "system", "content": tier1_skill.content},
+                    {"role": "user", "content": payload_json},
+                ]
+                request = prepare_b2b_exact_stage_request(
+                    "b2b_enrichment.tier1",
+                    provider="openrouter",
+                    model=str(cfg.enrichment_openrouter_model or "anthropic/claude-haiku-4-5"),
+                    messages=messages,
+                    max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+                    temperature=0.0,
+                    response_format={"type": "json_object"},
+                )
+                cached = await lookup_b2b_exact_stage_text(request)
+                tier1_entries.append(
+                    {
+                        "row": row,
+                        "payload_json": payload_json,
+                        "messages": messages,
+                        "request": request,
+                        "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                        "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                    }
+                )
+
+            existing_tier1_results = await reconcile_existing_batch_artifacts(
+                pool=pool,
+                llm=tier1_batch_llm,
+                task_name="b2b_enrichment",
+                artifact_type="review_enrichment_tier1",
+                artifact_ids=[str(entry["row"]["id"]) for entry in tier1_entries],
+            )
+            tier1_ready_entries: list[dict[str, Any]] = []
+            remaining_tier1_entries: list[dict[str, Any]] = []
+            for entry in tier1_entries:
+                row = entry["row"]
+                existing = existing_tier1_results.get(str(row["id"]))
+                if existing and existing.get("state") == "succeeded":
+                    tier1 = _parse_batch_text(existing.get("response_text"))
+                    if tier1 is not None:
+                        tier1_ready_entries.append(
+                            {
+                                "row": row,
+                                "tier1": tier1,
+                                "cached": bool(existing.get("cached")),
+                                "request": entry["request"],
+                            }
+                        )
+                        batch_metrics["reused_completed_items"] += 1
+                        continue
+                if existing and existing.get("state") == "pending":
+                    row_results[row["id"]] = await _defer_batch_row(
+                        pool,
+                        row,
+                        tier="tier1",
+                        custom_id=str(existing.get("custom_id") or ""),
+                    )
+                    batch_metrics["reused_pending_items"] += 1
+                    batch_metrics["rows_deferred"] += 1
+                    continue
+                remaining_tier1_entries.append(entry)
+            tier1_entries = remaining_tier1_entries
+
+            if tier1_entries:
+                tier1_execution = await run_anthropic_message_batch(
+                    llm=tier1_batch_llm,
+                    stage_id="b2b_enrichment.tier1",
+                    task_name="b2b_enrichment",
+                    items=[
+                        AnthropicBatchItem(
+                            custom_id=_enrichment_batch_custom_id("tier1", entry["row"]["id"]),
+                            artifact_type="review_enrichment_tier1",
+                            artifact_id=str(entry["row"]["id"]),
+                            vendor_name=str(entry["row"].get("vendor_name") or "") or None,
+                            messages=[
+                                Message(role=str(message["role"]), content=str(message["content"]))
+                                for message in entry["messages"]
+                            ],
+                            max_tokens=max(cfg.enrichment_tier1_max_tokens, 4096),
+                            temperature=0.0,
+                            trace_span_name="task.b2b_enrichment.tier1",
+                            trace_metadata={
+                                "run_id": run_id,
+                                "vendor_name": str(entry["row"].get("vendor_name") or ""),
+                                "review_id": str(entry["row"]["id"]),
+                                "source": str(entry["row"].get("source") or ""),
+                                "tier": "tier1",
+                                "workload": "anthropic_batch",
+                            },
+                            request_metadata={"review_id": str(entry["row"]["id"]), "tier": 1},
+                            cached_response_text=entry["cached_response_text"],
+                            cached_usage=entry["cached_usage"],
+                        )
+                        for entry in tier1_entries
+                    ],
+                    run_id=run_id,
+                    min_batch_size=anthropic_batch_min_items(
+                        task,
+                        default=2,
+                        keys=("enrichment_anthropic_batch_min_items",),
+                    ),
+                    batch_metadata={"stage": "tier1"},
+                    pool=pool,
+                )
+                batch_metrics["jobs"] += 1 if tier1_execution.provider_batch_id else 0
+                batch_metrics["submitted_items"] += int(tier1_execution.submitted_items or 0)
+                batch_metrics["cache_prefiltered_items"] += int(tier1_execution.cache_prefiltered_items or 0)
+                batch_metrics["fallback_single_call_items"] += int(tier1_execution.fallback_single_call_items or 0)
+                batch_metrics["completed_items"] += int(tier1_execution.completed_items or 0)
+                batch_metrics["failed_items"] += int(tier1_execution.failed_items or 0)
+            else:
+                tier1_execution = SimpleNamespace(results_by_custom_id={})
+
+            tier2_entries: list[dict[str, Any]] = []
+            fallback_rows: list[dict[str, Any]] = []
+            per_row_batch_usage: dict[Any, dict[str, int]] = {}
+
+            for ready_entry in tier1_ready_entries:
+                row = ready_entry["row"]
+                usage = _empty_exact_cache_usage()
+                if ready_entry["cached"]:
+                    usage["tier1_exact_cache_hits"] += 1
+                    usage["exact_cache_hits"] += 1
+                else:
+                    usage["tier1_generated_calls"] += 1
+                    usage["generated"] += 1
+                per_row_batch_usage[row["id"]] = usage
+                needs_tier2 = _tier1_has_extraction_gaps(ready_entry["tier1"], source=row.get("source"))
+                if needs_tier2 and tier2_batch_llm is not None:
+                    payload = _build_classify_payload(row, cfg.review_truncate_length)
+                    payload["tier1_specific_complaints"] = ready_entry["tier1"].get("specific_complaints", [])
+                    payload["tier1_quotable_phrases"] = ready_entry["tier1"].get("quotable_phrases", [])
+                    payload_json = json.dumps(payload)
+                    system_prompt = _tier2_system_prompt_for_content_type(
+                        tier2_skill.content,
+                        payload.get("content_type"),
+                    )
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": payload_json},
+                    ]
+                    request = prepare_b2b_exact_stage_request(
+                        "b2b_enrichment.tier2",
+                        provider="openrouter",
+                        model=str(tier2_model_id),
+                        messages=messages,
+                        max_tokens=cfg.enrichment_tier2_max_tokens,
+                        temperature=0.0,
+                        response_format={"type": "json_object"},
+                    )
+                    cached = await lookup_b2b_exact_stage_text(request)
+                    tier2_entries.append(
+                        {
+                            "row": row,
+                            "tier1": ready_entry["tier1"],
+                            "messages": messages,
+                            "request": request,
+                            "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                            "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                        }
+                    )
+                elif needs_tier2:
+                    row_results[row["id"]] = await _run_single_tier2_fallback(
+                        row,
+                        ready_entry["tier1"],
+                        usage,
+                    )
+                else:
+                    row_results[row["id"]] = await _persist_wrapped(
+                        row,
+                        _merge_tier1_tier2(ready_entry["tier1"], None),
+                        model_id=tier1_batch_model_id,
+                        usage=usage,
+                    )
+
+            for entry in tier1_entries:
+                row = entry["row"]
+                usage = _empty_exact_cache_usage()
+                tier1_custom_id = _enrichment_batch_custom_id("tier1", row["id"])
+                outcome = tier1_execution.results_by_custom_id.get(tier1_custom_id)
+                tier1 = _parse_batch_text(outcome.response_text if outcome is not None else None)
+                if tier1 is None:
+                    fallback_rows.append(row)
+                    if outcome is not None:
+                        await mark_batch_fallback_result(
+                            batch_id=tier1_execution.local_batch_id,
+                            custom_id=tier1_custom_id,
+                            succeeded=False,
+                            error_text=outcome.error_text or "tier1_batch_parse_failed",
+                            pool=pool,
+                        )
+                    continue
+                if outcome is not None and outcome.cached:
+                    usage["tier1_exact_cache_hits"] += 1
+                    usage["exact_cache_hits"] += 1
+                else:
+                    usage["tier1_generated_calls"] += 1
+                    usage["generated"] += 1
+                    await store_b2b_exact_stage_text(
+                        entry["request"],
+                        response_text=clean_llm_output(outcome.response_text or ""),
+                        metadata={"tier": 1, "backend": "anthropic_batch"},
+                    )
+
+                per_row_batch_usage[row["id"]] = usage
+                needs_tier2 = _tier1_has_extraction_gaps(tier1, source=row.get("source"))
+                if needs_tier2 and tier2_batch_llm is not None:
+                    payload = _build_classify_payload(row, cfg.review_truncate_length)
+                    payload["tier1_specific_complaints"] = tier1.get("specific_complaints", [])
+                    payload["tier1_quotable_phrases"] = tier1.get("quotable_phrases", [])
+                    payload_json = json.dumps(payload)
+                    system_prompt = _tier2_system_prompt_for_content_type(
+                        tier2_skill.content,
+                        payload.get("content_type"),
+                    )
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": payload_json},
+                    ]
+                    request = prepare_b2b_exact_stage_request(
+                        "b2b_enrichment.tier2",
+                        provider="openrouter",
+                        model=str(tier2_model_id),
+                        messages=messages,
+                        max_tokens=cfg.enrichment_tier2_max_tokens,
+                        temperature=0.0,
+                        response_format={"type": "json_object"},
+                    )
+                    cached = await lookup_b2b_exact_stage_text(request)
+                    tier2_entries.append(
+                        {
+                            "row": row,
+                            "tier1": tier1,
+                            "messages": messages,
+                            "request": request,
+                            "cached_response_text": str(cached["response_text"] or "") if cached is not None else None,
+                            "cached_usage": dict(cached.get("usage") or {}) if cached is not None else {},
+                        }
+                    )
+                elif needs_tier2:
+                    row_results[row["id"]] = await _run_single_tier2_fallback(row, tier1, usage)
+                else:
+                    row_results[row["id"]] = await _persist_wrapped(
+                        row,
+                        _merge_tier1_tier2(tier1, None),
+                        model_id=tier1_batch_model_id,
+                        usage=usage,
+                    )
+
+            if tier2_entries:
+                existing_tier2_results = await reconcile_existing_batch_artifacts(
+                    pool=pool,
+                    llm=tier2_batch_llm,
+                    task_name="b2b_enrichment",
+                    artifact_type="review_enrichment_tier2",
+                    artifact_ids=[str(entry["row"]["id"]) for entry in tier2_entries],
+                )
+                remaining_tier2_entries: list[dict[str, Any]] = []
+                for entry in tier2_entries:
+                    row = entry["row"]
+                    existing = existing_tier2_results.get(str(row["id"]))
+                    usage = per_row_batch_usage[row["id"]]
+                    if existing and existing.get("state") == "succeeded":
+                        tier2 = _parse_batch_text(existing.get("response_text"))
+                        if tier2 is not None:
+                            if existing.get("cached"):
+                                usage["tier2_exact_cache_hits"] += 1
+                                usage["exact_cache_hits"] += 1
+                            else:
+                                usage["tier2_generated_calls"] += 1
+                                usage["generated"] += 1
+                            row_results[row["id"]] = await _persist_wrapped(
+                                row,
+                                _merge_tier1_tier2(entry["tier1"], tier2),
+                                model_id=f"hybrid:{tier1_batch_model_id}+{tier2_model_id}",
+                                usage=usage,
+                            )
+                            batch_metrics["reused_completed_items"] += 1
+                            continue
+                    if existing and existing.get("state") == "pending":
+                        row_results[row["id"]] = await _defer_batch_row(
+                            pool,
+                            row,
+                            tier="tier2",
+                            usage=usage,
+                            custom_id=str(existing.get("custom_id") or ""),
+                        )
+                        batch_metrics["reused_pending_items"] += 1
+                        batch_metrics["rows_deferred"] += 1
+                        continue
+                    remaining_tier2_entries.append(entry)
+                tier2_entries = remaining_tier2_entries
+
+                if tier2_entries:
+                    tier2_execution = await run_anthropic_message_batch(
+                        llm=tier2_batch_llm,
+                        stage_id="b2b_enrichment.tier2",
+                        task_name="b2b_enrichment",
+                        items=[
+                            AnthropicBatchItem(
+                                custom_id=_enrichment_batch_custom_id("tier2", entry["row"]["id"]),
+                                artifact_type="review_enrichment_tier2",
+                                artifact_id=str(entry["row"]["id"]),
+                                vendor_name=str(entry["row"].get("vendor_name") or "") or None,
+                                messages=[
+                                    Message(role=str(message["role"]), content=str(message["content"]))
+                                    for message in entry["messages"]
+                                ],
+                                max_tokens=cfg.enrichment_tier2_max_tokens,
+                                temperature=0.0,
+                                trace_span_name="task.b2b_enrichment.tier2",
+                                trace_metadata={
+                                    "run_id": run_id,
+                                    "vendor_name": str(entry["row"].get("vendor_name") or ""),
+                                    "review_id": str(entry["row"]["id"]),
+                                    "source": str(entry["row"].get("source") or ""),
+                                    "tier": "tier2",
+                                    "workload": "anthropic_batch",
+                                },
+                                request_metadata={"review_id": str(entry["row"]["id"]), "tier": 2},
+                                cached_response_text=entry["cached_response_text"],
+                                cached_usage=entry["cached_usage"],
+                            )
+                            for entry in tier2_entries
+                        ],
+                        run_id=run_id,
+                        min_batch_size=anthropic_batch_min_items(
+                            task,
+                            default=2,
+                            keys=("enrichment_anthropic_batch_min_items",),
+                        ),
+                        batch_metadata={"stage": "tier2"},
+                        pool=pool,
+                    )
+                    batch_metrics["jobs"] += 1 if tier2_execution.provider_batch_id else 0
+                    batch_metrics["submitted_items"] += int(tier2_execution.submitted_items or 0)
+                    batch_metrics["cache_prefiltered_items"] += int(tier2_execution.cache_prefiltered_items or 0)
+                    batch_metrics["fallback_single_call_items"] += int(tier2_execution.fallback_single_call_items or 0)
+                    batch_metrics["completed_items"] += int(tier2_execution.completed_items or 0)
+                    batch_metrics["failed_items"] += int(tier2_execution.failed_items or 0)
+                else:
+                    tier2_execution = SimpleNamespace(results_by_custom_id={})
+
+                for entry in tier2_entries:
+                    row = entry["row"]
+                    usage = per_row_batch_usage[row["id"]]
+                    tier2_custom_id = _enrichment_batch_custom_id("tier2", row["id"])
+                    outcome = tier2_execution.results_by_custom_id.get(tier2_custom_id)
+                    tier2 = _parse_batch_text(outcome.response_text if outcome is not None else None)
+                    if tier2 is None:
+                        fallback_rows.append(row)
+                        if outcome is not None:
+                            await mark_batch_fallback_result(
+                                batch_id=tier2_execution.local_batch_id,
+                                custom_id=tier2_custom_id,
+                                succeeded=False,
+                                error_text=outcome.error_text or "tier2_batch_parse_failed",
+                                pool=pool,
+                            )
+                        continue
+                    if outcome is not None and outcome.cached:
+                        usage["tier2_exact_cache_hits"] += 1
+                        usage["exact_cache_hits"] += 1
+                    else:
+                        usage["tier2_generated_calls"] += 1
+                        usage["generated"] += 1
+                        await store_b2b_exact_stage_text(
+                            entry["request"],
+                            response_text=clean_llm_output(outcome.response_text or ""),
+                            metadata={"tier": 2, "backend": "anthropic_batch"},
+                        )
+                    row_results[row["id"]] = await _persist_wrapped(
+                        row,
+                        _merge_tier1_tier2(entry["tier1"], tier2),
+                        model_id=f"hybrid:{tier1_batch_model_id}+{tier2_model_id}",
+                        usage=usage,
+                    )
+
+            fallback_results = await _run_single_rows(fallback_rows)
+            for row, result in zip(fallback_rows, fallback_results):
+                row_results[row["id"]] = result
+
+            results = [row_results[row["id"]] for row in rows]
 
     for row, result in zip(rows, results):
         if isinstance(result, Exception):
             logger.error("Unexpected enrichment error for %s: %s", row["id"], result, exc_info=result)
+
+    cache_usage = _empty_exact_cache_usage()
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        if isinstance(result, dict):
+            _accumulate_exact_cache_usage(cache_usage, result)
 
     batch_ids = [row["id"] for row in rows]
     status_rows = await pool.fetch(
@@ -1021,6 +3214,17 @@ async def _enrich_rows(
         "quarantined": quarantined,
         "no_signal": no_signal or 0,
         "failed": failed,
+        "anthropic_batch_jobs": batch_metrics["jobs"],
+        "anthropic_batch_items_submitted": batch_metrics["submitted_items"],
+        "anthropic_batch_cache_prefiltered_items": batch_metrics["cache_prefiltered_items"],
+        "anthropic_batch_fallback_single_call_items": batch_metrics["fallback_single_call_items"],
+        "anthropic_batch_completed_items": batch_metrics["completed_items"],
+        "anthropic_batch_failed_items": batch_metrics["failed_items"],
+        "anthropic_batch_reused_completed_items": batch_metrics["reused_completed_items"],
+        "anthropic_batch_reused_pending_items": batch_metrics["reused_pending_items"],
+        "anthropic_batch_rows_deferred": batch_metrics["rows_deferred"],
+        "anthropic_batch_tier2_single_fallback_rows": batch_metrics["tier2_single_fallback_rows"],
+        **cache_usage,
     }
 
 
@@ -1200,15 +3404,21 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     requeued = requeued_parser + requeued_model
 
     task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
-    default_max_batch = min(cfg.enrichment_max_per_batch, 500)
+    default_max_batch = min(
+        _coerce_int_value(getattr(cfg, "enrichment_max_per_batch", 10), 10),
+        500,
+    )
     max_batch = _coerce_int_override(
         task_metadata.get("enrichment_max_per_batch"),
         default_max_batch,
         min_value=1,
         max_value=500,
     )
-    max_attempts = cfg.enrichment_max_attempts
-    default_max_rounds = max(1, cfg.enrichment_max_rounds_per_run)
+    max_attempts = _coerce_int_value(getattr(cfg, "enrichment_max_attempts", 3), 3)
+    default_max_rounds = max(
+        1,
+        _coerce_int_value(getattr(cfg, "enrichment_max_rounds_per_run", 1), 1),
+    )
     max_rounds = _coerce_int_override(
         task_metadata.get("enrichment_max_rounds_per_run"),
         default_max_rounds,
@@ -1217,17 +3427,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
     effective_concurrency = _coerce_int_override(
         task_metadata.get("enrichment_concurrency"),
-        max(1, cfg.enrichment_concurrency),
+        max(1, _coerce_int_value(getattr(cfg, "enrichment_concurrency", 10), 10)),
         min_value=1,
         max_value=100,
     )
     inter_batch_delay = max(
         0.0,
-        float(
+        _coerce_float_value(
             task_metadata.get(
                 "enrichment_inter_batch_delay_seconds",
-                cfg.enrichment_inter_batch_delay_seconds,
-            )
+                getattr(cfg, "enrichment_inter_batch_delay_seconds", 2.0),
+            ),
+            _coerce_float_value(getattr(cfg, "enrichment_inter_batch_delay_seconds", 2.0), 2.0),
         ),
     )
     priority_sources = [
@@ -1235,11 +3446,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         for source in str(cfg.enrichment_priority_sources or "").split(",")
         if source.strip()
     ]
+    run_id = _task_run_id(task)
 
     total_enriched = 0
     total_failed = 0
     total_no_signal = 0
     total_quarantined = 0
+    cache_usage = _empty_exact_cache_usage()
+    batch_metrics = {
+        "anthropic_batch_jobs": 0,
+        "anthropic_batch_items_submitted": 0,
+        "anthropic_batch_cache_prefiltered_items": 0,
+        "anthropic_batch_fallback_single_call_items": 0,
+        "anthropic_batch_completed_items": 0,
+        "anthropic_batch_failed_items": 0,
+        "anthropic_batch_rows_deferred": 0,
+        "anthropic_batch_tier2_single_fallback_rows": 0,
+    }
     rounds = 0
 
     while rounds < max_rounds:
@@ -1281,12 +3504,17 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             cfg,
             pool,
             concurrency_override=effective_concurrency,
+            run_id=run_id,
+            task=task,
         )
         total_enriched += result.get("enriched", 0)
         batch_failed = result.get("failed", 0)
         total_failed += batch_failed
         total_no_signal += result.get("no_signal", 0)
         total_quarantined += result.get("quarantined", 0)
+        _accumulate_exact_cache_usage(cache_usage, result)
+        for key in batch_metrics:
+            batch_metrics[key] += int(result.get(key, 0) or 0)
         rounds += 1
 
         # If most of the batch failed, vLLM is likely overwhelmed -- stop the loop
@@ -1301,18 +3529,75 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if rounds == 0:
         return {"_skip_synthesis": "No B2B reviews to enrich"}
 
+    secondary_write_breakdown = {
+        "company_backfills": int(cache_usage.get("secondary_write_hits", 0) or 0),
+        "orphaned_requeued": int(orphaned or 0),
+        "exhausted_marked_failed": int(exhausted or 0),
+        "version_upgrade_requeued": int(requeued or 0),
+    }
+    secondary_write_hits = sum(secondary_write_breakdown.values())
     result = {
         "enriched": total_enriched,
         "quarantined": total_quarantined,
         "failed": total_failed,
         "no_signal": total_no_signal,
+        **cache_usage,
         "rounds": rounds,
         "orphaned_requeued": orphaned,
         "exhausted_marked_failed": exhausted,
+        "witness_rows": int(cache_usage.get("witness_rows", 0) or 0),
+        "witness_count": int(cache_usage.get("witness_count", 0) or 0),
+        "reviews_processed": total_enriched + total_quarantined + total_failed + total_no_signal,
+        "secondary_write_hits": secondary_write_hits,
+        "secondary_write_breakdown": secondary_write_breakdown,
+        **batch_metrics,
         "_skip_synthesis": "B2B enrichment complete",
     }
     if requeued:
         result["version_upgrade_requeued"] = requeued
+
+    # Record enrichment run summary
+    from ..visibility import record_attempt, emit_event
+    total_processed = total_enriched + total_quarantined + total_failed + total_no_signal
+    await record_attempt(
+        pool, artifact_type="enrichment", artifact_id="batch",
+        run_id=run_id, stage="enrichment",
+        status="succeeded" if total_failed == 0 else "failed",
+        score=total_enriched,
+        blocker_count=total_failed,
+        warning_count=total_quarantined,
+        error_message=f"{total_failed} failed, {total_quarantined} quarantined" if total_failed else None,
+    )
+    if total_failed > 0 or total_quarantined > 0 or secondary_write_hits > 0:
+        if total_failed > 0:
+            reason_code = "enrichment_failures"
+        elif total_quarantined > 0:
+            reason_code = "enrichment_quarantines"
+        else:
+            reason_code = "enrichment_secondary_writes"
+        await emit_event(
+            pool, stage="extraction", event_type="enrichment_run_summary",
+            entity_type="pipeline", entity_id="enrichment",
+            summary=f"Enrichment: {total_enriched} enriched, {total_failed} failed, {total_quarantined} quarantined",
+            severity="warning" if total_failed > 0 else "info",
+            actionable=total_failed > 5,
+            run_id=run_id,
+            reason_code=reason_code,
+            detail={
+                "enriched": total_enriched,
+                "failed": total_failed,
+                "quarantined": total_quarantined,
+                "no_signal": total_no_signal,
+                "processed": total_processed,
+                "witness_rows": int(cache_usage.get("witness_rows", 0) or 0),
+                "witness_count": int(cache_usage.get("witness_count", 0) or 0),
+                "exact_cache_hits": int(cache_usage.get("exact_cache_hits", 0) or 0),
+                "generated": int(cache_usage.get("generated", 0) or 0),
+                "secondary_write_hits": secondary_write_hits,
+                "secondary_write_breakdown": secondary_write_breakdown,
+            },
+        )
+
     return result
 
 
@@ -1322,9 +3607,18 @@ _MIN_REVIEW_TEXT_LENGTH = 80  # Skip LLM calls for reviews shorter than this
 
 
 async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
-                         max_tokens: int, truncate_length: int = 3000) -> bool:
-    """Enrich a single B2B review with churn signals. Returns True on success."""
+                         max_tokens: int, truncate_length: int = 3000,
+                         run_id: str | None = None,
+                         usage_out: dict[str, int] | None = None) -> bool | str:
+    """Enrich a single B2B review and optionally report exact-cache usage."""
     review_id = row["id"]
+    cache_usage = _empty_exact_cache_usage()
+
+    def _finish(status: bool | str) -> bool | str:
+        if usage_out is not None:
+            usage_out.clear()
+            usage_out.update(cache_usage)
+        return status
 
     # Skip reviews with insufficient text -- title-only scrapes can't yield 47 fields
     review_text = row.get("review_text") or ""
@@ -1333,14 +3627,10 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             "UPDATE b2b_reviews SET enrichment_status = 'not_applicable' WHERE id = $1",
             review_id,
         )
-        return False
+        return _finish(False)
 
     source = str(row.get("source") or "").strip().lower()
-    skip_sources = {
-        item.strip().lower()
-        for item in str(settings.b2b_churn.enrichment_skip_sources or "").split(",")
-        if item.strip()
-    }
+    skip_sources = _effective_enrichment_skip_sources()
     if source in skip_sources:
         await pool.execute(
             """
@@ -1358,13 +3648,25 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             source,
             review_id,
         )
-        return False
+        return _finish(False)
 
     try:
         cfg = settings.b2b_churn
-        full_extraction_timeout = cfg.enrichment_full_extraction_timeout_seconds
+        full_extraction_timeout = max(
+            0.0,
+            _coerce_float_value(
+                getattr(cfg, "enrichment_full_extraction_timeout_seconds", 120.0),
+                120.0,
+            ),
+        )
         payload = _build_classify_payload(row, truncate_length)
         payload_json = json.dumps(payload)
+        trace_metadata = {
+            "run_id": run_id,
+            "vendor_name": str(row.get("vendor_name") or ""),
+            "review_id": str(review_id),
+            "source": str(row.get("source") or ""),
+        }
         client = _get_tier1_client(cfg)
 
         # Tier 1: deterministic extraction (base fields)
@@ -1375,144 +3677,98 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             and bool(cfg.openrouter_api_key)
         )
         if use_openrouter:
-            tier1, tier1_model = await asyncio.wait_for(
-                _call_openrouter_tier1(payload_json, cfg),
+            tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_openrouter_tier1(
+                    payload_json,
+                    cfg,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata | {"tier": "tier1"},
+                ),
                 timeout=full_extraction_timeout,
-            )
+            ))
         else:
-            tier1, tier1_model = await asyncio.wait_for(
-                _call_vllm_tier1(payload_json, cfg, client),
+            tier1, tier1_model, tier1_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                _call_vllm_tier1(
+                    payload_json,
+                    cfg,
+                    client,
+                    include_cache_hit=True,
+                    trace_metadata=trace_metadata | {"tier": "tier1"},
+                ),
                 timeout=full_extraction_timeout,
-            )
+            ))
+        if tier1_cache_hit:
+            cache_usage["tier1_exact_cache_hits"] += 1
+            cache_usage["exact_cache_hits"] += 1
+        elif tier1_model is not None:
+            cache_usage["tier1_generated_calls"] += 1
+            cache_usage["generated"] += 1
         if tier1 is None:
             logger.debug("Tier 1 returned None for %s, deferring to next cycle", review_id)
             await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-            return False
+            return _finish(False)
 
-        # Tier 2: conditional — only fire when tier 1 left extraction gaps
+        # Tier 2: conditional -- only fire when tier 1 left extraction gaps
         tier2 = None
         tier2_model = None
-        if _tier1_has_extraction_gaps(tier1):
-            tier2_client = _get_tier2_client(cfg)
-            tier2, tier2_model = await asyncio.wait_for(
-                _call_vllm_tier2(tier1, row, cfg, tier2_client, truncate_length),
-                timeout=full_extraction_timeout,
-            )
+        tier2_cache_hit = False
+        if _tier1_has_extraction_gaps(tier1, source=row.get("source")):
+            try:
+                if use_openrouter:
+                    tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                        _call_openrouter_tier2(
+                            tier1,
+                            row,
+                            cfg,
+                            truncate_length,
+                            include_cache_hit=True,
+                            trace_metadata=trace_metadata | {"tier": "tier2"},
+                        ),
+                        timeout=full_extraction_timeout,
+                    ))
+                else:
+                    tier2_client = _get_tier2_client(cfg)
+                    tier2, tier2_model, tier2_cache_hit = _unpack_stage_result(await asyncio.wait_for(
+                        _call_vllm_tier2(
+                            tier1,
+                            row,
+                            cfg,
+                            tier2_client,
+                            truncate_length,
+                            include_cache_hit=True,
+                            trace_metadata=trace_metadata | {"tier": "tier2"},
+                        ),
+                        timeout=full_extraction_timeout,
+                    ))
+            except Exception:
+                logger.warning(
+                    "Tier 2 enrichment failed for review %s; persisting tier 1 result only",
+                    review_id,
+                    exc_info=True,
+                )
+        if tier2_cache_hit:
+            cache_usage["tier2_exact_cache_hits"] += 1
+            cache_usage["exact_cache_hits"] += 1
+        elif tier2_model is not None:
+            cache_usage["tier2_generated_calls"] += 1
+            cache_usage["generated"] += 1
         if tier2 is not None:
             model_id = f"hybrid:{tier1_model}+{tier2_model}"
         else:
             model_id = tier1_model or ""
 
         result = _merge_tier1_tier2(tier1, tier2)
-
-        # Layer 3: compute derived fields from indicators (urgency, pain, recommend, etc.)
-        # Hard-fail if compute breaks -- do NOT fall back to model-dependent output.
-        if result:
-            try:
-                result = _compute_derived_fields(result, row)
-            except Exception:
-                logger.warning(
-                    "Evidence engine compute failed for %s -- quarantining to prevent model-dependent output",
-                    review_id, exc_info=True,
-                )
-                await pool.execute(
-                    """
-                    UPDATE b2b_reviews
-                    SET enrichment_status = 'quarantined',
-                        enrichment_attempts = enrichment_attempts + 1,
-                        low_fidelity = true,
-                        low_fidelity_reasons = $2::jsonb
-                    WHERE id = $1
-                    """,
-                    review_id,
-                    json.dumps(["evidence_engine_compute_failure"]),
-                )
-                return "quarantined"
-
-        if result and _validate_enrichment(result, row):
-            # Extract sentiment_trajectory subfields for indexed columns
-            st = result.get("sentiment_trajectory") or {}
-            st_direction = st.get("direction") if isinstance(st, dict) else None
-            st_tenure = st.get("tenure") if isinstance(st, dict) else None
-            st_turning = st.get("turning_point") if isinstance(st, dict) else None
-            low_fidelity_reasons = (
-                _detect_low_fidelity_reasons(row, result)
-                if cfg.enrichment_low_fidelity_enabled
-                else []
+        return _finish(
+            await _persist_enrichment_result(
+                pool,
+                row,
+                result,
+                model_id=model_id,
+                max_attempts=max_attempts,
+                run_id=run_id,
+                cache_usage=cache_usage,
             )
-            detected_at = datetime.now(timezone.utc)
-            if not low_fidelity_reasons and _is_no_signal_result(result, row):
-                target_status = "no_signal"
-            else:
-                target_status = "quarantined" if low_fidelity_reasons else "enriched"
-
-            await pool.execute(
-                """
-                UPDATE b2b_reviews
-                SET enrichment = $1,
-                    enrichment_status = $8,
-                    enrichment_attempts = enrichment_attempts + 1,
-                    enriched_at = $2,
-                    enrichment_model = $4,
-                    sentiment_direction = $5,
-                    sentiment_tenure = $6,
-                    sentiment_turning_point = $7,
-                    low_fidelity = $9,
-                    low_fidelity_reasons = $10::jsonb,
-                    low_fidelity_detected_at = $11
-                WHERE id = $3
-                """,
-                json.dumps(result),
-                detected_at,
-                review_id,
-                model_id,
-                st_direction,
-                st_tenure,
-                st_turning if st_turning and st_turning != "null" else None,
-                target_status,
-                bool(low_fidelity_reasons),
-                json.dumps(low_fidelity_reasons),
-                detected_at if low_fidelity_reasons else None,
-            )
-
-            # Fire ntfy notification for high-urgency signals (must never
-            # break enrichment -- wrapped in its own try/except)
-            try:
-                urgency = result.get("urgency_score", 0)
-                threshold = settings.b2b_churn.high_churn_urgency_threshold
-                if urgency >= threshold:
-                    signals = result.get("churn_signals", {})
-                    await _notify_high_urgency(
-                        vendor_name=row["vendor_name"],
-                        reviewer_company=row.get("reviewer_company") or "",
-                        urgency=urgency,
-                        pain_category=result.get("pain_category", ""),
-                        intent_to_leave=bool(signals.get("intent_to_leave")),
-                    )
-            except Exception:
-                logger.warning("ntfy notification failed for review %s, enrichment preserved", review_id)
-
-            # Backfill reviewer_company from LLM extraction when parser left it empty
-            try:
-                _ctx = result.get("reviewer_context") or {}
-                _extracted_company = (_ctx.get("company_name") or "").strip()
-                if _extracted_company and not (row.get("reviewer_company") or "").strip():
-                    _extracted_company_norm = normalize_company_name(_extracted_company) or None
-                    await pool.execute(
-                        "UPDATE b2b_reviews SET reviewer_company = $1, reviewer_company_norm = $2 WHERE id = $3",
-                        _extracted_company,
-                        _extracted_company_norm,
-                        review_id,
-                    )
-            except Exception:
-                logger.debug("Company name backfill failed for %s (non-fatal)", review_id)
-
-            if target_status == "quarantined":
-                return "quarantined"
-            return True
-        else:
-            await _increment_attempts(pool, review_id, row["enrichment_attempts"], max_attempts)
-            return False
+        )
 
     except Exception:
         logger.exception("Failed to enrich B2B review %s", review_id)
@@ -1530,7 +3786,7 @@ async def _enrich_single(pool, row, max_attempts: int, local_only: bool,
             )
         except Exception:
             pass
-        return False
+        return _finish(False)
 
 
 def _smart_truncate(text: str, max_len: int = 3000) -> str:
@@ -1556,7 +3812,7 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
         except (json.JSONDecodeError, TypeError):
             raw_meta = {}
 
-    return {
+    payload: dict[str, Any] = {
         "vendor_name": row["vendor_name"],
         "product_name": row["product_name"] or "",
         "product_category": row["product_category"] or "",
@@ -1568,13 +3824,28 @@ def _build_classify_payload(row, truncate_length: int = 3000) -> dict[str, Any]:
         "rating_max": int(row["rating_max"]),
         "summary": row["summary"] or "",
         "review_text": review_text,
-        "pros": row["pros"] or "",
-        "cons": row["cons"] or "",
-        "reviewer_title": row["reviewer_title"] or "",
-        "reviewer_company": row["reviewer_company"] or "",
-        "company_size_raw": row["company_size_raw"] or "",
-        "reviewer_industry": row["reviewer_industry"] or "",
     }
+    for key, value in (
+        ("pros", row["pros"]),
+        ("cons", row["cons"]),
+        ("reviewer_title", row["reviewer_title"]),
+        ("reviewer_company", row["reviewer_company"]),
+        ("company_size_raw", row["company_size_raw"]),
+        ("reviewer_industry", row["reviewer_industry"]),
+    ):
+        if isinstance(value, str) and value.strip():
+            payload[key] = value
+    if not payload["product_name"]:
+        payload.pop("product_name", None)
+    if not payload["product_category"]:
+        payload.pop("product_category", None)
+    if payload.get("rating") is None:
+        payload.pop("rating", None)
+    if not payload["summary"]:
+        payload.pop("summary", None)
+    if not payload["review_text"]:
+        payload.pop("review_text", None)
+    return payload
 
 
 _LOW_FIDELITY_TOKEN_STOPWORDS = {
@@ -1751,13 +4022,31 @@ def _detect_low_fidelity_reasons(row: dict[str, Any], result: dict[str, Any]) ->
 
 _KNOWN_PAIN_CATEGORIES = {
     "pricing", "features", "reliability", "support", "integration",
-    "performance", "security", "ux", "onboarding", "other",
+    "performance", "security", "ux", "onboarding", "overall_dissatisfaction",
     "technical_debt", "contract_lock_in", "data_migration", "api_limitations",
+    "outcome_gap", "admin_burden", "ai_hallucination", "integration_debt",
 }
+
+_LEGACY_GENERIC_PAIN_CATEGORIES = {"other", "general_dissatisfaction"}
+
+
+def _normalize_pain_category(category: Any) -> str:
+    raw = str(category or "").strip().lower()
+    if not raw:
+        return "overall_dissatisfaction"
+    if raw in _LEGACY_GENERIC_PAIN_CATEGORIES:
+        return "overall_dissatisfaction"
+    if raw in _KNOWN_PAIN_CATEGORIES:
+        return raw
+    return "overall_dissatisfaction"
 
 
 def _coerce_bool(value: Any) -> bool | None:
-    """Coerce a value to bool. Returns None if unrecognizable."""
+    """Coerce a value to bool. Returns None if unrecognizable.
+    None/null is treated as False (absence of signal).
+    """
+    if value is None:
+        return False
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
@@ -1765,7 +4054,7 @@ def _coerce_bool(value: Any) -> bool | None:
     if isinstance(value, str):
         if value.lower() in ("true", "yes", "1"):
             return True
-        if value.lower() in ("false", "no", "0"):
+        if value.lower() in ("false", "no", "0", "null", "none"):
             return False
     return None
 
@@ -1786,6 +4075,18 @@ _KNOWN_ROLE_LEVELS = {"executive", "director", "manager", "ic", "unknown"}
 _KNOWN_BUYING_STAGES = {"active_purchase", "evaluation", "renewal_decision", "post_purchase", "unknown"}
 _KNOWN_DECISION_TIMELINES = {"immediate", "within_quarter", "within_year", "unknown"}
 _KNOWN_CONTRACT_VALUE_SIGNALS = {"enterprise_high", "enterprise_mid", "mid_market", "smb", "unknown"}
+_KNOWN_REPLACEMENT_MODES = {
+    "competitor_switch", "bundled_suite_consolidation", "workflow_substitution",
+    "internal_tool", "none",
+}
+_KNOWN_OPERATING_MODEL_SHIFTS = {
+    "sync_to_async", "chat_to_docs", "chat_to_ticketing", "consolidation", "none",
+}
+_KNOWN_PRODUCTIVITY_DELTA_CLAIMS = {"more_productive", "less_productive", "no_change", "unknown"}
+_KNOWN_ORG_PRESSURE_TYPES = {
+    "procurement_mandate", "standardization_mandate", "bundle_pressure",
+    "budget_freeze", "none",
+}
 
 # Insider signal validation sets (migration 133)
 _KNOWN_CONTENT_TYPES = {"review", "community_discussion", "comment", "insider_account"}
@@ -1818,20 +4119,85 @@ _ROLE_TYPE_ALIASES = {
     "unknown": "unknown",
 }
 
-_NOISY_REVIEWER_TITLE_PATTERNS = (
-    re.compile(r"^repeat churn signal", re.I),
-    re.compile(r"score:\s*\d", re.I),
-)
+_ROLE_LEVEL_ALIASES = {
+    "executive": "executive",
+    "exec": "executive",
+    "csuite": "executive",
+    "cxo": "executive",
+    "ceo": "executive",
+    "cto": "executive",
+    "cfo": "executive",
+    "cio": "executive",
+    "cmo": "executive",
+    "coo": "executive",
+    "cro": "executive",
+    "president": "executive",
+    "founder": "executive",
+    "owner": "executive",
+    "executivedirector": "executive",
+    "presidentfounder": "executive",
+    "ownermanagingmember": "executive",
+    "ed": "executive",
+    "director": "director",
+    "vp": "director",
+    "vicepresident": "director",
+    "head": "director",
+    "directeur": "director",
+    "managingdirector": "director",
+    "headofcustomerexperience": "director",
+    "manager": "manager",
+    "lead": "manager",
+    "teamlead": "manager",
+    "supervisor": "manager",
+    "coordinator": "manager",
+    "projectmanager": "manager",
+    "programmanager": "manager",
+    "productmanager": "manager",
+    "marketingmanager": "manager",
+    "digitalmarketingmanager": "manager",
+    "salesmanager": "manager",
+    "operationsmanager": "manager",
+    "itmanager": "manager",
+    "businessdevelopmentmanager": "manager",
+    "clientservicemanager": "manager",
+    "customersuccessmanager": "manager",
+    "pmo": "manager",
+    "bdm": "manager",
+    "leadconsultant": "manager",
+    "projectmanagement": "manager",
+    "ic": "ic",
+    "individualcontributor": "ic",
+    "individual": "ic",
+    "user": "ic",
+    "product": "ic",
+    "marketing": "ic",
+    "digitalmarketing": "ic",
+    "consultant": "ic",
+    "customersupport": "ic",
+    "customersuccess": "ic",
+    "humanresources": "ic",
+    "softwaredevelopment": "ic",
+    "it": "ic",
+    "devops": "ic",
+    "swe": "ic",
+    "fse": "ic",
+    "cybersecurityanalyst": "ic",
+    "chemicalengineer": "ic",
+    "industrialengineer": "ic",
+    "customersatisfactionandqa": "ic",
+    "marketingteam": "ic",
+}
+
 _EXEC_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(vp\b|vice president|director|head of|chief|cfo|ceo|coo|cio|cto|cro|cmo|founder|owner|president)\b",
+    r"\b(vp\b|vice president|director|head of|chief|cfo|ceo|coo|cio|cto|cro|cmo|founder|owner|president|executive director|managing member)\b",
     re.I,
 )
 _CHAMPION_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(manager|lead|supervisor|coordinator)\b",
+    r"\b(manager|lead|team lead|supervisor|coordinator|pmo|project management|bdm)\b",
     re.I,
 )
 _EVALUATOR_REVIEWER_TITLE_PATTERN = re.compile(
-    r"\b(analyst|architect|engineer|developer|administrator|admin|consultant|specialist)\b",
+    r"\b(analyst|architect|engineer|developer|administrator|admin|consultant|specialist|devops|qa|customer support|customer success|human resources|marketing|product|software development|cybersecurity|it\b|swe\b|fse\b)\b",
     re.I,
 )
 _EXEC_ROLE_TEXT_PATTERN = re.compile(
@@ -1887,6 +4253,14 @@ _END_USER_TEXT_PATTERNS = (
     re.compile(r"\bdaily use\b", re.I),
     re.compile(r"\buse it for\b", re.I),
 )
+_MANAGER_DECISION_TITLE_PATTERN = re.compile(
+    r"\b(operations manager|it manager|project manager|program manager|product manager|marketing manager|sales manager|business development manager|client service manager|customer success manager|team lead|lead consultant|pmo|bdm|security manager|risk management)\b",
+    re.I,
+)
+_COMMERCIAL_DECISION_TEXT_PATTERN = re.compile(
+    r"\b(renewal|quote|quoted|pricing|price increase|budget|contract|procurement|vendor selection|selected|chose|approved|sign(?:ed)? off|purchase|buying committee|rfp|rfq|evaluate|evaluation|migration)\b",
+    re.I,
+)
 
 
 def _canonical_role_type(value: Any) -> str:
@@ -1896,27 +4270,22 @@ def _canonical_role_type(value: Any) -> str:
     return _ROLE_TYPE_ALIASES.get(raw, "unknown")
 
 
+def _normalize_role_title_key(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = text.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", text.strip().lower())
+
+
 def _clean_reviewer_title_for_role_inference(value: Any) -> str:
-    title = str(value or "").strip()
+    title = sanitize_reviewer_title(value) or ""
     if not title or len(title) > 120:
-        return ""
-    lowered = title.lower()
-    if any(pattern.search(lowered) for pattern in _NOISY_REVIEWER_TITLE_PATTERNS):
         return ""
     return title
 
 
 def _canonical_role_level(value: Any) -> str:
-    raw = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
-    if raw in {"executive", "exec", "csuite", "cxo"}:
-        return "executive"
-    if raw in {"director", "vp", "vicepresident", "head"}:
-        return "director"
-    if raw in {"manager", "lead", "teamlead", "supervisor", "coordinator"}:
-        return "manager"
-    if raw in {"ic", "individualcontributor", "individual", "user"}:
-        return "ic"
-    return "unknown"
+    raw = _normalize_role_title_key(value)
+    return _ROLE_LEVEL_ALIASES.get(raw, "unknown")
 
 
 def _combined_source_text(source_row: dict[str, Any] | None) -> str:
@@ -1934,6 +4303,9 @@ def _combined_source_text(source_row: dict[str, Any] | None) -> str:
 def _infer_role_level_from_text(reviewer_title: Any, source_row: dict[str, Any] | None) -> str:
     title = _clean_reviewer_title_for_role_inference(reviewer_title)
     if title:
+        canonical = _canonical_role_level(title)
+        if canonical != "unknown":
+            return canonical
         if re.search(r"\b(cfo|ceo|coo|cio|cto|cro|cmo|chief|founder|owner|president)\b", title, re.I):
             return "executive"
         if re.search(r"\b(vp\b|vice president|svp|evp|director|head of)\b", title, re.I):
@@ -1954,6 +4326,53 @@ def _infer_role_level_from_text(reviewer_title: Any, source_row: dict[str, Any] 
     if _IC_ROLE_TEXT_PATTERN.search(source_text):
         return "ic"
     return "unknown"
+
+
+def _has_manager_level_decision_context(result: dict[str, Any], source_row: dict[str, Any] | None) -> bool:
+    buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
+    if _coerce_bool(buyer_authority.get("has_budget_authority")) is True:
+        return True
+
+    budget = _coerce_json_dict(result.get("budget_signals"))
+    if any(
+        budget.get(field)
+        for field in ("annual_spend_estimate", "price_per_seat", "price_increase_detail")
+    ):
+        return True
+    if _coerce_bool(budget.get("price_increase_mentioned")) is True:
+        return True
+
+    timeline = _coerce_json_dict(result.get("timeline"))
+    if timeline.get("contract_end") or timeline.get("evaluation_deadline"):
+        return True
+
+    churn = _coerce_json_dict(result.get("churn_signals"))
+    if any(
+        _coerce_bool(churn.get(field)) is True
+        for field in ("actively_evaluating", "migration_in_progress", "contract_renewal_mentioned")
+    ):
+        return True
+
+    return bool(_COMMERCIAL_DECISION_TEXT_PATTERN.search(_combined_source_text(source_row)))
+
+
+def _infer_decision_maker(result: dict[str, Any], source_row: dict[str, Any] | None) -> bool:
+    reviewer_context = _coerce_json_dict(result.get("reviewer_context"))
+    buyer_authority = _coerce_json_dict(result.get("buyer_authority"))
+    role_level = _canonical_role_level(reviewer_context.get("role_level"))
+    if role_level in {"executive", "director"}:
+        return True
+    if _coerce_bool(buyer_authority.get("has_budget_authority")) is True:
+        return True
+    if _canonical_role_type(buyer_authority.get("role_type")) == "economic_buyer":
+        return True
+
+    title = _clean_reviewer_title_for_role_inference((source_row or {}).get("reviewer_title"))
+    if title and _EXEC_REVIEWER_TITLE_PATTERN.search(title):
+        return True
+    if title and _MANAGER_DECISION_TITLE_PATTERN.search(title):
+        return _has_manager_level_decision_context(result, source_row)
+    return False
 
 
 def _infer_buyer_role_type_from_text(
@@ -2038,7 +4457,7 @@ _REPAIR_NEGATIVE_PATTERNS = (
 )
 _REPAIR_COMPETITOR_PATTERNS = (
     "switched to", "moved to", "replaced with", "evaluating", "looking at",
-    "considering", "alternative to", " vs ",
+    "considering", "shortlisting", "shortlisted", "poc with", "proof of concept with",
 )
 _REPAIR_PRICING_PATTERNS = (
     "billing", "invoice", "invoiced", "charged", "refund", "renewal",
@@ -2053,13 +4472,43 @@ _REPAIR_FEATURE_GAP_PATTERNS = (
     "missing", "lacks", "lacking", "wish it had", "wish they had",
     "need better", "needs better", "needs more", "could use", "limited",
 )
+_REPAIR_TIMELINE_PATTERNS = (
+    "renewal", "contract end", "contract expires", "deadline", "next quarter",
+    "q1", "q2", "q3", "q4", "30 days", "60 days", "90 days",
+)
+_REPAIR_CATEGORY_SHIFT_PATTERNS = (
+    "async", "docs", "documentation", "notion", "confluence", "bundle",
+    "workspace", "microsoft 365", "google workspace", "internal tool",
+    "homegrown", "home-grown", "custom tool",
+)
+_REPAIR_CURRENCY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?", re.I)
 
 
 def _trusted_repair_sources() -> set[str]:
+    return set(
+        filter_deprecated_sources(
+            _config_allowlist(getattr(settings.b2b_churn, "enrichment_priority_sources", ""), ""),
+            getattr(
+                settings.b2b_churn,
+                "deprecated_review_sources",
+                "capterra,software_advice,trustpilot,trustradius",
+            )
+            if isinstance(getattr(settings.b2b_churn, "deprecated_review_sources", ""), str)
+            else "capterra,software_advice,trustpilot,trustradius",
+        )
+    )
+
+
+def _effective_enrichment_skip_sources() -> set[str]:
+    configured = _config_allowlist(getattr(settings.b2b_churn, "enrichment_skip_sources", ""), "")
+    deprecated = _config_allowlist(
+        getattr(settings.b2b_churn, "deprecated_review_sources", ""),
+        "capterra,software_advice,trustpilot,trustradius",
+    )
     return {
-        source.strip().lower()
-        for source in str(settings.b2b_churn.enrichment_priority_sources or "").split(",")
-        if source.strip()
+        source
+        for source in [*configured, *deprecated]
+        if source
     }
 
 
@@ -2086,14 +4535,26 @@ def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) ->
     feature_gaps = _normalize_text_list(result.get("feature_gaps"))
     event_mentions = result.get("event_mentions") or []
     competitors = result.get("competitors_mentioned") or []
+    salience_flags = {
+        str(flag or "").strip().lower()
+        for flag in result.get("salience_flags") or []
+        if str(flag or "").strip()
+    }
+    timeline = _coerce_json_dict(result.get("timeline"))
 
-    if str(result.get("pain_category") or "").strip().lower() == "other" and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
+    if _normalize_pain_category(result.get("pain_category")) == "overall_dissatisfaction" and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
         for field in ("specific_complaints", "pricing_phrases", "recommendation_language"):
             _add_target(field)
     if not competitors and _contains_any(review_blob, _REPAIR_COMPETITOR_PATTERNS):
         _add_target("competitors_mentioned")
     if not pricing_phrases and _contains_any(review_blob, _REPAIR_PRICING_PATTERNS):
         _add_target("pricing_phrases")
+    if (
+        str(result.get("pain_category") or "").strip().lower() not in {"pricing", "contract_lock_in"}
+        and (_REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
+    ):
+        for field in ("specific_complaints", "pricing_phrases"):
+            _add_target(field)
     if not complaints and _contains_any(review_blob, _REPAIR_NEGATIVE_PATTERNS):
         _add_target("specific_complaints")
     if not recommendation_language and _contains_any(review_blob, _REPAIR_RECOMMEND_PATTERNS):
@@ -2102,6 +4563,19 @@ def _repair_target_fields(result: dict[str, Any], source_row: dict[str, Any]) ->
         _add_target("feature_gaps")
     if not event_mentions and _contains_any(review_blob, ("renewal", "migration", "switched", "price increase", "invoice")):
         _add_target("event_mentions")
+    if (
+        _contains_any(review_blob, _REPAIR_TIMELINE_PATTERNS)
+        and _is_unknownish(timeline.get("decision_timeline"))
+        and not event_mentions
+    ):
+        _add_target("event_mentions")
+    if competitors and all(
+        not str(comp.get("reason_category") or "").strip()
+        for comp in competitors if isinstance(comp, dict)
+    ):
+        _add_target("specific_complaints")
+    if _contains_any(review_blob, _REPAIR_CATEGORY_SHIFT_PATTERNS) and not feature_gaps and not complaints:
+        _add_target("specific_complaints")
     if status == "no_signal" and source in _trusted_repair_sources() and _contains_any(
         review_blob, _REPAIR_NEGATIVE_PATTERNS + _REPAIR_COMPETITOR_PATTERNS
     ):
@@ -2405,11 +4879,13 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         logger.warning("feature_gaps is not a list: %s", type(fg).__name__)
         result["feature_gaps"] = []
 
-    # Coerce unknown pain_category to "other"
+    # Coerce unknown / legacy generic pain_category to the canonical fallback
     pain = result.get("pain_category")
-    if pain and pain not in _KNOWN_PAIN_CATEGORIES:
-        logger.warning("Unknown pain_category: %r -- coercing to 'other'", pain)
-        result["pain_category"] = "other"
+    if pain is not None:
+        normalized_pain = _normalize_pain_category(pain)
+        if normalized_pain != str(pain).strip().lower():
+            logger.warning("Normalizing pain_category %r -> %r", pain, normalized_pain)
+        result["pain_category"] = normalized_pain
 
     # --- New expanded field validation (permissive: coerce, never reject) ---
 
@@ -2423,9 +4899,7 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
             for item in pc:
                 if not isinstance(item, dict):
                     continue
-                cat = item.get("category", "other")
-                if cat not in _KNOWN_PAIN_CATEGORIES:
-                    cat = "other"
+                cat = _normalize_pain_category(item.get("category", "overall_dissatisfaction"))
                 sev = item.get("severity", "minor")
                 if sev not in _KNOWN_SEVERITY_LEVELS:
                     sev = "minor"
@@ -2438,6 +4912,10 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         if not isinstance(bs, dict):
             result["budget_signals"] = {}
         else:
+            for field in ("annual_spend_estimate", "price_per_seat"):
+                if field in bs and bs[field] is not None and not isinstance(bs[field], (int, float)):
+                    text = _normalize_budget_value_text(bs[field])
+                    bs[field] = text if text else None
             if "seat_count" in bs and bs["seat_count"] is not None:
                 try:
                     seat = int(bs["seat_count"])
@@ -2447,6 +4925,11 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
             if "price_increase_mentioned" in bs:
                 coerced = _coerce_bool(bs["price_increase_mentioned"])
                 bs["price_increase_mentioned"] = coerced if coerced is not None else False
+            if "price_increase_detail" in bs and bs["price_increase_detail"] is not None:
+                detail = _normalize_budget_detail_text(bs["price_increase_detail"])
+                bs["price_increase_detail"] = detail if detail else None
+                if bs["price_increase_detail"] and not _coerce_bool(bs.get("price_increase_mentioned")):
+                    bs["price_increase_mentioned"] = True
 
     # use_case: dict with lists and lock_in_level
     uc = result.get("use_case")
@@ -2475,9 +4958,19 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         )
     reviewer_ctx["role_level"] = role_level
     decision_maker = _coerce_bool(reviewer_ctx.get("decision_maker"))
+    derived_decision_maker = _infer_decision_maker(result, source_row)
     if decision_maker is None:
-        decision_maker = role_level in {"executive", "director"}
+        decision_maker = derived_decision_maker
+    else:
+        decision_maker = bool(decision_maker or derived_decision_maker)
     reviewer_ctx["decision_maker"] = decision_maker
+    company_name = str(reviewer_ctx.get("company_name") or "").strip()
+    if company_name:
+        reviewer_ctx["company_name"] = company_name
+    else:
+        trusted_company = _trusted_reviewer_company_name(source_row)
+        if trusted_company:
+            reviewer_ctx["company_name"] = trusted_company
 
     # sentiment_trajectory: dict with direction
     st = result.get("sentiment_trajectory")
@@ -2508,15 +5001,18 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
         if bstage and bstage not in _KNOWN_BUYING_STAGES:
             ba["buying_stage"] = "unknown"
         canonical_rt = _canonical_role_type(ba.get("role_type"))
+        derived_role_type = _infer_buyer_role_type(
+            ba,
+            reviewer_ctx,
+            (source_row or {}).get("reviewer_title"),
+            source_row,
+        )
         if canonical_rt == "unknown":
-            ba["role_type"] = _infer_buyer_role_type(
-                ba,
-                reviewer_ctx,
-                (source_row or {}).get("reviewer_title"),
-                source_row,
-            )
+            ba["role_type"] = derived_role_type
         else:
             ba["role_type"] = canonical_rt
+        if derived_role_type == "economic_buyer":
+            ba["role_type"] = "economic_buyer"
         if ba["role_type"] == "economic_buyer":
             reviewer_ctx["decision_maker"] = True
 
@@ -2544,6 +5040,101 @@ def _validate_enrichment(result: dict, source_row: dict[str, Any] | None = None)
     cc_val = result.get("content_classification")
     if cc_val and cc_val not in _KNOWN_CONTENT_TYPES:
         result["content_classification"] = "review"
+
+    if _schema_version(result) >= 3:
+        missing_fields = _missing_witness_primitives(result)
+        if missing_fields:
+            if source_row is None:
+                logger.warning(
+                    "schema v3 enrichment missing witness primitives without source row: %s",
+                    ", ".join(missing_fields),
+                )
+                return False
+            try:
+                recomputed = _compute_derived_fields(
+                    json.loads(json.dumps(result)),
+                    source_row,
+                )
+            except Exception:
+                logger.warning(
+                    "schema v3 witness primitive recompute failed for %s",
+                    source_row.get("id"),
+                    exc_info=True,
+                )
+                return False
+            result.clear()
+            result.update(recomputed)
+
+    # witness-oriented deterministic evidence fields
+    replacement_mode = str(result.get("replacement_mode") or "").strip()
+    if replacement_mode not in _KNOWN_REPLACEMENT_MODES:
+        result["replacement_mode"] = "none"
+    operating_model_shift = str(result.get("operating_model_shift") or "").strip()
+    if operating_model_shift not in _KNOWN_OPERATING_MODEL_SHIFTS:
+        result["operating_model_shift"] = "none"
+    productivity_delta_claim = str(result.get("productivity_delta_claim") or "").strip()
+    if productivity_delta_claim not in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS:
+        result["productivity_delta_claim"] = "unknown"
+    org_pressure_type = str(result.get("org_pressure_type") or "").strip()
+    if org_pressure_type not in _KNOWN_ORG_PRESSURE_TYPES:
+        result["org_pressure_type"] = "none"
+
+    salience_flags = result.get("salience_flags")
+    if salience_flags is not None:
+        if not isinstance(salience_flags, list):
+            result["salience_flags"] = []
+        else:
+            result["salience_flags"] = [
+                str(flag).strip() for flag in salience_flags if str(flag or "").strip()
+            ]
+
+    evidence_spans = result.get("evidence_spans")
+    if evidence_spans is not None:
+        if not isinstance(evidence_spans, list):
+            result["evidence_spans"] = []
+        else:
+            cleaned_spans: list[dict[str, Any]] = []
+            for idx, span in enumerate(evidence_spans):
+                if not isinstance(span, dict):
+                    continue
+                text = str(span.get("text") or "").strip()
+                if not text:
+                    continue
+                pain_category = str(span.get("pain_category") or "").strip()
+                replacement = str(span.get("replacement_mode") or "").strip()
+                operating_shift = str(span.get("operating_model_shift") or "").strip()
+                productivity = str(span.get("productivity_delta_claim") or "").strip()
+                cleaned_spans.append({
+                    "span_id": str(span.get("span_id") or f"derived:{idx}"),
+                    "_sid": str(span.get("_sid") or span.get("span_id") or f"derived:{idx}"),
+                    "text": text,
+                    "start_char": span.get("start_char"),
+                    "end_char": span.get("end_char"),
+                    "signal_type": str(span.get("signal_type") or "review_context"),
+                    "pain_category": pain_category if pain_category in _KNOWN_PAIN_CATEGORIES else None,
+                    "competitor": str(span.get("competitor") or "").strip() or None,
+                    "company_name": str(span.get("company_name") or "").strip() or None,
+                    "reviewer_title": str(span.get("reviewer_title") or "").strip() or None,
+                    "time_anchor": str(span.get("time_anchor") or "").strip() or None,
+                    "numeric_literals": span.get("numeric_literals") if isinstance(span.get("numeric_literals"), dict) else {},
+                    "flags": [
+                        str(flag).strip() for flag in (span.get("flags") or [])
+                        if str(flag or "").strip()
+                    ],
+                    "replacement_mode": replacement if replacement in _KNOWN_REPLACEMENT_MODES else result.get("replacement_mode"),
+                    "operating_model_shift": operating_shift if operating_shift in _KNOWN_OPERATING_MODEL_SHIFTS else result.get("operating_model_shift"),
+                    "productivity_delta_claim": productivity if productivity in _KNOWN_PRODUCTIVITY_DELTA_CLAIMS else result.get("productivity_delta_claim"),
+                })
+            result["evidence_spans"] = cleaned_spans
+
+    if _schema_version(result) >= 3:
+        remaining_missing = _missing_witness_primitives(result)
+        if remaining_missing:
+            logger.warning(
+                "schema v3 enrichment still missing witness primitives after normalization: %s",
+                ", ".join(remaining_missing),
+            )
+            return False
 
     # insider_signals: validate structure if present
     insider = result.get("insider_signals")
