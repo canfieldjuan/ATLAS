@@ -16,6 +16,8 @@ from .target_planning import (
 )
 from .target_validation import validate_target_input
 
+_SEARCH_SOURCE_VALUES = frozenset(member.value for member in SEARCH_SOURCES)
+
 
 def _safe_target_metadata(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -112,6 +114,13 @@ async def apply_missing_core_targets(
         source, product_slug = validate_target_input(item["source"], product_slug)
         defaults = derive_seed_defaults(existing_targets, source, item.get("product_category"))
         product_name = item.get("verified_product_name") or item["vendor_name"]
+        metadata: dict[str, Any] = {}
+        if item.get("source_fit_probation"):
+            metadata = {
+                "source_fit_probation": True,
+                "source_fit_override": "conditional_onboarding_signal",
+                "onboarding_lane": item.get("onboarding_lane") or "signal",
+            }
         action = {
             "action": "insert_target",
             "vendor_name": item["vendor_name"],
@@ -121,14 +130,16 @@ async def apply_missing_core_targets(
             "product_category": item.get("product_category"),
             **defaults,
         }
+        if metadata:
+            action["metadata"] = metadata
         if not dry_run:
             vendor_name = await resolve_vendor_name(item["vendor_name"])
             row = await pool.fetchrow(
                 """
                 INSERT INTO b2b_scrape_targets
-                    (source, vendor_name, product_name, product_slug, product_category,
-                     max_pages, enabled, priority, scrape_interval_hours, scrape_mode, metadata)
-                VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, '{}'::jsonb)
+                     (source, vendor_name, product_name, product_slug, product_category,
+                      max_pages, enabled, priority, scrape_interval_hours, scrape_mode, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10::jsonb)
                 RETURNING id
                 """,
                 source,
@@ -140,10 +151,28 @@ async def apply_missing_core_targets(
                 defaults["priority"],
                 defaults["scrape_interval_hours"],
                 defaults["scrape_mode"],
+                json.dumps(metadata),
             )
             action["target_id"] = str(row["id"]) if row else None
         applied.append(action)
     return applied
+
+
+def _is_signal_lane_source(source: str | None) -> bool:
+    return (source or "").strip().lower() in _SEARCH_SOURCE_VALUES
+
+
+def _split_onboarding_candidates(
+    items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    core: list[dict[str, Any]] = []
+    signal_lane: list[dict[str, Any]] = []
+    for item in items:
+        if _is_signal_lane_source(item.get("source")):
+            signal_lane.append(item)
+        else:
+            core.append(item)
+    return core, signal_lane
 
 
 async def provision_missing_core_targets_for_vendors(
@@ -297,12 +326,33 @@ async def provision_vendor_onboarding_targets(
         if len(candidates) >= limit:
             break
 
+    has_verified_or_slug_seed = any(
+        not _is_signal_lane_source(item.get("source"))
+        for item in candidates
+    )
+    if not has_verified_or_slug_seed:
+        for item in plan["conditional_opportunities"]:
+            if str(item.get("vendor_name") or "").strip().lower() != canonical_vendor.lower():
+                continue
+            if not item.get("can_probation_now"):
+                continue
+            if not _is_signal_lane_source(item.get("source")):
+                continue
+            candidate = dict(item)
+            candidate["source_fit_probation"] = True
+            candidate["onboarding_lane"] = "signal"
+            candidates.append(candidate)
+            if len(candidates) >= limit:
+                break
+
     actions = await apply_missing_core_targets(
         pool,
         existing_targets,
         candidates,
         dry_run=dry_run,
     )
+    core_candidates, signal_candidates = _split_onboarding_candidates(candidates)
+    core_actions, signal_actions = _split_onboarding_candidates(actions)
     vendor_inventory_source = "manual_bootstrap" if bootstrap_used else next(
         (
             str(row.get("inventory_source") or "unknown")
@@ -321,5 +371,9 @@ async def provision_vendor_onboarding_targets(
         "inventory_source": vendor_inventory_source,
         "inventory_source_breakdown": plan.get("inventory_source_breakdown", {}),
         "bootstrap_used": bootstrap_used,
+        "requested_core_targets": len(core_candidates),
+        "requested_signal_targets": len(signal_candidates),
+        "applied_core_targets": len(core_actions),
+        "applied_signal_targets": len(signal_actions),
         "actions": actions,
     }

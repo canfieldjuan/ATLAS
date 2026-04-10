@@ -29,6 +29,12 @@ from ...services.vendor_registry import resolve_vendor_name_cached
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_shared")
 
+_INTELLIGENCE_ELIGIBLE_STATUSES: tuple[str, ...] = (
+    "enriched",
+    "no_signal",
+    "quarantined",
+)
+
 
 def _reasoning_int(value: Any) -> int | None:
     """Unwrap a traced numeric contract field into an integer."""
@@ -523,7 +529,12 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
     """
     p = f"{alias}." if alias else ""
     time_expr = _eligible_review_timestamp_expr(alias=alias)
-    parts = [f"{p}enrichment_status = 'enriched'"]
+    status_list = ", ".join(
+        f"'{status}'"
+        for status in _INTELLIGENCE_ELIGIBLE_STATUSES
+        if re.fullmatch(r"[a-z_]+", status)
+    )
+    parts = [f"{p}enrichment_status IN ({status_list})"]
     parts.append(f"{p}duplicate_of_review_id IS NULL")
     if window_param is not None:
         parts.append(f"{time_expr} > NOW() - make_interval(days => ${window_param})")
@@ -545,6 +556,193 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
         f")"
     )
     return "\n          AND ".join(parts)
+
+
+def _parse_task_result_payload(result_text: Any) -> dict[str, Any]:
+    """Safely parse scheduler result payloads stored as JSON text."""
+    parsed = _safe_json(result_text, {})
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _extract_scrape_intake_funnel_from_result(
+    payload: dict[str, Any],
+    *,
+    allowed_sources: set[str],
+) -> dict[str, int] | None:
+    """Extract source-filtered scrape funnel totals from one task result payload."""
+    def _count(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    rows = payload.get("results")
+    if not isinstance(rows, list):
+        return None
+    totals = {
+        "found": 0,
+        "filtered": 0,
+        "short_flagged": 0,
+        "quality_gated": 0,
+        "duplicate_or_existing": 0,
+        "retained_pending": 0,
+        "retained_raw_only": 0,
+        "inserted": 0,
+        "company_signal_eligible": 0,
+    }
+    matched = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("source") or "").strip().lower() not in allowed_sources:
+            continue
+        matched += 1
+        totals["found"] += _count(row.get("found"))
+        totals["filtered"] += _count(row.get("filtered"))
+        totals["short_flagged"] += _count(row.get("short_flagged"))
+        totals["quality_gated"] += _count(row.get("quality_gate_flagged"))
+        totals["duplicate_or_existing"] += _count(row.get("duplicate_or_existing"))
+        totals["retained_pending"] += _count(row.get("retained_pending"))
+        totals["retained_raw_only"] += _count(row.get("retained_raw_only"))
+        totals["inserted"] += _count(row.get("inserted"))
+        totals["company_signal_eligible"] += _count(row.get("company_signal_eligible_reviews"))
+    return totals if matched else None
+
+
+async def _fetch_recent_scrape_intake_funnel(pool, window_days: int, sources: list[str]) -> dict[str, int]:
+    """Aggregate recent scrape-intake funnel counts from source-filtered task results."""
+    rows = await pool.fetch(
+        """
+        SELECT e.result_text
+        FROM task_executions e
+        JOIN scheduled_tasks t ON t.id = e.task_id
+        WHERE t.name = 'b2b_scrape_intake'
+          AND e.status = 'completed'
+          AND e.started_at > NOW() - make_interval(days => $1)
+        ORDER BY e.started_at DESC
+        """,
+        window_days,
+    )
+    totals: dict[str, int] = {
+        "runs": 0,
+        "found": 0,
+        "filtered": 0,
+        "short_flagged": 0,
+        "quality_gated": 0,
+        "duplicate_or_existing": 0,
+        "retained_pending": 0,
+        "retained_raw_only": 0,
+        "inserted": 0,
+        "company_signal_eligible": 0,
+    }
+    allowed_sources = {
+        str(source or "").strip().lower()
+        for source in sources
+        if str(source or "").strip()
+    }
+    if not allowed_sources:
+        return totals
+    for row in rows:
+        payload = _parse_task_result_payload(row.get("result_text"))
+        funnel = _extract_scrape_intake_funnel_from_result(
+            payload,
+            allowed_sources=allowed_sources,
+        )
+        if funnel is None:
+            continue
+        totals["runs"] += 1
+        for key in (
+            "found",
+            "filtered",
+            "short_flagged",
+            "quality_gated",
+            "duplicate_or_existing",
+            "retained_pending",
+            "retained_raw_only",
+            "inserted",
+            "company_signal_eligible",
+        ):
+            try:
+                totals[key] += int(funnel.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+    return totals
+
+
+async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
+    """Return end-to-end review funnel counts for the active intelligence sources."""
+    sources = _intelligence_source_allowlist()
+    eligible_filters = _eligible_review_filters(window_param=1, source_param=2)
+    status_rows = await pool.fetch(
+        """
+        SELECT enrichment_status, count(*) AS ct
+        FROM b2b_reviews
+        WHERE duplicate_of_review_id IS NULL
+          AND source = ANY($1::text[])
+          AND COALESCE(reviewed_at, imported_at, enriched_at) > NOW() - make_interval(days => $2)
+        GROUP BY enrichment_status
+        """,
+        sources,
+        window_days,
+    )
+    status_counts = {
+        str(row["enrichment_status"] or ""): int(row["ct"] or 0)
+        for row in status_rows
+    }
+    eligible_row = await pool.fetchrow(
+        f"""
+        SELECT
+            count(*) AS intelligence_eligible_reviews,
+            count(*) FILTER (
+                WHERE reviewer_company_norm IS NOT NULL
+                  AND reviewer_company_norm <> ''
+            ) AS company_signal_eligible_reviews,
+            count(*) FILTER (
+                WHERE reviewer_company_norm IS NOT NULL
+                  AND reviewer_company_norm <> ''
+                  AND source <> ALL($3::text[])
+            ) AS high_confidence_named_account_reviews
+        FROM b2b_reviews
+        WHERE {eligible_filters}
+        """,
+        window_days,
+        sources,
+        list(_company_signal_low_trust_sources()),
+    )
+
+    def _row_count(key: str) -> int:
+        if not eligible_row:
+            return 0
+        return int((eligible_row[key] or 0))
+
+    intelligence_eligible_reviews = _row_count("intelligence_eligible_reviews")
+    company_signal_eligible_reviews = _row_count("company_signal_eligible_reviews")
+    high_conf_named_account_reviews = _row_count("high_confidence_named_account_reviews")
+    scrape_intake = await _fetch_recent_scrape_intake_funnel(pool, window_days, sources)
+    return {
+        "found": sum(status_counts.values()),
+        "enriched": status_counts.get("enriched", 0),
+        "no_signal": status_counts.get("no_signal", 0),
+        "quarantined": status_counts.get("quarantined", 0),
+        "raw_only": status_counts.get("raw_only", 0),
+        "pending": status_counts.get("pending", 0),
+        "failed": status_counts.get("failed", 0),
+        "not_applicable": status_counts.get("not_applicable", 0),
+        "duplicate": status_counts.get("duplicate", 0),
+        "intelligence_eligible": intelligence_eligible_reviews,
+        "company_signal_eligible": company_signal_eligible_reviews,
+        "high_confidence_named_account": high_conf_named_account_reviews,
+        "scrape_runs": scrape_intake["runs"],
+        "scrape_found": scrape_intake["found"],
+        "scrape_filtered": scrape_intake["filtered"],
+        "scrape_short_flagged": scrape_intake["short_flagged"],
+        "scrape_quality_gated": scrape_intake["quality_gated"],
+        "scrape_duplicate_or_existing": scrape_intake["duplicate_or_existing"],
+        "scrape_retained_pending": scrape_intake["retained_pending"],
+        "scrape_retained_raw_only": scrape_intake["retained_raw_only"],
+        "scrape_inserted": scrape_intake["inserted"],
+        "scrape_company_signal_eligible": scrape_intake["company_signal_eligible"],
+    }
 
 
 def _quote_text(q: Any) -> str | None:
@@ -3696,6 +3894,7 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
     """Compute temporal metadata and source composition for the LLM."""
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=None, source_param=2)
+    funnel_audit = await _fetch_review_funnel_audit(pool, window_days)
     row = await pool.fetchrow(
         f"""
         SELECT
@@ -3745,6 +3944,7 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
         "unique_vendors": row["vendor_count"],
         "unique_companies": row["company_count"],
         "source_distribution": source_dist,
+        "funnel_audit": funnel_audit,
     }
 
 

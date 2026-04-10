@@ -2572,13 +2572,13 @@ class B2BChurnConfig(BaseSettings):
     intelligence_min_reviews: int = Field(default=3, description="Min reviews per vendor to include")
     intelligence_source_allowlist: str = Field(
         default=(
-            "g2,capterra,trustradius,gartner,peerspot,"
-            "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
+            "g2,gartner,peerspot,"
+            "getapp,reddit,hackernews,github,stackoverflow,slashdot"
         ),
         description="Sources allowed in churn intelligence aggregation (comma-separated)",
     )
     intelligence_executive_sources: str = Field(
-        default="g2,capterra,trustradius,gartner,peerspot",
+        default="g2,gartner,peerspot,getapp",
         description="High-signal sources for executive-facing outputs (weekly_churn_feed, displacement, timeline)",
     )
     deprecated_review_sources: str = Field(
@@ -2782,8 +2782,8 @@ class B2BChurnConfig(BaseSettings):
     # Blog source filtering
     blog_source_allowlist: str = Field(
         default=(
-            "g2,capterra,trustradius,gartner,peerspot,"
-            "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
+            "g2,gartner,peerspot,"
+            "getapp,reddit,hackernews,github,stackoverflow,slashdot"
         ),
         description="Sources to include in blog data queries",
     )
@@ -3681,8 +3681,8 @@ class B2BScrapeConfig(BaseSettings):
     max_targets_per_run: int = Field(default=0, description="Max targets to scrape per run (0 = unlimited)")
     source_allowlist: str = Field(
         default=(
-            "g2,capterra,trustradius,gartner,peerspot,"
-            "getapp,software_advice,trustpilot,reddit,hackernews,github,stackoverflow,slashdot"
+            "g2,gartner,peerspot,"
+            "getapp,reddit,hackernews,github,stackoverflow,slashdot"
         ),
         description="Sources allowed for automated scrape intake (comma-separated)",
     )
