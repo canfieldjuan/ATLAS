@@ -456,9 +456,11 @@ class TemporalEngine:
 
     async def _infer_category(self, vendor_name: str) -> str | None:
         """Try to infer product category from churn signals."""
-        row = await self._pool.fetchrow(
-            "SELECT product_category FROM b2b_churn_signals WHERE vendor_name = $1 LIMIT 1",
-            vendor_name,
+        from ..autonomous.tasks._b2b_shared import read_vendor_signal_detail_exact
+
+        row = await read_vendor_signal_detail_exact(
+            self._pool,
+            vendor_name=vendor_name,
         )
         return row["product_category"] if row else None
 
