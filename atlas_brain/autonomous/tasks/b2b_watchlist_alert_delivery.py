@@ -36,7 +36,7 @@ def _synthetic_account_user(*, account_id: Any, product: str) -> AuthUser:
 async def _fetch_due_views(pool, limit: int) -> list[Any]:
     return await pool.fetch(
         """
-        SELECT v.id, v.account_id, v.name, v.vendor_name, v.category, v.source, v.min_urgency,
+        SELECT v.id, v.account_id, v.name, v.vendor_names, v.category, v.source, v.min_urgency,
                v.include_stale, v.named_accounts_only, v.changed_wedges_only,
                v.vendor_alert_threshold, v.account_alert_threshold, v.stale_days_threshold,
                v.alert_email_enabled, v.alert_delivery_frequency, v.next_alert_delivery_at,
