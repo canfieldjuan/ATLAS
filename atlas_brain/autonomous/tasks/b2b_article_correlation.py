@@ -27,10 +27,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Freshness gate: only run if the core task completed canonically today.
     today = date.today()
-    from ._b2b_shared import has_complete_core_run_marker
+    from ._b2b_shared import describe_core_run_gap, has_complete_core_run_marker
 
     if not await has_complete_core_run_marker(pool, today):
-        return {"_skip_synthesis": "Core run not complete for today"}
+        return {
+            "_skip_synthesis": (
+                await describe_core_run_gap(pool, today)
+                or "Core run not complete for today"
+            )
+        }
 
     from .b2b_churn_intelligence import (
         _correlate_articles_with_archetypes,
