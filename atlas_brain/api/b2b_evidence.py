@@ -83,6 +83,23 @@ def _row_to_dict(row) -> dict:
     return d
 
 
+async def _read_vendor_intelligence_record(
+    pool,
+    vendor_name: str,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict | None:
+    from ..autonomous.tasks._b2b_shared import read_vendor_intelligence_record
+
+    return await read_vendor_intelligence_record(
+        pool,
+        vendor_name,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+    )
+
+
 async def _latest_witness_snapshot_date(pool, vendor_name: str, window_days: int, target_date: date) -> date | None:
     row = await pool.fetchrow(
         """
@@ -356,18 +373,11 @@ async def get_vault(
 
     target_date = _parse_target_date(as_of_date)
 
-    vault_row = await pool.fetchrow(
-        """
-        SELECT vendor_name, as_of_date, analysis_window_days, schema_version,
-               vault, created_at
-        FROM b2b_evidence_vault
-        WHERE vendor_name = $1
-          AND analysis_window_days = $2
-          AND as_of_date <= $3
-        ORDER BY as_of_date DESC
-        LIMIT 1
-        """,
-        vendor_name, window_days, target_date,
+    vault_row = await _read_vendor_intelligence_record(
+        pool,
+        vendor_name,
+        as_of=target_date,
+        analysis_window_days=window_days,
     )
 
     if not vault_row:
@@ -377,7 +387,7 @@ async def get_vault(
             "message": "No evidence vault found for this vendor",
         }
 
-    vault = _safe_json(vault_row["vault"]) or {}
+    vault = vault_row["vault"] or {}
 
     # Count witnesses backing this vault
     witness_count = await pool.fetchrow(

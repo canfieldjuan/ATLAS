@@ -6546,20 +6546,45 @@ async def _fetch_product_profiles(pool) -> list[dict[str, Any]]:
     return normalized
 
 
-async def read_vendor_intelligence_map(
+def _normalize_vendor_intelligence_record(row: Any) -> dict[str, Any] | None:
+    """Normalize a latest-row evidence-vault record into a stable dict."""
+    if not row:
+        return None
+    vendor_name = str(row.get("vendor_name") or "").strip()
+    if not vendor_name:
+        return None
+    vault = _safe_json(row.get("vault"), default={})
+    if not isinstance(vault, dict):
+        vault = {}
+    return {
+        "vendor_name": vendor_name,
+        "as_of_date": row.get("as_of_date"),
+        "analysis_window_days": row.get("analysis_window_days"),
+        "schema_version": row.get("schema_version"),
+        "created_at": row.get("created_at"),
+        "vault": vault,
+    }
+
+
+async def read_vendor_intelligence_records(
     pool,
     *,
     as_of: date,
     analysis_window_days: int,
     vendor_names: Iterable[Any] | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Read canonical vendor intelligence objects from ``b2b_evidence_vault``."""
+) -> list[dict[str, Any]]:
+    """Read the latest canonical vendor intelligence row per vendor."""
     requested_vendors = _canonicalize_vendor_name_filters(vendor_names)
     vendor_filter_clause = "AND LOWER(vendor_name) = ANY($3::text[])" if requested_vendors else ""
     rows = await pool.fetch(
         """
         SELECT DISTINCT ON (vendor_name)
-               vendor_name, vault
+               vendor_name,
+               as_of_date,
+               analysis_window_days,
+               schema_version,
+               vault,
+               created_at
         FROM b2b_evidence_vault
         WHERE as_of_date <= $1
           AND analysis_window_days = $2
@@ -6570,14 +6595,130 @@ async def read_vendor_intelligence_map(
         analysis_window_days,
         *([requested_vendors] if requested_vendors else []),
     )
-    vault_lookup: dict[str, dict[str, Any]] = {}
+    records: list[dict[str, Any]] = []
     for row in rows:
-        vendor = _canonicalize_vendor(row.get("vendor_name") or "")
+        record = _normalize_vendor_intelligence_record(row)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+async def read_vendor_intelligence_record(
+    pool,
+    vendor_name: str,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, Any] | None:
+    """Read the latest canonical vendor intelligence row for one vendor."""
+    canonical_vendor = _canonicalize_vendor(vendor_name)
+    if not canonical_vendor:
+        return None
+    records = await read_vendor_intelligence_records(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+        vendor_names=[vendor_name],
+    )
+    for record in records:
+        if _canonicalize_vendor(record.get("vendor_name") or "") == canonical_vendor:
+            return record
+    return None
+
+
+async def search_vendor_intelligence_record(
+    pool,
+    *,
+    vendor_query: str,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, Any] | None:
+    """Read the latest canonical vendor intelligence row matching a partial vendor query."""
+    normalized_query = str(vendor_query or "").strip()
+    if not normalized_query:
+        return None
+    row = await pool.fetchrow(
+        """
+        SELECT vendor_name,
+               as_of_date,
+               analysis_window_days,
+               schema_version,
+               vault,
+               created_at
+        FROM b2b_evidence_vault
+        WHERE vendor_name ILIKE '%' || $1 || '%'
+          AND as_of_date <= $2
+          AND analysis_window_days = $3
+        ORDER BY as_of_date DESC, created_at DESC
+        LIMIT 1
+        """,
+        normalized_query,
+        as_of,
+        analysis_window_days,
+    )
+    return _normalize_vendor_intelligence_record(row)
+
+
+async def search_vendor_intelligence_records(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+    vendor_query: str | None = None,
+) -> list[dict[str, Any]]:
+    """Read the latest canonical vendor intelligence row for each matching vendor."""
+    conditions = [
+        "as_of_date <= $1",
+        "analysis_window_days = $2",
+    ]
+    params: list[Any] = [as_of, analysis_window_days]
+    if str(vendor_query or "").strip():
+        conditions.append("vendor_name ILIKE '%' || $3 || '%'")
+        params.append(str(vendor_query).strip())
+    where = " AND ".join(conditions)
+    rows = await pool.fetch(
+        f"""
+        SELECT DISTINCT ON (vendor_name)
+               vendor_name,
+               as_of_date,
+               analysis_window_days,
+               schema_version,
+               vault,
+               created_at
+        FROM b2b_evidence_vault
+        WHERE {where}
+        ORDER BY vendor_name, as_of_date DESC, created_at DESC
+        """,
+        *params,
+    )
+    records: list[dict[str, Any]] = []
+    for row in rows:
+        record = _normalize_vendor_intelligence_record(row)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+async def read_vendor_intelligence_map(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+    vendor_names: Iterable[Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Read canonical vendor intelligence objects from ``b2b_evidence_vault``."""
+    records = await read_vendor_intelligence_records(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+        vendor_names=vendor_names,
+    )
+    vault_lookup: dict[str, dict[str, Any]] = {}
+    for record in records:
+        vendor = _canonicalize_vendor(record.get("vendor_name") or "")
         if not vendor:
             continue
-        vault = _safe_json(row.get("vault"), default={})
-        if isinstance(vault, dict):
-            vault_lookup[vendor] = vault
+        vault_lookup[vendor] = record.get("vault") or {}
     return vault_lookup
 
 

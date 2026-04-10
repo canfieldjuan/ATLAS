@@ -516,6 +516,58 @@ def test_b2b_evidence_router_rejects_invalid_as_of_date(monkeypatch):
     assert response.json()["detail"] == "Invalid as_of_date; expected YYYY-MM-DD"
 
 
+def test_b2b_evidence_vault_route_uses_shared_vendor_intelligence_reader(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            assert "FROM b2b_vendor_witnesses" in query
+            assert args == ("Salesforce", date(2026, 3, 30), 30)
+            return {"total": 4}
+
+    reader = AsyncMock(
+        return_value={
+            "vendor_name": "Salesforce",
+            "as_of_date": date(2026, 3, 30),
+            "analysis_window_days": 30,
+            "schema_version": 2,
+            "created_at": datetime(2026, 3, 30, 18, 0, tzinfo=timezone.utc),
+            "vault": {
+                "weakness_evidence": [{"category": "pricing"}],
+                "strength_evidence": [{"category": "ecosystem"}],
+                "company_signals": [{"company_name": "Acme"}],
+                "metric_snapshot": {"avg_urgency": 7.1},
+                "provenance": {"sources": ["g2"]},
+            },
+        },
+    )
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+    monkeypatch.setattr(evidence_api, "_read_vendor_intelligence_record", reader)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/b2b/evidence/vault?vendor_name=Salesforce&as_of_date=2026-03-31&window_days=30"
+        )
+
+    assert response.status_code == 200
+    reader.assert_awaited_once()
+    body = response.json()
+    assert body["vendor_name"] == "Salesforce"
+    assert body["as_of_date"] == "2026-03-30"
+    assert body["witness_count"] == 4
+    assert body["metric_snapshot"]["avg_urgency"] == 7.1
+
+
 def test_b2b_evidence_trace_bounds_diff_lookup_to_target_date(monkeypatch):
     app = FastAPI()
     app.include_router(evidence_api.router)
@@ -1021,7 +1073,7 @@ def test_upsert_report_subscription_library_view_persists_filter_payload(monkeyp
                     "id": uuid4(),
                     "scope_type": "library_view",
                     "scope_key": "library-view--type-battle_card--vendor-zendesk--quality-sales_ready",
-                    "scope_label": "Battle Cards • Zendesk Library",
+                    "scope_label": "Battle Cards - Zendesk Library",
                     "filter_payload": {
                         "report_type": "battle_card",
                         "vendor_filter": "Zendesk",
@@ -1058,7 +1110,7 @@ def test_upsert_report_subscription_library_view_persists_filter_payload(monkeyp
         response = client.put(
             "/b2b/tenant/report-subscriptions/library_view/library-view--type-battle_card--vendor-zendesk--quality-sales_ready--freshness-stale--review-blocked",
             json={
-                "scope_label": "Battle Cards • Zendesk Library",
+                "scope_label": "Battle Cards - Zendesk Library",
                 "filter_payload": {
                     "report_type": "battle_card",
                     "vendor_filter": "Zendesk",

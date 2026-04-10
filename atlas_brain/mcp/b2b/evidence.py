@@ -13,6 +13,40 @@ from .server import mcp
 # -------------------------------------------------------------------
 
 
+async def _search_vendor_intelligence_record(
+    pool,
+    *,
+    vendor_query: str,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict | None:
+    from ...autonomous.tasks._b2b_shared import search_vendor_intelligence_record
+
+    return await search_vendor_intelligence_record(
+        pool,
+        vendor_query=vendor_query,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+    )
+
+
+async def _search_vendor_intelligence_records(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+    vendor_query: str | None = None,
+) -> list[dict]:
+    from ...autonomous.tasks._b2b_shared import search_vendor_intelligence_records
+
+    return await search_vendor_intelligence_records(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+        vendor_query=vendor_query,
+    )
+
+
 @mcp.tool()
 async def get_evidence_vault(
     vendor_name: str,
@@ -44,28 +78,17 @@ async def get_evidence_vault(
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
 
-        row = await pool.fetchrow(
-            """
-            SELECT vendor_name, as_of_date, analysis_window_days,
-                   schema_version, vault, created_at
-            FROM b2b_evidence_vault
-            WHERE vendor_name ILIKE '%' || $1 || '%'
-              AND as_of_date <= $2
-              AND analysis_window_days = $3
-            ORDER BY as_of_date DESC, created_at DESC
-            LIMIT 1
-            """,
-            vendor_name.strip(),
-            target_date,
-            window_days,
+        row = await _search_vendor_intelligence_record(
+            pool,
+            vendor_query=vendor_name.strip(),
+            as_of=target_date,
+            analysis_window_days=window_days,
         )
 
         if not row:
             return json.dumps({"success": False, "error": "No evidence vault found for that vendor"})
 
-        vault = _safe_json(row["vault"])
-        if not isinstance(vault, dict):
-            vault = {}
+        vault = row["vault"] or {}
 
         return json.dumps({
             "success": True,
@@ -116,38 +139,16 @@ async def list_evidence_vaults(
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
 
-        conditions = [
-            "as_of_date <= $1",
-            "analysis_window_days = $2",
-        ]
-        params: list = [target_date, window_days]
-        idx = 3
-
-        if vendor_name:
-            conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
-            params.append(vendor_name.strip())
-            idx += 1
-
-        where = " AND ".join(conditions)
-
-        rows = await pool.fetch(
-            f"""
-            SELECT DISTINCT ON (vendor_name)
-                   vendor_name, as_of_date, schema_version, vault, created_at
-            FROM b2b_evidence_vault
-            WHERE {where}
-            ORDER BY vendor_name, as_of_date DESC, created_at DESC
-            """,
-            *params,
+        rows = await _search_vendor_intelligence_records(
+            pool,
+            as_of=target_date,
+            analysis_window_days=window_days,
+            vendor_query=vendor_name.strip() if vendor_name else None,
         )
-
-        rows = rows[:limit]
 
         vaults = []
         for r in rows:
-            vault = _safe_json(r["vault"])
-            if not isinstance(vault, dict):
-                vault = {}
+            vault = r["vault"] or {}
             ms = vault.get("metric_snapshot") or {}
             prov = vault.get("provenance") or {}
             vaults.append({
@@ -167,6 +168,7 @@ async def list_evidence_vaults(
             })
 
         vaults.sort(key=lambda v: v.get("avg_urgency") or 0, reverse=True)
+        vaults = vaults[:limit]
 
         return json.dumps({"vaults": vaults, "count": len(vaults)}, default=str)
     except Exception:
