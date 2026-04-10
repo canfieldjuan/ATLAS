@@ -7,6 +7,14 @@ from unittest.mock import AsyncMock
 from atlas_brain.autonomous.tasks import b2b_churn_intelligence as mod
 
 
+class CapturePool:
+    def __init__(self):
+        self.execute_calls = []
+
+    async def execute(self, query, *params):
+        self.execute_calls.append((str(query), params))
+
+
 @pytest.mark.asyncio
 async def test_run_skips_when_b2b_churn_intelligence_disabled(monkeypatch):
     monkeypatch.setattr(mod.settings.b2b_churn, "enabled", False)
@@ -86,3 +94,43 @@ async def test_load_category_council_lookup_skips_generic_categories(monkeypatch
     )
 
     assert result == {}
+
+
+def test_task_run_id_prefers_scheduler_execution_id():
+    execution_id = str(uuid4())
+    task = SimpleNamespace(id=uuid4(), metadata={"_execution_id": execution_id, "run_id": "legacy-run"})
+
+    assert mod._task_run_id(task) == execution_id
+
+
+@pytest.mark.asyncio
+async def test_upsert_churn_signals_persists_materialization_run_id():
+    pool = CapturePool()
+
+    failures = await mod._upsert_churn_signals(
+        pool,
+        vendor_scores=[
+            {
+                "vendor_name": "Zendesk",
+                "total_reviews": 12,
+                "churn_intent": 3,
+                "avg_urgency": 7.5,
+                "signal_reviews": 5,
+            },
+        ],
+        neg_lookup={},
+        pain_lookup={},
+        competitor_lookup={},
+        feature_gap_lookup={},
+        price_lookup={},
+        dm_lookup={},
+        company_lookup={},
+        quote_lookup={},
+        materialization_run_id="run-123",
+    )
+
+    assert failures == 0
+    assert len(pool.execute_calls) == 1
+    query, params = pool.execute_calls[0]
+    assert "materialization_run_id" in query
+    assert params[-2] == "run-123"
