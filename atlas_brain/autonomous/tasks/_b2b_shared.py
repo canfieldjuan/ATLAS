@@ -4308,7 +4308,7 @@ async def read_vendor_signal_rows(
         """
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-    capped_limit = max(1, min(int(limit or 20), 100))
+    capped_limit = max(1, min(int(limit or 20), 10_000))
     rows = await pool.fetch(
         """
         SELECT sig.vendor_name,

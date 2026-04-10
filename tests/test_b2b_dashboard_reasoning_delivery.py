@@ -232,6 +232,74 @@ async def test_dashboard_get_signal_overlays_synthesis_detail(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_export_signals_uses_shared_signal_row_adapter(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
+
+    pool = SimpleNamespace()
+    rows = [
+        {
+            "vendor_name": "Zendesk",
+            "product_category": "CRM",
+            "total_reviews": 100,
+            "churn_intent_count": 22,
+            "avg_urgency_score": 6.4,
+            "avg_rating_normalized": 0.4,
+            "nps_proxy": -0.2,
+            "price_complaint_rate": 0.18,
+            "decision_maker_churn_rate": 0.12,
+            "support_sentiment": -0.1,
+            "legacy_support_score": -0.2,
+            "new_feature_velocity": 0.3,
+            "employee_growth_rate": 0.04,
+            "keyword_spike_count": 2,
+            "insider_signal_count": 1,
+            "last_computed_at": None,
+        },
+    ]
+    read_rows = AsyncMock(return_value=rows)
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(shared_mod, "read_vendor_signal_rows", read_rows)
+    monkeypatch.setattr(
+        mod,
+        "_load_reasoning_views_for_vendors",
+        AsyncMock(return_value={"zendesk": _make_view("Zendesk")}),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_csv_response",
+        lambda payload, filename: {"rows": payload, "filename": filename},
+    )
+
+    user = SimpleNamespace(account_id="11111111-1111-1111-1111-111111111111", is_admin=False)
+    result = await mod.export_signals(
+        vendor_name="Zendesk",
+        min_urgency=5.0,
+        category="CRM",
+        user=user,
+    )
+
+    read_rows.assert_awaited_once_with(
+        pool,
+        vendor_name_query="Zendesk",
+        min_urgency=5.0,
+        product_category="CRM",
+        tracked_account_id="11111111-1111-1111-1111-111111111111",
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+        limit=mod.EXPORT_ROW_LIMIT,
+    )
+    assert result["filename"] == "churn_signals.csv"
+    row = result["rows"][0]
+    assert row["vendor_name"] == "Zendesk"
+    assert row["support_sentiment"] == -0.1
+    assert row["keyword_spike_count"] == 2
+    assert row["archetype"] == "price_squeeze"
+    assert row["reasoning_risk_level"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_dashboard_get_signal_does_not_fallback_to_legacy_reasoning(monkeypatch):
     from atlas_brain.api import b2b_dashboard as mod
 

@@ -409,6 +409,23 @@ async def test_read_vendor_signal_rows_applies_snapshot_filters_and_limit():
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_signal_rows_caps_export_limit_at_ten_thousand():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals sig": [],
+        },
+    )
+
+    await shared_mod.read_vendor_signal_rows(
+        pool,
+        limit=25_000,
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals sig" in call[0])
+    assert score_call[1] == (10_000,)
+
+
+@pytest.mark.asyncio
 async def test_read_best_vendor_signal_rows_dedupes_per_vendor_and_applies_filters():
     pool = FakePool(
         fetch_map={
