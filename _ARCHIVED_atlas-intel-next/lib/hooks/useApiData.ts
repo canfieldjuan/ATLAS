@@ -28,6 +28,7 @@ export default function useApiData<T>(
   // when deps change rapidly or the user clicks refresh while a fetch
   // is already in-flight.
   const requestRef = useRef(0)
+  const mountedRef = useRef(true)
   // Track whether we have successfully loaded data at least once.
   // Used to decide whether a retry should show the full loading skeleton
   // (no data yet) vs. the lighter refreshing indicator (data on screen).
@@ -50,17 +51,17 @@ export default function useApiData<T>(
       setError(null)
       try {
         const result = await fetcher()
-        if (requestRef.current === id) {
+        if (requestRef.current === id && mountedRef.current) {
           hasDataRef.current = true
           lastLoadedAtRef.current = Date.now()
           setData(result)
         }
       } catch (err) {
-        if (requestRef.current === id) {
+        if (requestRef.current === id && mountedRef.current) {
           setError(err instanceof Error ? err : new Error(String(err)))
         }
       } finally {
-        if (requestRef.current === id) {
+        if (requestRef.current === id && mountedRef.current) {
           setLoading(false)
           setRefreshing(false)
         }
@@ -104,6 +105,11 @@ export default function useApiData<T>(
       window.removeEventListener('online', onReconnect)
     }
   }, [load, minRefreshIntervalMs, refreshOnFocus, refreshOnReconnect])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   const refresh = useCallback(() => {
     load(true)

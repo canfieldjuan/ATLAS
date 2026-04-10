@@ -400,7 +400,8 @@ export interface ManualQueueEntry {
 }
 
 export interface CompanyOverride {
-  id: string
+  // id is absent when returned from settings-fallback path (DB table empty)
+  id?: string
   company_name_raw: string
   company_name_norm: string
   search_names: string[]

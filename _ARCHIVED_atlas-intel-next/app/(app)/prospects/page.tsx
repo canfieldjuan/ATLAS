@@ -17,6 +17,7 @@ import {
   RotateCcw,
   XCircle,
   Building2,
+  ExternalLink,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import useApiData from '@/lib/hooks/useApiData'
@@ -118,6 +119,54 @@ function QueueStatusBadge({ status }: { status: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Error detail helpers
+// ---------------------------------------------------------------------------
+
+const ERROR_REASON_MAP: Record<string, { label: string; color: string }> = {
+  apollo_no_results: { label: 'No Results', color: 'bg-slate-500/20 text-slate-400' },
+  no_people_found: { label: 'No People', color: 'bg-amber-500/20 text-amber-400' },
+  no_verified_email: { label: 'No Emails', color: 'bg-orange-500/20 text-orange-400' },
+  manual_queue_seed_after_apollo_exhausted: { label: 'Apollo Exhausted', color: 'bg-red-500/20 text-red-400' },
+}
+
+function ErrorDetailCell({ detail }: { detail: string | null }) {
+  if (!detail) return <span className="text-xs text-slate-500">--</span>
+
+  let parsed: { reason?: string; search_names?: string[] } | null = null
+  try {
+    const raw = JSON.parse(detail)
+    if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+      parsed = raw
+    }
+  } catch {
+    // not JSON — fall through to raw display
+  }
+
+  if (parsed?.reason) {
+    const mapping = ERROR_REASON_MAP[parsed.reason]
+    return (
+      <div title={detail}>
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+          mapping?.color ?? 'bg-slate-500/20 text-slate-400')}>
+          {mapping?.label ?? parsed.reason.slice(0, 30)}
+        </span>
+        {parsed.search_names && parsed.search_names.length > 0 && (
+          <span className="block text-xs text-slate-500 mt-0.5 line-clamp-1 max-w-[180px]">
+            {parsed.search_names.join(', ')}
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <span className="text-xs text-red-400 line-clamp-1 max-w-[200px]" title={detail}>
+      {detail.slice(0, 60)}{detail.length > 60 ? '...' : ''}
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Tab type
 // ---------------------------------------------------------------------------
 
@@ -127,9 +176,215 @@ type ProspectsTab = 'prospects' | 'manual_queue' | 'company_overrides'
 // Main page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Prospect Detail Drawer
+// ---------------------------------------------------------------------------
+
+function ProspectDetailDrawer({
+  prospect,
+  onClose,
+}: {
+  prospect: Prospect
+  onClose: () => void
+}) {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const fullName = [prospect.first_name, prospect.last_name].filter(Boolean).join(' ') || 'Unknown'
+  const location = [prospect.city, prospect.state].filter(Boolean).join(', ')
+  const hasReasoning =
+    prospect.reasoning_scope_summary ||
+    prospect.reasoning_atom_context ||
+    prospect.reasoning_delta_summary
+
+  return (
+    <div
+      className="fixed top-0 right-0 bottom-0 left-0 lg:left-56 flex items-center justify-center p-8"
+      style={{ zIndex: 50, backgroundColor: 'rgba(0,0,0,0.7)' }}
+      onClick={onClose}
+    >
+      <div
+        className="bg-slate-800 border-2 border-slate-500 rounded-xl flex flex-col"
+        style={{ maxWidth: '640px', width: '100%', maxHeight: '85vh', boxShadow: '0 0 40px rgba(0,0,0,0.8)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 pb-3 border-b border-slate-700/50 shrink-0">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-white truncate">{fullName}</h2>
+            <div className="flex items-center gap-2 mt-1">
+              <ProspectStatusBadge status={prospect.status} />
+              {prospect.title && (
+                <span className="text-xs text-slate-400 truncate">{prospect.title}</span>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="ml-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto p-5 space-y-5 flex-1">
+          {/* Contact */}
+          <div>
+            <span className="text-xs text-slate-400 uppercase tracking-wider">Contact</span>
+            <div className="mt-2 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Mail className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                {prospect.email ? (
+                  <a href={`mailto:${prospect.email}`} className="text-sm text-cyan-400 hover:underline truncate">
+                    {prospect.email}
+                  </a>
+                ) : (
+                  <span className="text-sm text-slate-500">--</span>
+                )}
+                {prospect.email_status && <EmailStatusBadge status={prospect.email_status} />}
+              </div>
+              {prospect.linkedin_url && (
+                <div className="flex items-center gap-2">
+                  <ExternalLink className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                  <a
+                    href={prospect.linkedin_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-cyan-400 hover:underline"
+                  >
+                    LinkedIn Profile
+                  </a>
+                </div>
+              )}
+              {prospect.seniority && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">Seniority:</span>
+                  <SeniorityBadge seniority={prospect.seniority} />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Company */}
+          <div>
+            <span className="text-xs text-slate-400 uppercase tracking-wider">Company</span>
+            <div className="mt-2 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Building2 className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                <span className="text-sm text-white">{prospect.company_name || '--'}</span>
+              </div>
+              {prospect.company_domain && (
+                <div className="flex items-center gap-2">
+                  <ExternalLink className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                  <a
+                    href={prospect.company_domain.startsWith("http") ? prospect.company_domain : `https://${prospect.company_domain}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-cyan-400 hover:underline"
+                  >
+                    {prospect.company_domain}
+                  </a>
+                </div>
+              )}
+              {location && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500">Location:</span>
+                  <span className="text-sm text-slate-300">{location}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Sequence */}
+          {prospect.related_sequence_status && (
+            <div>
+              <span className="text-xs text-slate-400 uppercase tracking-wider">Sequence</span>
+              <div className="mt-2 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <SequenceStatusBadge status={prospect.related_sequence_status} />
+                  {prospect.related_sequence_current_step != null && prospect.related_sequence_max_steps != null && (
+                    <span className="text-sm text-slate-300">
+                      Step {prospect.related_sequence_current_step}/{prospect.related_sequence_max_steps}
+                    </span>
+                  )}
+                </div>
+                {prospect.related_sequence_last_sent_at && (
+                  <div className="text-xs text-slate-400">
+                    Last sent: {new Date(prospect.related_sequence_last_sent_at).toLocaleDateString()}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Churning From */}
+          {prospect.churning_from && (
+            <div>
+              <span className="text-xs text-slate-400 uppercase tracking-wider">Churning From</span>
+              <div className="mt-2">
+                <span className="text-sm text-amber-400">{prospect.churning_from}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Reasoning Context */}
+          {hasReasoning && (
+            <div>
+              <span className="text-xs text-slate-400 uppercase tracking-wider">Reasoning Context</span>
+              <div className="mt-2 space-y-2">
+                {prospect.reasoning_scope_summary && (
+                  <div>
+                    <span className="text-xs text-slate-500">Scope Summary</span>
+                    <pre className="mt-1 text-xs text-slate-300 bg-slate-900/50 rounded-lg p-3 overflow-x-auto max-h-40">
+                      {JSON.stringify(prospect.reasoning_scope_summary, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {prospect.reasoning_atom_context && (
+                  <div>
+                    <span className="text-xs text-slate-500">Atom Context</span>
+                    <pre className="mt-1 text-xs text-slate-300 bg-slate-900/50 rounded-lg p-3 overflow-x-auto max-h-40">
+                      {JSON.stringify(prospect.reasoning_atom_context, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {prospect.reasoning_delta_summary && (
+                  <div>
+                    <span className="text-xs text-slate-500">Delta Summary</span>
+                    <pre className="mt-1 text-xs text-slate-300 bg-slate-900/50 rounded-lg p-3 overflow-x-auto max-h-40">
+                      {JSON.stringify(prospect.reasoning_delta_summary, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
 export default function ProspectsPage() {
   const [activeTab, setActiveTab] = useState<ProspectsTab>('prospects')
   const [actionResult, setActionResult] = useState<string | null>(null)
+  const [isActionError, setIsActionError] = useState(false)
+  const [viewingProspect, setViewingProspect] = useState<Prospect | null>(null)
 
   // ---- Prospects tab state ----
   const [companySearch, setCompanySearch] = useState('')
@@ -206,7 +461,12 @@ export default function ProspectsPage() {
       key: 'company',
       header: 'Company',
       render: (r) => (
-        <span className="text-white font-medium">{r.company_name || '--'}</span>
+        <div>
+          <span className="text-white font-medium">{r.company_name || '--'}</span>
+          {r.company_domain && (
+            <span className="block text-xs text-slate-500">{r.company_domain}</span>
+          )}
+        </div>
       ),
       sortable: true,
       sortValue: (r) => r.company_name || '',
@@ -246,11 +506,39 @@ export default function ProspectsPage() {
       sortValue: (r) => r.title || '',
     },
     {
+      key: 'location',
+      header: 'Location',
+      render: (r) => {
+        const parts = [r.city, r.state].filter(Boolean)
+        return parts.length > 0
+          ? <span className="text-sm text-slate-300">{parts.join(', ')}</span>
+          : <span className="text-xs text-slate-500">--</span>
+      },
+      sortable: true,
+      sortValue: (r) => [r.city, r.state].filter(Boolean).join(', '),
+    },
+    {
       key: 'email',
       header: 'Email',
       render: (r) => (
         <span className="text-sm text-slate-400 font-mono">{r.email || '--'}</span>
       ),
+    },
+    {
+      key: 'linkedin',
+      header: '',
+      render: (r) => r.linkedin_url ? (
+        <a
+          href={r.linkedin_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center justify-center p-1 rounded text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors"
+          title="View LinkedIn profile"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      ) : null,
     },
     {
       key: 'seniority',
@@ -336,11 +624,7 @@ export default function ProspectsPage() {
     {
       key: 'error_detail',
       header: 'Error',
-      render: (r) => (
-        <span className="text-xs text-red-400 line-clamp-1 max-w-[200px]">
-          {r.error_detail || '--'}
-        </span>
-      ),
+      render: (r) => <ErrorDetailCell detail={r.error_detail} />,
     },
     {
       key: 'updated_at',
@@ -452,24 +736,25 @@ export default function ProspectsPage() {
       key: 'actions',
       header: 'Actions',
       render: (r) => {
-        if (!r.id) return <span className="text-xs text-slate-500">settings</span>
+        const overrideId = r.id
+        if (!overrideId) return <span className="text-xs text-slate-500">settings</span>
         return (
           <div className="flex items-center gap-2">
             <button
               onClick={() => startEditOverride(r)}
-              disabled={deletingId === r.id}
+              disabled={deletingId === overrideId}
               className="text-slate-400 hover:text-cyan-400 disabled:opacity-50"
               title="Edit"
             >
               <Pencil className="h-3.5 w-3.5" />
             </button>
             <button
-              onClick={() => handleDeleteOverride(r.id)}
-              disabled={deletingId === r.id}
+              onClick={() => handleDeleteOverride(overrideId)}
+              disabled={deletingId === overrideId}
               className="text-slate-400 hover:text-red-400 disabled:opacity-50"
               title="Delete"
             >
-              {deletingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {deletingId === overrideId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
             </button>
           </div>
         )
@@ -485,11 +770,13 @@ export default function ProspectsPage() {
         action,
         domain: action === 'retry' && resolveDomain ? resolveDomain : undefined,
       })
+      setIsActionError(false)
       setActionResult(action === 'retry' ? 'Entry queued for retry' : 'Entry dismissed')
       setResolvingId(null)
       setResolveDomain('')
       mqRefresh()
     } catch (err) {
+      setIsActionError(true)
       setActionResult(err instanceof Error ? err.message : 'Resolve failed')
     } finally {
       setResolveLoading(false)
@@ -497,6 +784,7 @@ export default function ProspectsPage() {
   }
 
   const startEditOverride = (r: CompanyOverride) => {
+    if (!r.id) return
     setEditingOverrideId(r.id)
     setOverrideForm({
       company_name_raw: r.company_name_raw,
@@ -523,10 +811,12 @@ export default function ProspectsPage() {
         search_names: searchNames.length > 0 ? searchNames : undefined,
         domains: domains.length > 0 ? domains : undefined,
       })
+      setIsActionError(false)
       setActionResult(editingOverrideId ? 'Override updated' : 'Override created')
       resetOverrideForm()
       coRefresh()
     } catch (err) {
+      setIsActionError(true)
       setActionResult(err instanceof Error ? err.message : 'Save failed')
     } finally {
       setOverrideLoading(false)
@@ -538,9 +828,11 @@ export default function ProspectsPage() {
     setDeletingId(id)
     try {
       await deleteCompanyOverride(id)
+      setIsActionError(false)
       setActionResult('Override deleted')
       coRefresh()
     } catch (err) {
+      setIsActionError(true)
       setActionResult(err instanceof Error ? err.message : 'Delete failed')
     } finally {
       setDeletingId(null)
@@ -551,9 +843,11 @@ export default function ProspectsPage() {
     setBootstrapLoading(true)
     try {
       const result = await bootstrapCompanyOverrides()
+      setIsActionError(false)
       setActionResult(`Bootstrapped ${result.imported} override(s) from settings`)
       coRefresh()
     } catch (err) {
+      setIsActionError(true)
       setActionResult(err instanceof Error ? err.message : 'Bootstrap failed')
     } finally {
       setBootstrapLoading(false)
@@ -581,10 +875,15 @@ export default function ProspectsPage() {
     setSeniorityFilter('')
   }
 
-  const tabLabels: Record<ProspectsTab, string> = {
-    prospects: 'All Prospects',
-    manual_queue: 'Manual Queue',
-    company_overrides: 'Company Overrides',
+  function tabLabel(tab: ProspectsTab): string {
+    switch (tab) {
+      case 'prospects':
+        return 'All Prospects' + (data?.count != null ? ' (' + data.count + ')' : '')
+      case 'manual_queue':
+        return 'Manual Queue' + (mqData?.count != null ? ' (' + mqData.count + ')' : '')
+      case 'company_overrides':
+        return 'Company Overrides' + (coData?.count != null ? ' (' + coData.count + ')' : '')
+    }
   }
 
   return (
@@ -651,9 +950,14 @@ export default function ProspectsPage() {
 
       {/* Action result banner */}
       {actionResult && (
-        <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-3 flex items-center justify-between">
-          <span className="text-sm text-cyan-400">{actionResult}</span>
-          <button onClick={() => setActionResult(null)} className="text-cyan-400 hover:text-white">
+        <div className={clsx(
+          'rounded-lg p-3 flex items-center justify-between',
+          isActionError
+            ? 'bg-red-500/10 border border-red-500/30'
+            : 'bg-cyan-500/10 border border-cyan-500/30',
+        )}>
+          <span className={clsx('text-sm', isActionError ? 'text-red-400' : 'text-cyan-400')}>{actionResult}</span>
+          <button onClick={() => setActionResult(null)} className={clsx(isActionError ? 'text-red-400' : 'text-cyan-400', 'hover:text-white')}>
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -664,7 +968,7 @@ export default function ProspectsPage() {
         {(['prospects', 'manual_queue', 'company_overrides'] as const).map((tab) => (
           <button
             key={tab}
-            onClick={() => { setActiveTab(tab); setActionResult(null) }}
+            onClick={() => { setActiveTab(tab); setActionResult(null); setResolvingId(null); setResolveDomain(''); resetOverrideForm() }}
             className={clsx(
               'px-4 py-2 text-sm font-medium transition-colors border-b-2',
               activeTab === tab
@@ -672,7 +976,7 @@ export default function ProspectsPage() {
                 : 'text-slate-400 border-transparent hover:text-white',
             )}
           >
-            {tabLabels[tab]}
+            {tabLabel(tab)}
           </button>
         ))}
       </div>
@@ -754,6 +1058,7 @@ export default function ProspectsPage() {
               <DataTable
                 columns={prospectColumns}
                 data={prospects}
+                onRowClick={setViewingProspect}
                 emptyMessage="No prospects match your filters"
                 emptyAction={hasFilters ? { label: 'Clear all filters', onClick: clearFilters } : undefined}
               />
@@ -951,6 +1256,14 @@ export default function ProspectsPage() {
             )}
           </div>
         </>
+      )}
+
+      {/* Prospect Detail Drawer */}
+      {viewingProspect && (
+        <ProspectDetailDrawer
+          prospect={viewingProspect}
+          onClose={() => setViewingProspect(null)}
+        />
       )}
     </div>
   )

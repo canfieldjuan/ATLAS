@@ -20,6 +20,7 @@ interface DataTableProps<T> {
   skeletonRows?: number
   emptyAction?: { label: string; onClick: () => void }
   pageSize?: number
+  rowKey?: (row: T, index: number) => string | number
 }
 
 const PAGE_SIZES = [25, 50, 100] as const
@@ -32,11 +33,20 @@ export default function DataTable<T>({
   skeletonRows,
   emptyAction,
   pageSize: defaultPageSize = 25,
+  rowKey,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [page, setPage] = useState(0)
   const [perPage, setPerPage] = useState(defaultPageSize)
+
+  // Stable row key: explicit prop > row.id > array index
+  function getRowKey(row: T, index: number): string | number {
+    if (rowKey) return rowKey(row, index)
+    const r = row as Record<string, unknown>
+    if (r.id != null) return String(r.id)
+    return index
+  }
 
   // Reset to page 0 when data length changes (new fetch / filter)
   const dataLen = data.length
@@ -60,7 +70,7 @@ export default function DataTable<T>({
   const totalPages = Math.max(1, Math.ceil(sorted.length / perPage))
   const safePage = Math.min(page, totalPages - 1)
   const paged = sorted.slice(safePage * perPage, (safePage + 1) * perPage)
-  const showPagination = sorted.length > PAGE_SIZES[0]
+  const showPagination = sorted.length > perPage
 
   function handleSort(key: string) {
     if (sortKey === key) {
@@ -146,7 +156,7 @@ export default function DataTable<T>({
           ) : (
             paged.map((row, i) => (
               <tr
-                key={i}
+                key={getRowKey(row, i)}
                 className={clsx(
                   'transition-colors',
                   onRowClick
