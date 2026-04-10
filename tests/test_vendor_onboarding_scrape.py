@@ -672,5 +672,43 @@ async def test_provision_vendor_onboarding_targets_bootstraps_search_and_slug_so
     assert result["bootstrap_used"] is True
     assert result["matched_vendors"] == ["Linear"]
     assert result["applied"] == 3
+    assert result["applied_core_targets"] == 2
+    assert result["applied_signal_targets"] == 1
     assert [item["source"] for item in result["actions"]] == ["capterra", "g2", "reddit"]
     assert pool.fetchrow.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_provision_vendor_onboarding_targets_seeds_conditional_signal_lane_when_core_is_thin():
+    from atlas_brain.services.scraping.target_provisioning import (
+        provision_vendor_onboarding_targets,
+    )
+
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(side_effect=[[], [], []])
+    pool.fetchrow = AsyncMock(return_value={"id": "t-signal"})
+    cfg = MagicMock()
+    cfg.source_allowlist = "github"
+    cfg.deprecated_sources = ""
+
+    with patch(
+        "atlas_brain.services.scraping.target_provisioning.settings",
+        MagicMock(b2b_scrape=cfg),
+    ):
+        with patch(
+            "atlas_brain.services.scraping.target_provisioning.resolve_vendor_name",
+            new=AsyncMock(return_value="HubSpot"),
+        ):
+            result = await provision_vendor_onboarding_targets(
+                pool,
+                "HubSpot",
+                product_category="CRM",
+                dry_run=False,
+            )
+
+    assert result["status"] == "applied"
+    assert result["bootstrap_used"] is True
+    assert result["applied_core_targets"] == 0
+    assert result["applied_signal_targets"] == 1
+    assert result["actions"][0]["source"] == "github"
+    assert result["actions"][0]["metadata"]["source_fit_probation"] is True

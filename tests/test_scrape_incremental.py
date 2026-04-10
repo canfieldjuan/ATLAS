@@ -447,7 +447,7 @@ async def test_insert_reviews_marks_cross_source_duplicate_rows(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_insert_reviews_skips_capterra_aggregate_pages(monkeypatch):
+async def test_insert_reviews_retains_capterra_aggregate_pages_in_raw_only_lane(monkeypatch):
     from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
 
     async def _resolve(vendor_name):
@@ -472,10 +472,43 @@ async def test_insert_reviews_skips_capterra_aggregate_pages(monkeypatch):
 
     stats = await _insert_reviews(pool, reviews, "batch-agg", parser_version="capterra:1")
 
-    assert pool.inserted_rows == []
-    assert stats["inserted"] == 0
-    assert stats["skipped_quality_gate"] == 1
-    assert stats["eligible_rows"] == 0
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["quality_gate_flagged"] == 1
+    assert stats["retained_raw_only"] == 1
+    assert pool.inserted_rows[0][43] == "raw_only"
+
+
+@pytest.mark.asyncio
+async def test_insert_reviews_retains_short_reviews_in_raw_only_lane(monkeypatch):
+    from atlas_brain.autonomous.tasks.b2b_scrape_intake import _insert_reviews
+
+    async def _resolve(vendor_name):
+        return vendor_name
+
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks.b2b_scrape_intake.resolve_vendor_name",
+        _resolve,
+    )
+
+    pool = _FakeInsertPool()
+    reviews = [
+        {
+            "source": "reddit",
+            "vendor_name": "HubSpot",
+            "source_review_id": "post-short",
+            "review_text": "too short",
+            "reviewed_at": "2026-03-20",
+        }
+    ]
+
+    stats = await _insert_reviews(pool, reviews, "batch-short", parser_version="reddit:1")
+
+    assert len(pool.inserted_rows) == 1
+    assert stats["inserted"] == 1
+    assert stats["short_flagged"] == 1
+    assert stats["retained_raw_only"] == 1
+    assert pool.inserted_rows[0][43] == "raw_only"
 
 
 @pytest.mark.asyncio

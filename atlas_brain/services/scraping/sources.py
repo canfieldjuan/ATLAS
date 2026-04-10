@@ -120,31 +120,27 @@ VERIFIED_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.GETAPP,
     ReviewSource.SOFTWARE_ADVICE,
     ReviewSource.TRUSTPILOT,
+})
+
+# Structured review platforms bypass the social/content relevance filter, but
+# only VERIFIED_SOURCES should receive verified-source confidence treatment.
+STRUCTURED_SOURCES: frozenset[ReviewSource] = VERIFIED_SOURCES | frozenset({
     ReviewSource.SOURCEFORGE,
     ReviewSource.SLASHDOT,
 })
 
-# Structured review platforms should stay aligned with the verified-review set
-# so they bypass the social/content relevance filter.
-STRUCTURED_SOURCES: frozenset[ReviewSource] = VERIFIED_SOURCES
-
 EXECUTIVE_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.G2,
-    ReviewSource.CAPTERRA,
-    ReviewSource.TRUSTRADIUS,
     ReviewSource.GARTNER,
     ReviewSource.PEERSPOT,
+    ReviewSource.GETAPP,
 })
 
 DEFAULT_ALLOWLIST_SOURCES: frozenset[ReviewSource] = frozenset({
     ReviewSource.G2,
-    ReviewSource.CAPTERRA,
-    ReviewSource.TRUSTRADIUS,
     ReviewSource.GARTNER,
     ReviewSource.PEERSPOT,
     ReviewSource.GETAPP,
-    ReviewSource.SOFTWARE_ADVICE,
-    ReviewSource.TRUSTPILOT,
     ReviewSource.REDDIT,
     ReviewSource.HACKERNEWS,
     ReviewSource.GITHUB,

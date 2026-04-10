@@ -29,6 +29,12 @@ from ...services.vendor_registry import resolve_vendor_name_cached
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_shared")
 
+_INTELLIGENCE_ELIGIBLE_STATUSES: tuple[str, ...] = (
+    "enriched",
+    "no_signal",
+    "quarantined",
+)
+
 
 def _reasoning_int(value: Any) -> int | None:
     """Unwrap a traced numeric contract field into an integer."""
@@ -523,7 +529,8 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
     """
     p = f"{alias}." if alias else ""
     time_expr = _eligible_review_timestamp_expr(alias=alias)
-    parts = [f"{p}enrichment_status = 'enriched'"]
+    status_list = ", ".join(f"'{status}'" for status in _INTELLIGENCE_ELIGIBLE_STATUSES)
+    parts = [f"{p}enrichment_status IN ({status_list})"]
     parts.append(f"{p}duplicate_of_review_id IS NULL")
     if window_param is not None:
         parts.append(f"{time_expr} > NOW() - make_interval(days => ${window_param})")
@@ -545,6 +552,65 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
         f")"
     )
     return "\n          AND ".join(parts)
+
+
+async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
+    """Return end-to-end review funnel counts for the active intelligence sources."""
+    sources = _intelligence_source_allowlist()
+    eligible_filters = _eligible_review_filters(window_param=1, source_param=2)
+    status_rows = await pool.fetch(
+        """
+        SELECT enrichment_status, count(*) AS ct
+        FROM b2b_reviews
+        WHERE duplicate_of_review_id IS NULL
+          AND source = ANY($1::text[])
+          AND COALESCE(reviewed_at, imported_at, enriched_at) > NOW() - make_interval(days => $2)
+        GROUP BY enrichment_status
+        """,
+        sources,
+        window_days,
+    )
+    status_counts = {
+        str(row["enrichment_status"] or ""): int(row["ct"] or 0)
+        for row in status_rows
+    }
+    eligible_row = await pool.fetchrow(
+        f"""
+        SELECT
+            count(*) AS intelligence_eligible_reviews,
+            count(*) FILTER (
+                WHERE reviewer_company_norm IS NOT NULL
+                  AND reviewer_company_norm <> ''
+            ) AS company_signal_eligible_reviews,
+            count(*) FILTER (
+                WHERE reviewer_company_norm IS NOT NULL
+                  AND reviewer_company_norm <> ''
+                  AND source <> ALL($3::text[])
+            ) AS high_confidence_named_account_reviews
+        FROM b2b_reviews
+        WHERE {eligible_filters}
+        """,
+        window_days,
+        sources,
+        list(_company_signal_low_trust_sources()),
+    )
+    intelligence_eligible_reviews = int((eligible_row["intelligence_eligible_reviews"] if eligible_row else 0) or 0)
+    company_signal_eligible_reviews = int((eligible_row["company_signal_eligible_reviews"] if eligible_row else 0) or 0)
+    high_conf_named_account_reviews = int((eligible_row["high_confidence_named_account_reviews"] if eligible_row else 0) or 0)
+    return {
+        "found": sum(status_counts.values()),
+        "enriched": status_counts.get("enriched", 0),
+        "no_signal": status_counts.get("no_signal", 0),
+        "quarantined": status_counts.get("quarantined", 0),
+        "raw_only": status_counts.get("raw_only", 0),
+        "pending": status_counts.get("pending", 0),
+        "failed": status_counts.get("failed", 0),
+        "not_applicable": status_counts.get("not_applicable", 0),
+        "duplicate": status_counts.get("duplicate", 0),
+        "intelligence_eligible": intelligence_eligible_reviews,
+        "company_signal_eligible": company_signal_eligible_reviews,
+        "high_confidence_named_account": high_conf_named_account_reviews,
+    }
 
 
 def _quote_text(q: Any) -> str | None:
@@ -3696,6 +3762,7 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
     """Compute temporal metadata and source composition for the LLM."""
     sources = _intelligence_source_allowlist()
     filters = _eligible_review_filters(window_param=None, source_param=2)
+    funnel_audit = await _fetch_review_funnel_audit(pool, window_days)
     row = await pool.fetchrow(
         f"""
         SELECT
@@ -3745,6 +3812,7 @@ async def _fetch_data_context(pool, window_days: int) -> dict[str, Any]:
         "unique_vendors": row["vendor_count"],
         "unique_companies": row["company_count"],
         "source_distribution": source_dist,
+        "funnel_audit": funnel_audit,
     }
 
 
