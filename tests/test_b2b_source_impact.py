@@ -116,9 +116,17 @@ def test_build_source_impact_ledger_highlights_getapp_recovery():
     assert "watchlists_accounts_in_motion" in entry["expected_consumers"]
 
 
+def test_build_source_impact_ledger_aligns_trustpilot_family_with_registry():
+    ledger = build_source_impact_ledger(source="trustpilot")
+
+    assert ledger["sources"][0]["source_family"] == "structured_review"
+
+
 def test_consumer_wiring_baseline_flags_mixed_consumers():
     baseline = get_consumer_wiring_baseline()
 
+    assert baseline["baseline_mode"] == "static_code_inventory"
+    assert baseline["measured"] is False
     assert baseline["summary"]["total_consumers"] >= 5
     assert baseline["summary"]["mixed_consumers"] >= 1
     accounts = next(
@@ -150,6 +158,8 @@ async def test_summarize_source_field_baseline_shapes_coverage():
                 "timing_rows": 1,
                 "quote_rows": 5,
                 "pain_rows": 8,
+                "content_classification_rows": 8,
+                "support_escalation_rows": 2,
             }
         ]
     )
@@ -163,9 +173,15 @@ async def test_summarize_source_field_baseline_shapes_coverage():
     assert result["summary"]["total_sources"] == 1
     row = result["rows"][0]
     assert row["source"] == "trustradius"
-    assert row["coverage"]["title"] == 0.6
-    assert row["coverage"]["competitors"] == 0.7
+    assert row["enrichment_rate"] == 0.8
+    assert row["coverage"]["title"] == 0.75
+    assert row["coverage"]["competitors"] == 0.875
+    assert row["coverage"]["content_classification"] == 1.0
+    assert row["coverage"]["support_escalation"] == 0.25
+    assert row["coverage_of_total_reviews"]["title"] == 0.6
     assert row["raw_counts"]["pain_rows"] == 8
+    assert row["raw_counts"]["content_classification_rows"] == 8
+    assert row["raw_counts"]["support_escalation_rows"] == 2
 
 
 @pytest.mark.asyncio
@@ -185,6 +201,8 @@ async def test_dashboard_source_impact_ledger_includes_field_baseline(monkeypatc
                 "timing_rows": 4,
                 "quote_rows": 7,
                 "pain_rows": 12,
+                "content_classification_rows": 15,
+                "support_escalation_rows": 3,
             }
         ]
     )
@@ -197,7 +215,11 @@ async def test_dashboard_source_impact_ledger_includes_field_baseline(monkeypatc
 
     assert result["impact_summary"]["total_sources"] == 1
     assert result["sources"][0]["source"] == "reddit"
-    assert result["field_baseline"]["rows"][0]["coverage"]["competitors"] == 0.45
+    assert result["field_baseline"]["rows"][0]["coverage"]["competitors"] == 0.6
+    assert (
+        result["field_baseline"]["rows"][0]["coverage_of_total_reviews"]["competitors"]
+        == 0.45
+    )
     assert result["consumer_wiring"]["summary"]["mixed_consumers"] >= 1
 
 
@@ -218,6 +240,8 @@ async def test_mcp_source_impact_ledger_returns_json_payload():
                 "timing_rows": 0,
                 "quote_rows": 4,
                 "pain_rows": 5,
+                "content_classification_rows": 5,
+                "support_escalation_rows": 1,
             }
         ]
     )
@@ -230,3 +254,4 @@ async def test_mcp_source_impact_ledger_returns_json_payload():
     assert data["impact_summary"]["total_sources"] == 1
     assert data["sources"][0]["source"] == "getapp"
     assert data["field_baseline"]["rows"][0]["coverage"]["title"] == 0.8
+    assert data["field_baseline"]["rows"][0]["coverage"]["support_escalation"] == 0.2
