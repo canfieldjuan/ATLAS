@@ -1442,6 +1442,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     budget = _TaskTimer()
     materialization_run_id = _task_run_id(task)
     synced_firmographics = 0
+    today = date.today()
     await _update_execution_progress(
         task,
         stage=_STAGE_LOADING_INPUTS,
@@ -1453,7 +1454,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     await _warm_vendor_cache()
 
     try:
-        synced_firmographics = await _sync_vendor_firmographics(pool, as_of=date.today())
+        synced_firmographics = await _sync_vendor_firmographics(pool, as_of=today)
         if synced_firmographics:
             logger.info("Vendor firmographics synced: %d vendors", synced_firmographics)
     except Exception:
@@ -1467,7 +1468,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     quote_min_urgency = cfg.quotable_phrase_min_urgency
     tl_limit = cfg.timeline_signals_limit
     prior_limit = cfg.prior_reports_limit
-    today = date.today()
     from ...pipelines.llm import get_pipeline_llm as _get_plm
     _llm_workload = cfg.intelligence_llm_backend if cfg.intelligence_llm_backend in ("vllm", "anthropic", "auto") else "vllm"
     _ci_llm = _get_plm(workload=_llm_workload)
@@ -1963,8 +1963,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # ---------------------------------------------------------------
     vault_persisted = 0
     try:
-        from datetime import date as _date
-
         _hi_by_vendor: dict[str, list[dict]] = {}
         for hi in high_intent:
             vn = _canonicalize_vendor(hi.get("vendor") or "")
@@ -2010,7 +2008,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             _vault_rows.append((
                 vn,
-                _date.today(),
+                today,
                 window_days,
                 vault["schema_version"],
                 materialization_run_id,
@@ -2048,8 +2046,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # ---------------------------------------------------------------
     segment_persisted = 0
     try:
-        from datetime import date as _seg_date
-
         _seg_rows: list[tuple] = []
         _seg_seen: set[str] = set()
         for vs in vendor_scores:
@@ -2073,7 +2069,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             _seg_rows.append((
                 vn,
-                _seg_date.today(),
+                today,
                 window_days,
                 seg["schema_version"],
                 json.dumps(seg, default=str),
@@ -2100,8 +2096,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # ---------------------------------------------------------------
     temporal_persisted = 0
     try:
-        from datetime import date as _temp_date
-
         _temp_rows: list[tuple] = []
         _temp_seen: set[str] = set()
         for vs in vendor_scores:
@@ -2120,7 +2114,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             _temp_rows.append((
                 vn,
-                _temp_date.today(),
+                today,
                 window_days,
                 temp["schema_version"],
                 json.dumps(temp, default=str),
@@ -2156,8 +2150,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # ---------------------------------------------------------------
     displacement_dynamics_persisted = 0
     try:
-        from datetime import date as _disp_date
-
         # Read persisted edges for velocity/quote data
         _edge_rows = await pool.fetch(
             """
@@ -2234,7 +2226,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             _disp_rows.append((
                 from_v,
                 to_v,
-                _disp_date.today(),
+                today,
                 window_days,
                 dyn["schema_version"],
                 json.dumps(dyn, default=str),
@@ -2276,7 +2268,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
     else:
         try:
-            from datetime import date as _cat_date
             from dataclasses import asdict as _cat_asdict
 
             # Read category council conclusions from DB
@@ -2379,7 +2370,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 )
                 _cat_rows.append((
                     cat,
-                    _cat_date.today(),
+                    today,
                     window_days,
                     dyn["schema_version"],
                     json.dumps(dyn, default=str),
@@ -2415,8 +2406,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     # ---------------------------------------------------------------
     account_intelligence_persisted = 0
     try:
-        from datetime import date as _acct_date
-
         # Collect all vendors with signals
         _acct_vendors: set[str] = set()
         _acct_vendors.update(_canonical_company_signals.keys())
@@ -2438,7 +2427,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             )
             _acct_rows.append((
                 vn,
-                _acct_date.today(),
+                today,
                 window_days,
                 acct["schema_version"],
                 json.dumps(acct, default=str),
