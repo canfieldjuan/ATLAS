@@ -9,7 +9,7 @@ baselines from ``b2b_reviews``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from ..scraping.capabilities import get_all_capabilities
 from ..scraping.sources import ReviewSource, display_name as source_display_name
@@ -427,6 +427,10 @@ _DEFAULT_IMPACT_PROFILE = SourceImpactProfile(
 )
 
 
+class SupportsFetch(Protocol):
+    async def fetch(self, query: str, *args: Any) -> Any: ...
+
+
 def _profile_for_source(source: str) -> SourceImpactProfile:
     return _SOURCE_IMPACT_PROFILES.get(source, _DEFAULT_IMPACT_PROFILE)
 
@@ -623,18 +627,14 @@ def _compute_coverage_ratio(
     numerator: int | float | None,
     denominator: int | float | None,
 ) -> float | None:
-    if numerator is None or denominator in (None, 0):
+    """Return a stable low-volume coverage ratio with 3-decimal precision."""
+    if numerator is None or denominator is None or denominator == 0:
         return None
     return round(float(numerator) / float(denominator), 3)
 
 
-async def summarize_source_field_baseline(
-    pool,
-    *,
-    window_days: int = 90,
-    source: str | None = None,
-) -> dict[str, Any]:
-    text_value_sql = """
+def _build_non_empty_text_check(expression: str) -> str:
+    return f"""
         NULLIF(
             TRIM(
                 COALESCE(
@@ -645,32 +645,41 @@ async def summarize_source_field_baseline(
             ''
         ) IS NOT NULL
     """
-    title_present_sql = text_value_sql.format(expression="reviewer_title")
-    company_present_sql = text_value_sql.format(expression="reviewer_company")
-    company_size_present_sql = text_value_sql.format(
-        expression="""
+
+
+async def summarize_source_field_baseline(
+    pool: SupportsFetch,
+    *,
+    window_days: int = 90,
+    source: str | None = None,
+) -> dict[str, Any]:
+    title_present_sql = _build_non_empty_text_check("reviewer_title")
+    company_present_sql = _build_non_empty_text_check("reviewer_company")
+    company_size_present_sql = _build_non_empty_text_check(
+        """
             COALESCE(
                 company_size_raw,
                 enrichment->'reviewer_context'->>'company_size_segment'
             )
         """
     )
-    industry_present_sql = text_value_sql.format(
-        expression="""
+    industry_present_sql = _build_non_empty_text_check(
+        """
             COALESCE(
                 reviewer_industry,
                 enrichment->'reviewer_context'->>'industry'
             )
         """
     )
-    timing_present_sql = " OR ".join(
-        [
-            text_value_sql.format(expression="enrichment->'timeline'->>'contract_end'"),
-            text_value_sql.format(expression="enrichment->'timeline'->>'evaluation_deadline'"),
-            text_value_sql.format(expression="enrichment->'timeline'->>'decision_timeline'"),
-        ]
+    timing_conditions = [
+        _build_non_empty_text_check("enrichment->'timeline'->>'contract_end'"),
+        _build_non_empty_text_check("enrichment->'timeline'->>'evaluation_deadline'"),
+        _build_non_empty_text_check("enrichment->'timeline'->>'decision_timeline'"),
+    ]
+    timing_present_sql = f"({' OR '.join(timing_conditions)})"
+    pain_present_sql = _build_non_empty_text_check(
+        "enrichment->>'pain_category'"
     )
-    pain_present_sql = text_value_sql.format(expression="enrichment->>'pain_category'")
     conditions = [
         "duplicate_of_review_id IS NULL",
         "imported_at >= NOW() - make_interval(days => $1)",

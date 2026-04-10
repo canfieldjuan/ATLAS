@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from pathlib import Path
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -68,12 +70,31 @@ sys.modules.setdefault("mcp", _mcp_mod)
 sys.modules.setdefault("mcp.server", _mcp_server_mod)
 sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
 
-from atlas_brain.mcp.b2b import pipeline as mcp_pipeline
+import atlas_brain
+
 from atlas_brain.services.b2b.source_impact import (
+    _compute_coverage_ratio,
     build_source_impact_ledger,
     get_consumer_wiring_baseline,
     summarize_source_field_baseline,
 )
+
+_repo_root = Path(__file__).resolve().parents[1]
+_api_pkg = types.ModuleType("atlas_brain.api")
+_api_pkg.__path__ = [str(_repo_root / "atlas_brain" / "api")]
+sys.modules.setdefault("atlas_brain.api", _api_pkg)
+
+_dashboard_path = _repo_root / "atlas_brain" / "api" / "b2b_dashboard.py"
+_dashboard_spec = importlib.util.spec_from_file_location(
+    "atlas_brain.api.b2b_dashboard",
+    _dashboard_path,
+)
+assert _dashboard_spec and _dashboard_spec.loader
+b2b_dashboard = importlib.util.module_from_spec(_dashboard_spec)
+sys.modules["atlas_brain.api.b2b_dashboard"] = b2b_dashboard
+_dashboard_spec.loader.exec_module(b2b_dashboard)
+
+from atlas_brain.mcp.b2b import pipeline as mcp_pipeline
 
 
 def _mock_pool(fetch_return=None):
@@ -106,6 +127,10 @@ def test_consumer_wiring_baseline_flags_mixed_consumers():
         if consumer["consumer"] == "b2b_accounts_in_motion"
     )
     assert accounts["legacy_fallback"] is True
+
+
+def test_compute_coverage_ratio_keeps_three_decimal_precision():
+    assert _compute_coverage_ratio(1, 3) == 0.333
 
 
 @pytest.mark.asyncio
@@ -143,14 +168,37 @@ async def test_summarize_source_field_baseline_shapes_coverage():
     assert row["raw_counts"]["pain_rows"] == 8
 
 
-def test_dashboard_source_contains_source_impact_route():
-    source = (
-        Path(__file__).resolve().parents[1] / "atlas_brain" / "api" / "b2b_dashboard.py"
-    ).read_text()
+@pytest.mark.asyncio
+async def test_dashboard_source_impact_ledger_includes_field_baseline(monkeypatch):
+    pool = _mock_pool(
+        fetch_return=[
+            {
+                "source": "reddit",
+                "total_reviews": 20,
+                "enriched_reviews": 15,
+                "title_rows": 0,
+                "company_rows": 0,
+                "company_size_rows": 0,
+                "industry_rows": 1,
+                "decision_maker_rows": 0,
+                "competitor_rows": 9,
+                "timing_rows": 4,
+                "quote_rows": 7,
+                "pain_rows": 12,
+            }
+        ]
+    )
+    monkeypatch.setattr(b2b_dashboard, "get_db_pool", lambda: pool)
 
-    assert '@router.get("/source-impact-ledger")' in source
-    assert "build_source_impact_ledger" in source
-    assert "summarize_source_field_baseline" in source
+    result = await b2b_dashboard.get_source_impact_ledger(
+        source="reddit",
+        window_days=45,
+    )
+
+    assert result["impact_summary"]["total_sources"] == 1
+    assert result["sources"][0]["source"] == "reddit"
+    assert result["field_baseline"]["rows"][0]["coverage"]["competitors"] == 0.45
+    assert result["consumer_wiring"]["summary"]["mixed_consumers"] >= 1
 
 
 @pytest.mark.asyncio

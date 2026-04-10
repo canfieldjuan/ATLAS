@@ -16,6 +16,8 @@ from ...services.b2b.source_impact import (
     summarize_source_field_baseline,
 )
 
+_MAX_IMPACT_WINDOW_DAYS = 3650
+
 
 @mcp.tool()
 async def get_pipeline_status() -> str:
@@ -434,13 +436,17 @@ async def get_source_impact_ledger(
     include_field_baseline: Include live b2b_reviews field-coverage metrics when DB is ready
     include_consumer_wiring: Include downstream consumer wiring baseline
     """
-    window_days = max(1, min(window_days, 3650))
+    window_days = max(1, min(window_days, _MAX_IMPACT_WINDOW_DAYS))
+    valid_source_names = sorted(
+        str(member.value if hasattr(member, "value") else member)
+        for member in VALID_SOURCES
+    )
     if source:
         source = source.strip().lower()
-        if source not in VALID_SOURCES:
+        if source not in valid_source_names:
             return json.dumps({
                 "success": False,
-                "error": f"source must be one of {sorted(s.value for s in VALID_SOURCES)}",
+                "error": f"source must be one of {valid_source_names}",
             })
 
     try:
