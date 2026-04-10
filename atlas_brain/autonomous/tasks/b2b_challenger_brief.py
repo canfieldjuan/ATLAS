@@ -20,13 +20,27 @@ from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ._b2b_shared import (
-    read_vendor_intelligence_map,
+    read_vendor_intelligence_map as _read_vendor_intelligence_map,
     _segment_targeting_summary,
     _timing_summary_payload,
 )
 from ._execution_progress import _update_execution_progress
 
 logger = logging.getLogger("atlas.tasks.b2b_challenger_brief")
+
+
+async def _fetch_latest_evidence_vault(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, dict[str, Any]]:
+    """Compatibility seam delegating canonical reads to the shared adapter."""
+    return await _read_vendor_intelligence_map(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+    )
 
 _STAGE_SELECTING_PAIRS = "selecting_pairs"
 _STAGE_BUILDING_BRIEFS = "building_briefs"
@@ -1918,7 +1932,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     try:
-        evidence_vault_lookup = await read_vendor_intelligence_map(
+        evidence_vault_lookup = await _fetch_latest_evidence_vault(
             pool,
             as_of=today,
             analysis_window_days=window_days,

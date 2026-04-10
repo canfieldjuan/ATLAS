@@ -38,7 +38,7 @@ from ...services.scraping.sources import (
 from ...reasoning.wedge_registry import Wedge, get_wedge_meta
 from ._execution_progress import task_run_id as _task_execution_run_id
 from ._b2b_shared import (
-    read_vendor_intelligence_map,
+    read_vendor_intelligence_map as _read_vendor_intelligence_map,
     _segment_targeting_summary,
     _timing_summary_payload,
     fetch_all_pool_layers,
@@ -50,6 +50,22 @@ from ._b2b_specificity import (
 )
 
 logger = logging.getLogger("atlas.autonomous.tasks.b2b_blog_post_generation")
+
+
+async def _fetch_latest_evidence_vault(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+    vendor_names: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Compatibility seam delegating canonical reads to the shared adapter."""
+    return await _read_vendor_intelligence_map(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+        vendor_names=vendor_names,
+    )
 
 _BLOG_GENERATION_CACHE_STAGE = "b2b_blog_post_generation.content"
 _BLOG_GENERATION_TRACE_SPAN = "task.b2b_blog_post_generation"
@@ -5194,7 +5210,7 @@ async def _gather_data(
     ]
     try:
         evidence_vault_lookup = (
-            await read_vendor_intelligence_map(
+            await _fetch_latest_evidence_vault(
                 pool,
                 as_of=date.today(),
                 analysis_window_days=settings.b2b_churn.intelligence_window_days,
