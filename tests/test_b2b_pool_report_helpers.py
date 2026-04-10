@@ -363,6 +363,42 @@ async def test_read_vendor_signal_detail_applies_snapshot_scope_and_suppression(
 
 
 @pytest.mark.asyncio
+async def test_read_vendor_signal_detail_exact_applies_exact_scope_and_suppression():
+    tracked_account_id = "11111111-1111-1111-1111-111111111111"
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_churn_signals sig": {
+                "vendor_name": "Zendesk",
+                "product_category": "CRM",
+                "support_sentiment": -0.1,
+            },
+        },
+    )
+
+    row = await shared_mod.read_vendor_signal_detail_exact(
+        pool,
+        vendor_name="Zendesk",
+        product_category="CRM",
+        tracked_account_id=tracked_account_id,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals sig" in call[0])
+    assert score_call[1] == ("Zendesk", "CRM", tracked_account_id)
+    assert "LEFT JOIN LATERAL" in score_call[0]
+    assert "LOWER(sig.vendor_name) = LOWER($1)" in score_call[0]
+    assert "sig.product_category = $2" in score_call[0]
+    assert "tracked_vendors WHERE account_id = $3::uuid" in score_call[0]
+    assert "dc.entity_type = 'churn_signal'" in score_call[0]
+    assert row == {
+        "vendor_name": "Zendesk",
+        "product_category": "CRM",
+        "support_sentiment": -0.1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_read_vendor_signal_rows_applies_snapshot_filters_and_limit():
     pool = FakePool(
         fetch_map={

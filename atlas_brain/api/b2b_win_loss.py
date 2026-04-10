@@ -345,14 +345,18 @@ async def _compute_prediction(
     industry: Optional[str] = None,
 ) -> WinLossResponse:
     """Run the full prediction pipeline for a single vendor. Returns WinLossResponse."""
+    from ..autonomous.tasks._b2b_shared import read_vendor_signal_detail_exact
+
+    signal = await read_vendor_signal_detail_exact(
+        pool,
+        vendor_name=vendor,
+    )
+    review_count = int((signal or {}).get("total_reviews") or 0)
 
     # -- Pre-check: count data availability per factor ------------------------
-    counts = await pool.fetchrow(
+    raw_counts = await pool.fetchrow(
         """
         SELECT
-            COALESCE((SELECT total_reviews FROM b2b_churn_signals
-                      WHERE vendor_name = $1
-                      ORDER BY last_computed_at DESC NULLS LAST LIMIT 1), 0) AS reviews,
             (SELECT COUNT(*) FROM b2b_displacement_edges
              WHERE from_vendor = $1) AS edges,
             (SELECT COUNT(*) FROM b2b_vendor_pain_points
@@ -368,6 +372,8 @@ async def _compute_prediction(
         """,
         vendor,
     )
+    counts = dict(raw_counts or {})
+    counts["reviews"] = review_count
 
     gates = [
         DataGate(factor="Churn Reviews", required=MIN_REVIEWS,
@@ -479,18 +485,6 @@ async def _compute_prediction(
     # -- 2. Churn signal severity ----------------------------------------------
     review_gate = gates[0]
     if review_gate.sufficient:
-        signal = await pool.fetchrow(
-            """
-            SELECT total_reviews, negative_reviews, churn_intent_count,
-                   avg_urgency_score, decision_maker_churn_rate, nps_proxy,
-                   price_complaint_rate, archetype, confidence_score
-            FROM b2b_churn_signals
-            WHERE vendor_name = $1
-            ORDER BY last_computed_at DESC NULLS LAST
-            LIMIT 1
-            """,
-            vendor,
-        )
         if signal:
             urgency = float(signal["avg_urgency_score"] or 0) / URGENCY_MAX
             total_revs = max(int(signal["total_reviews"] or 1), 1)
