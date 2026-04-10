@@ -798,7 +798,7 @@ SET summary = CASE
         THEN $9::text
         ELSE r.cons
     END,
-    raw_metadata = ((COALESCE(r.raw_metadata, '{}'::jsonb) || $10::jsonb) - 'retention_lane' - 'retention_reasons'),
+    raw_metadata = (COALESCE(r.raw_metadata, '{}'::jsonb) || $10::jsonb) - 'retention_lane' - 'retention_reasons',
     parser_version = COALESCE($11::text, r.parser_version),
     cross_source_content_hash = COALESCE($5::text, r.cross_source_content_hash),
     cross_source_identity_key = COALESCE($4::text, r.cross_source_identity_key),
