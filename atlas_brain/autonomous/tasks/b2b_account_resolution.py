@@ -76,6 +76,7 @@ async def _exclude_unsupported_sources(
         FROM b2b_reviews r
         LEFT JOIN b2b_account_resolution ar ON ar.review_id = r.id
         WHERE r.enrichment_status = ANY($1::text[])
+          AND r.duplicate_of_review_id IS NULL
           AND r.enrichment IS NOT NULL
           AND r.source = ANY($2::text[])
           AND ar.id IS NULL
@@ -108,7 +109,8 @@ async def _propagate_user_resolutions(pool: Any, backfill_labels: set) -> int:
                ar.resolution_method
         FROM b2b_reviews r
         JOIN b2b_account_resolution ar ON ar.review_id = r.id
-        WHERE ar.resolution_status = 'resolved'
+        WHERE r.duplicate_of_review_id IS NULL
+          AND ar.resolution_status = 'resolved'
           AND ar.confidence_label IN ('high', 'medium')
           AND r.reviewer_name IS NOT NULL
           AND r.reviewer_name NOT IN ('[deleted]', '', 'deleted')
@@ -121,7 +123,8 @@ async def _propagate_user_resolutions(pool: Any, backfill_labels: set) -> int:
             SELECT r.id AS review_id, r.reviewer_company, ar.id AS ar_id
             FROM b2b_reviews r
             JOIN b2b_account_resolution ar ON ar.review_id = r.id
-            WHERE r.source = $1
+            WHERE r.duplicate_of_review_id IS NULL
+              AND r.source = $1
               AND r.reviewer_name = $2
               AND ar.resolution_status = 'unresolved'
         """, user["source"], user["reviewer_name"])
@@ -232,6 +235,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         FROM b2b_reviews r
         LEFT JOIN b2b_account_resolution ar ON ar.review_id = r.id
         WHERE r.enrichment_status = ANY($1::text[])
+          AND r.duplicate_of_review_id IS NULL
           AND r.enrichment IS NOT NULL
           AND NOT (r.source = ANY($2::text[]))
           AND ar.id IS NULL

@@ -133,6 +133,7 @@ async def _fetch_satisfaction_by_area(pool, window_days: int) -> dict[str, list[
                COUNT(*) AS cnt
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
           AND enrichment->>'pain_category' IS NOT NULL
         GROUP BY vendor_name, enrichment->>'pain_category'
@@ -164,6 +165,7 @@ async def _fetch_pain_distribution(pool, window_days: int) -> dict[str, dict[str
                COUNT(*) AS cnt
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
           AND enrichment->>'pain_category' IS NOT NULL
         GROUP BY vendor_name, enrichment->>'pain_category'
@@ -188,6 +190,7 @@ async def _fetch_use_case_distribution(pool, window_days: int) -> dict[str, list
                COUNT(*) AS cnt
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
           AND enrichment->'use_case'->>'primary_workflow' IS NOT NULL
         GROUP BY vendor_name, enrichment->'use_case'->>'primary_workflow'
@@ -215,6 +218,7 @@ async def _fetch_company_size_distribution(pool, window_days: int) -> dict[str, 
                COUNT(*) AS cnt
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
           AND enrichment->'reviewer_context'->>'company_size_segment' IS NOT NULL
           AND enrichment->'reviewer_context'->>'company_size_segment' != 'unknown'
@@ -245,6 +249,7 @@ async def _fetch_competitive_flows(pool, window_days: int) -> dict[str, dict]:
         FROM b2b_reviews,
              jsonb_array_elements(enrichment->'competitors_mentioned') AS comp
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
           AND jsonb_typeof(enrichment->'competitors_mentioned') = 'array'
         """,
@@ -286,6 +291,7 @@ async def _fetch_integration_stacks(pool, window_days: int) -> dict[str, dict[st
         FROM b2b_reviews,
              jsonb_array_elements_text(enrichment->'use_case'->'integration_stack') AS integ
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
           AND jsonb_typeof(enrichment->'use_case'->'integration_stack') = 'array'
         """,
@@ -324,6 +330,7 @@ async def _fetch_aggregate_metrics(pool, window_days: int, min_reviews: int) -> 
                MAX(enriched_at) AS review_window_end
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
         GROUP BY vendor_name
         HAVING COUNT(*) >= $2
@@ -353,6 +360,7 @@ async def _fetch_source_distribution(pool, window_days: int) -> dict[str, dict[s
         SELECT vendor_name, source, count(*) AS cnt
         FROM b2b_reviews
         WHERE enrichment_status = 'enriched'
+          AND duplicate_of_review_id IS NULL
           AND enriched_at > NOW() - make_interval(days => $1)
         GROUP BY vendor_name, source
         """,

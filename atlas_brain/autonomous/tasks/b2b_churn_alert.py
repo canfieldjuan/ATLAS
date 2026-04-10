@@ -73,6 +73,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 ) AS displacement_count
             FROM b2b_reviews
             WHERE enrichment_status = 'enriched'
+              AND duplicate_of_review_id IS NULL
               AND vendor_name ILIKE '%' || $1 || '%'
               AND enriched_at > NOW() - INTERVAL '7 days'
             """,
