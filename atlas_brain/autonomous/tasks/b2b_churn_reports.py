@@ -863,7 +863,7 @@ async def _build_deterministic_report_bundle(
         _build_deterministic_vendor_scorecards,
         _build_vendor_deep_dives,
         _compute_evidence_confidence,
-        _fetch_latest_evidence_vault,
+        read_vendor_intelligence_map,
         _structure_displacement_report,
     )
     from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
@@ -887,7 +887,7 @@ async def _build_deterministic_report_bundle(
         if pool is None:
             evidence_vault_lookup = {}
         else:
-            evidence_vault_lookup = await _fetch_latest_evidence_vault(
+            evidence_vault_lookup = await read_vendor_intelligence_map(
                 pool,
                 as_of=as_of,
                 analysis_window_days=analysis_window_days,
@@ -1133,7 +1133,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _compute_evidence_confidence,
         _executive_source_list,
         _fallback_scorecard_expert_take,
-        _fetch_latest_evidence_vault,
         _fetch_competitive_displacement_source_of_truth,
         _fetch_competitor_reasons,
         _fetch_data_context,

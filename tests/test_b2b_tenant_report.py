@@ -972,12 +972,17 @@ def test_build_deterministic_tenant_report_prefers_context_then_contracts(monkey
 
 @pytest.mark.asyncio
 async def test_build_deterministic_tenant_report_from_raw_uses_shared_builders(monkeypatch):
-    async def _fake_fetch_latest_evidence_vault(pool, *, as_of, analysis_window_days):
+    async def _fake_read_vendor_intelligence_map(pool, *, as_of, analysis_window_days, vendor_names=None):
+        assert vendor_names is None
         return {}
 
     monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_shared.read_vendor_intelligence_map",
+        _fake_read_vendor_intelligence_map,
+    )
+    monkeypatch.setattr(
         "atlas_brain.autonomous.tasks._b2b_shared._fetch_latest_evidence_vault",
-        _fake_fetch_latest_evidence_vault,
+        AsyncMock(side_effect=AssertionError("deprecated wrapper should not run")),
     )
 
     payload = {

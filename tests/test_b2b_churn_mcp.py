@@ -1328,3 +1328,58 @@ class TestBuildChallengerBriefMCP:
         assert resolve_args[1:4] == ("Zendesk", "Freshdesk", date.today())
         assert resolve_args[4] == merged_lookup
         build_brief.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_build_accounts_in_motion_uses_canonical_vault_reader(monkeypatch):
+    from atlas_brain.mcp.b2b.write_intelligence import build_accounts_in_motion
+    import atlas_brain.autonomous.tasks._b2b_shared as shared_mod
+    import atlas_brain.autonomous.tasks.b2b_accounts_in_motion as aim_mod
+    import atlas_brain.autonomous.tasks._b2b_synthesis_reader as synth_mod
+    import atlas_brain.autonomous.tasks._b2b_cross_vendor_synthesis as xv_mod
+
+    pool = _mock_pool()
+    read_vaults = AsyncMock(return_value={"Zendesk": {"metric_snapshot": {"avg_urgency": 7.2}}})
+    monkeypatch.setattr(shared_mod, "read_vendor_intelligence_map", read_vaults)
+    monkeypatch.setattr(
+        shared_mod,
+        "_fetch_latest_evidence_vault",
+        AsyncMock(side_effect=AssertionError("deprecated wrapper should not run")),
+    )
+    monkeypatch.setattr(shared_mod, "_aggregate_competitive_disp", lambda rows: rows)
+    monkeypatch.setattr(shared_mod, "_build_competitor_lookup", lambda rows: {})
+    monkeypatch.setattr(shared_mod, "_build_feature_gap_lookup", lambda rows: {})
+    monkeypatch.setattr(shared_mod, "_canonicalize_vendor", lambda raw: str(raw or "").strip())
+    monkeypatch.setattr(shared_mod, "_fetch_budget_signals", AsyncMock(return_value=[]))
+    monkeypatch.setattr(shared_mod, "_fetch_churning_companies", AsyncMock(return_value=[]))
+    monkeypatch.setattr(shared_mod, "_fetch_competitive_displacement", AsyncMock(return_value=[]))
+    monkeypatch.setattr(shared_mod, "_fetch_feature_gaps", AsyncMock(return_value=[]))
+    monkeypatch.setattr(shared_mod, "_fetch_high_intent_companies", AsyncMock(return_value=[]))
+    monkeypatch.setattr(shared_mod, "_fetch_latest_account_intelligence", AsyncMock(return_value={}))
+    monkeypatch.setattr(shared_mod, "_fetch_price_complaint_rates", AsyncMock(return_value=[]))
+    monkeypatch.setattr(shared_mod, "_fetch_quotable_evidence", AsyncMock(return_value=[]))
+    monkeypatch.setattr(shared_mod, "_fetch_timeline_signals", AsyncMock(return_value=[]))
+    monkeypatch.setattr(aim_mod, "_fetch_company_signal_metadata", AsyncMock(return_value=[]))
+    monkeypatch.setattr(aim_mod, "_fetch_apollo_org_lookup", AsyncMock(return_value={}))
+    monkeypatch.setattr(aim_mod, "_merge_company_profiles", lambda *args, **kwargs: {
+        "acct-1": {"vendor": "Zendesk", "category": "Helpdesk"},
+    })
+    monkeypatch.setattr(aim_mod, "_compute_account_opportunity_score", lambda acct: (50, {}))
+    monkeypatch.setattr(aim_mod, "_apply_account_quality_adjustments", lambda acct, cfg: (0, {}, []))
+    monkeypatch.setattr(aim_mod, "_build_vendor_aggregate", lambda *args, **kwargs: {"archetype": "pricing_pressure"})
+    monkeypatch.setattr(synth_mod, "load_best_reasoning_view", AsyncMock(return_value=None))
+    monkeypatch.setattr(synth_mod, "build_reasoning_lookup_from_views", lambda views: views)
+    monkeypatch.setattr(xv_mod, "load_best_cross_vendor_lookup", AsyncMock(return_value={}))
+
+    with _patch_pool(pool):
+        raw = await build_accounts_in_motion(
+            vendor_name="Zendesk",
+            persist=False,
+            min_urgency=5.0,
+            max_accounts=10,
+        )
+
+    payload = json.loads(raw)
+    read_vaults.assert_awaited_once()
+    assert payload["success"] is True
+    assert payload["vendor_name"] == "Zendesk"
