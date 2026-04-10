@@ -617,6 +617,66 @@ def test_b2b_evidence_trace_bounds_diff_lookup_to_target_date(monkeypatch):
     assert body["trace"]["evidence_diff"]["computed_date"] == "2026-03-30"
 
 
+def test_b2b_evidence_trace_reads_prompt_payload_packet_counts(monkeypatch):
+    app = FastAPI()
+    app.include_router(evidence_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetchrow(self, query, *args):
+            if "FROM b2b_reasoning_synthesis" in query:
+                return None
+            if "FROM b2b_vendor_reasoning_packets" in query:
+                return {
+                    "vendor_name": "Salesforce",
+                    "as_of_date": date(2026, 3, 30),
+                    "analysis_window_days": 30,
+                    "schema_version": "witness_packet_v1",
+                    "evidence_hash": "hash-1",
+                    "packet": {
+                        "payload": {
+                            "witness_pack": [{"witness_id": "full-1"}],
+                            "section_packets": {
+                                "anchor_examples": {"common_pattern": ["full-1", "full-2"]},
+                                "segment_packet": {},
+                            },
+                        },
+                        "prompt_payload": {
+                            "witness_pack": [{"witness_id": "prompt-1"}],
+                            "section_packets": {
+                                "anchor_examples": {"common_pattern": ["prompt-1"]},
+                            },
+                        },
+                    },
+                    "created_at": datetime(2026, 3, 30, 12, 0, tzinfo=timezone.utc),
+                }
+            if "FROM reasoning_evidence_diffs" in query:
+                return None
+            return None
+
+        async def fetch(self, query, *_args):
+            if "FROM b2b_vendor_witnesses" in query:
+                return []
+            return []
+
+    monkeypatch.setattr(evidence_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        evidence_api,
+        "resolve_vendor_name",
+        AsyncMock(return_value="Salesforce"),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/evidence/trace?vendor_name=Salesforce&as_of_date=2026-03-31")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trace"]["reasoning_packet"]["witness_pack_size"] == 1
+    assert body["trace"]["reasoning_packet"]["section_count"] == 1
+
+
 def test_campaign_outcome_routes_require_growth_plan():
     app = FastAPI()
     app.include_router(campaigns_api.router)

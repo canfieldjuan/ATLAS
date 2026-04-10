@@ -229,7 +229,9 @@ async def _load_packet_payload_for_vendor(
         _PACKET_SCHEMA_VERSION,
     )
     packet = _coerce_json_dict(row.get("packet")) if row else {}
-    payload = packet.get("payload")
+    payload = packet.get("prompt_payload")
+    if not isinstance(payload, dict):
+        payload = packet.get("payload")
     return dict(payload) if isinstance(payload, dict) else {}
 
 
@@ -1047,7 +1049,7 @@ def contract_gaps_for_consumer(view: SynthesisView | None, consumer: str) -> lis
             gaps.append(name)
             continue
         # Confidence = insufficient means the section is structurally present
-        # but analytically empty — treat as a gap for consumers
+        # but analytically empty; treat as a gap for consumers
         conf = str(section.get("confidence") or "").strip().lower()
         if conf == "insufficient":
             gaps.append(f"{name}:insufficient")
