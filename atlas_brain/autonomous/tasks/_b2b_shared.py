@@ -4443,6 +4443,56 @@ async def read_churn_report_candidates(
     ]
 
 
+async def read_category_vendor_rows(
+    pool,
+    *,
+    category_names: Iterable[Any],
+    limit: int | None = None,
+    require_scorecard_match: bool = False,
+) -> list[dict[str, Any]]:
+    """Read vendor rows for one or more product categories."""
+    normalized_categories = sorted(
+        {
+            str(value or "").strip().lower()
+            for value in category_names
+            if str(value or "").strip()
+        }
+    )
+    if not normalized_categories:
+        return []
+
+    limit_clause = " LIMIT $2" if limit is not None else ""
+    if require_scorecard_match:
+        query = (
+            """
+            SELECT DISTINCT pp.vendor_name, pp.product_category
+            FROM b2b_product_profiles pp
+            JOIN b2b_churn_signals cs
+              ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
+             AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
+            WHERE LOWER(pp.product_category) = ANY($1::text[])
+            ORDER BY pp.vendor_name
+            """
+            + limit_clause
+        )
+    else:
+        query = (
+            """
+            SELECT DISTINCT vendor_name, product_category
+            FROM b2b_product_profiles
+            WHERE LOWER(product_category) = ANY($1::text[])
+            ORDER BY vendor_name
+            """
+            + limit_clause
+        )
+    rows = await pool.fetch(
+        query,
+        normalized_categories,
+        *([limit] if limit is not None else []),
+    )
+    return [dict(row) for row in rows if row.get("vendor_name")]
+
+
 async def _fetch_vendor_churn_scores_from_signals(
     pool,
     window_days: int,

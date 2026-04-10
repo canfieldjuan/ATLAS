@@ -3838,15 +3838,12 @@ async def _rerank_topic_candidates_with_reasoning(
         cat_vendors_needed = category_set - {v.lower() for v in vendor_set}
         if cat_vendors_needed:
             try:
+                from ._b2b_shared import read_category_vendor_rows
+
                 _as_of_filter = as_of or date.today()
-                cat_vendor_rows = await pool.fetch(
-                    """
-                    SELECT DISTINCT vendor_name, product_category
-                    FROM b2b_product_profiles
-                    WHERE LOWER(product_category) = ANY($1)
-                    ORDER BY vendor_name
-                    """,
-                    [c.lower() for c in cat_vendors_needed],
+                cat_vendor_rows = await read_category_vendor_rows(
+                    pool,
+                    category_names=cat_vendors_needed,
                 )
                 for row in cat_vendor_rows:
                     vn = row.get("vendor_name")
@@ -4947,11 +4944,12 @@ async def _load_pool_layers_for_blog(
         ).strip()
         if category_name:
             try:
-                cat_rows = await pool.fetch(
-                    "SELECT DISTINCT vendor_name FROM b2b_product_profiles "
-                    "WHERE LOWER(product_category) = LOWER($1) "
-                    "LIMIT 10",
-                    category_name,
+                from ._b2b_shared import read_category_vendor_rows
+
+                cat_rows = await read_category_vendor_rows(
+                    pool,
+                    category_names=[category_name],
+                    limit=10,
                 )
                 view_names = [r["vendor_name"] for r in cat_rows if r.get("vendor_name")]
             except Exception:
@@ -5389,9 +5387,11 @@ async def _gather_data(
         category = topic_ctx["category"]
         sources = _blog_source_allowlist()
         # Fetch all profiles in category
-        vendor_rows = await pool.fetch(
-            "SELECT DISTINCT vendor_name FROM b2b_product_profiles WHERE product_category = $1",
-            category,
+        from ._b2b_shared import read_category_vendor_rows
+
+        vendor_rows = await read_category_vendor_rows(
+            pool,
+            category_names=[category],
         )
         profiles = []
         vendor_signals = []
@@ -5461,17 +5461,12 @@ async def _gather_data(
         category = topic_ctx["category"]
         sources = _blog_source_allowlist()
         # Fetch all vendors in this category
-        vendor_rows = await pool.fetch(
-            """
-            SELECT DISTINCT pp.vendor_name
-            FROM b2b_product_profiles pp
-            JOIN b2b_churn_signals cs
-              ON LOWER(cs.vendor_name) = LOWER(pp.vendor_name)
-             AND LOWER(COALESCE(cs.product_category, '')) = LOWER(COALESCE(pp.product_category, ''))
-            WHERE pp.product_category = $1
-            ORDER BY pp.vendor_name
-            """,
-            category,
+        from ._b2b_shared import read_category_vendor_rows
+
+        vendor_rows = await read_category_vendor_rows(
+            pool,
+            category_names=[category],
+            require_scorecard_match=True,
         )
         vendor_names = [r["vendor_name"] for r in vendor_rows]
         profiles = []
