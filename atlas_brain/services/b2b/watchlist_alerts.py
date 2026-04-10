@@ -427,79 +427,79 @@ async def evaluate_watchlist_alert_events_for_view(
             account_id,
             view_id,
         )
-    existing_open = {
-        (str(row["event_type"]), str(row["entity_key"])): row["id"]
-        for row in existing_open_rows
-    }
-    current_keys = {(str(item["event_type"]), str(item["entity_key"])) for item in candidates}
-    new_open_count = sum(1 for key in current_keys if key not in existing_open)
+            existing_open = {
+                (str(row["event_type"]), str(row["entity_key"])): row["id"]
+                for row in existing_open_rows
+            }
+            current_keys = {(str(item["event_type"]), str(item["entity_key"])) for item in candidates}
+            new_open_count = sum(1 for key in current_keys if key not in existing_open)
 
-    persisted_rows = []
-    for item in candidates:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO b2b_watchlist_alert_events (
-                id, account_id, watchlist_view_id, event_type, threshold_field, entity_type,
-                entity_key, vendor_name, company_name, category, source, threshold_value,
-                summary, payload, status, first_seen_at, last_seen_at, resolved_at, created_at, updated_at
-            )
-            VALUES (
-                $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10, $11, $12,
-                $13, $14::jsonb, 'open', $15, $15, NULL, $15, $15
-            )
-            ON CONFLICT (watchlist_view_id, event_type, entity_key)
-            DO UPDATE SET
-                threshold_field = EXCLUDED.threshold_field,
-                entity_type = EXCLUDED.entity_type,
-                vendor_name = EXCLUDED.vendor_name,
-                company_name = EXCLUDED.company_name,
-                category = EXCLUDED.category,
-                source = EXCLUDED.source,
-                threshold_value = EXCLUDED.threshold_value,
-                summary = EXCLUDED.summary,
-                payload = EXCLUDED.payload,
-                status = 'open',
-                last_seen_at = EXCLUDED.last_seen_at,
-                resolved_at = NULL,
-                reopen_count = b2b_watchlist_alert_events.reopen_count + CASE
-                    WHEN b2b_watchlist_alert_events.status = 'resolved' THEN 1 ELSE 0 END,
-                updated_at = EXCLUDED.updated_at
-            RETURNING id, watchlist_view_id, event_type, threshold_field, entity_type, entity_key,
-                      vendor_name, company_name, category, source, threshold_value, summary,
-                      payload, status, first_seen_at, last_seen_at, resolved_at, reopen_count, created_at, updated_at
-            """,
-            _uuid.uuid4(),
-            account_id,
-            view_id,
-            item["event_type"],
-            item["threshold_field"],
-            item["entity_type"],
-            item["entity_key"],
-            item["vendor_name"],
-            item["company_name"],
-            item["category"],
-            item["source"],
-            item["threshold_value"],
-            item["summary"],
-            json.dumps(item["payload"] or {}),
-            now,
-        )
-        persisted_rows.append(row)
+            persisted_rows = []
+            for item in candidates:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO b2b_watchlist_alert_events (
+                        id, account_id, watchlist_view_id, event_type, threshold_field, entity_type,
+                        entity_key, vendor_name, company_name, category, source, threshold_value,
+                        summary, payload, status, first_seen_at, last_seen_at, resolved_at, created_at, updated_at
+                    )
+                    VALUES (
+                        $1, $2, $3, $4, $5, $6,
+                        $7, $8, $9, $10, $11, $12,
+                        $13, $14::jsonb, 'open', $15, $15, NULL, $15, $15
+                    )
+                    ON CONFLICT (watchlist_view_id, event_type, entity_key)
+                    DO UPDATE SET
+                        threshold_field = EXCLUDED.threshold_field,
+                        entity_type = EXCLUDED.entity_type,
+                        vendor_name = EXCLUDED.vendor_name,
+                        company_name = EXCLUDED.company_name,
+                        category = EXCLUDED.category,
+                        source = EXCLUDED.source,
+                        threshold_value = EXCLUDED.threshold_value,
+                        summary = EXCLUDED.summary,
+                        payload = EXCLUDED.payload,
+                        status = 'open',
+                        last_seen_at = EXCLUDED.last_seen_at,
+                        resolved_at = NULL,
+                        reopen_count = b2b_watchlist_alert_events.reopen_count + CASE
+                            WHEN b2b_watchlist_alert_events.status = 'resolved' THEN 1 ELSE 0 END,
+                        updated_at = EXCLUDED.updated_at
+                    RETURNING id, watchlist_view_id, event_type, threshold_field, entity_type, entity_key,
+                              vendor_name, company_name, category, source, threshold_value, summary,
+                              payload, status, first_seen_at, last_seen_at, resolved_at, reopen_count, created_at, updated_at
+                    """,
+                    _uuid.uuid4(),
+                    account_id,
+                    view_id,
+                    item["event_type"],
+                    item["threshold_field"],
+                    item["entity_type"],
+                    item["entity_key"],
+                    item["vendor_name"],
+                    item["company_name"],
+                    item["category"],
+                    item["source"],
+                    item["threshold_value"],
+                    item["summary"],
+                    json.dumps(item["payload"] or {}),
+                    now,
+                )
+                persisted_rows.append(row)
 
-    resolved_ids = [event_id for key, event_id in existing_open.items() if key not in current_keys]
-    if resolved_ids:
-        await conn.execute(
-            """
-            UPDATE b2b_watchlist_alert_events
-            SET status = 'resolved',
-                resolved_at = $2,
-                updated_at = $2
-            WHERE id = ANY($1::uuid[])
-            """,
-            resolved_ids,
-            now,
-        )
+            resolved_ids = [event_id for key, event_id in existing_open.items() if key not in current_keys]
+            if resolved_ids:
+                await conn.execute(
+                    """
+                    UPDATE b2b_watchlist_alert_events
+                    SET status = 'resolved',
+                        resolved_at = $2,
+                        updated_at = $2
+                    WHERE id = ANY($1::uuid[])
+                    """,
+                    resolved_ids,
+                    now,
+                )
 
     events = [serialize_watchlist_alert_event(row) for row in persisted_rows]
     return {

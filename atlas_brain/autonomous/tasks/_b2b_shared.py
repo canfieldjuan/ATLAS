@@ -253,6 +253,7 @@ async def _sync_vendor_firmographics(pool, *, as_of: date) -> int:
         SELECT DISTINCT vendor_name
         FROM b2b_reviews
         WHERE vendor_name IS NOT NULL AND vendor_name <> ''
+          AND duplicate_of_review_id IS NULL
         ORDER BY vendor_name
         """
     )
