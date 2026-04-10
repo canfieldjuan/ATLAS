@@ -236,11 +236,50 @@ async def _resolve_tracked_vendor_for_view(
     return str(resolved)
 
 
+async def _resolve_tracked_vendors_for_view(
+    pool,
+    account_id: _uuid.UUID,
+    vendor_names: list[str] | None,
+) -> list[str] | None:
+    if not vendor_names:
+        return None
+    cleaned = [v.strip() for v in vendor_names if v and v.strip()]
+    if not cleaned:
+        return None
+    resolved = []
+    for name in cleaned:
+        row = await pool.fetchval(
+            """
+            SELECT vendor_name
+            FROM tracked_vendors
+            WHERE account_id = $1
+              AND vendor_name ILIKE $2
+            LIMIT 1
+            """,
+            account_id,
+            name,
+        )
+        if not row:
+            raise HTTPException(status_code=422, detail=f"Vendor '{name}' is not in your tracked vendors")
+        resolved.append(str(row))
+    return resolved or None
+
+
+def _merge_vendor_names_from_request(req) -> list[str] | None:
+    """Merge vendor_names and vendor_name fields from request for backward compat."""
+    if req.vendor_names:
+        return [v.strip() for v in req.vendor_names if v and v.strip()] or None
+    if req.vendor_name and req.vendor_name.strip():
+        return [req.vendor_name.strip()]
+    return None
+
+
 def _watchlist_view_payload(row: Any) -> dict[str, Any]:
     return {
         "id": str(row["id"]),
         "name": row["name"],
-        "vendor_name": row["vendor_name"],
+        "vendor_name": (row["vendor_names"] or [None])[0],
+        "vendor_names": list(row["vendor_names"] or []),
         "category": row["category"],
         "source": row["source"],
         "min_urgency": _safe_float(row["min_urgency"]),
@@ -310,7 +349,7 @@ async def _fetch_watchlist_view_row(
 ):
     return await pool.fetchrow(
         """
-        SELECT id, account_id, name, vendor_name, category, source, min_urgency,
+        SELECT id, account_id, name, vendor_names, category, source, min_urgency,
                include_stale, named_accounts_only, changed_wedges_only,
                vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
@@ -517,6 +556,26 @@ async def _load_accessible_tenant_report(pool, report_id: _uuid.UUID, user: Auth
     return row
 
 
+async def _fetch_latest_tenant_vendor_report(
+    pool,
+    *,
+    report_type: str,
+    vendor_name: str,
+):
+    return await pool.fetchrow(
+        """
+        SELECT *
+        FROM b2b_intelligence
+        WHERE report_type = $1
+          AND LOWER(vendor_filter) = LOWER($2)
+        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+        LIMIT 1
+        """,
+        report_type,
+        vendor_name,
+    )
+
+
 async def _tracked_vendor_map(pool, account_id: _uuid.UUID) -> dict[str, dict]:
     rows = await pool.fetch(
         """
@@ -663,6 +722,11 @@ class AccountDeepDiveRequest(BaseModel):
     persist: bool = True
 
 
+class BattleCardRequest(BaseModel):
+    vendor_name: str = Field(..., min_length=1, max_length=200)
+    refresh: bool = False
+
+
 class ReportSubscriptionUpsertRequest(BaseModel):
     scope_label: str = Field(..., min_length=1, max_length=255)
     delivery_frequency: str = Field("weekly", pattern="^(weekly|monthly|quarterly)$")
@@ -742,6 +806,7 @@ class PushToCrmBody(BaseModel):
 class WatchlistViewRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     vendor_name: str | None = Field(default=None, max_length=255)
+    vendor_names: list[str] | None = Field(default=None)
     category: str | None = Field(default=None, max_length=255)
     source: str | None = Field(default=None, max_length=255)
     min_urgency: float | None = Field(default=None, ge=0, le=10)
@@ -1437,6 +1502,7 @@ async def dashboard_overview(user: AuthUser = Depends(require_auth)):
 @router.get("/signals")
 async def list_tenant_signals(
     vendor_name: Optional[str] = Query(None),
+    vendor_names: Optional[list[str]] = Query(None),
     min_urgency: float = Query(0, ge=0, le=10),
     category: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
@@ -1445,6 +1511,7 @@ async def list_tenant_signals(
     """Churn signals for tracked vendors."""
     _require_b2b_product(user)
     pool = _pool_or_503()
+    vendor_names = [v.strip() for v in vendor_names if v and v.strip()] if isinstance(vendor_names, (list, tuple)) else ([vendor_names.strip()] if isinstance(vendor_names, str) and vendor_names.strip() else None)
 
     conditions: list[str] = []
     params: list = []
@@ -1458,7 +1525,11 @@ async def list_tenant_signals(
         params.extend(t_params)
         idx += 1
 
-    if vendor_name:
+    if vendor_names:
+        conditions.append(f"LOWER(vendor_name) = ANY(${idx}::text[])")
+        params.append([v.lower() for v in vendor_names])
+        idx += 1
+    elif vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
         params.append(vendor_name)
         idx += 1
@@ -1558,6 +1629,7 @@ async def list_tenant_signals(
 @router.get("/slow-burn-watchlist")
 async def list_tenant_slow_burn_watchlist(
     vendor_name: Optional[str] = Query(None),
+    vendor_names: Optional[list[str]] = Query(None),
     category: Optional[str] = Query(None),
     vendor_alert_threshold: float | None = Query(None, ge=0, le=10),
     stale_days_threshold: int | None = Query(None, ge=0, le=365),
@@ -1568,6 +1640,7 @@ async def list_tenant_slow_burn_watchlist(
     _require_b2b_product(user)
     pool = _pool_or_503()
     vendor_name = vendor_name if isinstance(vendor_name, str) else None
+    vendor_names = [v.strip() for v in vendor_names if v and v.strip()] if isinstance(vendor_names, (list, tuple)) else ([vendor_names.strip()] if isinstance(vendor_names, str) and vendor_names.strip() else None)
     category = category if isinstance(category, str) else None
     vendor_alert_threshold = _safe_float(vendor_alert_threshold)
     stale_days_threshold = _coerce_optional_int(stale_days_threshold)
@@ -1591,7 +1664,11 @@ async def list_tenant_slow_burn_watchlist(
         params.extend(t_params)
         idx += 1
 
-    if vendor_name:
+    if vendor_names:
+        conditions.append(f"LOWER(sig.vendor_name) = ANY(${idx}::text[])")
+        params.append([v.lower() for v in vendor_names])
+        idx += 1
+    elif vendor_name:
         conditions.append(f"sig.vendor_name ILIKE '%' || ${idx} || '%'")
         params.append(vendor_name)
         idx += 1
@@ -1856,6 +1933,7 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
 @router.get("/accounts-in-motion-feed")
 async def list_tenant_accounts_in_motion_feed(
     vendor_name: Optional[str] = Query(None),
+    vendor_names: Optional[list[str]] = Query(None),
     category: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     min_urgency: float = Query(settings.b2b_churn.accounts_in_motion_min_urgency, ge=0, le=10),
@@ -1871,6 +1949,7 @@ async def list_tenant_accounts_in_motion_feed(
     pool = _pool_or_503()
     acct = _uuid.UUID(user.account_id)
     vendor_name = vendor_name if isinstance(vendor_name, str) else None
+    vendor_names = [v.strip() for v in vendor_names if v and v.strip()] if isinstance(vendor_names, (list, tuple)) else ([vendor_names.strip()] if isinstance(vendor_names, str) and vendor_names.strip() else None)
     category = category if isinstance(category, str) else None
     source = source if isinstance(source, str) else None
     include_stale = include_stale if isinstance(include_stale, bool) else True
@@ -1921,7 +2000,10 @@ async def list_tenant_accounts_in_motion_feed(
     freshest_report_date: str | None = None
     vendors_with_accounts = 0
     for tracked, report in zip(tracked_rows, vendor_reports):
-        if vendor_name and not _matches_text_filter(tracked["vendor_name"], vendor_name):
+        if vendor_names:
+            if tracked["vendor_name"].lower() not in {v.lower() for v in vendor_names}:
+                continue
+        elif vendor_name and not _matches_text_filter(tracked["vendor_name"], vendor_name):
             continue
         if not report:
             continue
@@ -2002,7 +2084,7 @@ async def list_watchlist_views(user: AuthUser = Depends(require_auth)):
     pool = _pool_or_503()
     rows = await pool.fetch(
         """
-        SELECT id, name, vendor_name, category, source, min_urgency,
+        SELECT id, name, vendor_names, category, source, min_urgency,
                include_stale, named_accounts_only, changed_wedges_only,
                vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
@@ -2042,7 +2124,7 @@ async def create_watchlist_view(
     )
     if existing:
         raise HTTPException(status_code=409, detail="Saved view name already exists")
-    vendor_name = await _resolve_tracked_vendor_for_view(pool, account_id, req.vendor_name)
+    vendor_names = await _resolve_tracked_vendors_for_view(pool, account_id, _merge_vendor_names_from_request(req))
     now = datetime.now(timezone.utc)
     alert_delivery_frequency = watchlist_alert_service.clean_watchlist_alert_delivery_frequency(req.alert_delivery_frequency)
     next_alert_delivery_at = watchlist_alert_service.resolve_watchlist_alert_next_delivery_at(
@@ -2054,7 +2136,7 @@ async def create_watchlist_view(
     row = await pool.fetchrow(
         """
         INSERT INTO b2b_watchlist_views (
-            id, account_id, name, vendor_name, category, source, min_urgency,
+            id, account_id, name, vendor_names, category, source, min_urgency,
             include_stale, named_accounts_only, changed_wedges_only,
             vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
             alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
@@ -2064,7 +2146,7 @@ async def create_watchlist_view(
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
             $14, $15, $16, $17, $17
         )
-        RETURNING id, name, vendor_name, category, source, min_urgency,
+        RETURNING id, name, vendor_names, category, source, min_urgency,
                   include_stale, named_accounts_only, changed_wedges_only,
                   vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                   alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
@@ -2074,7 +2156,7 @@ async def create_watchlist_view(
         _uuid.uuid4(),
         account_id,
         name,
-        vendor_name,
+        vendor_names,
         _clean_optional_text(req.category),
         _clean_optional_text(req.source),
         req.min_urgency,
@@ -2103,7 +2185,7 @@ async def update_watchlist_view(
     account_id = _uuid.UUID(user.account_id)
     existing = await pool.fetchrow(
         """
-        SELECT id, name, vendor_name, category, source, min_urgency,
+        SELECT id, name, vendor_names, category, source, min_urgency,
                include_stale, named_accounts_only, changed_wedges_only,
                vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at
@@ -2135,10 +2217,12 @@ async def update_watchlist_view(
     if duplicate:
         raise HTTPException(status_code=409, detail="Saved view name already exists")
     request_fields = set(getattr(req, "model_fields_set", set()))
-    vendor_name = await _resolve_tracked_vendor_for_view(
+    vendor_names = await _resolve_tracked_vendors_for_view(
         pool,
         account_id,
-        req.vendor_name if "vendor_name" in request_fields else existing["vendor_name"],
+        _merge_vendor_names_from_request(req)
+        if "vendor_names" in request_fields or "vendor_name" in request_fields
+        else list(existing["vendor_names"] or []) or None,
     )
     now = datetime.now(timezone.utc)
     category = (
@@ -2198,7 +2282,7 @@ async def update_watchlist_view(
         """
         UPDATE b2b_watchlist_views
         SET name = $3,
-            vendor_name = $4,
+            vendor_names = $4,
             category = $5,
             source = $6,
             min_urgency = $7,
@@ -2214,7 +2298,7 @@ async def update_watchlist_view(
             updated_at = $17
         WHERE id = $1
           AND account_id = $2
-        RETURNING id, name, vendor_name, category, source, min_urgency,
+        RETURNING id, name, vendor_names, category, source, min_urgency,
                   include_stale, named_accounts_only, changed_wedges_only,
                   vendor_alert_threshold, account_alert_threshold, stale_days_threshold,
                   alert_email_enabled, alert_delivery_frequency, next_alert_delivery_at,
@@ -2224,7 +2308,7 @@ async def update_watchlist_view(
         view_id,
         account_id,
         name,
-        vendor_name,
+        vendor_names,
         category,
         source,
         min_urgency,
@@ -3221,6 +3305,77 @@ async def generate_tenant_account_deep_dive_report(
     if not report:
         raise HTTPException(status_code=404, detail="Insufficient data for this company")
     return report
+
+
+@router.post("/reports/battle-card")
+async def generate_tenant_battle_card_report(
+    body: BattleCardRequest,
+    user: AuthUser = Depends(require_auth),
+):
+    """Return a persisted battle card artifact for a tracked vendor."""
+    _require_b2b_product(user)
+    pool = _pool_or_503()
+    vendor_name = body.vendor_name.strip()
+    if not vendor_name:
+        raise HTTPException(status_code=400, detail="vendor_name is required")
+
+    tracked_vendor = vendor_name
+    if settings.saas_auth.enabled and not _is_admin_user(user):
+        tracked_vendor = await _resolve_tracked_vendor_for_view(
+            pool,
+            _uuid.UUID(user.account_id),
+            vendor_name,
+        )
+        if not tracked_vendor:
+            raise HTTPException(status_code=403, detail="Vendor must be in your tracked vendor list")
+
+    existing = await _fetch_latest_tenant_vendor_report(
+        pool,
+        report_type="battle_card",
+        vendor_name=tracked_vendor,
+    )
+    if existing and not body.refresh:
+        return {
+            "status": "ready",
+            "report_id": str(existing["id"]),
+            "vendor_name": tracked_vendor,
+            "reused": True,
+            "message": "Using the latest persisted battle card.",
+        }
+
+    task_repo = get_scheduled_task_repo()
+    battle_card_task = await task_repo.get_by_name("b2b_battle_cards")
+    if not battle_card_task:
+        raise HTTPException(status_code=503, detail="b2b_battle_cards task is not registered")
+
+    battle_card_task.metadata = {
+        **(battle_card_task.metadata or {}),
+        "scope_name": tracked_vendor,
+        "scope_trigger": "tenant_manual_request",
+        "test_vendors": [tracked_vendor],
+    }
+    scheduler = get_task_scheduler()
+    run_result = await scheduler.run_now(battle_card_task)
+
+    latest = await _fetch_latest_tenant_vendor_report(
+        pool,
+        report_type="battle_card",
+        vendor_name=tracked_vendor,
+    )
+    if not latest:
+        detail = str((run_result or {}).get("_skip_synthesis") or "").strip()
+        raise HTTPException(
+            status_code=404,
+            detail=detail or f"No persisted battle card is available for {tracked_vendor}",
+        )
+
+    return {
+        "status": "ready",
+        "report_id": str(latest["id"]),
+        "vendor_name": tracked_vendor,
+        "reused": False,
+        "message": "Battle card ready.",
+    }
 
 
 @router.get("/reports")

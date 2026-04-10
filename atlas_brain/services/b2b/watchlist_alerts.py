@@ -135,7 +135,8 @@ def watchlist_view_payload(row: Any) -> dict[str, Any]:
     return {
         "id": str(_row_value(row, "id")),
         "name": _row_value(row, "name"),
-        "vendor_name": _row_value(row, "vendor_name"),
+        "vendor_name": (list(_row_value(row, "vendor_names") or []) or [None])[0],
+        "vendor_names": list(_row_value(row, "vendor_names") or []),
         "category": _row_value(row, "category"),
         "source": _row_value(row, "source"),
         "min_urgency": _safe_float(_row_value(row, "min_urgency")),
@@ -368,14 +369,14 @@ async def evaluate_watchlist_alert_events_for_view(
     accounts_loader: Callable[..., Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
     feed = await slow_burn_loader(
-        vendor_name=_row_value(view_row, "vendor_name"),
+        vendor_names=list(_row_value(view_row, "vendor_names") or []) or None,
         category=_row_value(view_row, "category"),
         vendor_alert_threshold=_safe_float(_row_value(view_row, "vendor_alert_threshold")),
         stale_days_threshold=_coerce_optional_int(_row_value(view_row, "stale_days_threshold")),
         user=user,
     )
     accounts_feed = await accounts_loader(
-        vendor_name=_row_value(view_row, "vendor_name"),
+        vendor_names=list(_row_value(view_row, "vendor_names") or []) or None,
         category=_row_value(view_row, "category"),
         source=_row_value(view_row, "source"),
         min_urgency=_safe_float(_row_value(view_row, "min_urgency"), settings.b2b_churn.accounts_in_motion_min_urgency),

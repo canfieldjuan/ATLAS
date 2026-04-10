@@ -15,6 +15,8 @@ def test_api_router_exposes_only_tenant_b2b_paths():
     assert "/b2b/tenant/reports/compare" in paths
     assert "/b2b/tenant/reports/compare-companies" in paths
     assert "/b2b/tenant/reports/company-deep-dive" in paths
+    assert "/b2b/tenant/reports/battle-card" in paths
+    assert "/b2b/tenant/reports/{report_id}/pdf" in paths
     assert "/b2b/tenant/affiliates/opportunities" in paths
 
 
@@ -197,6 +199,81 @@ async def test_list_tenant_reports_excludes_stale_and_allows_global_rows(monkeyp
     assert "vendor_filter IS NULL" in sql
     assert "account_id = $1" in sql
     assert "COALESCE((intelligence_data->>'data_stale')::boolean, false) = false" in sql
+
+
+@pytest.mark.asyncio
+async def test_generate_tenant_battle_card_report_reuses_existing_persisted_report(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    report_id = uuid4()
+    pool = SimpleNamespace(is_initialized=True)
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        mod,
+        "_resolve_tracked_vendor_for_view",
+        AsyncMock(return_value="Zendesk"),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_fetch_latest_tenant_vendor_report",
+        AsyncMock(return_value={"id": report_id}),
+    )
+
+    result = await mod.generate_tenant_battle_card_report(
+        mod.BattleCardRequest(vendor_name="zendesk"),
+        user=user,
+    )
+
+    assert result["status"] == "ready"
+    assert result["report_id"] == str(report_id)
+    assert result["vendor_name"] == "Zendesk"
+    assert result["reused"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_tenant_battle_card_report_runs_scoped_task_when_missing(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    report_id = uuid4()
+    pool = SimpleNamespace(is_initialized=True)
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    task = SimpleNamespace(metadata={"seed": "value"})
+    scheduler = SimpleNamespace(run_now=AsyncMock(return_value={"status": "ok"}))
+    task_repo = SimpleNamespace(get_by_name=AsyncMock(return_value=task))
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(
+        mod,
+        "_resolve_tracked_vendor_for_view",
+        AsyncMock(return_value="Zendesk"),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_fetch_latest_tenant_vendor_report",
+        AsyncMock(side_effect=[None, {"id": report_id}]),
+    )
+    monkeypatch.setattr(mod, "get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(mod, "get_task_scheduler", lambda: scheduler)
+
+    result = await mod.generate_tenant_battle_card_report(
+        mod.BattleCardRequest(vendor_name="Zendesk"),
+        user=user,
+    )
+
+    assert result["status"] == "ready"
+    assert result["report_id"] == str(report_id)
+    assert result["vendor_name"] == "Zendesk"
+    assert result["reused"] is False
+    task_repo.get_by_name.assert_awaited_once_with("b2b_battle_cards")
+    scheduler.run_now.assert_awaited_once()
+    assert task.metadata["seed"] == "value"
+    assert task.metadata["scope_name"] == "Zendesk"
+    assert task.metadata["scope_trigger"] == "tenant_manual_request"
+    assert task.metadata["test_vendors"] == ["Zendesk"]
 
 
 @pytest.mark.asyncio
@@ -626,7 +703,7 @@ async def test_watchlist_views_list_returns_account_scoped_rows(monkeypatch):
                 {
                     "id": view_id,
                     "name": "Fresh named accounts",
-                    "vendor_name": "Intercom",
+                    "vendor_names": ["Intercom"],
                     "category": "Helpdesk",
                     "source": "reddit",
                     "min_urgency": 8.0,
@@ -676,12 +753,12 @@ async def test_list_tracked_vendors_includes_backend_freshness_fields(monkeypatc
     pool = SimpleNamespace(
         is_initialized=True,
         fetch=AsyncMock(
-            return_value=[
-                {
-                    "id": uuid4(),
-                    "vendor_name": "Intercom",
-                    "track_mode": "competitor",
-                    "label": "Messaging",
+                return_value=[
+                    {
+                        "id": uuid4(),
+                        "vendor_name": "Intercom",
+                        "track_mode": "competitor",
+                        "label": "Messaging",
                     "added_at": None,
                     "avg_urgency_score": 7.4,
                     "churn_intent_count": 14,
@@ -724,7 +801,7 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
             return_value={
                 "id": view_id,
                 "name": "Intercom named only",
-                "vendor_name": "Intercom",
+                "vendor_names": ["Intercom"],
                 "category": "Helpdesk",
                 "source": "reddit",
                 "min_urgency": 8.0,
@@ -752,7 +829,7 @@ async def test_create_watchlist_view_persists_filters_and_validates_vendor(monke
     result = await mod.create_watchlist_view(
         req=mod.WatchlistViewRequest(
             name="Intercom named only",
-            vendor_name="intercom",
+            vendor_names=["intercom"],
             category="Helpdesk",
             source="reddit",
             min_urgency=8,
@@ -802,7 +879,7 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
                     {
                         "id": view_id,
                         "name": "Changed wedges only",
-                        "vendor_name": None,
+                        "vendor_names": [],
                         "category": None,
                         "source": None,
                         "min_urgency": None,
@@ -819,7 +896,7 @@ async def test_update_and_delete_watchlist_view_are_account_scoped(monkeypatch):
                 {
                     "id": view_id,
                     "name": "Changed wedges only",
-                    "vendor_name": None,
+                    "vendor_names": [],
                     "category": None,
                     "source": None,
                     "min_urgency": None,
