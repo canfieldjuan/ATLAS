@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from typing import Any
@@ -13,6 +15,34 @@ _ANTHROPIC_BATCH_SUCCESS_STATUSES = {
     "batch_succeeded",
     "fallback_succeeded",
 }
+
+
+def exact_stage_request_fingerprint(request: Any) -> str:
+    payload = {
+        "namespace": str(getattr(request, "namespace", "") or ""),
+        "provider": str(getattr(request, "provider", "") or ""),
+        "model": str(getattr(request, "model", "") or ""),
+        "request_envelope": getattr(request, "request_envelope", None) or {},
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _stored_request_fingerprint(row: Any) -> str | None:
+    metadata = row.get("request_metadata") if hasattr(row, "get") else None
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("request_fingerprint")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
 
 
 def task_metadata(task: Any) -> dict[str, Any]:
@@ -191,6 +221,7 @@ async def reconcile_existing_batch_artifacts(
     task_name: str,
     artifact_type: str,
     artifact_ids: list[str],
+    expected_request_fingerprints: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Reconcile matching Anthropic batch rows and return the best-known item state.
 
@@ -208,6 +239,14 @@ async def reconcile_existing_batch_artifacts(
     artifact_ids = [str(value) for value in artifact_ids if str(value or "").strip()]
     if not artifact_ids:
         return {}
+
+    fingerprint_map = None
+    if expected_request_fingerprints is not None:
+        fingerprint_map = {
+            str(key): str(value).strip()
+            for key, value in expected_request_fingerprints.items()
+            if str(value or "").strip()
+        }
 
     rows = await pool.fetch(
         """
@@ -278,6 +317,17 @@ async def reconcile_existing_batch_artifacts(
 
     selected: dict[str, dict[str, Any]] = {}
     for artifact_id, artifact_rows in grouped.items():
+        if fingerprint_map is not None:
+            expected_fingerprint = fingerprint_map.get(artifact_id)
+            if not expected_fingerprint:
+                continue
+            artifact_rows = [
+                row for row in artifact_rows
+                if _stored_request_fingerprint(row) == expected_fingerprint
+            ]
+            if not artifact_rows:
+                continue
+
         success_row = next(
             (
                 row

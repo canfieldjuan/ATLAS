@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from atlas_brain.autonomous.tasks import b2b_enrichment
+from atlas_brain.autonomous.tasks._b2b_batch_utils import exact_stage_request_fingerprint, reconcile_existing_batch_artifacts
 from atlas_brain.reasoning import evidence_engine
 from atlas_brain.storage.models import ScheduledTask
 
@@ -676,6 +677,88 @@ async def test_enrich_rows_reuses_existing_completed_tier1_batch_result(monkeypa
     assert result["enriched"] == 1
     assert persist.await_count == 1
     run_batch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_existing_batch_artifacts_requires_matching_request_fingerprint():
+    request = SimpleNamespace(
+        namespace="b2b_enrichment.tier1",
+        provider="openrouter",
+        model="anthropic/claude-haiku-4-5",
+        request_envelope={
+            "messages": [
+                {"role": "system", "content": "tier1 prompt"},
+                {"role": "user", "content": "payload"},
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
+        },
+    )
+    fingerprint = exact_stage_request_fingerprint(request)
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "artifact_id": "review-1",
+                    "batch_id": "batch-1",
+                    "status": "batch_succeeded",
+                    "response_text": json.dumps({"specific_complaints": ["pricing"]}),
+                    "error_text": None,
+                    "custom_id": "tier1_review-1",
+                    "request_metadata": {"request_fingerprint": fingerprint},
+                    "batch_status": "completed",
+                    "provider_batch_id": "provider-1",
+                }
+            ]
+        ),
+    )
+
+    result = await reconcile_existing_batch_artifacts(
+        pool=pool,
+        llm=None,
+        task_name="b2b_enrichment",
+        artifact_type="review_enrichment_tier1",
+        artifact_ids=["review-1"],
+        expected_request_fingerprints={"review-1": fingerprint},
+    )
+
+    assert result["review-1"]["state"] == "succeeded"
+    assert result["review-1"]["custom_id"] == "tier1_review-1"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_existing_batch_artifacts_skips_mismatched_request_fingerprint():
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "artifact_id": "review-1",
+                    "batch_id": "batch-1",
+                    "status": "batch_succeeded",
+                    "response_text": json.dumps({"specific_complaints": ["pricing"]}),
+                    "error_text": None,
+                    "custom_id": "tier1_review-1",
+                    "request_metadata": {"request_fingerprint": "stale-request"},
+                    "batch_status": "completed",
+                    "provider_batch_id": "provider-1",
+                }
+            ]
+        ),
+    )
+
+    result = await reconcile_existing_batch_artifacts(
+        pool=pool,
+        llm=None,
+        task_name="b2b_enrichment",
+        artifact_type="review_enrichment_tier1",
+        artifact_ids=["review-1"],
+        expected_request_fingerprints={"review-1": "current-request"},
+    )
+
+    assert result == {}
 
 
 def test_get_base_enrichment_llm_uses_vllm_first(monkeypatch):
