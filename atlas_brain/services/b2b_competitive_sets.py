@@ -523,39 +523,40 @@ async def load_vendor_category_map(pool, vendor_names: list[str]) -> dict[str, s
     vendor_names = [str(name or "").strip() for name in vendor_names if str(name or "").strip()]
     if not vendor_names:
         return {}
-    rows = await pool.fetch(
+    profile_rows = await pool.fetch(
         """
         WITH requested AS (
             SELECT UNNEST($1::text[]) AS vendor_name
-        ),
-        profile_match AS (
-            SELECT DISTINCT ON (r.vendor_name)
-                   r.vendor_name AS requested_vendor,
-                   p.product_category
-            FROM requested r
-            LEFT JOIN b2b_product_profiles p
-              ON LOWER(p.vendor_name) = LOWER(r.vendor_name)
-            ORDER BY r.vendor_name, p.product_category NULLS LAST
-        ),
-        signal_match AS (
-            SELECT DISTINCT ON (r.vendor_name)
-                   r.vendor_name AS requested_vendor,
-                   s.product_category
-            FROM requested r
-            LEFT JOIN b2b_churn_signals s
-              ON LOWER(s.vendor_name) = LOWER(r.vendor_name)
-            ORDER BY r.vendor_name, s.total_reviews DESC NULLS LAST
         )
-        SELECT r.vendor_name,
-               COALESCE(pm.product_category, sm.product_category, '') AS product_category
+        SELECT DISTINCT ON (r.vendor_name)
+               r.vendor_name,
+               p.product_category
         FROM requested r
-        LEFT JOIN profile_match pm ON pm.requested_vendor = r.vendor_name
-        LEFT JOIN signal_match sm ON sm.requested_vendor = r.vendor_name
+        LEFT JOIN b2b_product_profiles p
+          ON LOWER(p.vendor_name) = LOWER(r.vendor_name)
+        ORDER BY r.vendor_name, p.product_category NULLS LAST
         """,
         vendor_names,
     )
-    return {
-        _norm_vendor(row["vendor_name"]): str(row["product_category"] or "").strip()
-        for row in rows
-        if str(row["product_category"] or "").strip()
+    from ..autonomous.tasks._b2b_shared import read_vendor_scorecard_details
+
+    scorecard_rows = await read_vendor_scorecard_details(
+        pool,
+        vendor_names=vendor_names,
+    )
+    scorecard_categories = {
+        _norm_vendor(row.get("vendor_name") or ""): str(row.get("product_category") or "").strip()
+        for row in scorecard_rows
+        if str(row.get("product_category") or "").strip()
     }
+    category_map: dict[str, str] = {}
+    for row in profile_rows:
+        vendor_key = _norm_vendor(row["vendor_name"])
+        category = str(row["product_category"] or "").strip()
+        if category:
+            category_map[vendor_key] = category
+            continue
+        fallback = scorecard_categories.get(vendor_key)
+        if fallback:
+            category_map[vendor_key] = fallback
+    return category_map
