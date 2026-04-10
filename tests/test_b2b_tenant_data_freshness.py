@@ -74,8 +74,13 @@ async def test_dashboard_overview_owner_role_reads_global_vendor_count(monkeypat
 
     pool = SimpleNamespace(
         is_initialized=True,
-        fetchval=AsyncMock(return_value=56),
-        fetchrow=AsyncMock(return_value={"avg_urgency": 3.6, "total_churn_signals": 100, "total_reviews": 2000}),
+        fetchval=AsyncMock(),
+        fetchrow=AsyncMock(
+            side_effect=[
+                {"total_vendors": 56, "high_urgency_count": 12, "total_signal_reviews": 2000},
+                {"avg_urgency": 3.6, "total_churn_signals": 100, "total_reviews": 2000},
+            ]
+        ),
         fetch=AsyncMock(return_value=[]),
     )
     user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="owner", is_admin=False)
@@ -85,10 +90,11 @@ async def test_dashboard_overview_owner_role_reads_global_vendor_count(monkeypat
     result = await mod.dashboard_overview(user=user)
 
     assert result["tracked_vendors"] == 56
-    fetchval_sql = pool.fetchval.await_args.args[0]
-    assert "COUNT(DISTINCT vendor_name) FROM b2b_churn_signals" in fetchval_sql
-    fetchrow_sql = pool.fetchrow.await_args.args[0]
-    assert "WHERE TRUE" in fetchrow_sql
+    assert pool.fetchval.await_count == 0
+    summary_sql = pool.fetchrow.await_args_list[0].args[0]
+    assert "COUNT(DISTINCT sig.vendor_name) AS total_vendors" in summary_sql
+    overview_sql = pool.fetchrow.await_args_list[1].args[0]
+    assert "COALESCE(AVG(sig.avg_urgency_score), 0) AS avg_urgency" in overview_sql
 
 
 @pytest.mark.asyncio
@@ -112,7 +118,7 @@ async def test_dashboard_overview_member_role_reads_account_scoped_vendor_count(
     assert "COUNT(*) FROM tracked_vendors WHERE account_id = $1" in fetchval_sql
     assert str(fetchval_acct) == user.account_id
     fetchrow_sql, fetchrow_acct = pool.fetchrow.await_args.args
-    assert "vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1)" in fetchrow_sql
+    assert "sig.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)" in fetchrow_sql
     assert str(fetchrow_acct) == user.account_id
 
 
@@ -917,21 +923,29 @@ async def test_list_tracked_vendors_includes_backend_freshness_fields(monkeypatc
     pool = SimpleNamespace(
         is_initialized=True,
         fetch=AsyncMock(
-                return_value=[
+            side_effect=[
+                [
                     {
                         "id": uuid4(),
                         "vendor_name": "Intercom",
                         "track_mode": "competitor",
                         "label": "Messaging",
-                    "added_at": None,
-                    "avg_urgency_score": 7.4,
-                    "churn_intent_count": 14,
-                    "total_reviews": 220,
-                    "nps_proxy": 21.5,
-                    "last_computed_at": datetime(2026, 4, 7, 15, 0, tzinfo=timezone.utc),
-                    "latest_snapshot_date": date(2026, 4, 7),
-                    "latest_accounts_report_date": date(2026, 4, 6),
-                },
+                        "added_at": None,
+                        "latest_snapshot_date": date(2026, 4, 7),
+                        "latest_accounts_report_date": date(2026, 4, 6),
+                    },
+                ],
+                [
+                    {
+                        "vendor_name": "Intercom",
+                        "product_category": "CRM",
+                        "total_reviews": 220,
+                        "churn_intent_count": 14,
+                        "avg_urgency_score": 7.4,
+                        "nps_proxy": 21.5,
+                        "last_computed_at": datetime(2026, 4, 7, 15, 0, tzinfo=timezone.utc),
+                    },
+                ],
             ]
         ),
     )
@@ -947,9 +961,56 @@ async def test_list_tracked_vendors_includes_backend_freshness_fields(monkeypatc
     assert result["vendors"][0]["latest_accounts_report_date"] == "2026-04-06"
     assert result["vendors"][0]["freshness_status"] == "synthesis_pending"
     assert result["vendors"][0]["freshness_timestamp"] == "2026-04-07 15:00:00+00:00"
-    sql = pool.fetch.await_args.args[0]
-    assert "FROM b2b_vendor_snapshots" in sql
-    assert "FROM b2b_intelligence bi" in sql
+    tracked_sql = pool.fetch.await_args_list[0].args[0]
+    signal_sql = pool.fetch.await_args_list[1].args[0]
+    assert "FROM b2b_vendor_snapshots" in tracked_sql
+    assert "FROM b2b_intelligence bi" in tracked_sql
+    assert "WITH ranked_signals AS" in signal_sql
+    assert "PARTITION BY sig.vendor_name" in signal_sql
+
+
+@pytest.mark.asyncio
+async def test_search_available_vendors_reads_best_signal_rows(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "vendor_name": "Zendesk",
+                    "product_category": "Helpdesk",
+                    "total_reviews": 320,
+                    "churn_intent_count": 14,
+                    "avg_urgency_score": 6.8,
+                    "nps_proxy": 18.5,
+                    "last_computed_at": None,
+                },
+            ]
+        ),
+    )
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.search_available_vendors(q="Zen", limit=10, user=user)
+
+    assert result == {
+        "vendors": [
+            {
+                "vendor_name": "Zendesk",
+                "product_category": "Helpdesk",
+                "total_reviews": 320,
+                "avg_urgency": 6.8,
+            },
+        ],
+        "count": 1,
+    }
+    search_sql, search_query, search_limit = pool.fetch.await_args.args
+    assert "WITH ranked_signals AS" in search_sql
+    assert "sig.vendor_name ILIKE '%' || $1 || '%'" in search_sql
+    assert search_query == "Zen"
+    assert search_limit == 10
 
 
 @pytest.mark.asyncio

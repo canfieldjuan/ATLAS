@@ -409,6 +409,51 @@ async def test_read_vendor_signal_rows_applies_snapshot_filters_and_limit():
 
 
 @pytest.mark.asyncio
+async def test_read_best_vendor_signal_rows_dedupes_per_vendor_and_applies_filters():
+    pool = FakePool(
+        fetch_map={
+            "WITH ranked_signals AS": [
+                {
+                    "vendor_name": "Zendesk",
+                    "product_category": "CRM",
+                    "total_reviews": 120,
+                    "churn_intent_count": 22,
+                    "avg_urgency_score": 6.4,
+                    "nps_proxy": -0.2,
+                    "last_computed_at": None,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_best_vendor_signal_rows(
+        pool,
+        vendor_name_query="Zendesk",
+        tracked_account_id="11111111-1111-1111-1111-111111111111",
+        exclude_suppressed=True,
+        limit=15,
+    )
+
+    score_call = next(call for call in pool.calls if "WITH ranked_signals AS" in call[0])
+    assert score_call[1] == ("11111111-1111-1111-1111-111111111111", "Zendesk", 15)
+    assert "sig.vendor_name ILIKE '%' || $2 || '%'" in score_call[0]
+    assert "tracked_vendors WHERE account_id = $1::uuid" in score_call[0]
+    assert "dc.entity_type = 'churn_signal'" in score_call[0]
+    assert "PARTITION BY sig.vendor_name" in score_call[0]
+    assert rows == [
+        {
+            "vendor_name": "Zendesk",
+            "product_category": "CRM",
+            "total_reviews": 120,
+            "churn_intent_count": 22,
+            "avg_urgency_score": 6.4,
+            "nps_proxy": -0.2,
+            "last_computed_at": None,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_read_vendor_signal_summary_applies_exact_vendor_filters():
     pool = FakePool(
         fetchrow_map={
@@ -433,6 +478,33 @@ async def test_read_vendor_signal_summary_applies_exact_vendor_filters():
         "total_vendors": 2,
         "high_urgency_count": 1,
         "total_signal_reviews": 180,
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_signal_overview_applies_account_scope():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_churn_signals sig": {
+                "avg_urgency": 4.2,
+                "total_churn_signals": 22,
+                "total_reviews": 330,
+            },
+        },
+    )
+
+    row = await shared_mod.read_vendor_signal_overview(
+        pool,
+        tracked_account_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals sig" in call[0])
+    assert score_call[1] == ("11111111-1111-1111-1111-111111111111",)
+    assert "tracked_vendors WHERE account_id = $1::uuid" in score_call[0]
+    assert row == {
+        "avg_urgency": 4.2,
+        "total_churn_signals": 22,
+        "total_reviews": 330,
     }
 
 

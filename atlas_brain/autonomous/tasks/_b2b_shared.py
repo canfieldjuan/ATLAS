@@ -4227,13 +4227,7 @@ async def read_vendor_signal_detail(
 
 
 def _normalize_vendor_name_list(vendor_names: Iterable[Any] | None) -> list[str]:
-    return sorted(
-        {
-            str(vendor_name or "").strip().lower()
-            for vendor_name in (vendor_names or [])
-            if str(vendor_name or "").strip()
-        }
-    )
+    return _canonicalize_vendor_name_filters(vendor_names)
 
 
 async def read_vendor_signal_rows(
@@ -4348,6 +4342,95 @@ async def read_vendor_signal_rows(
     return [dict(row) for row in rows]
 
 
+async def read_best_vendor_signal_rows(
+    pool,
+    *,
+    vendor_name_query: str | None = None,
+    vendor_names: Iterable[Any] | None = None,
+    tracked_account_id: Any | None = None,
+    exclude_suppressed: bool = False,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Read one best-fit vendor signal row per vendor."""
+    normalized_vendor_names = _normalize_vendor_name_list(vendor_names)
+    if vendor_names is not None and not normalized_vendor_names:
+        return []
+    conditions: list[str] = []
+    params: list[Any] = []
+    idx = 1
+
+    if tracked_account_id is not None:
+        conditions.append(
+            f"sig.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+        )
+        params.append(tracked_account_id)
+        idx += 1
+
+    if normalized_vendor_names:
+        conditions.append(f"LOWER(sig.vendor_name) = ANY(${idx}::text[])")
+        params.append(normalized_vendor_names)
+        idx += 1
+
+    normalized_query = str(vendor_name_query or "").strip()
+    if normalized_query:
+        conditions.append(f"sig.vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(normalized_query)
+        idx += 1
+
+    if exclude_suppressed:
+        conditions.append(
+            suppress_predicate(
+                "churn_signal",
+                id_expr="sig.id",
+                vendor_expr="sig.vendor_name",
+            )
+        )
+
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+    capped_limit = max(1, min(int(limit or 20), 5000))
+    rows = await pool.fetch(
+        """
+        WITH ranked_signals AS (
+            SELECT sig.vendor_name,
+                   sig.product_category,
+                   sig.total_reviews,
+                   sig.churn_intent_count,
+                   sig.avg_urgency_score,
+                   sig.nps_proxy,
+                   sig.last_computed_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY sig.vendor_name
+                       ORDER BY sig.avg_urgency_score DESC,
+                                sig.total_reviews DESC,
+                                sig.last_computed_at DESC NULLS LAST,
+                                sig.product_category ASC NULLS LAST
+                   ) AS vendor_row_rank
+            FROM b2b_churn_signals sig
+        """
+        + where_clause
+        + """
+        )
+        SELECT vendor_name,
+               product_category,
+               total_reviews,
+               churn_intent_count,
+               avg_urgency_score,
+               nps_proxy,
+               last_computed_at
+        FROM ranked_signals
+        WHERE vendor_row_rank = 1
+        ORDER BY total_reviews DESC,
+                 avg_urgency_score DESC,
+                 last_computed_at DESC NULLS LAST,
+                 vendor_name ASC
+        LIMIT $"""
+        + str(idx),
+        *params,
+        capped_limit,
+    )
+    return [dict(row) for row in rows]
+
+
 async def read_vendor_signal_summary(
     pool,
     *,
@@ -4416,6 +4499,77 @@ async def read_vendor_signal_summary(
         "total_vendors": 0,
         "high_urgency_count": 0,
         "total_signal_reviews": 0,
+    }
+
+
+async def read_vendor_signal_overview(
+    pool,
+    *,
+    vendor_name_query: str | None = None,
+    vendor_names: Iterable[Any] | None = None,
+    min_urgency: float = 0.0,
+    product_category: str | None = None,
+    tracked_account_id: Any | None = None,
+    exclude_suppressed: bool = False,
+) -> dict[str, Any]:
+    """Read overview rollups for vendor signal dashboard surfaces."""
+    normalized_vendor_names = _normalize_vendor_name_list(vendor_names)
+    conditions: list[str] = []
+    params: list[Any] = []
+    idx = 1
+
+    if tracked_account_id is not None:
+        conditions.append(
+            f"sig.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+        )
+        params.append(tracked_account_id)
+        idx += 1
+
+    if normalized_vendor_names:
+        conditions.append(f"LOWER(sig.vendor_name) = ANY(${idx}::text[])")
+        params.append(normalized_vendor_names)
+        idx += 1
+
+    normalized_query = str(vendor_name_query or "").strip()
+    if normalized_query:
+        conditions.append(f"sig.vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(normalized_query)
+        idx += 1
+
+    if min_urgency > 0:
+        conditions.append(f"sig.avg_urgency_score >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+
+    if product_category:
+        conditions.append(f"sig.product_category = ${idx}")
+        params.append(product_category)
+        idx += 1
+
+    if exclude_suppressed:
+        conditions.append(
+            suppress_predicate(
+                "churn_signal",
+                id_expr="sig.id",
+                vendor_expr="sig.vendor_name",
+            )
+        )
+
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+    row = await pool.fetchrow(
+        """
+        SELECT COALESCE(AVG(sig.avg_urgency_score), 0) AS avg_urgency,
+               COALESCE(SUM(sig.churn_intent_count), 0) AS total_churn_signals,
+               COALESCE(SUM(sig.total_reviews), 0) AS total_reviews
+        FROM b2b_churn_signals sig
+        """
+        + where_clause,
+        *params,
+    )
+    return dict(row) if row else {
+        "avg_urgency": 0,
+        "total_churn_signals": 0,
+        "total_reviews": 0,
     }
 
 

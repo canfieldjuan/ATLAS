@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.params import Param
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, EmailStr, Field
 
@@ -513,6 +514,8 @@ def _normalize_report_subscription_filter_payload(
 
 
 def _normalize_report_list_filter(name: str, value: Optional[str]) -> str | None:
+    if isinstance(value, Param):
+        value = value.default
     normalized = str(value or "").strip().lower()
     if not normalized:
         return None
@@ -1020,21 +1023,9 @@ async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
     rows = await pool.fetch(
         """
         SELECT tv.id, tv.vendor_name, tv.track_mode, tv.label, tv.added_at,
-               sig.avg_urgency_score, sig.churn_intent_count, sig.total_reviews,
-               sig.nps_proxy, sig.last_computed_at,
                snap.snapshot_date AS latest_snapshot_date,
                rpt.report_date AS latest_accounts_report_date
         FROM tracked_vendors tv
-        LEFT JOIN LATERAL (
-            SELECT avg_urgency_score, churn_intent_count, total_reviews,
-                   nps_proxy, last_computed_at
-            FROM b2b_churn_signals sig
-            WHERE sig.vendor_name = tv.vendor_name
-            ORDER BY avg_urgency_score DESC NULLS LAST,
-                     total_reviews DESC NULLS LAST,
-                     last_computed_at DESC NULLS LAST
-            LIMIT 1
-        ) sig ON TRUE
         LEFT JOIN LATERAL (
             SELECT snapshot_date
             FROM b2b_vendor_snapshots snap
@@ -1056,23 +1047,40 @@ async def list_tracked_vendors(user: AuthUser = Depends(require_auth)):
         acct,
     )
 
+    from ..autonomous.tasks._b2b_shared import read_best_vendor_signal_rows
+
+    tracked_vendor_names = [row["vendor_name"] for row in rows if row.get("vendor_name")]
+    signal_rows = []
+    if tracked_vendor_names:
+        signal_rows = await read_best_vendor_signal_rows(
+            pool,
+            vendor_names=tracked_vendor_names,
+            limit=len(tracked_vendor_names),
+        )
+    signal_by_vendor = {
+        _normalize_vendor_name(row.get("vendor_name")): row
+        for row in signal_rows
+        if row.get("vendor_name")
+    }
+
     vendors = []
     reasoning_views = await _load_reasoning_views_for_vendors(
         pool,
         [row["vendor_name"] for row in rows],
     )
     for r in rows:
+        signal_row = signal_by_vendor.get(_normalize_vendor_name(r["vendor_name"])) or {}
         vendor = {
             "id": str(r["id"]),
             "vendor_name": r["vendor_name"],
             "track_mode": r["track_mode"],
             "label": r["label"],
             "added_at": str(r["added_at"]) if r["added_at"] else None,
-            "avg_urgency": _safe_float(r["avg_urgency_score"]),
-            "churn_intent_count": r["churn_intent_count"],
-            "total_reviews": r["total_reviews"],
-            "nps_proxy": _safe_float(r["nps_proxy"]),
-            "last_computed_at": str(r["last_computed_at"]) if r["last_computed_at"] else None,
+            "avg_urgency": _safe_float(signal_row.get("avg_urgency_score")),
+            "churn_intent_count": signal_row.get("churn_intent_count"),
+            "total_reviews": signal_row.get("total_reviews"),
+            "nps_proxy": _safe_float(signal_row.get("nps_proxy")),
+            "last_computed_at": str(signal_row.get("last_computed_at")) if signal_row.get("last_computed_at") else None,
             "latest_snapshot_date": str(r["latest_snapshot_date"]) if r["latest_snapshot_date"] else None,
             "latest_accounts_report_date": str(r["latest_accounts_report_date"]) if r["latest_accounts_report_date"] else None,
             "freshness_status": None,
@@ -1256,17 +1264,12 @@ async def search_available_vendors(
     _require_b2b_product(user)
     pool = _pool_or_503()
 
-    rows = await pool.fetch(
-        """
-        SELECT DISTINCT vendor_name, product_category,
-               total_reviews, avg_urgency_score
-        FROM b2b_churn_signals
-        WHERE vendor_name ILIKE '%' || $1 || '%'
-        ORDER BY total_reviews DESC
-        LIMIT $2
-        """,
-        q.strip(),
-        min(limit, 50),
+    from ..autonomous.tasks._b2b_shared import read_best_vendor_signal_rows
+
+    rows = await read_best_vendor_signal_rows(
+        pool,
+        vendor_name_query=q.strip(),
+        limit=min(limit, 50),
     )
 
     return {
@@ -1589,31 +1592,29 @@ async def dashboard_overview(user: AuthUser = Depends(require_auth)):
     _require_b2b_product(user)
     pool = _pool_or_503()
     t_params = _tenant_params(user)
+    from ..autonomous.tasks._b2b_shared import (
+        read_high_intent_companies,
+        read_vendor_signal_overview,
+        read_vendor_signal_summary,
+    )
+
     if t_params:
         vendor_count = await pool.fetchval(
             "SELECT COUNT(*) FROM tracked_vendors WHERE account_id = $1",
             t_params[0],
         )
-    else:
-        vendor_count = await pool.fetchval(
-            "SELECT COUNT(DISTINCT vendor_name) FROM b2b_churn_signals",
+        signal_stats = await read_vendor_signal_overview(
+            pool,
+            tracked_account_id=t_params[0],
         )
-
-    # Signal summary for tracked vendors
-    signal_stats = await pool.fetchrow(
-        f"""
-        SELECT COALESCE(AVG(avg_urgency_score), 0) AS avg_urgency,
-               COALESCE(SUM(churn_intent_count), 0) AS total_churn_signals,
-               COALESCE(SUM(total_reviews), 0) AS total_reviews
-        FROM b2b_churn_signals
-        WHERE {_vendor_scope_sql(1, user)}
-        """,
-        *t_params,
-    )
+    else:
+        summary = await read_vendor_signal_summary(
+            pool,
+        )
+        vendor_count = summary.get("total_vendors", 0)
+        signal_stats = await read_vendor_signal_overview(pool)
 
     # Recent high-intent leads via shared adapter
-    from ..autonomous.tasks._b2b_shared import read_high_intent_companies
-
     scoped_vendors: list[str] | None = None
     if t_params:
         sv_rows = await pool.fetch(
