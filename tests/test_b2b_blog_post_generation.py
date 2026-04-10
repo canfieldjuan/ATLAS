@@ -2125,11 +2125,33 @@ async def test_gather_data_vendor_alternative_uses_evidence_vault_overlay(monkey
         "latest": "2026-03-18",
     })})()
 
-    monkeypatch.setattr(blog_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={"Zendesk": vault}))
-    monkeypatch.setattr(blog_mod, "_fetch_product_profile", AsyncMock(return_value={"strengths": []}))
-    monkeypatch.setattr(blog_mod, "_fetch_churn_signals", AsyncMock(return_value=[
+    scorecard_details = {
+        "Zendesk": {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-123",
+        },
+    }
+    blog_signals = AsyncMock(return_value=[
         {"pain_category": "pricing", "signal_count": 3, "avg_urgency": 4.0, "feature_gaps": []},
-    ]))
+    ])
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_latest_evidence_vault_records",
+        AsyncMock(return_value=[
+            {
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-123",
+                "vault": vault,
+            },
+        ]),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_vendor_scorecard_details",
+        AsyncMock(return_value=scorecard_details),
+    )
+    monkeypatch.setattr(blog_mod, "_fetch_product_profile", AsyncMock(return_value={"strengths": []}))
+    monkeypatch.setattr(blog_mod, "_fetch_blog_signal_rows", blog_signals)
     monkeypatch.setattr(blog_mod, "_fetch_quotable_reviews", AsyncMock(return_value=[
         {
             "phrase": "Pricing opacity kept surprising us",
@@ -2160,6 +2182,86 @@ async def test_gather_data_vendor_alternative_uses_evidence_vault_overlay(monkey
     assert data["quotes"][0]["source_name"] == "reddit"
     assert data["data_context"]["evidence_vault_used"] is True
     assert data["data_context"]["evidence_vault_vendors"] == ["Zendesk"]
+    assert blog_signals.await_args.kwargs["detail_row"]["materialization_run_id"] == "run-123"
+
+
+@pytest.mark.asyncio
+async def test_gather_data_vendor_alternative_suppresses_stale_evidence_vault_overlay(monkeypatch):
+    vault = {
+        "vendor_name": "Zendesk",
+        "weakness_evidence": [
+            {
+                "key": "pricing",
+                "label": "Pricing opacity",
+                "evidence_type": "pain_category",
+                "mention_count_total": 14,
+                "supporting_metrics": {"avg_urgency_when_mentioned": 7.8},
+                "best_quote": "Pricing opacity kept surprising us",
+                "quote_source": {"source": "reddit", "reviewer_title": "VP Ops", "company": "Acme"},
+            },
+        ],
+    }
+    pool = type("Pool", (), {"fetchrow": AsyncMock(return_value={
+        "total_reviews": 25,
+        "enriched": 20,
+        "churn_intent": 8,
+        "earliest": "2026-01-01",
+        "latest": "2026-03-18",
+    })})()
+
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_latest_evidence_vault_records",
+        AsyncMock(return_value=[
+            {
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-stale",
+                "vault": vault,
+            },
+        ]),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_vendor_scorecard_details",
+        AsyncMock(return_value={
+            "Zendesk": {
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-123",
+            },
+        }),
+    )
+    monkeypatch.setattr(blog_mod, "_fetch_product_profile", AsyncMock(return_value={"strengths": []}))
+    monkeypatch.setattr(blog_mod, "_fetch_blog_signal_rows", AsyncMock(return_value=[
+        {"pain_category": "pricing", "signal_count": 3, "avg_urgency": 4.0, "feature_gaps": []},
+    ]))
+    monkeypatch.setattr(blog_mod, "_fetch_quotable_reviews", AsyncMock(return_value=[
+        {
+            "phrase": "Pricing opacity kept surprising us",
+            "vendor": "Zendesk",
+            "urgency": 5.0,
+            "role": "Ops Manager",
+            "company": "Acme",
+            "company_size": "Mid-Market",
+            "industry": "SaaS",
+            "source_name": "g2",
+            "sentiment": "negative",
+        },
+    ]))
+    monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_fetch_source_distribution", AsyncMock(return_value={"g2": 10}))
+    monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
+
+    data = await _gather_data(
+        pool,
+        "vendor_alternative",
+        {"vendor": "Zendesk", "category": "Helpdesk", "review_count": 42, "urgency": 7.2, "slug": "zendesk-alternatives"},
+    )
+
+    assert data["signals"][0]["pain_category"] == "pricing"
+    assert data["signals"][0]["signal_count"] == 3
+    assert data["quotes"][0]["source_name"] == "g2"
+    assert data["data_context"]["evidence_vault_used"] is False
 
 
 @pytest.mark.asyncio
@@ -2202,9 +2304,29 @@ async def test_gather_data_pricing_reality_check_uses_evidence_vault_review_fall
         },
     )()
 
-    monkeypatch.setattr(blog_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={"Zendesk": vault}))
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_latest_evidence_vault_records",
+        AsyncMock(return_value=[
+            {
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-123",
+                "vault": vault,
+            },
+        ]),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_vendor_scorecard_details",
+        AsyncMock(return_value={
+            "Zendesk": {
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-123",
+            },
+        }),
+    )
     monkeypatch.setattr(blog_mod, "_fetch_product_profile", AsyncMock(return_value={"strengths": []}))
-    monkeypatch.setattr(blog_mod, "_fetch_churn_signals", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_fetch_blog_signal_rows", AsyncMock(return_value=[]))
     monkeypatch.setattr(blog_mod, "_fetch_source_distribution", AsyncMock(return_value={"g2": 10}))
     monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
     monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
@@ -2251,9 +2373,29 @@ async def test_gather_data_switching_story_uses_evidence_vault_review_fallback(m
         },
     )()
 
-    monkeypatch.setattr(blog_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={"Zendesk": vault}))
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_latest_evidence_vault_records",
+        AsyncMock(return_value=[
+            {
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-123",
+                "vault": vault,
+            },
+        ]),
+    )
+    monkeypatch.setattr(
+        blog_mod,
+        "_fetch_vendor_scorecard_details",
+        AsyncMock(return_value={
+            "Zendesk": {
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-123",
+            },
+        }),
+    )
     monkeypatch.setattr(blog_mod, "_fetch_product_profile", AsyncMock(return_value={"strengths": []}))
-    monkeypatch.setattr(blog_mod, "_fetch_churn_signals", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_fetch_blog_signal_rows", AsyncMock(return_value=[]))
     monkeypatch.setattr(blog_mod, "_fetch_source_distribution", AsyncMock(return_value={"g2": 10}))
     monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
     monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
