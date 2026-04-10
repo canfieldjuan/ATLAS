@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 from ...config import settings
 from ...services.apollo_company_overrides import fetch_company_override_map
+from ...services.b2b.corrections import suppress_predicate
 from ...services.company_normalization import normalize_company_name
 from ...services.scraping.sources import (
     parse_source_allowlist,
@@ -4141,6 +4142,88 @@ async def read_vendor_scorecard_detail(
         if _canonicalize_vendor(row.get("vendor_name") or "") == canonical:
             return row
     return None
+
+
+async def read_vendor_signal_detail(
+    pool,
+    *,
+    vendor_name_query: str,
+    product_category: str | None = None,
+    tracked_account_id: Any | None = None,
+    include_snapshot_metrics: bool = False,
+    exclude_suppressed: bool = False,
+) -> dict[str, Any] | None:
+    """Read one vendor signal detail row with optional scope and snapshot fields."""
+    normalized_query = str(vendor_name_query or "").strip()
+    if not normalized_query:
+        return None
+
+    conditions = ["sig.vendor_name ILIKE '%' || $1 || '%'"]
+    params: list[Any] = [normalized_query]
+    idx = 2
+
+    if product_category:
+        conditions.append(f"sig.product_category = ${idx}")
+        params.append(product_category)
+        idx += 1
+
+    if tracked_account_id is not None:
+        conditions.append(
+            f"sig.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = ${idx}::uuid)"
+        )
+        params.append(tracked_account_id)
+        idx += 1
+
+    if exclude_suppressed:
+        conditions.append(
+            suppress_predicate(
+                "churn_signal",
+                id_expr="sig.id",
+                vendor_expr="sig.vendor_name",
+            )
+        )
+
+    snapshot_select = ""
+    snapshot_join = ""
+    if include_snapshot_metrics:
+        snapshot_select = """
+               , snap.support_sentiment AS support_sentiment
+               , snap.legacy_support_score AS legacy_support_score
+               , snap.new_feature_velocity AS new_feature_velocity
+               , snap.employee_growth_rate AS employee_growth_rate
+        """
+        snapshot_join = """
+        LEFT JOIN LATERAL (
+            SELECT support_sentiment,
+                   legacy_support_score,
+                   new_feature_velocity,
+                   employee_growth_rate
+            FROM b2b_vendor_snapshots snap
+            WHERE snap.vendor_name = sig.vendor_name
+            ORDER BY snap.snapshot_date DESC
+            LIMIT 1
+        ) snap ON TRUE
+        """
+
+    row = await pool.fetchrow(
+        """
+        SELECT sig.*
+               """
+        + snapshot_select
+        + """
+        FROM b2b_churn_signals sig
+        """
+        + snapshot_join
+        + """
+        WHERE """
+        + " AND ".join(conditions)
+        + """
+        ORDER BY sig.avg_urgency_score DESC
+        LIMIT 1
+        """,
+        *params,
+    )
+    return dict(row) if row else None
 
 
 async def read_vendor_top_competitor_map(

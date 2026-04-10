@@ -1916,25 +1916,12 @@ async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_a
         if not tracked:
             raise HTTPException(status_code=403, detail="Vendor not in your tracked list")
 
-    signal_row = await pool.fetchrow(
-        """
-        SELECT sig.*, snap.support_sentiment AS support_sentiment,
-               snap.legacy_support_score AS legacy_support_score,
-               snap.new_feature_velocity AS new_feature_velocity,
-               snap.employee_growth_rate AS employee_growth_rate
-        FROM b2b_churn_signals sig
-        LEFT JOIN LATERAL (
-            SELECT support_sentiment, legacy_support_score,
-                   new_feature_velocity, employee_growth_rate
-            FROM b2b_vendor_snapshots snap
-            WHERE snap.vendor_name = sig.vendor_name
-            ORDER BY snap.snapshot_date DESC
-            LIMIT 1
-        ) snap ON TRUE
-        WHERE sig.vendor_name ILIKE '%' || $1 || '%'
-        ORDER BY avg_urgency_score DESC LIMIT 1
-        """,
-        vname,
+    from ..autonomous.tasks._b2b_shared import read_vendor_signal_detail
+
+    signal_row = await read_vendor_signal_detail(
+        pool,
+        vendor_name_query=vname,
+        include_snapshot_metrics=True,
     )
 
     counts = await pool.fetchrow(

@@ -177,30 +177,14 @@ async def get_churn_signal(
         if not pool.is_initialized:
             return json.dumps({"success": False, "error": "Database not ready"})
 
-        if product_category:
-            row = await pool.fetchrow(
-                f"""
-                SELECT * FROM b2b_churn_signals
-                WHERE vendor_name ILIKE '%' || $1 || '%'
-                  AND product_category = $2
-                  AND {_suppress_predicate('churn_signal')}
-                ORDER BY avg_urgency_score DESC
-                LIMIT 1
-                """,
-                vendor_name.strip(),
-                product_category,
-            )
-        else:
-            row = await pool.fetchrow(
-                f"""
-                SELECT * FROM b2b_churn_signals
-                WHERE vendor_name ILIKE '%' || $1 || '%'
-                  AND {_suppress_predicate('churn_signal')}
-                ORDER BY avg_urgency_score DESC
-                LIMIT 1
-                """,
-                vendor_name.strip(),
-            )
+        from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_signal_detail
+
+        row = await read_vendor_signal_detail(
+            pool,
+            vendor_name_query=vendor_name.strip(),
+            product_category=product_category,
+            exclude_suppressed=True,
+        )
 
         if not row:
             return json.dumps({"success": False, "error": "No churn signal found for that vendor"})
@@ -356,16 +340,12 @@ async def get_vendor_profile(vendor_name: str) -> str:
             return json.dumps({"success": False, "error": "Database not ready"})
         vname = vendor_name.strip()
 
-        # Churn signal
-        signal_row = await pool.fetchrow(
-            f"""
-            SELECT * FROM b2b_churn_signals
-            WHERE vendor_name ILIKE '%' || $1 || '%'
-              AND {_suppress_predicate('churn_signal')}
-            ORDER BY avg_urgency_score DESC
-            LIMIT 1
-            """,
-            vname,
+        from atlas_brain.autonomous.tasks._b2b_shared import read_vendor_signal_detail, read_high_intent_companies
+
+        signal_row = await read_vendor_signal_detail(
+            pool,
+            vendor_name_query=vname,
+            exclude_suppressed=True,
         )
 
         # Live review counts
@@ -383,8 +363,6 @@ async def get_vendor_profile(vendor_name: str) -> str:
             vname,
         )
 
-        # Top 5 high-intent companies via shared adapter
-        from atlas_brain.autonomous.tasks._b2b_shared import read_high_intent_companies
         hi_results = await read_high_intent_companies(
             pool,
             min_urgency=7.0,

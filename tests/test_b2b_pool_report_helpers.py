@@ -47,6 +47,7 @@ class FakePool:
 
     async def fetchrow(self, query, *params):
         normalized = " ".join(str(query).split())
+        self.calls.append((normalized, params))
         for needle, value in self.fetchrow_map.items():
             if needle in normalized:
                 return value(*params) if callable(value) else value
@@ -323,6 +324,41 @@ async def test_read_vendor_scorecard_metrics_returns_latest_metric_row():
         "avg_urgency_score": 6.5,
         "top_competitors": [{"name": "Freshdesk"}],
         "sentiment_distribution": {"declining": 4, "improving": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_signal_detail_applies_snapshot_scope_and_suppression():
+    tracked_account_id = "11111111-1111-1111-1111-111111111111"
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_churn_signals sig": {
+                "vendor_name": "Zendesk",
+                "product_category": "CRM",
+                "support_sentiment": -0.1,
+            },
+        },
+    )
+
+    row = await shared_mod.read_vendor_signal_detail(
+        pool,
+        vendor_name_query="Zendesk",
+        product_category="CRM",
+        tracked_account_id=tracked_account_id,
+        include_snapshot_metrics=True,
+        exclude_suppressed=True,
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals sig" in call[0])
+    assert score_call[1] == ("Zendesk", "CRM", tracked_account_id)
+    assert "LEFT JOIN LATERAL" in score_call[0]
+    assert "sig.product_category = $2" in score_call[0]
+    assert "tracked_vendors WHERE account_id = $3::uuid" in score_call[0]
+    assert "dc.entity_type = 'churn_signal'" in score_call[0]
+    assert row == {
+        "vendor_name": "Zendesk",
+        "product_category": "CRM",
+        "support_sentiment": -0.1,
     }
 
 
