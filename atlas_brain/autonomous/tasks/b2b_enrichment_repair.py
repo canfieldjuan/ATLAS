@@ -45,6 +45,12 @@ _COMPETITOR_PRESSURE_PATTERNS = (
     "overcharged", "not worth", "switch", "switched to", "moved to", "replaced with",
     "evaluating", "considering", "alternative", "frustrated", "pain", "issue", "problem",
 )
+_NONPRICING_PRESSURE_PATTERNS = (
+    "cancel", "cancellation", "refund", "billing dispute", "renewal",
+    "overcharged", "not worth", "frustrated", "pain", "issue", "problem",
+    "failed", "failure", "broken", "terrible", "nightmare", "outgrew",
+    "doesn't work", "doesnt work",
+)
 _DISPLACEMENT_HARD_PATTERNS = (
     "switched to", "moved to", "replaced with", "migrating to", "migration to",
 )
@@ -390,15 +396,7 @@ def _strategic_adjudication_reasons(result: dict[str, Any], source_row: dict[str
         structured_churn
         or bool(result.get("specific_complaints"))
         or bool(result.get("feature_gaps"))
-        or base_enrichment._contains_any(
-            review_blob,
-            (
-                "cancel", "cancellation", "refund", "billing dispute", "renewal",
-                "overcharged", "not worth", "frustrated", "pain", "issue", "problem",
-                "failed", "failure", "broken", "terrible", "nightmare", "outgrew",
-                "doesn't work", "doesnt work",
-            ),
-        )
+        or base_enrichment._contains_any(review_blob, _NONPRICING_PRESSURE_PATTERNS)
     )
     pricing_signal = bool(base_enrichment._REPAIR_CURRENCY_RE.search(review_blob) or "explicit_dollar" in salience_flags)
     alt_context_signal = base_enrichment._contains_any(review_blob, _DISPLACEMENT_ALT_CONTEXT_PATTERNS)
@@ -1443,6 +1441,236 @@ async def _call_repair_extractor(
         )
 
 
+
+def _repair_candidate_predicates_sql() -> str:
+    """SQL OR-predicate block identifying reviews that need repair.
+
+    Each branch targets a specific signal gap: pricing without span,
+    competitor without displacement framing, named company without
+    named-account evidence, timeline without anchor, or workflow
+    language without replacement mode.
+    """
+    return f"""
+        AND (
+          (
+            COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction')
+            AND review_text ~* '(cancel|cancellation|billing dispute|refund denied|runaround|automatic renewal|auto renew|renewed without notice|charged|invoiced|price increase|overcharg)'
+          )
+          OR (
+            NOT ({_VALID_COMPETITOR_OBJECT_SQL})
+            AND review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
+          )
+          OR (
+            COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) = 0
+            AND review_text ~* '(billing|invoice|invoiced|charged|refund|renewal|price increase|cost increase|automatic renewal|auto renew|overcharg)'
+          )
+          OR (
+            COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') NOT IN ('pricing', 'contract_lock_in')
+            AND (
+              (
+                review_text ~* '\\$\\s?\\d'
+                OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
+              )
+              AND (
+                COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+                OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+              )
+            )
+          )
+          OR (
+            COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) = 0
+            AND review_text ~* '(cancel|cancellation|billing dispute|charged after cancellation|refund denied|runaround|automatic renewal|auto renew|renewed without notice)'
+          )
+          OR (
+            COALESCE(jsonb_array_length(enrichment->'event_mentions'), 0) = 0
+            AND COALESCE(enrichment->'timeline'->>'decision_timeline', 'unknown') = 'unknown'
+            AND (
+              NULLIF(enrichment->'churn_signals'->>'renewal_timing', '') IS NOT NULL
+              OR review_text ~* '(renewal|contract end|contract expires|deadline)'
+              OR (
+                review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+                AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
+              )
+            )
+          )
+          OR (
+            enrichment_status = 'no_signal'
+            AND (
+              cardinality($3::text[]) = 0
+              OR lower(source) = ANY($3::text[])
+            )
+            AND review_text ~* '(cancel|cancellation|billing|invoice|charged|refund|automatic renewal|auto renew|switched to|moved to|considering|evaluating|replaced with)'
+          )
+          OR (
+            (
+              review_text ~* '\\$\\s?\\d'
+              OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
+            )
+            AND (
+              COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+              OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+              OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+              OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+              OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
+            )
+            AND NOT (
+              content_type IN ('community_discussion', 'insider_account')
+              AND NOT (
+                COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+              )
+              AND COALESCE(
+                CASE
+                  WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+                  ELSE NULLIF(reviewer_title, '')
+                END,
+                NULLIF(reviewer_company, ''),
+                NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+              ) IS NULL
+              AND NOT jsonb_path_exists(
+                COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+                '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+              )
+            )
+            AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "pricing_backlash")')
+          )
+          OR (
+            (
+              review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
+              OR (
+                review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
+                AND ({_VALID_COMPETITOR_OBJECT_SQL})
+              )
+              OR jsonb_path_exists(
+                COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+                '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+              )
+            )
+            AND (
+              COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+              OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+              OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+              OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+              OR COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) > 0
+              OR COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) > 0
+              OR COALESCE(jsonb_array_length(enrichment->'feature_gaps'), 0) > 0
+              OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
+            )
+            AND NOT (
+              source = 'reddit'
+              AND NOT (
+                (
+                  review_text ILIKE ('%' || vendor_name || '%')
+                  AND (
+                    lower(vendor_name) NOT IN ('copper', 'close')
+                    OR (
+                      review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
+                      AND review_text ~* '(crm|sales|pipeline|lead|leads|deal|deals|account|contact|contacts|prospect|prospects|software|saas)'
+                    )
+                  )
+                )
+                OR (
+                  COALESCE(product_name, '') <> ''
+                  AND lower(COALESCE(product_name, '')) <> lower(COALESCE(vendor_name, ''))
+                  AND review_text ILIKE ('%' || product_name || '%')
+                )
+              )
+              AND NOT review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
+            )
+            AND NOT (
+              content_type IN ('community_discussion', 'insider_account')
+              AND (
+                review_text ILIKE ('%' || vendor_name || '%')
+                OR (
+                  COALESCE(product_name, '') <> ''
+                  AND lower(COALESCE(product_name, '')) <> lower(COALESCE(vendor_name, ''))
+                  AND review_text ILIKE ('%' || product_name || '%')
+                )
+              )
+              AND NOT (
+                COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+              )
+              AND review_text ~* '(work(?:ing)? at|employee|career|manager|my manager|our team|interview|hiring|certification|freelance|rep at|joined|left my role|leaving my full time|promotion|salary)'
+              AND NOT review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
+            )
+            AND NOT (
+              content_type IN ('community_discussion', 'insider_account')
+              AND NOT (
+                COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+              )
+              AND COALESCE(
+                CASE
+                  WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+                  ELSE NULLIF(reviewer_title, '')
+                END,
+                NULLIF(reviewer_company, ''),
+                NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+              ) IS NULL
+              AND NOT jsonb_path_exists(
+                COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
+                '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
+              )
+            )
+            AND NOT (
+              ({_STRONG_VALID_COMPETITOR_OBJECT_SQL})
+              OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
+              OR lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'competitor_switch'
+            )
+          )
+          OR (
+            COALESCE(NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NOT NULL
+            AND NOT (
+              COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'named_account'
+              OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.company_name != null && @.company_name != "")')
+            )
+          )
+          OR (
+            (
+              NULLIF(enrichment->'churn_signals'->>'renewal_timing', '') IS NOT NULL
+              OR review_text ~* '(renewal|contract end|contract expires|deadline)'
+              OR (
+                review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
+                AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
+              )
+            )
+            AND NOT (
+              content_type IN ('community_discussion', 'insider_account')
+              AND NOT (
+                COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
+                OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
+              )
+              AND COALESCE(
+                CASE
+                  WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
+                  ELSE NULLIF(reviewer_title, '')
+                END,
+                NULLIF(reviewer_company, ''),
+                NULLIF(enrichment->'reviewer_context'->>'company_name', '')
+              ) IS NULL
+            )
+            AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? ((@.time_anchor != null && @.time_anchor != "") || @.flags[*] == "deadline")')
+          )
+          OR (
+            review_text ~* '(async|docs|documentation|notion|confluence|bundle|workspace|microsoft 365|google workspace|internal tool|homegrown|home-grown|custom tool)'
+            AND lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'none'
+          )
+        )
+"""
+
+
 async def run(task: ScheduledTask) -> dict[str, Any]:
     cfg = settings.b2b_churn
     if not cfg.enabled:
@@ -1561,223 +1789,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                     OR lower(vendor_name) = ANY($4::text[])
                   )
                   AND {_strict_discussion_gate_sql(6, 7)}
-                  AND (
-                    (
-                      COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') IN ('other', 'general_dissatisfaction', 'overall_dissatisfaction')
-                      AND review_text ~* '(cancel|cancellation|billing dispute|refund denied|runaround|automatic renewal|auto renew|renewed without notice|charged|invoiced|price increase|overcharg)'
-                    )
-                    OR (
-                      NOT ({_VALID_COMPETITOR_OBJECT_SQL})
-                      AND review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
-                    )
-                    OR (
-                      COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) = 0
-                      AND review_text ~* '(billing|invoice|invoiced|charged|refund|renewal|price increase|cost increase|automatic renewal|auto renew|overcharg)'
-                    )
-                    OR (
-                      COALESCE(enrichment->>'pain_category', 'overall_dissatisfaction') NOT IN ('pricing', 'contract_lock_in')
-                      AND (
-                        (
-                          review_text ~* '\\$\\s?\\d'
-                          OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
-                        )
-                        AND (
-                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                          OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
-                        )
-                      )
-                    )
-                    OR (
-                      COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) = 0
-                      AND review_text ~* '(cancel|cancellation|billing dispute|charged after cancellation|refund denied|runaround|automatic renewal|auto renew|renewed without notice)'
-                    )
-                    OR (
-                      COALESCE(jsonb_array_length(enrichment->'event_mentions'), 0) = 0
-                      AND COALESCE(enrichment->'timeline'->>'decision_timeline', 'unknown') = 'unknown'
-                      AND (
-                        NULLIF(enrichment->'churn_signals'->>'renewal_timing', '') IS NOT NULL
-                        OR review_text ~* '(renewal|contract end|contract expires|deadline)'
-                        OR (
-                          review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
-                          AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
-                        )
-                      )
-                    )
-                    OR (
-                      enrichment_status = 'no_signal'
-                      AND (
-                        cardinality($3::text[]) = 0
-                        OR lower(source) = ANY($3::text[])
-                      )
-                      AND review_text ~* '(cancel|cancellation|billing|invoice|charged|refund|automatic renewal|auto renew|switched to|moved to|considering|evaluating|replaced with)'
-                    )
-                    OR (
-                      (
-                        review_text ~* '\\$\\s?\\d'
-                        OR COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'explicit_dollar'
-                      )
-                      AND (
-                        COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-                        OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-                        OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-                        OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                        OR review_text ~* '(pricing|price|priced|cost|costly|expensive|cheaper|budget|billing|invoice|refund|overcharg|renewal|per seat|per user|subscription|license|licensed|plan|plan tier|seat|user)'
-                      )
-                      AND NOT (
-                        content_type IN ('community_discussion', 'insider_account')
-                        AND NOT (
-                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                        )
-                        AND COALESCE(
-                          CASE
-                            WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
-                            ELSE NULLIF(reviewer_title, '')
-                          END,
-                          NULLIF(reviewer_company, ''),
-                          NULLIF(enrichment->'reviewer_context'->>'company_name', '')
-                        ) IS NULL
-                        AND NOT jsonb_path_exists(
-                          COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
-                          '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
-                        )
-                      )
-                      AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "pricing_backlash")')
-                    )
-                    OR (
-                      (
-                        review_text ~* '(switched to|moved to|replaced with|migrating to|migration to)'
-                        OR (
-                          review_text ~* '(evaluating|looking at|considering|shortlisting|shortlisted|poc with|proof of concept with)'
-                          AND ({_VALID_COMPETITOR_OBJECT_SQL})
-                        )
-                        OR jsonb_path_exists(
-                          COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
-                          '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
-                        )
-                      )
-                      AND (
-                        COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-                        OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-                        OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-                        OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                        OR COALESCE(jsonb_array_length(enrichment->'specific_complaints'), 0) > 0
-                        OR COALESCE(jsonb_array_length(enrichment->'pricing_phrases'), 0) > 0
-                        OR COALESCE(jsonb_array_length(enrichment->'feature_gaps'), 0) > 0
-                        OR review_text ~* '(cancel|cancellation|refund|billing dispute|renewal|price increase|overcharg|not worth|switch|switched to|moved to|replaced with|evaluating|considering|alternative|frustrated|pain|issue|problem)'
-                      )
-                      AND NOT (
-                        source = 'reddit'
-                        AND NOT (
-                          (
-                            review_text ILIKE ('%' || vendor_name || '%')
-                            AND (
-                              lower(vendor_name) NOT IN ('copper', 'close')
-                              OR (
-                                review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
-                                AND review_text ~* '(crm|sales|pipeline|lead|leads|deal|deals|account|contact|contacts|prospect|prospects|software|saas)'
-                              )
-                            )
-                          )
-                          OR (
-                            COALESCE(product_name, '') <> ''
-                            AND lower(COALESCE(product_name, '')) <> lower(COALESCE(vendor_name, ''))
-                            AND review_text ILIKE ('%' || product_name || '%')
-                          )
-                        )
-                        AND NOT review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
-                      )
-                      AND NOT (
-                        content_type IN ('community_discussion', 'insider_account')
-                        AND (
-                          review_text ILIKE ('%' || vendor_name || '%')
-                          OR (
-                            COALESCE(product_name, '') <> ''
-                            AND lower(COALESCE(product_name, '')) <> lower(COALESCE(vendor_name, ''))
-                            AND review_text ILIKE ('%' || product_name || '%')
-                          )
-                        )
-                        AND NOT (
-                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                        )
-                        AND review_text ~* '(work(?:ing)? at|employee|career|manager|my manager|our team|interview|hiring|certification|freelance|rep at|joined|left my role|leaving my full time|promotion|salary)'
-                        AND NOT review_text ~* '(alternative|alternatives|budget|contract|cost|expensive|migrate|migration|pricing|renewal|replace|replaced|seat|seats|support|switch|switching)'
-                      )
-                      AND NOT (
-                        content_type IN ('community_discussion', 'insider_account')
-                        AND NOT (
-                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                        )
-                        AND COALESCE(
-                          CASE
-                            WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
-                            ELSE NULLIF(reviewer_title, '')
-                          END,
-                          NULLIF(reviewer_company, ''),
-                          NULLIF(enrichment->'reviewer_context'->>'company_name', '')
-                        ) IS NULL
-                        AND NOT jsonb_path_exists(
-                          COALESCE(enrichment->'competitors_mentioned', '[]'::jsonb),
-                          '$[*] ? (@.evidence_type == "explicit_switch" || @.evidence_type == "active_evaluation" || @.displacement_confidence == "high" || @.displacement_confidence == "medium" || @.reason != null || @.reason_category != null || @.reason_detail != null)'
-                        )
-                      )
-                      AND NOT (
-                        ({_STRONG_VALID_COMPETITOR_OBJECT_SQL})
-                        OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.signal_type == "competitor_pressure")')
-                        OR lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'competitor_switch'
-                      )
-                    )
-                    OR (
-                      COALESCE(NULLIF(reviewer_company, ''), NULLIF(enrichment->'reviewer_context'->>'company_name', '')) IS NOT NULL
-                      AND NOT (
-                        COALESCE(enrichment->'salience_flags', '[]'::jsonb) ? 'named_account'
-                        OR jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? (@.company_name != null && @.company_name != "")')
-                      )
-                    )
-                    OR (
-                      (
-                        NULLIF(enrichment->'churn_signals'->>'renewal_timing', '') IS NOT NULL
-                        OR review_text ~* '(renewal|contract end|contract expires|deadline)'
-                        OR (
-                          review_text ~* '(next quarter|q1|q2|q3|q4|30 days|60 days|90 days)'
-                          AND review_text ~* '(renewal|contract|evaluating|evaluation|considering|switch|switched|migrating|migration|replatform|cancel|deadline|go live|go-live|cutover)'
-                        )
-                      )
-                      AND NOT (
-                        content_type IN ('community_discussion', 'insider_account')
-                        AND NOT (
-                          COALESCE((enrichment->'churn_signals'->>'intent_to_leave')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'actively_evaluating')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'migration_in_progress')::boolean, false)
-                          OR COALESCE((enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean, false)
-                        )
-                        AND COALESCE(
-                          CASE
-                            WHEN LOWER(COALESCE(reviewer_title, '')) LIKE 'repeat churn signal%' THEN NULL
-                            ELSE NULLIF(reviewer_title, '')
-                          END,
-                          NULLIF(reviewer_company, ''),
-                          NULLIF(enrichment->'reviewer_context'->>'company_name', '')
-                        ) IS NULL
-                      )
-                      AND NOT jsonb_path_exists(COALESCE(enrichment->'evidence_spans', '[]'::jsonb), '$[*] ? ((@.time_anchor != null && @.time_anchor != "") || @.flags[*] == "deadline")')
-                    )
-                    OR (
-                      review_text ~* '(async|docs|documentation|notion|confluence|bundle|workspace|microsoft 365|google workspace|internal tool|homegrown|home-grown|custom tool)'
-                      AND lower(COALESCE(enrichment->>'replacement_mode', 'none')) = 'none'
-                    )
-                  )
+                  {_repair_candidate_predicates_sql()}
                 ORDER BY
                   CASE
                     WHEN enrichment_repair_status IS NULL THEN 0
