@@ -9,6 +9,8 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
     title = escape(str(artifact.get("title") or "Persisted artifact"))
     type_label = escape(str(artifact.get("type_label") or "Report"))
     trust_label = escape(str(artifact.get("trust_label") or "Persisted artifact"))
+    artifact_label = escape(str(artifact.get("artifact_label") or "Status unknown"))
+    review_label = escape(str(artifact.get("review_label") or "Review unknown"))
     freshness_label = escape(str(artifact.get("freshness_label") or "Unknown"))
     freshness_detail = escape(str(artifact.get("freshness_detail") or ""))
     executive_summary = escape(str(artifact.get("executive_summary") or "No executive summary is attached to this artifact yet."))
@@ -54,6 +56,8 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
     <div style="margin-top:8px;font-size:20px;font-weight:700;color:#0f172a;">{title}</div>
     <div style="margin-top:10px;font-size:13px;color:#475569;line-height:1.6;">
       <strong>Trust:</strong> {trust_label}<br>
+      <strong>Artifact:</strong> {artifact_label}<br>
+      <strong>Review:</strong> {review_label}<br>
       <strong>Freshness:</strong> {freshness_label}
       {"<br><span style=\"color:#64748b;\">" + freshness_detail + "</span>" if freshness_detail else ""}
     </div>
@@ -175,6 +179,8 @@ def render_report_subscription_delivery_text(
         lines.append(f"- {artifact.get('title') or 'Persisted artifact'}")
         lines.append(f"  Type: {artifact.get('type_label') or 'Report'}")
         lines.append(f"  Trust: {artifact.get('trust_label') or 'Persisted artifact'}")
+        lines.append(f"  Artifact: {artifact.get('artifact_label') or 'Status unknown'}")
+        lines.append(f"  Review: {artifact.get('review_label') or 'Review unknown'}")
         lines.append(f"  Freshness: {artifact.get('freshness_label') or 'Unknown'}")
         freshness_detail = str(artifact.get("freshness_detail") or "").strip()
         if freshness_detail:
