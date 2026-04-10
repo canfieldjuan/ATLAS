@@ -4,7 +4,7 @@ import json
 import sys
 from datetime import date, datetime, timezone
 from uuid import uuid4
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -73,6 +73,7 @@ async def test_vendor_snapshot_parses_vendor_mentions_shape(monkeypatch):
     pool = FakePool(
         fetchrow_map={
             "FROM b2b_evidence_vault": {
+                "vendor_name": "Zendesk",
                 "vault": json.dumps({
                     "metric_snapshot": {
                         "total_reviews": 40,
@@ -375,6 +376,113 @@ async def test_read_vendor_graph_sync_rows_uses_ranked_scorecard_join():
 
 
 @pytest.mark.asyncio
+async def test_fetch_vendor_vault_row_uses_shared_nearest_window_reader(monkeypatch):
+    pool = object()
+    reader = AsyncMock(
+        return_value={
+            "vendor_name": "Zendesk",
+            "analysis_window_days": 60,
+            "vault": {"metric_snapshot": {"total_reviews": 42}},
+        },
+    )
+    monkeypatch.setattr(mod, "_read_vendor_intelligence_record_nearest_window", reader)
+
+    vault, resolved_window = await mod._fetch_vendor_vault_row(pool, "Zendesk", 90)
+
+    reader.assert_awaited_once_with(pool, "Zendesk", 90)
+    assert vault == {"metric_snapshot": {"total_reviews": 42}}
+    assert resolved_window == 60
+
+
+@pytest.mark.asyncio
+async def test_generate_company_deep_dive_report_uses_shared_archetype_lookup(monkeypatch):
+    pool = object()
+    snapshot = {
+        "company_name": "Acme Corp",
+        "signal_count": 2,
+        "avg_urgency_score": 6.1,
+        "max_urgency_score": 8.2,
+        "decision_maker_signals": 1,
+        "churn_intent_count": 1,
+        "current_vendors": [{"vendor": "Zendesk"}],
+        "product_categories": [],
+        "top_pain_categories": [{"category": "pricing"}],
+        "alternatives_considered": [{"name": "Freshdesk"}],
+        "timeline_signals": [],
+    }
+    monkeypatch.setattr(mod, "_company_snapshot_from_signals", AsyncMock(return_value=snapshot))
+    lookup = AsyncMock(return_value={"Zendesk": {"archetype": "pricing_pressure", "confidence": 0.82}})
+    monkeypatch.setattr(mod, "_build_vendor_archetype_lookup", lookup)
+
+    report = await mod.generate_company_deep_dive_report(
+        pool,
+        "Acme Corp",
+        window_days=90,
+        persist=False,
+    )
+
+    lookup.assert_awaited_once_with(pool, ["Zendesk"])
+    assert report is not None
+    assert report["vendor_archetypes"]["Zendesk"]["archetype"] == "pricing_pressure"
+
+
+@pytest.mark.asyncio
+async def test_generate_company_comparison_report_uses_shared_archetype_lookup(monkeypatch):
+    pool = object()
+    primary_snapshot = {
+        "company_name": "Acme Corp",
+        "signal_count": 2,
+        "avg_urgency_score": 6.1,
+        "max_urgency_score": 8.2,
+        "decision_maker_signals": 1,
+        "churn_intent_count": 1,
+        "current_vendors": [{"vendor": "Zendesk"}],
+        "product_categories": [],
+        "top_pain_categories": [{"category": "pricing"}],
+        "alternatives_considered": [{"name": "Freshdesk"}],
+        "timeline_signals": [],
+    }
+    comparison_snapshot = {
+        "company_name": "Globex",
+        "signal_count": 3,
+        "avg_urgency_score": 5.4,
+        "max_urgency_score": 7.3,
+        "decision_maker_signals": 2,
+        "churn_intent_count": 1,
+        "current_vendors": [{"vendor": "HubSpot"}],
+        "product_categories": [],
+        "top_pain_categories": [{"category": "automation"}],
+        "alternatives_considered": [{"name": "Freshdesk"}],
+        "timeline_signals": [],
+    }
+    monkeypatch.setattr(
+        mod,
+        "_company_snapshot_from_signals",
+        AsyncMock(side_effect=[primary_snapshot, comparison_snapshot]),
+    )
+    lookup = AsyncMock(
+        return_value={
+            "HubSpot": {"archetype": "feature_gap", "confidence": 0.71},
+            "Zendesk": {"archetype": "pricing_pressure", "confidence": 0.82},
+        },
+    )
+    monkeypatch.setattr(mod, "_build_vendor_archetype_lookup", lookup)
+
+    report = await mod.generate_company_comparison_report(
+        pool,
+        "Acme Corp",
+        "Globex",
+        window_days=90,
+        persist=False,
+    )
+
+    lookup.assert_awaited_once()
+    assert report is not None
+    assert report["vendor_archetypes"]["Zendesk"]["archetype"] == "pricing_pressure"
+    assert report["vendor_archetypes"]["HubSpot"]["archetype"] == "feature_gap"
+
+
+@pytest.mark.asyncio
 async def test_read_vendor_scorecard_inventory_rows_matches_provisioning_shape():
     pool = FakePool(
         fetch_map={
@@ -507,6 +615,66 @@ async def test_search_vendor_intelligence_record_uses_partial_vendor_query():
         "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
         "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
     }
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_intelligence_record_nearest_window_prefers_closest_match():
+    pool = FakePool(
+        fetchrow_map={
+            "FROM b2b_evidence_vault": {
+                "vendor_name": "Zendesk",
+                "as_of_date": date(2026, 3, 31),
+                "analysis_window_days": 60,
+                "schema_version": 2,
+                "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+                "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+            },
+        },
+    )
+
+    row = await shared_mod.read_vendor_intelligence_record_nearest_window(
+        pool,
+        vendor_name="Zendesk",
+        analysis_window_days=90,
+    )
+
+    evidence_call = next(call for call in pool.calls if "FROM b2b_evidence_vault" in call[0])
+    assert "ABS(analysis_window_days - $2)" in evidence_call[0]
+    assert evidence_call[1] == ("Zendesk", 90)
+    assert row["analysis_window_days"] == 60
+    assert row["vault"]["metric_snapshot"]["avg_urgency"] == 7.2
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_scorecard_archetypes_returns_latest_non_null_rows():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [
+                {
+                    "vendor_name": "Zendesk",
+                    "archetype": "pricing_pressure",
+                    "archetype_confidence": 0.82,
+                },
+            ],
+        },
+    )
+
+    rows = await shared_mod.read_vendor_scorecard_archetypes(
+        pool,
+        vendor_names=["Zendesk"],
+    )
+
+    signal_call = next(call for call in pool.calls if "FROM b2b_churn_signals" in call[0])
+    assert "SELECT DISTINCT ON (vendor_name)" in signal_call[0]
+    assert "archetype IS NOT NULL" in signal_call[0]
+    assert signal_call[1] == (["zendesk"],)
+    assert rows == [
+        {
+            "vendor_name": "Zendesk",
+            "archetype": "pricing_pressure",
+            "archetype_confidence": 0.82,
+        },
+    ]
 
 
 @pytest.mark.asyncio
