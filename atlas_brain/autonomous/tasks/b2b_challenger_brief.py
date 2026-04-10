@@ -20,8 +20,6 @@ from ...config import settings
 from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ._b2b_shared import (
-    _align_vendor_intelligence_record_to_scorecard,
-    read_vendor_intelligence_records as _read_vendor_intelligence_records,
     read_vendor_intelligence_map as _read_vendor_intelligence_map,
     _segment_targeting_summary,
     _timing_summary_payload,
@@ -46,56 +44,6 @@ async def _fetch_latest_evidence_vault(
         vendor_names=vendor_names,
     )
 
-
-async def _fetch_latest_evidence_vault_records(
-    pool,
-    *,
-    as_of: date,
-    analysis_window_days: int,
-    vendor_names: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    """Read canonical vendor-intelligence records with run metadata."""
-    return await _read_vendor_intelligence_records(
-        pool,
-        as_of=as_of,
-        analysis_window_days=analysis_window_days,
-        vendor_names=vendor_names,
-    )
-
-
-def _evidence_vault_record_lookup(
-    records: list[dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    lookup: dict[str, dict[str, Any]] = {}
-    for record in records:
-        vendor_name = str(record.get("vendor_name") or "").strip()
-        if vendor_name:
-            lookup[vendor_name] = record
-    return lookup
-
-
-def _select_incumbent_evidence_vault(
-    *,
-    vendor_name: str,
-    churn_signal: dict[str, Any] | None,
-    evidence_record: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not isinstance(evidence_record, dict):
-        return None
-    if not isinstance(churn_signal, dict):
-        vault = evidence_record.get("vault")
-        return vault if isinstance(vault, dict) else None
-    vault, alignment = _align_vendor_intelligence_record_to_scorecard(
-        churn_signal,
-        evidence_record,
-    )
-    if alignment["mismatched_vendor_count"] > 0:
-        logger.info(
-            "Suppressed stale challenger evidence-vault overlay for %s",
-            vendor_name,
-        )
-    return vault
-
 _STAGE_SELECTING_PAIRS = "selecting_pairs"
 _STAGE_BUILDING_BRIEFS = "building_briefs"
 _STAGE_FINALIZING = "finalizing"
@@ -106,11 +54,14 @@ _STAGE_FINALIZING = "finalizing"
 # ---------------------------------------------------------------------------
 
 async def _check_freshness(pool) -> date | None:
-    """Return today's date if the core run completed canonically for today."""
-    from ._b2b_shared import has_complete_core_run_marker
-
+    """Return today's date if the core run completed for today."""
     today = date.today()
-    if not await has_complete_core_run_marker(pool, today):
+    marker = await pool.fetchval(
+        "SELECT 1 FROM b2b_intelligence "
+        "WHERE report_type = 'core_run_complete' AND report_date = $1",
+        today,
+    )
+    if not marker:
         logger.info("Core run not complete for %s, skipping", today)
         return None
     return today
@@ -1926,14 +1877,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     today = await _check_freshness(pool)
     if today is None:
-        from ._b2b_shared import describe_core_run_gap
-
-        return {
-            "_skip_synthesis": (
-                await describe_core_run_gap(pool, date.today())
-                or "Core signals not fresh for today"
-            )
-        }
+        return {"_skip_synthesis": "Core signals not fresh for today"}
 
     from .b2b_churn_intelligence import _normalize_test_vendors
 
@@ -1991,13 +1935,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     )
 
     try:
-        evidence_vault_lookup = _evidence_vault_record_lookup(
-            await _fetch_latest_evidence_vault_records(
-                pool,
-                as_of=today,
-                analysis_window_days=window_days,
-                vendor_names=evidence_vendors,
-            )
+        evidence_vault_lookup = await _fetch_latest_evidence_vault(
+            pool,
+            as_of=today,
+            analysis_window_days=window_days,
+            vendor_names=evidence_vendors,
         )
     except Exception:
         logger.warning("Failed to load evidence vault for challenger briefs", exc_info=True)
@@ -2079,11 +2021,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
                 accounts_in_motion=accounts_in_motion,
                 incumbent_profile=incumbent_profile,
                 challenger_profile=challenger_profile,
-                incumbent_evidence_vault=_select_incumbent_evidence_vault(
-                    vendor_name=incumbent,
-                    churn_signal=churn_signal,
-                    evidence_record=evidence_vault_lookup.get(incumbent),
-                ),
+                incumbent_evidence_vault=evidence_vault_lookup.get(incumbent),
                 churn_signal=churn_signal,
                 incumbent_synthesis_view=incumbent_synthesis_view,
                 cross_vendor_battle=cross_vendor_battle,

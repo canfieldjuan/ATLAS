@@ -1669,7 +1669,7 @@ class TestChallengerBriefRunProgress:
         monkeypatch.setattr(brief_mod, "_update_execution_progress", progress)
         monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
         monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
-        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault_records", AsyncMock(return_value=[]))
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={}))
         monkeypatch.setattr(
             brief_mod,
             "_select_displacement_pairs",
@@ -1734,8 +1734,8 @@ class TestChallengerBriefRunProgress:
         monkeypatch.setattr(brief_mod, "_update_execution_progress", AsyncMock())
         monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
         monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
-        fetch_vault = AsyncMock(return_value=[])
-        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault_records", fetch_vault)
+        fetch_vault = AsyncMock(return_value={})
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", fetch_vault)
         monkeypatch.setattr(
             brief_mod,
             "_select_displacement_pairs",
@@ -1817,7 +1817,7 @@ class TestChallengerBriefRunProgress:
         monkeypatch.setattr(brief_mod, "_update_execution_progress", AsyncMock())
         monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
         monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
-        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault_records", AsyncMock(return_value=[]))
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={}))
         monkeypatch.setattr(
             brief_mod,
             "_select_displacement_pairs",
@@ -1842,87 +1842,6 @@ class TestChallengerBriefRunProgress:
 
         xv_mod.load_best_cross_vendor_lookup.assert_awaited_once()
         assert resolve_battle.call_args.args[4] == merged_lookup
-
-    @pytest.mark.asyncio
-    async def test_run_suppresses_stale_evidence_vault_overlay_when_churn_signal_run_mismatches(self, monkeypatch):
-        pool = type("Pool", (), {
-            "is_initialized": True,
-            "execute": AsyncMock(),
-            "fetch": AsyncMock(return_value=[]),
-        })()
-        captured: dict[str, Any] = {}
-
-        async def fake_gather(*_args, **_kwargs):
-            for coro in _args:
-                close = getattr(coro, "close", None)
-                if close:
-                    close()
-            return (
-                None,
-                None,
-                {"total_mentions": 3, "source_distribution": {"reddit": 3}},
-                None,
-                None,
-                {
-                    "vendor": "Zendesk",
-                    "materialization_run_id": "run-current",
-                    "total_reviews": 30,
-                    "signal_reviews": 30,
-                    "churn_intent_count": 6,
-                    "avg_urgency_score": 4.2,
-                    "decision_maker_churn_rate": 0.12,
-                    "price_complaint_rate": 0.2,
-                    "top_competitors": [],
-                },
-                None,
-                None,
-                [],
-            )
-
-        def build_brief(**kwargs):
-            captured.update(kwargs)
-            return {
-                "_executive_summary": "summary",
-                "displacement_summary": {"total_mentions": 3, "source_distribution": {"reddit": 3}},
-                "data_sources": {"battle_card": False},
-                "total_target_accounts": 0,
-            }
-
-        monkeypatch.setattr(brief_mod.settings.b2b_churn, "enabled", True, raising=False)
-        monkeypatch.setattr(brief_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
-        monkeypatch.setattr(brief_mod, "_update_execution_progress", AsyncMock())
-        monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
-        monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
-        monkeypatch.setattr(
-            brief_mod,
-            "_fetch_latest_evidence_vault_records",
-            AsyncMock(return_value=[
-                {
-                    "vendor_name": "Zendesk",
-                    "materialization_run_id": "run-stale",
-                    "vault": {"metric_snapshot": {"avg_urgency": 8.8}},
-                },
-            ]),
-        )
-        monkeypatch.setattr(
-            brief_mod,
-            "_select_displacement_pairs",
-            AsyncMock(return_value=[{"incumbent": "Zendesk", "challenger": "Freshdesk"}]),
-        )
-        monkeypatch.setattr(brief_mod.asyncio, "gather", fake_gather)
-        monkeypatch.setattr(brief_mod, "_build_challenger_brief", build_brief)
-
-        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
-        result = await brief_mod.run(task)
-
-        assert result == {
-            "_skip_synthesis": "Challenger briefs complete",
-            "pairs": 1,
-            "persisted": 1,
-            "briefs_retired": 0,
-        }
-        assert captured["churn_signal"]["materialization_run_id"] == "run-current"
-        assert captured["incumbent_evidence_vault"] is None
 
 
 @pytest.mark.asyncio

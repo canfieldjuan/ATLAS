@@ -203,6 +203,72 @@ async def test_read_vendor_scorecards_applies_vendor_filter():
     assert "LOWER(vendor_name) = ANY($3::text[])" in score_call[0]
 
 
+def test_align_vendor_intelligence_records_to_scorecards_filters_mismatched_runs():
+    vendor_scores = [
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-zendesk",
+        },
+        {
+            "vendor_name": "Freshdesk",
+            "materialization_run_id": "run-freshdesk",
+        },
+        {
+            "vendor_name": "Intercom",
+        },
+    ]
+    records = [
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-zendesk",
+            "vault": {"metric_snapshot": {"avg_urgency": 7.2}},
+        },
+        {
+            "vendor_name": "Freshdesk",
+            "materialization_run_id": "run-stale",
+            "vault": {"metric_snapshot": {"avg_urgency": 6.1}},
+        },
+        {
+            "vendor_name": "Intercom",
+            "vault": {"metric_snapshot": {"avg_urgency": 5.4}},
+        },
+    ]
+
+    lookup, alignment = shared_mod._align_vendor_intelligence_records_to_scorecards(
+        vendor_scores,
+        records,
+    )
+
+    assert lookup == {
+        "Zendesk": {"metric_snapshot": {"avg_urgency": 7.2}},
+        "Intercom": {"metric_snapshot": {"avg_urgency": 5.4}},
+    }
+    assert alignment["matched_vendor_count"] == 2
+    assert alignment["mismatched_vendor_count"] == 1
+    assert alignment["mismatched_vendors"] == ["Freshdesk"]
+    assert alignment["legacy_scorecard_vendors"] == ["Intercom"]
+    assert alignment["legacy_vault_vendors"] == ["Intercom"]
+
+
+def test_align_vendor_intelligence_record_to_scorecard_filters_mismatched_run():
+    vault, alignment = shared_mod._align_vendor_intelligence_record_to_scorecard(
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-current",
+        },
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-stale",
+            "vault": {"metric_snapshot": {"avg_urgency": 6.9}},
+        },
+    )
+
+    assert vault is None
+    assert alignment["matched_vendor_count"] == 0
+    assert alignment["mismatched_vendor_count"] == 1
+    assert alignment["mismatched_vendors"] == ["Zendesk"]
+
+
 @pytest.mark.asyncio
 async def test_has_complete_core_run_marker_requires_published_complete_row():
     pool = FakePool(
