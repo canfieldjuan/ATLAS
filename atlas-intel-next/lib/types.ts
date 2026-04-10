@@ -367,6 +367,17 @@ export interface Prospect {
   status: string
   created_at: string
   updated_at: string
+  // Sequence enrollment data (populated by backend when available)
+  churning_from?: string | null
+  target_persona?: string | null
+  related_sequence_id?: string | null
+  related_sequence_status?: string | null
+  related_sequence_current_step?: number | null
+  related_sequence_max_steps?: number | null
+  related_sequence_last_sent_at?: string | null
+  reasoning_scope_summary?: Record<string, unknown>
+  reasoning_atom_context?: Record<string, unknown>
+  reasoning_delta_summary?: Record<string, unknown>
 }
 
 export interface ProspectStats {
@@ -374,6 +385,28 @@ export interface ProspectStats {
   active: number
   contacted: number
   this_month: number
+}
+
+export interface ManualQueueEntry {
+  id: string
+  company_name_raw: string
+  company_name_norm: string | null
+  domain: string | null
+  status: string
+  error_detail: string | null
+  enriched_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CompanyOverride {
+  id: string
+  company_name_raw: string
+  company_name_norm: string
+  search_names: string[]
+  domains: string[]
+  created_at: string | null
+  updated_at: string | null
 }
 
 // ---------------------------------------------------------------------------
