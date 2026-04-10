@@ -601,7 +601,7 @@ describe('Watchlists', () => {
     expect(screen.getByDisplayValue('1')).toBeInTheDocument()
     expect(screen.getByText('Vendor alerts at 7.5+ urgency: 1 hit')).toBeInTheDocument()
     expect(screen.getByText('Account alerts at 8.5+ urgency: 1 hit')).toBeInTheDocument()
-    expect(screen.getByText('Stale policy after 1 day: 1 hit')).toBeInTheDocument()
+    expect(screen.getByText('Stale policy after 1 day: 2 hits')).toBeInTheDocument()
     expect(screen.getByText('Saved View Alert Events')).toBeInTheDocument()
     expect(screen.getByText('Zendesk crossed the vendor alert threshold at 8.2')).toBeInTheDocument()
     expect(screen.getByText('Email delivery log')).toBeInTheDocument()
@@ -812,6 +812,134 @@ describe('Watchlists', () => {
       })
     })
     expect(api.createWatchlistView).not.toHaveBeenCalled()
+  })
+
+  it('sends changed-only and force flags when starting a competitive-set run', async () => {
+    const user = userEvent.setup()
+    api.listCompetitiveSets.mockResolvedValue({
+      competitive_sets: [
+        {
+          id: 'set-1',
+          name: 'Helpdesk core',
+          focal_vendor_name: 'Intercom',
+          competitor_vendor_names: ['Zendesk', 'Freshdesk'],
+          active: true,
+          refresh_mode: 'manual',
+          refresh_interval_hours: null,
+          vendor_synthesis_enabled: true,
+          pairwise_enabled: true,
+          category_council_enabled: false,
+          asymmetry_enabled: true,
+          last_run_at: null,
+          last_success_at: null,
+          last_run_status: null,
+          last_run_summary: {},
+          created_at: '2026-04-07T12:00:00Z',
+          updated_at: '2026-04-07T12:00:00Z',
+        },
+      ],
+      count: 1,
+      defaults: {
+        default_refresh_interval_hours: 24,
+        max_competitors: 5,
+        default_changed_vendors_only: true,
+      },
+    })
+    api.fetchCompetitiveSetPlan.mockResolvedValue({
+      competitive_set: {
+        id: 'set-1',
+        name: 'Helpdesk core',
+      },
+      plan: {
+        competitive_set_id: 'set-1',
+        focal_vendor_name: 'Intercom',
+        vendor_names: ['Intercom', 'Zendesk', 'Freshdesk'],
+        pairwise_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        category_names: [],
+        asymmetry_pairs: [['Intercom', 'Zendesk'], ['Intercom', 'Freshdesk']],
+        vendor_synthesis_enabled: true,
+        pairwise_enabled: true,
+        category_council_enabled: false,
+        asymmetry_enabled: true,
+        vendor_job_count: 3,
+        pairwise_job_count: 2,
+        category_job_count: 0,
+        asymmetry_job_count: 2,
+        estimated_total_jobs: 7,
+        estimate: {
+          lookback_days: 30,
+          vendor_jobs_planned: 3,
+          pairwise_jobs_planned: 2,
+          category_jobs_planned: 0,
+          asymmetry_jobs_planned: 2,
+          estimated_vendor_tokens: 1200,
+          estimated_cross_vendor_tokens: 2400,
+          estimated_total_tokens: 3600,
+          estimated_vendor_cost_usd: 0.12,
+          estimated_cross_vendor_cost_usd: 0.24,
+          estimated_total_cost_usd: 0.36,
+          estimated_vendor_tokens_likely_to_reason: 800,
+          estimated_vendor_cost_usd_likely_to_reason: 0.08,
+          vendor_jobs_with_history: 2,
+          vendor_jobs_using_fallback: 1,
+          cross_vendor_jobs_with_history: 3,
+          cross_vendor_jobs_using_fallback: 1,
+          vendor_jobs_with_matching_pools: 2,
+          vendor_jobs_missing_pools: 1,
+          vendor_jobs_likely_to_reason: 2,
+          vendor_jobs_likely_hash_reuse: 1,
+          vendor_jobs_likely_stale_reuse: 0,
+          vendor_jobs_likely_missing_prior: 0,
+          vendor_jobs_likely_hash_changed: 1,
+          vendor_jobs_likely_prior_quality_weak: 0,
+          vendor_jobs_likely_missing_packet_artifacts: 0,
+          vendor_jobs_likely_missing_reference_ids: 0,
+          likely_rerun_vendors: ['Intercom:changed'],
+          likely_reuse_vendors: ['Zendesk:reuse'],
+          recent_vendor_sample_count: 3,
+          recent_cross_vendor_sample_count: 2,
+          note: 'Estimated from recent runs.',
+        },
+      },
+      recent_runs: [],
+    })
+    api.runCompetitiveSetNow.mockResolvedValue({
+      execution_id: 'exec-1',
+      status: 'started',
+      message: 'queued',
+      competitive_set_id: 'set-1',
+      plan: {
+        competitive_set_id: 'set-1',
+      },
+    })
+
+    render(
+      <MemoryRouter>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Helpdesk core')
+    await user.click(screen.getByRole('button', { name: 'Preview cost' }))
+
+    await waitFor(() => {
+      expect(api.fetchCompetitiveSetPlan).toHaveBeenCalledWith('set-1')
+    })
+
+    await user.click(screen.getByLabelText('Run changed vendors only'))
+    await user.click(screen.getByLabelText('Force vendor rerun'))
+    await user.click(screen.getByLabelText('Force cross-vendor synthesis'))
+    await user.click(screen.getByRole('button', { name: 'Run now' }))
+
+    await waitFor(() => {
+      expect(api.runCompetitiveSetNow).toHaveBeenCalledWith('set-1', {
+        changed_vendors_only: false,
+        force: true,
+        force_cross_vendor: true,
+      })
+    })
+
+    expect(await screen.findByText('Helpdesk core refresh started (exec-1)')).toBeInTheDocument()
   })
 
   it('matches the active saved view using alert delivery settings too', async () => {

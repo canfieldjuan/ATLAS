@@ -437,6 +437,54 @@ async def test_run_competitive_set_now_forwards_changed_only_flag(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_competitive_set_now_forwards_force_flags(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    competitive_set = _competitive_set()
+    repo = SimpleNamespace(
+        get_by_id_for_account=AsyncMock(return_value=competitive_set),
+    )
+    scheduler = SimpleNamespace(
+        run_now=AsyncMock(return_value={"status": "started", "message": "ok", "execution_id": "exec-1"}),
+    )
+    task = SimpleNamespace(metadata={"existing": True})
+    task_repo = SimpleNamespace(get_by_name=AsyncMock(return_value=task))
+    user = AuthUser(
+        user_id=str(uuid4()),
+        account_id=str(competitive_set.account_id),
+        plan="b2b_pro",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+    )
+
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: object())
+    monkeypatch.setattr(mod, "get_competitive_set_repo", lambda: repo)
+    monkeypatch.setattr(mod, "get_task_scheduler", lambda: scheduler)
+    monkeypatch.setattr(mod, "get_scheduled_task_repo", lambda: task_repo)
+    monkeypatch.setattr(
+        mod,
+        "load_vendor_category_map",
+        AsyncMock(return_value={"salesforce": "CRM", "hubspot": "CRM"}),
+    )
+
+    req = mod.CompetitiveSetRunRequest(
+        force=True,
+        force_cross_vendor=True,
+        changed_vendors_only=False,
+    )
+    result = await mod.run_competitive_set_now(competitive_set.id, req, user=user)
+
+    assert result["competitive_set_id"] == str(competitive_set.id)
+    assert scheduler.run_now.await_count == 1
+    assert task.metadata["force"] is True
+    assert task.metadata["force_cross_vendor"] is True
+    assert task.metadata["changed_vendors_only"] is False
+    assert task.metadata["scope_trigger"] == "manual"
+
+
+@pytest.mark.asyncio
 async def test_run_competitive_set_now_uses_config_default_when_flag_omitted(monkeypatch):
     from atlas_brain.api import b2b_tenant_dashboard as mod
 

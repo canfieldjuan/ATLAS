@@ -336,6 +336,8 @@ export default function Watchlists() {
   const [competitiveSetPreviews, setCompetitiveSetPreviews] = useState<Record<string, CompetitiveSetPlan>>({})
   const [competitiveSetRuns, setCompetitiveSetRuns] = useState<Record<string, CompetitiveSetRun[]>>({})
   const [competitiveSetChangedOnly, setCompetitiveSetChangedOnly] = useState<Record<string, boolean>>({})
+  const [competitiveSetForceRun, setCompetitiveSetForceRun] = useState<Record<string, boolean>>({})
+  const [competitiveSetForceCrossVendor, setCompetitiveSetForceCrossVendor] = useState<Record<string, boolean>>({})
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [selectedAccount, setSelectedAccount] = useState<AccountsInMotionFeedItem | null>(null)
@@ -941,6 +943,14 @@ export default function Watchlists() {
         ...current,
         [item.id]: current[item.id] ?? (competitiveSetDefaults?.default_changed_vendors_only ?? true),
       }))
+      setCompetitiveSetForceRun((current) => ({
+        ...current,
+        [item.id]: current[item.id] ?? false,
+      }))
+      setCompetitiveSetForceCrossVendor((current) => ({
+        ...current,
+        [item.id]: current[item.id] ?? false,
+      }))
       setOpenCompetitiveSetPreviewId(item.id)
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Failed to load competitive-set preview')
@@ -956,6 +966,8 @@ export default function Watchlists() {
     try {
       const result = await runCompetitiveSetNow(item.id, {
         changed_vendors_only: competitiveSetChangedOnly[item.id] ?? true,
+        force: competitiveSetForceRun[item.id] ?? false,
+        force_cross_vendor: competitiveSetForceCrossVendor[item.id] ?? false,
       })
       setActionMessage(
         `${item.name} refresh started${result.execution_id ? ` (${result.execution_id})` : ''}`,
@@ -2152,6 +2164,8 @@ export default function Watchlists() {
                 const likelyReuseVendors = (estimate?.likely_reuse_vendors ?? []).slice(0, 6)
                 const previewOpen = openCompetitiveSetPreviewId === item.id
                 const changedOnly = competitiveSetChangedOnly[item.id] ?? true
+                const forceRun = competitiveSetForceRun[item.id] ?? false
+                const forceCrossVendor = competitiveSetForceCrossVendor[item.id] ?? false
                 return (
                   <div key={item.id} className="rounded-lg border border-slate-700/50 bg-slate-950/40 p-3">
                     <div className="flex items-start justify-between gap-3">
@@ -2377,6 +2391,32 @@ export default function Watchlists() {
                             }}
                           />
                           Run changed vendors only
+                        </label>
+                        <label className="mt-2 flex items-center gap-2 rounded-md border border-slate-700/50 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={forceRun}
+                            onChange={(event) => {
+                              setCompetitiveSetForceRun((current) => ({
+                                ...current,
+                                [item.id]: event.target.checked,
+                              }))
+                            }}
+                          />
+                          Force vendor rerun
+                        </label>
+                        <label className="mt-2 flex items-center gap-2 rounded-md border border-slate-700/50 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={forceCrossVendor}
+                            onChange={(event) => {
+                              setCompetitiveSetForceCrossVendor((current) => ({
+                                ...current,
+                                [item.id]: event.target.checked,
+                              }))
+                            }}
+                          />
+                          Force cross-vendor synthesis
                         </label>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button
