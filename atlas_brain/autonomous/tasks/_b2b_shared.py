@@ -5456,6 +5456,7 @@ async def fetch_all_pool_layers(
 
     # Review candidates for witness-pack building.
     try:
+        review_filter_clause = "AND LOWER(r.vendor_name) = ANY($3::text[])" if requested_vendors else ""
         review_rows = await pool.fetch(
             """
                 SELECT
@@ -5490,6 +5491,7 @@ async def fetch_all_pool_layers(
                   AND r.duplicate_of_review_id IS NULL
                   AND COALESCE(r.reviewed_at, r.imported_at) <= ($1::date + INTERVAL '1 day')
                   AND COALESCE(r.reviewed_at, r.imported_at) >= ($1::date - ($2::int * INTERVAL '1 day'))
+                  """ + review_filter_clause + """
                 ORDER BY
                     r.vendor_name,
                     COALESCE(r.reviewed_at, r.imported_at) DESC,
@@ -5498,6 +5500,7 @@ async def fetch_all_pool_layers(
             """,
             as_of,
             analysis_window_days,
+            *vendor_filter_args,
         )
         for row in review_rows:
             vendor = _canonicalize_vendor(row.get("vendor_name") or "")

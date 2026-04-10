@@ -279,6 +279,7 @@ async def test_fetch_all_pool_layers_applies_vendor_filter_to_queries():
                 {"vendor_name": "Zendesk", "product_category": "Helpdesk"},
             ],
             "FROM b2b_category_dynamics": [],
+            "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar": [],
         },
     )
 
@@ -294,6 +295,9 @@ async def test_fetch_all_pool_layers_applies_vendor_filter_to_queries():
     assert evidence_call[1][2] == ["zendesk"]
     profile_call = next(call for call in pool.calls if "FROM b2b_product_profiles" in call[0])
     assert profile_call[1][0] == ["zendesk"]
+    review_call = next(call for call in pool.calls if "FROM b2b_reviews r LEFT JOIN b2b_account_resolution ar" in call[0])
+    assert review_call[1][2] == ["zendesk"]
+    assert "LOWER(r.vendor_name) = ANY($3::text[])" in review_call[0]
 
 
 @pytest.mark.asyncio
