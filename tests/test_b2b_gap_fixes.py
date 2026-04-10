@@ -148,6 +148,8 @@ async def test_fetch_review_funnel_audit_filters_recent_scrape_intake_counts_to_
 
     assert result["found"] == 5
     assert result["scrape_runs"] == 1
+    assert result["scrape_found"] != 99
+    assert result["scrape_filtered"] != 99
     assert result["scrape_found"] == 12
     assert result["scrape_filtered"] == 5
     assert result["scrape_short_flagged"] == 2
