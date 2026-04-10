@@ -626,17 +626,6 @@ def _empty_repair_usage() -> dict[str, int]:
     }
 
 
-def _coerce_float_override(
-    raw_value: Any,
-    default_value: float,
-    *,
-    min_value: float,
-    max_value: float,
-) -> float:
-    coerced = base_enrichment._coerce_float_value(raw_value, float(default_value))
-    return max(min_value, min(max_value, coerced))
-
-
 def _row_usage_result(status: Any, usage: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = {"status": status}
     usage_dict = usage or {}
@@ -1255,7 +1244,7 @@ async def _quarantine_shadowed_hard_gap_rows(pool, *, limit: int) -> int:
         return 0
 
 
-async def _recover_orphaned_repairing(pool, max_attempts: int, orphan_timeout_minutes: int = 30) -> int:
+async def _recover_orphaned_repairing(pool, max_attempts: int) -> int:
     result = await pool.execute(
         """
         UPDATE b2b_reviews
@@ -1267,11 +1256,10 @@ async def _recover_orphaned_repairing(pool, max_attempts: int, orphan_timeout_mi
         WHERE enrichment_repair_status = 'repairing'
           AND (
                 enrichment_repaired_at IS NULL
-                OR enrichment_repaired_at < NOW() - make_interval(mins => $2)
+                OR enrichment_repaired_at < NOW() - INTERVAL '30 minutes'
               )
         """,
         max_attempts,
-        orphan_timeout_minutes,
     )
     try:
         return int(str(result).split()[-1])
@@ -1726,17 +1714,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     pool = get_db_pool()
     if not pool.is_initialized:
         return {"_skip_synthesis": "DB not ready"}
-    task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
 
-    orphaned = await _recover_orphaned_repairing(
-        pool, cfg.enrichment_repair_max_attempts,
-        orphan_timeout_minutes=base_enrichment._coerce_int_override(
-            task_metadata.get("enrichment_repair_orphan_timeout_minutes"),
-            getattr(cfg, "enrichment_repair_orphan_timeout_minutes", 30),
-            min_value=5,
-            max_value=120,
-        ),
-    )
+    orphaned = await _recover_orphaned_repairing(pool, cfg.enrichment_repair_max_attempts)
+    task_metadata = task.metadata if isinstance(task.metadata, dict) else {}
     max_batch = base_enrichment._coerce_int_override(
         task_metadata.get("enrichment_repair_max_per_batch"),
         base_enrichment._coerce_int_value(getattr(cfg, "enrichment_repair_max_per_batch", 25), 25),
@@ -1797,18 +1777,6 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     rounds = 0
     consecutive_no_progress = 0
     circuit_breaker_reason = None
-    failure_rate_threshold = _coerce_float_override(
-        task_metadata.get("enrichment_repair_failure_rate_threshold"),
-        getattr(cfg, "enrichment_repair_failure_rate_threshold", 0.5),
-        min_value=0.1,
-        max_value=1.0,
-    )
-    no_progress_max_rounds = base_enrichment._coerce_int_override(
-        task_metadata.get("enrichment_repair_no_progress_max_rounds"),
-        getattr(cfg, "enrichment_repair_no_progress_max_rounds", 3),
-        min_value=1,
-        max_value=20,
-    )
     strict_discussion_sources, strict_discussion_content_types = _strict_discussion_lists(cfg)
     low_signal_discussion_skipped = await _skip_low_signal_strict_discussion_rows(
         pool,
@@ -1925,7 +1893,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         round_failed = result.get("failed", 0)
         round_total = round_promoted + round_shadowed + round_failed
 
-        if round_total > 0 and round_failed > round_total * failure_rate_threshold:
+        if round_total > 0 and round_failed > round_total * 0.5:
             circuit_breaker_reason = f"high failure rate ({round_failed}/{round_total})"
             logger.warning("Enrichment repair circuit breaker: %s in round %d", circuit_breaker_reason, rounds + 1)
             rounds += 1
@@ -1936,7 +1904,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         else:
             consecutive_no_progress = 0
 
-        if consecutive_no_progress >= no_progress_max_rounds:
+        if consecutive_no_progress >= 3:
             circuit_breaker_reason = f"{consecutive_no_progress} consecutive rounds with no repair progress"
             logger.warning("Enrichment repair circuit breaker: %s", circuit_breaker_reason)
             rounds += 1
