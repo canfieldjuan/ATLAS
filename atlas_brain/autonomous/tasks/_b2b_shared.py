@@ -4115,6 +4115,37 @@ def _align_vendor_intelligence_records_to_scorecards(
     }
 
 
+def _align_vendor_intelligence_record_to_scorecard(
+    scorecard: dict[str, Any] | None,
+    record: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Align one vendor-intelligence record against one scorecard row."""
+    if not isinstance(record, dict):
+        return None, {
+            "matched_vendor_count": 0,
+            "mismatched_vendor_count": 0,
+            "mismatched_vendors": [],
+            "legacy_scorecard_vendor_count": 0,
+            "legacy_scorecard_vendors": [],
+            "legacy_vault_vendor_count": 0,
+            "legacy_vault_vendors": [],
+        }
+
+    aligned_lookup, alignment = _align_vendor_intelligence_records_to_scorecards(
+        [scorecard] if isinstance(scorecard, dict) else [],
+        [record],
+    )
+    vendor_name = _canonicalize_vendor(
+        record.get("vendor_name")
+        or (scorecard or {}).get("vendor_name")
+        or (scorecard or {}).get("vendor")
+        or "",
+    )
+    if not vendor_name:
+        return None, alignment
+    return aligned_lookup.get(vendor_name), alignment
+
+
 async def read_vendor_scorecard(
     pool,
     vendor_name: str,

@@ -38,8 +38,10 @@ from ...storage.database import get_db_pool
 from ...storage.models import ScheduledTask
 from ...templates.email.vendor_briefing import render_vendor_briefing_html
 from ._b2b_shared import (
+    _align_vendor_intelligence_record_to_scorecard,
     _timing_summary_payload,
     _reasoning_int,
+    read_vendor_intelligence_record,
     read_vendor_intelligence,
     read_vendor_scorecard_detail,
 )
@@ -1753,6 +1755,7 @@ async def build_vendor_briefing(
     }
 
     found = False
+    signals: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Source 1: weekly_churn_feed from b2b_intelligence
@@ -1820,7 +1823,19 @@ async def build_vendor_briefing(
     # ------------------------------------------------------------------
     # Source 3: b2b_evidence_vault (canonical overlay for sparse fields)
     # ------------------------------------------------------------------
-    vault = await _fetch_vendor_evidence_vault(pool, vendor_name)
+    if signals:
+        vault_record = await _fetch_vendor_evidence_record(pool, vendor_name)
+        vault, vault_alignment = _align_vendor_intelligence_record_to_scorecard(
+            signals,
+            vault_record,
+        )
+        if vault_alignment["mismatched_vendor_count"] > 0:
+            logger.info(
+                "Suppressed stale vendor briefing evidence-vault overlay for %s",
+                vendor_name,
+            )
+    else:
+        vault = await _fetch_vendor_evidence_vault(pool, vendor_name)
     if _apply_evidence_vault_to_briefing(briefing, vault):
         briefing["data_sources"]["evidence_vault"] = True
 
@@ -2420,6 +2435,19 @@ async def _fetch_displacement_dynamics(
 async def _fetch_vendor_evidence_vault(pool: Any, vendor_name: str) -> dict[str, Any] | None:
     """Compatibility seam delegating canonical reads to the shared adapter."""
     return await read_vendor_intelligence(
+        pool,
+        vendor_name,
+        as_of=date.today(),
+        analysis_window_days=settings.b2b_churn.intelligence_window_days,
+    )
+
+
+async def _fetch_vendor_evidence_record(
+    pool: Any,
+    vendor_name: str,
+) -> dict[str, Any] | None:
+    """Read the canonical vendor-intelligence record with run metadata."""
+    return await read_vendor_intelligence_record(
         pool,
         vendor_name,
         as_of=date.today(),

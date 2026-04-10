@@ -454,6 +454,77 @@ async def test_build_vendor_briefing_uses_evidence_vault_overlay(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_build_vendor_briefing_suppresses_stale_evidence_vault_overlay_for_signal_fallback(monkeypatch):
+    class DummyPool:
+        is_initialized = True
+
+        async def fetchrow(self, *args, **kwargs):
+            return None
+
+        async def fetch(self, *args, **kwargs):
+            return []
+
+    vault_record = {
+        "vendor_name": "Zendesk",
+        "materialization_run_id": "run-stale",
+        "vault": {
+            "metric_snapshot": {"reviews_in_analysis_window": 30, "avg_urgency": 9.9},
+            "weakness_evidence": [
+                {
+                    "key": "pricing",
+                    "label": "Pricing opacity",
+                    "evidence_type": "pain_category",
+                    "best_quote": "The price jumps were impossible to budget.",
+                    "quote_source": {"source": "capterra"},
+                    "mention_count_total": 11,
+                    "supporting_metrics": {"avg_urgency_when_mentioned": 6.4},
+                }
+            ],
+        },
+    }
+
+    monkeypatch.setattr(briefing_mod, "get_db_pool", lambda: DummyPool())
+    monkeypatch.setattr(briefing_mod, "_extract_feed_entry", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        briefing_mod,
+        "_fetch_churn_signals",
+        AsyncMock(
+            return_value={
+                "vendor_name": "Zendesk",
+                "materialization_run_id": "run-current",
+                "avg_urgency_score": 4.4,
+                "total_reviews": 30,
+                "decision_maker_churn_rate": 0.12,
+                "top_pain_categories": [{"category": "pricing", "count": 4}],
+                "top_competitors": [],
+                "quotable_evidence": [{"quote": "Raw signal quote", "source": "g2"}],
+                "company_churn_list": [],
+                "top_feature_gaps": [],
+                "product_category": "CRM",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        briefing_mod,
+        "_fetch_vendor_evidence_record",
+        AsyncMock(return_value=vault_record),
+    )
+    monkeypatch.setattr(briefing_mod, "_fetch_product_profile", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "_fetch_high_urgency_quotes", AsyncMock(return_value=[]))
+    monkeypatch.setattr(briefing_mod, "_enrich_with_analyst_summary", AsyncMock(return_value=None))
+    monkeypatch.setattr(briefing_mod, "generate_account_cards", AsyncMock(return_value=[]))
+
+    briefing = await briefing_mod.build_vendor_briefing("Zendesk")
+
+    assert briefing is not None
+    assert briefing["data_sources"]["churn_signals"] is True
+    assert briefing["data_sources"]["evidence_vault"] is False
+    assert briefing["avg_urgency"] == 4.4
+    assert briefing["evidence"][0]["source"] == "g2"
+    assert briefing["pain_breakdown"][0]["category"] == "pricing"
+
+
+@pytest.mark.asyncio
 async def test_build_vendor_briefing_marks_reasoning_synthesis_from_feed(monkeypatch):
     class DummyPool:
         is_initialized = True

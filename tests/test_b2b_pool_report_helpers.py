@@ -241,6 +241,25 @@ def test_align_vendor_intelligence_records_to_scorecards_filters_mismatched_runs
     assert alignment["legacy_vault_vendors"] == ["Intercom"]
 
 
+def test_align_vendor_intelligence_record_to_scorecard_filters_mismatched_run():
+    vault, alignment = shared_mod._align_vendor_intelligence_record_to_scorecard(
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-current",
+        },
+        {
+            "vendor_name": "Zendesk",
+            "materialization_run_id": "run-stale",
+            "vault": {"metric_snapshot": {"avg_urgency": 6.9}},
+        },
+    )
+
+    assert vault is None
+    assert alignment["matched_vendor_count"] == 0
+    assert alignment["mismatched_vendor_count"] == 1
+    assert alignment["mismatched_vendors"] == ["Zendesk"]
+
+
 @pytest.mark.asyncio
 async def test_read_vendor_scorecard_details_prefers_specific_category_rows():
     pool = FakePool(
