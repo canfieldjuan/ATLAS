@@ -3957,22 +3957,33 @@ def _is_generic_vendor_score_category(category: str | None) -> bool:
     return str(category or "").strip().lower() in {"", "unknown", "b2b software"}
 
 
-async def _fetch_vendor_churn_scores_from_signals(
+def _canonicalize_vendor_name_filters(vendor_names: Iterable[Any] | None) -> list[str]:
+    """Normalize an optional vendor filter list for adapter-backed reads."""
+    return sorted(
+        {
+            canonical.lower()
+            for name in (vendor_names or [])
+            for canonical in [_canonicalize_vendor(name)]
+            if canonical
+        }
+    )
+
+
+async def read_vendor_scorecards(
     pool,
+    *,
     window_days: int,
     min_reviews: int,
+    vendor_names: Iterable[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Read canonical vendor churn scores from persisted churn signals.
+    """Read derived vendor scorecards from ``b2b_churn_signals``.
 
-    This is the canonical downstream read path for battle-card eligibility and
-    deterministic card construction. It preserves the existing ``vendor_scores``
-    shape while sourcing the metrics from ``b2b_churn_signals`` instead of
-    recomputing them from raw reviews.
-
-    If a vendor has both a generic category row (for example ``B2B Software``)
-    and one or more specific category rows, the generic row is dropped so
-    downstream category-aware surfaces prefer the specific product category.
+    This is the canonical adapter for vendor-level ranking and score reads.
+    Feature code should prefer this adapter instead of querying
+    ``b2b_churn_signals`` directly.
     """
+    requested_vendors = _canonicalize_vendor_name_filters(vendor_names)
+    vendor_filter_clause = "AND LOWER(vendor_name) = ANY($3::text[])" if requested_vendors else ""
     rows = await pool.fetch(
         """
         SELECT vendor_name,
@@ -3986,10 +3997,12 @@ async def _fetch_vendor_churn_scores_from_signals(
         FROM b2b_churn_signals
         WHERE total_reviews >= $2
           AND COALESCE(review_window_end, last_computed_at::date) >= CURRENT_DATE - $1::int
+          """ + vendor_filter_clause + """
         ORDER BY vendor_name, total_reviews DESC, last_computed_at DESC
         """,
         window_days,
         min_reviews,
+        *([requested_vendors] if requested_vendors else []),
     )
     mapped = [
         {
@@ -4025,6 +4038,42 @@ async def _fetch_vendor_churn_scores_from_signals(
             continue
         filtered.append(row)
     return filtered
+
+
+async def read_vendor_scorecard(
+    pool,
+    vendor_name: str,
+    *,
+    window_days: int,
+    min_reviews: int,
+) -> dict[str, Any] | None:
+    """Read the derived scorecard row for a single vendor."""
+    rows = await read_vendor_scorecards(
+        pool,
+        window_days=window_days,
+        min_reviews=min_reviews,
+        vendor_names=[vendor_name],
+    )
+    canonical = _canonicalize_vendor(vendor_name)
+    if not canonical:
+        return None
+    for row in rows:
+        if _canonicalize_vendor(row.get("vendor_name") or "") == canonical:
+            return row
+    return None
+
+
+async def _fetch_vendor_churn_scores_from_signals(
+    pool,
+    window_days: int,
+    min_reviews: int,
+) -> list[dict[str, Any]]:
+    """Deprecated wrapper. Use ``read_vendor_scorecards`` instead."""
+    return await read_vendor_scorecards(
+        pool,
+        window_days=window_days,
+        min_reviews=min_reviews,
+    )
 
 
 async def _fetch_high_intent_companies(
@@ -5270,13 +5319,16 @@ async def _fetch_product_profiles(pool) -> list[dict[str, Any]]:
     return normalized
 
 
-async def _fetch_latest_evidence_vault(
+async def read_vendor_intelligence_map(
     pool,
     *,
     as_of: date,
     analysis_window_days: int,
+    vendor_names: Iterable[Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Fetch the newest evidence-vault row per vendor at or before *as_of*."""
+    """Read canonical vendor intelligence objects from ``b2b_evidence_vault``."""
+    requested_vendors = _canonicalize_vendor_name_filters(vendor_names)
+    vendor_filter_clause = "AND LOWER(vendor_name) = ANY($3::text[])" if requested_vendors else ""
     rows = await pool.fetch(
         """
         SELECT DISTINCT ON (vendor_name)
@@ -5284,10 +5336,12 @@ async def _fetch_latest_evidence_vault(
         FROM b2b_evidence_vault
         WHERE as_of_date <= $1
           AND analysis_window_days = $2
+          """ + vendor_filter_clause + """
         ORDER BY vendor_name, as_of_date DESC, created_at DESC
         """,
         as_of,
         analysis_window_days,
+        *([requested_vendors] if requested_vendors else []),
     )
     vault_lookup: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -5298,6 +5352,40 @@ async def _fetch_latest_evidence_vault(
         if isinstance(vault, dict):
             vault_lookup[vendor] = vault
     return vault_lookup
+
+
+async def read_vendor_intelligence(
+    pool,
+    vendor_name: str,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, Any] | None:
+    """Read the canonical vendor intelligence object for a single vendor."""
+    lookup = await read_vendor_intelligence_map(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+        vendor_names=[vendor_name],
+    )
+    canonical = _canonicalize_vendor(vendor_name)
+    if not canonical:
+        return None
+    return lookup.get(canonical)
+
+
+async def _fetch_latest_evidence_vault(
+    pool,
+    *,
+    as_of: date,
+    analysis_window_days: int,
+) -> dict[str, dict[str, Any]]:
+    """Deprecated wrapper. Use ``read_vendor_intelligence_map`` instead."""
+    return await read_vendor_intelligence_map(
+        pool,
+        as_of=as_of,
+        analysis_window_days=analysis_window_days,
+    )
 
 
 async def fetch_all_pool_layers(
@@ -10365,10 +10453,11 @@ async def fetch_vendor_evidence(
         return None
 
     # Fetch vendor score rows
-    all_scores = await _fetch_vendor_churn_scores_from_signals(
+    all_scores = await read_vendor_scorecards(
         pool,
-        window_days,
-        min_reviews,
+        window_days=window_days,
+        min_reviews=min_reviews,
+        vendor_names=[vendor_name],
     )
     vs_match = [v for v in all_scores if _canonicalize_vendor(v.get("vendor_name", "")) == canonical]
     if not vs_match:

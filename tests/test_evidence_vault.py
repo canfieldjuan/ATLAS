@@ -7,7 +7,7 @@ import pytest
 from atlas_brain.autonomous.tasks._b2b_shared import (
     _build_evidence_vault_pass2_rollups,
     _fetch_existing_company_signals,
-    _fetch_latest_evidence_vault,
+    read_vendor_intelligence_map,
     _fetch_product_profiles,
     _merge_company_lookup_with_evidence_vault,
     _merge_canonical_company_signals,
@@ -47,14 +47,14 @@ async def test_fetch_product_profiles_normalizes_json_fields():
 
 
 @pytest.mark.asyncio
-async def test_fetch_latest_evidence_vault_normalizes_vendor_lookup():
+async def test_read_vendor_intelligence_map_normalizes_vendor_lookup():
     pool = AsyncMock()
     pool.fetch = AsyncMock(return_value=[{
         "vendor_name": "Acme",
         "vault": '{"vendor_name":"Acme","weakness_evidence":[],"company_signals":[],"metric_snapshot":{},"provenance":{}}',
     }])
 
-    lookup = await _fetch_latest_evidence_vault(
+    lookup = await read_vendor_intelligence_map(
         pool,
         as_of=date(2026, 3, 19),
         analysis_window_days=30,
@@ -62,6 +62,23 @@ async def test_fetch_latest_evidence_vault_normalizes_vendor_lookup():
 
     assert "Acme" in lookup
     assert lookup["Acme"]["vendor_name"] == "Acme"
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_intelligence_map_applies_vendor_filter():
+    pool = AsyncMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    await read_vendor_intelligence_map(
+        pool,
+        as_of=date(2026, 3, 19),
+        analysis_window_days=30,
+        vendor_names=["Acme"],
+    )
+
+    query, *params = pool.fetch.await_args.args
+    assert "LOWER(vendor_name) = ANY($3::text[])" in str(query)
+    assert params[2] == ["acme"]
 
 
 @pytest.mark.asyncio

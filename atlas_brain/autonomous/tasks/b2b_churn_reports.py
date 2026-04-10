@@ -863,7 +863,7 @@ async def _build_deterministic_report_bundle(
         _build_deterministic_vendor_scorecards,
         _build_vendor_deep_dives,
         _compute_evidence_confidence,
-        _fetch_latest_evidence_vault,
+        read_vendor_intelligence_map,
         _structure_displacement_report,
     )
     from ._b2b_cross_vendor_synthesis import load_best_cross_vendor_lookup
@@ -884,7 +884,7 @@ async def _build_deterministic_report_bundle(
     if reasoning_lookup is None:
         reasoning_lookup = build_reasoning_lookup_from_views(synthesis_views)
     if evidence_vault_lookup is None:
-        evidence_vault_lookup = await _fetch_latest_evidence_vault(
+        evidence_vault_lookup = await read_vendor_intelligence_map(
             pool,
             as_of=as_of,
             analysis_window_days=analysis_window_days,
@@ -1130,11 +1130,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         _compute_evidence_confidence,
         _executive_source_list,
         _fallback_scorecard_expert_take,
-        _fetch_latest_evidence_vault,
+        read_vendor_intelligence_map,
         _fetch_competitive_displacement_source_of_truth,
         _fetch_competitor_reasons,
         _fetch_data_context,
-        _fetch_vendor_churn_scores_from_signals,
+        read_vendor_scorecards,
         _fetch_pain_distribution,
         _fetch_feature_gaps,
         _fetch_negative_review_counts,
@@ -1203,7 +1203,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             review_text_agg, department_dist,
             contract_ctx, turning_points,
         ) = await asyncio.gather(
-            _fetch_vendor_churn_scores_from_signals(pool, window_days, min_reviews),
+            read_vendor_scorecards(pool, window_days=window_days, min_reviews=min_reviews),
             _fetch_competitive_displacement_source_of_truth(
                 pool,
                 as_of=today,

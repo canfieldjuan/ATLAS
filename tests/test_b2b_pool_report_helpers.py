@@ -111,7 +111,7 @@ async def test_vendor_snapshot_parses_vendor_mentions_shape(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_fetch_vendor_churn_scores_from_signals_prefers_specific_category_rows():
+async def test_read_vendor_scorecards_prefers_specific_category_rows():
     pool = FakePool(
         fetch_map={
             "FROM b2b_churn_signals": [
@@ -146,7 +146,7 @@ async def test_fetch_vendor_churn_scores_from_signals_prefers_specific_category_
         },
     )
 
-    rows = await shared_mod._fetch_vendor_churn_scores_from_signals(pool, 30, 3)
+    rows = await shared_mod.read_vendor_scorecards(pool, window_days=30, min_reviews=3)
 
     assert rows == [
         {
@@ -164,6 +164,26 @@ async def test_fetch_vendor_churn_scores_from_signals_prefers_specific_category_
             "avg_urgency": 6.2,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_read_vendor_scorecards_applies_vendor_filter():
+    pool = FakePool(
+        fetch_map={
+            "FROM b2b_churn_signals": [],
+        },
+    )
+
+    await shared_mod.read_vendor_scorecards(
+        pool,
+        window_days=30,
+        min_reviews=3,
+        vendor_names=["Zendesk"],
+    )
+
+    score_call = next(call for call in pool.calls if "FROM b2b_churn_signals" in call[0])
+    assert score_call[1][2] == ["zendesk"]
+    assert "LOWER(vendor_name) = ANY($3::text[])" in score_call[0]
 
 
 @pytest.mark.asyncio

@@ -38,7 +38,7 @@ from ...services.scraping.sources import (
 from ...reasoning.wedge_registry import Wedge, get_wedge_meta
 from ._execution_progress import task_run_id as _task_execution_run_id
 from ._b2b_shared import (
-    _fetch_latest_evidence_vault,
+    read_vendor_intelligence_map,
     _segment_targeting_summary,
     _timing_summary_payload,
     fetch_all_pool_layers,
@@ -5194,10 +5194,11 @@ async def _gather_data(
     ]
     try:
         evidence_vault_lookup = (
-            await _fetch_latest_evidence_vault(
+            await read_vendor_intelligence_map(
                 pool,
                 as_of=date.today(),
                 analysis_window_days=settings.b2b_churn.intelligence_window_days,
+                vendor_names=vendor_names,
             )
             if vendor_names else
             {}
