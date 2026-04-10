@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import {
   Search, Fingerprint, Loader2, Database, GitBranch,
@@ -36,6 +37,7 @@ type Tab = 'witnesses' | 'vault' | 'trace'
 // -- Main component -----------------------------------------------------------
 
 export default function EvidenceExplorer() {
+  // Matches backend evidence_default_analysis_window_days config
   const windowDays = 30
 
   // Search state
@@ -262,12 +264,12 @@ export default function EvidenceExplorer() {
       {activeVendor && (
         <>
           {/* Vendor reports link */}
-          {selectedVendor && (
+          {activeVendor && (
             <Link
-              to={`/reports?vendor=${encodeURIComponent(selectedVendor)}`}
+              to={`/reports?vendor=${encodeURIComponent(activeVendor)}`}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
-              View reports for {selectedVendor} <ExternalLink className="h-3 w-3" />
+              View reports for {activeVendor} <ExternalLink className="h-3 w-3" />
             </Link>
           )}
 

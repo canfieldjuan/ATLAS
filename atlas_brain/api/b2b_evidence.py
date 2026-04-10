@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
+from ..config import settings
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
 
@@ -28,7 +29,8 @@ from ..storage.database import get_db_pool
 
 DEFAULT_WITNESS_LIMIT = 50
 MAX_WITNESS_LIMIT = 100
-DEFAULT_ANALYSIS_WINDOW_DAYS = 30
+def _default_analysis_window_days() -> int:
+    return int(getattr(settings.b2b_churn, 'evidence_default_analysis_window_days', 30))
 MIN_ANALYSIS_WINDOW_DAYS = 7
 MAX_ANALYSIS_WINDOW_DAYS = 365
 TRACE_WITNESS_SAMPLE_SIZE = 20
@@ -115,7 +117,7 @@ def _annotation_join_parts(account_id: _uuid.UUID | None, param_idx: int) -> tup
 async def list_witnesses(
     vendor_name: str,
     as_of_date: Optional[str] = None,
-    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
+    window_days: int = Query(default=_default_analysis_window_days(), ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     pain_category: Optional[str] = None,
     source: Optional[str] = None,
     competitor: Optional[str] = None,
@@ -274,7 +276,7 @@ async def get_witness(
     witness_id: str,
     vendor_name: str,
     as_of_date: Optional[str] = None,
-    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
+    window_days: int = Query(default=_default_analysis_window_days(), ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get a single witness record with full review text and evidence spans."""
@@ -341,7 +343,7 @@ async def get_witness(
 async def get_vault(
     vendor_name: str,
     as_of_date: Optional[str] = None,
-    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
+    window_days: int = Query(default=_default_analysis_window_days(), ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get the evidence vault for a vendor -- weakness/strength claims with provenance."""
@@ -412,7 +414,7 @@ async def get_vault(
 async def get_trace(
     vendor_name: str,
     as_of_date: Optional[str] = None,
-    window_days: int = Query(default=DEFAULT_ANALYSIS_WINDOW_DAYS, ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
+    window_days: int = Query(default=_default_analysis_window_days(), ge=MIN_ANALYSIS_WINDOW_DAYS, le=MAX_ANALYSIS_WINDOW_DAYS),
     user: AuthUser = Depends(require_b2b_plan("b2b_trial")),
 ):
     """Get the full claim-to-review reasoning trace for a vendor.

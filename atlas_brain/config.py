@@ -2524,6 +2524,12 @@ class B2BChurnConfig(BaseSettings):
         le=20,
         description="Consecutive rounds with zero promotions before circuit breaker trips",
     )
+    evidence_default_analysis_window_days: int = Field(
+        default=30,
+        ge=7,
+        le=365,
+        description="Default analysis window in days for evidence explorer witness queries",
+    )
     enrichment_low_fidelity_enabled: bool = Field(
         default=True,
         description="Enable deterministic quarantine of low-fidelity enriched rows",
