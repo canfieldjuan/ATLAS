@@ -114,11 +114,13 @@ async def apply_missing_core_targets(
         source, product_slug = validate_target_input(item["source"], product_slug)
         defaults = derive_seed_defaults(existing_targets, source, item.get("product_category"))
         product_name = item.get("verified_product_name") or item["vendor_name"]
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, Any] | None = None
         if item.get("source_fit_probation"):
-            metadata["source_fit_probation"] = True
-            metadata["source_fit_override"] = "conditional_onboarding_signal"
-            metadata["onboarding_lane"] = item.get("onboarding_lane") or "signal"
+            metadata = {
+                "source_fit_probation": True,
+                "source_fit_override": "conditional_onboarding_signal",
+                "onboarding_lane": item.get("onboarding_lane") or "signal",
+            }
         action = {
             "action": "insert_target",
             "vendor_name": item["vendor_name"],
@@ -126,9 +128,10 @@ async def apply_missing_core_targets(
             "product_slug": product_slug,
             "product_name": product_name,
             "product_category": item.get("product_category"),
-            "metadata": metadata,
             **defaults,
         }
+        if metadata:
+            action["metadata"] = metadata
         if not dry_run:
             vendor_name = await resolve_vendor_name(item["vendor_name"])
             row = await pool.fetchrow(
@@ -148,7 +151,7 @@ async def apply_missing_core_targets(
                 defaults["priority"],
                 defaults["scrape_interval_hours"],
                 defaults["scrape_mode"],
-                json.dumps(metadata),
+                json.dumps(metadata) if metadata else None,
             )
             action["target_id"] = str(row["id"]) if row else None
         applied.append(action)
