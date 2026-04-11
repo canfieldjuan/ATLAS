@@ -5533,6 +5533,10 @@ async def list_webhooks(
     webhooks = []
     for r in rows:
         recent_total = r["recent_deliveries"] or 0
+        latest_test_success = r["latest_test_success"] if "latest_test_success" in r else None
+        latest_test_status_code = r["latest_test_status_code"] if "latest_test_status_code" in r else None
+        latest_test_error = r["latest_test_error"] if "latest_test_error" in r else None
+        latest_test_at = r["latest_test_at"] if "latest_test_at" in r else None
         webhooks.append({
             "id": str(r["id"]),
             "url": r["url"],
@@ -5548,10 +5552,10 @@ async def list_webhooks(
             "latest_failure_status_code": r["latest_failure_status_code"],
             "latest_failure_error": r["latest_failure_error"],
             "latest_failure_at": r["latest_failure_at"].isoformat() if r["latest_failure_at"] else None,
-            "latest_test_success": r["latest_test_success"],
-            "latest_test_status_code": r["latest_test_status_code"],
-            "latest_test_error": r["latest_test_error"],
-            "latest_test_at": r["latest_test_at"].isoformat() if r["latest_test_at"] else None,
+            "latest_test_success": latest_test_success,
+            "latest_test_status_code": latest_test_status_code,
+            "latest_test_error": latest_test_error,
+            "latest_test_at": latest_test_at.isoformat() if latest_test_at else None,
         })
 
     return {"webhooks": webhooks, "count": len(webhooks)}

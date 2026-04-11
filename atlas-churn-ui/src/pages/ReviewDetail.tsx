@@ -181,7 +181,10 @@ export default function ReviewDetail() {
       setTimeout(() => setCopied(false), 2000)
     })
   }
-  const handleCopyShortcutLink = (key: 'account' | 'evidence', path: string) => {
+  const handleCopyShortcutLink = (
+    key: 'account' | 'evidence' | 'vendor' | 'reports' | 'opportunities',
+    path: string,
+  ) => {
     navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
       setCopiedShortcutState({ key, status: 'copied' })
       setTimeout(() => setCopiedShortcutState((current) => (

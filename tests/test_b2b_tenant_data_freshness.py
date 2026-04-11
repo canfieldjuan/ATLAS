@@ -53,6 +53,29 @@ def test_report_trust_payload_omits_artifact_state_when_status_is_missing():
     }
 
 
+def test_report_trust_payload_treats_date_only_anchor_as_monitor():
+    created_at = datetime.now(timezone.utc) - timedelta(hours=8)
+
+    trust = report_trust_payload(
+        report_date=created_at.date(),
+        created_at=created_at,
+        data_stale=False,
+        blocker_count=0,
+        warning_count=1,
+        unresolved_issue_count=0,
+        status="published",
+    )
+
+    assert trust == {
+        "artifact_state": "ready",
+        "artifact_label": "Ready",
+        "freshness_state": "monitor",
+        "freshness_label": "Monitor",
+        "review_state": "warnings",
+        "review_label": "Warnings",
+    }
+
+
 def test_report_section_evidence_payload_marks_witness_backed_partial_and_thin_sections():
     payload = report_section_evidence_payload({
         "key_insights": [

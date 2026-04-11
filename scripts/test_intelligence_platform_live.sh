@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
 # Live integration test for the entire Intelligence Platform (Phases 0-6)
 # Hits every REST endpoint against a running server with real data.
-# Usage: bash scripts/test_intelligence_platform_live.sh [port]
+# Usage: bash scripts/test_intelligence_platform_live.sh [port] [bearer_token]
 
 set -euo pipefail
 
 PORT="${1:-8000}"
+TOKEN="${2:-${ATLAS_TOKEN:-}}"
 BASE="http://127.0.0.1:${PORT}"
 PASS=0
 FAIL=0
 TOTAL=0
+
+if [ -n "$TOKEN" ]; then
+    CURL_AUTH_ARGS=(-H "Authorization: Bearer ${TOKEN}")
+    AUTH_REQUIRED_CODE="200"
+    CRM_PUSH_LOG_EXPECT_CODE="404"
+else
+    CURL_AUTH_ARGS=()
+    AUTH_REQUIRED_CODE="401"
+    CRM_PUSH_LOG_EXPECT_CODE="401"
+fi
 
 # Sample IDs from the database
 REVIEW_ID="74bb10c7-42f8-4cd4-a6c7-0282b1db5828"
@@ -39,6 +50,7 @@ check() {
     if [ -n "$body" ]; then
         args+=(-H "Content-Type: application/json" -d "$body")
     fi
+    args+=("${CURL_AUTH_ARGS[@]}")
     args+=("${BASE}${url}")
 
     local code
@@ -69,6 +81,7 @@ check_contains() {
     if [ -n "$body" ]; then
         args+=(-H "Content-Type: application/json" -d "$body")
     fi
+    args+=("${CURL_AUTH_ARGS[@]}")
     args+=("${BASE}${url}")
 
     local code
@@ -89,6 +102,11 @@ echo ""
 echo -e "${CYAN}===============================================${NC}"
 echo -e "${CYAN} Atlas Intelligence Platform -- Live Test Suite${NC}"
 echo -e "${CYAN} Server: ${BASE}${NC}"
+if [ -n "$TOKEN" ]; then
+    echo -e "${CYAN} Auth: bearer token provided${NC}"
+else
+    echo -e "${CYAN} Auth: none (auth-gated routes expected to 401)${NC}"
+fi
 echo -e "${CYAN}===============================================${NC}"
 echo ""
 
@@ -194,8 +212,8 @@ check "CRM enrichment stats" GET "/api/v1/b2b/crm/events/enrichment-stats"
 check_contains "Batch CRM ingest" POST "/api/v1/b2b/crm/events/batch" "created_ids" \
     '{"events":[{"crm_provider":"hubspot","crm_event_id":"test-live-'$RANDOM'","event_type":"deal_stage_change","company_name":"Test Corp","contact_email":"live@test.com","deal_amount":1000}]}'
 
-# HubSpot webhook format (requires auth -- expect 401 in local dev)
-check "HubSpot webhook (auth-gated)" POST "/api/v1/b2b/crm/events/hubspot" "401" \
+# HubSpot webhook format (auth-gated)
+check "HubSpot webhook (auth-gated)" POST "/api/v1/b2b/crm/events/hubspot" "${AUTH_REQUIRED_CODE}" \
     '[{"objectType":"deal","propertyName":"dealstage","propertyValue":"closedwon","objectId":99999,"subscriptionType":"deal.propertyChange","changeSource":"CRM","eventId":'$RANDOM'}]'
 
 # ════════════════════════════════════════════════════════════
@@ -204,9 +222,9 @@ check "HubSpot webhook (auth-gated)" POST "/api/v1/b2b/crm/events/hubspot" "401"
 echo ""
 echo -e "${YELLOW}[Phase 5] Webhooks / PDF / Delivery${NC}"
 
-# Webhooks (require auth -- expect 401 in local dev)
-check "List webhooks (auth-gated)" GET "/api/v1/b2b/tenant/webhooks" "401"
-check "Webhook delivery summary (auth-gated)" GET "/api/v1/b2b/tenant/webhooks/delivery-summary" "401"
+# Webhooks (auth-gated)
+check "List webhooks (auth-gated)" GET "/api/v1/b2b/tenant/webhooks" "${AUTH_REQUIRED_CODE}"
+check "Webhook delivery summary (auth-gated)" GET "/api/v1/b2b/tenant/webhooks/delivery-summary" "${AUTH_REQUIRED_CODE}"
 
 # PDF export
 check "PDF export" GET "/api/v1/b2b/tenant/reports/${REPORT_ID}/pdf"
@@ -216,8 +234,8 @@ check "List reports" GET "/api/v1/b2b/tenant/reports"
 check "Get report" GET "/api/v1/b2b/tenant/reports/${REPORT_ID}"
 check "Get report (bad UUID)" GET "/api/v1/b2b/tenant/reports/not-a-uuid" "400"
 
-# CRM push log (requires auth -- expect 401 in local dev)
-check "CRM push log (auth-gated)" GET "/api/v1/b2b/tenant/webhooks/00000000-0000-0000-0000-000000000000/crm-push-log" "401"
+# CRM push log (auth-gated)
+check "CRM push log (auth-gated)" GET "/api/v1/b2b/tenant/webhooks/00000000-0000-0000-0000-000000000000/crm-push-log" "${CRM_PUSH_LOG_EXPECT_CODE}"
 
 # ════════════════════════════════════════════════════════════
 # PHASE 6: Analyst Controls
@@ -246,6 +264,7 @@ echo -e "${YELLOW}[Phase 6] Suppress + Revert round-trip${NC}"
 SUPPRESS_BODY='{"entity_type":"review","entity_id":"'${REVIEW_ID}'","correction_type":"suppress","reason":"Live test suppression"}'
 TOTAL=$((TOTAL + 1))
 SUPPRESS_RESULT=$(curl -s -X POST "${BASE}/api/v1/b2b/tenant/corrections" \
+    "${CURL_AUTH_ARGS[@]}" \
     -H "Content-Type: application/json" \
     -d "$SUPPRESS_BODY" 2>/dev/null)
 SUPPRESS_ID=$(echo "$SUPPRESS_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
@@ -256,7 +275,7 @@ if [ -n "$SUPPRESS_ID" ] && [ "$SUPPRESS_ID" != "" ]; then
 
     # Verify review is suppressed
     TOTAL=$((TOTAL + 1))
-    REVIEW_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/v1/b2b/tenant/reviews/${REVIEW_ID}" 2>/dev/null)
+    REVIEW_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${CURL_AUTH_ARGS[@]}" "${BASE}/api/v1/b2b/tenant/reviews/${REVIEW_ID}" 2>/dev/null)
     if [ "$REVIEW_CODE" = "404" ]; then
         PASS=$((PASS + 1))
         echo -e "  ${GREEN}PASS${NC} [404] Suppressed review returns 404"
@@ -270,7 +289,7 @@ if [ -n "$SUPPRESS_ID" ] && [ "$SUPPRESS_ID" != "" ]; then
 
     # Verify review is back
     TOTAL=$((TOTAL + 1))
-    REVIEW_CODE2=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/v1/b2b/tenant/reviews/${REVIEW_ID}" 2>/dev/null)
+    REVIEW_CODE2=$(curl -s -o /dev/null -w "%{http_code}" "${CURL_AUTH_ARGS[@]}" "${BASE}/api/v1/b2b/tenant/reviews/${REVIEW_ID}" 2>/dev/null)
     if [ "$REVIEW_CODE2" = "200" ]; then
         PASS=$((PASS + 1))
         echo -e "  ${GREEN}PASS${NC} [200] Review restored after revert"
@@ -294,6 +313,7 @@ echo -e "${YELLOW}[Phase 6] Field Override round-trip${NC}"
 OVERRIDE_BODY='{"entity_type":"review","entity_id":"'${REVIEW_ID}'","correction_type":"override_field","field_name":"vendor_name","old_value":"original","new_value":"Corrected Vendor","reason":"Live test override"}'
 TOTAL=$((TOTAL + 1))
 OVERRIDE_RESULT=$(curl -s -X POST "${BASE}/api/v1/b2b/tenant/corrections" \
+    "${CURL_AUTH_ARGS[@]}" \
     -H "Content-Type: application/json" \
     -d "$OVERRIDE_BODY" 2>/dev/null)
 OVERRIDE_ID=$(echo "$OVERRIDE_RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
@@ -324,7 +344,7 @@ check "Reviews list" GET "/api/v1/b2b/tenant/reviews?limit=5"
 check "Review detail" GET "/api/v1/b2b/tenant/reviews/${REVIEW_ID}"
 check "Signals list" GET "/api/v1/b2b/tenant/signals"
 check "High-intent companies" GET "/api/v1/b2b/tenant/high-intent"
-check "Vendor detail" GET "/api/v1/b2b/tenant/vendors/${VENDOR}"
+check "Vendor detail" GET "/api/v1/b2b/tenant/signals/${VENDOR}"
 
 # ════════════════════════════════════════════════════════════
 # VALIDATION: Bad inputs return proper errors

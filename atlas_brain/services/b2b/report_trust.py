@@ -66,12 +66,15 @@ def report_freshness_payload(
 ) -> dict[str, str]:
     if data_stale:
         return {"state": "stale", "label": report_freshness_label("stale", unknown_label=unknown_label)}
+    anchor_is_date_only = isinstance(anchor, date) and not isinstance(anchor, datetime)
     dt = coerce_datetime(anchor)
     if not dt:
         return {"state": "unknown", "label": unknown_label}
     current = now or datetime.now(timezone.utc)
     age_hours = (current - dt.astimezone(timezone.utc)).total_seconds() / 3600
-    if age_hours < fresh_hours:
+    if anchor_is_date_only:
+        state = "monitor" if age_hours < monitor_hours else "stale"
+    elif age_hours < fresh_hours:
         state = "fresh"
     elif age_hours < monitor_hours:
         state = "monitor"

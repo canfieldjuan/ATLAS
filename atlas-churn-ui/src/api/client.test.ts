@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildReportLibraryViewScopeKey,
   downloadReportPdf,
+  listWebhooks,
   normalizeReportLibraryViewFilters,
 } from './client'
 
@@ -55,5 +56,21 @@ describe('api client helpers', () => {
       'http://localhost:3000/api/v1/b2b/tenant/reports/report-42/pdf?token=token-123',
       '_blank',
     )
+  })
+
+  it('uses the tenant webhook routes instead of the legacy dashboard prefix', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ webhooks: [], count: 0 }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listWebhooks()
+
+    const requestedUrl = String(fetchMock.mock.calls[0]?.[0] ?? '')
+    const legacyDashboardPrefix = ['/api/v1', '/b2b', '/dashboard'].join('')
+    expect(requestedUrl).toContain('/api/v1/b2b/tenant/webhooks')
+    expect(requestedUrl).not.toContain(legacyDashboardPrefix)
   })
 })
