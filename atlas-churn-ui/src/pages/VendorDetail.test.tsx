@@ -321,6 +321,28 @@ describe('VendorDetail', () => {
     })
   })
 
+  it('copies the opportunities shortcut link with preserved vendor back context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy opportunities link' })[0])
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/opportunities?vendor=Zendesk&back_to=%2Fvendors%2FZendesk`,
+      )
+    })
+  })
+
 
   it('surfaces the upstream watchlist path when entered from evidence explorer', async () => {
     const user = userEvent.setup()
