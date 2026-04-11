@@ -498,6 +498,24 @@ describe('EvidenceExplorer', () => {
     })
   })
 
+  it('copies the active reports shortcut link', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const reportsLink = await screen.findByRole('link', { name: 'Reports' })
+    await user.click(screen.getByRole('button', { name: 'Copy reports link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${reportsLink.getAttribute('href')}`)
+    })
+  })
+
   it('copies the active watchlists shortcut link', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)

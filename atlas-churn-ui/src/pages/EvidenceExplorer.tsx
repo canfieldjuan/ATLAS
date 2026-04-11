@@ -242,6 +242,7 @@ export default function EvidenceExplorer() {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWatchlistsState, setCopiedWatchlistsState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedVendorWorkspaceState, setCopiedVendorWorkspaceState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [copiedReportsState, setCopiedReportsState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
@@ -565,6 +566,15 @@ export default function EvidenceExplorer() {
     }
   }
 
+  async function handleCopyReportsLink(path: string) {
+    try {
+      await copyText(`${window.location.origin}${path}`)
+      setCopiedReportsState('copied')
+    } catch {
+      setCopiedReportsState('error')
+    }
+  }
+
   async function handleCopyWitnessLink(witnessId: string) {
     try {
       await copyText(`${window.location.origin}${evidenceWitnessPath(searchParams, witnessId)}`)
@@ -660,12 +670,22 @@ export default function EvidenceExplorer() {
               >
                 Opportunities
               </Link>
-              <Link
-                to={evidenceReportsPath(searchParams, activeVendor)}
-                className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
-              >
-                Reports
-              </Link>
+              <span className="inline-flex items-center gap-2">
+                <Link
+                  to={evidenceReportsPath(searchParams, activeVendor)}
+                  className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+                >
+                  Reports
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyReportsLink(evidenceReportsPath(searchParams, activeVendor))}
+                  className="text-slate-400 hover:text-white transition-colors"
+                  aria-label="Copy reports link"
+                >
+                  {copiedReportsState === 'copied' ? 'Copied' : copiedReportsState === 'error' ? 'Copy Failed' : 'Copy Link'}
+                </button>
+              </span>
             </div>
           ) : null}
         </div>
