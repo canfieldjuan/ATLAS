@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Shield,
   Plus,
@@ -100,10 +101,50 @@ const EMPTY_FORM = {
   notes: '',
 }
 
+function vendorTargetsPath(search: string, mode: string) {
+  const next = new URLSearchParams()
+  if (search.trim()) next.set('search', search.trim())
+  if (mode.trim()) next.set('mode', mode.trim())
+  const qs = next.toString()
+  return qs ? `/vendor-targets?${qs}` : '/vendor-targets'
+}
+
+function vendorDetailPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  if (backTo !== '/vendor-targets') next.set('back_to', backTo)
+  const qs = next.toString()
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  return qs ? `${base}?${qs}` : base
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
+
 export default function VendorTargets() {
-  const [modeFilter, setModeFilter] = useState<string>('')
-  const [searchInput, setSearchInput] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [modeFilter, setModeFilter] = useState<string>(() => searchParams.get('mode') ?? '')
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '')
+  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('search') ?? '')
 
   // Form state
   const [showForm, setShowForm] = useState(false)
@@ -124,6 +165,16 @@ export default function VendorTargets() {
     return () => clearTimeout(t)
   }, [searchInput])
 
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
+    else next.delete('search')
+    if (modeFilter.trim()) next.set('mode', modeFilter.trim())
+    else next.delete('mode')
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [debouncedSearch, modeFilter, searchParams, setSearchParams])
+
   const { data, loading, error, refresh, refreshing } = useApiData(
     async () => {
       const res = await fetchVendorTargets({
@@ -140,6 +191,10 @@ export default function VendorTargets() {
   const vendorTargets = targets.filter(t => t.target_mode === 'vendor_retention')
   const challengerTargets = targets.filter(t => t.target_mode === 'challenger_intel')
   const legacyTargets = targets.filter(t => t.ownership_scope === 'legacy_global')
+  const currentListPath = useMemo(
+    () => vendorTargetsPath(debouncedSearch, modeFilter),
+    [debouncedSearch, modeFilter],
+  )
 
   function openAdd(mode: string = 'vendor_retention') {
     setEditingId(null)
@@ -313,9 +368,37 @@ export default function VendorTargets() {
     },
     {
       key: 'actions',
-      header: '',
+      header: 'Actions',
       render: (r) => (
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <Link
+            to={vendorDetailPath(r.company_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-cyan-400 hover:text-cyan-300 transition-colors"
+          >
+            Vendor
+          </Link>
+          <Link
+            to={evidencePath(r.company_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-violet-300 hover:text-violet-200 transition-colors"
+          >
+            Evidence
+          </Link>
+          <Link
+            to={reportsPath(r.company_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+          >
+            Reports
+          </Link>
+          <Link
+            to={opportunitiesPath(r.company_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-emerald-300 hover:text-emerald-200 transition-colors"
+          >
+            Opportunities
+          </Link>
           {r.ownership_scope === 'legacy_global' && (
             <button
               onClick={(e) => { e.stopPropagation(); handleClaimTarget(r) }}
@@ -569,6 +652,7 @@ export default function VendorTargets() {
           <DataTable
             columns={columns}
             data={targets}
+            onRowClick={(row) => navigate(vendorDetailPath(row.company_name, currentListPath))}
             emptyMessage="No vendor targets configured"
             emptyAction={{
               label: 'Add Target',
