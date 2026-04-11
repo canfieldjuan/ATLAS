@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Activity,
   BellRing,
@@ -302,6 +302,12 @@ function summarizeWatchlistView(view: WatchlistView) {
   return parts.length > 0 ? parts.join(' - ') : 'All signals'
 }
 
+function watchlistViewUrl(viewId: string) {
+  const params = new URLSearchParams()
+  params.set('view', viewId)
+  return `${window.location.origin}/watchlists?${params.toString()}`
+}
+
 function alertEventTone(event: WatchlistAlertEvent) {
   if (event.event_type === 'stale_data') {
     return 'border-amber-500/30 bg-amber-500/10 text-amber-200'
@@ -320,6 +326,7 @@ function alertEventLabel(event: WatchlistAlertEvent) {
 
 export default function Watchlists() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [searchInput, setSearchInput] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [savedViewName, setSavedViewName] = useState('')
@@ -578,6 +585,13 @@ export default function Watchlists() {
     () => watchlistViews.find((view) => watchlistViewMatchesState(view, currentViewFilters)) ?? null,
     [currentViewFilters, watchlistViews],
   )
+  const requestedWatchlistViewId = searchParams.get('view')?.trim() || ''
+  const requestedWatchlistView = useMemo(
+    () => (requestedWatchlistViewId
+      ? watchlistViews.find((view) => view.id === requestedWatchlistViewId) ?? null
+      : null),
+    [requestedWatchlistViewId, watchlistViews],
+  )
   const {
     data: activeAlertEventsData,
     refresh: refreshAlertEvents,
@@ -743,7 +757,7 @@ export default function Watchlists() {
     setCompetitiveSetAsymmetryEnabled(false)
   }
 
-  function applyWatchlistView(view: WatchlistView) {
+  const applyWatchlistView = useCallback((view: WatchlistView) => {
     const vendorNames = watchlistViewVendorNames(view)
     setSelectedVendorFilter(vendorNames[0] || '')
     setSelectedVendorFilters(vendorNames)
@@ -759,6 +773,46 @@ export default function Watchlists() {
     setAlertEmailEnabled(view.alert_email_enabled)
     setAlertDeliveryFrequency(view.alert_delivery_frequency || 'daily')
     setSavedViewName(view.name)
+  }, [])
+
+  useEffect(() => {
+    if (!requestedWatchlistView) return
+    if (activeWatchlistView?.id === requestedWatchlistView.id) return
+    applyWatchlistView(requestedWatchlistView)
+  }, [activeWatchlistView?.id, applyWatchlistView, requestedWatchlistView])
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentViewId = searchParams.get('view')?.trim() || ''
+    const nextViewId = activeWatchlistView?.id || ''
+    if (currentViewId === nextViewId) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextViewId) {
+        next.set('view', nextViewId)
+      } else {
+        next.delete('view')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    setSearchParams,
+  ])
+
+  async function handleCopyWatchlistViewLink(view: WatchlistView) {
+    try {
+      await navigator.clipboard.writeText(watchlistViewUrl(view.id))
+      setActionError(null)
+      setActionMessage(`Copied link for ${view.name}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : `Failed to copy link for ${view.name}`)
+    }
   }
 
   async function handleSaveWatchlistView() {
@@ -1648,9 +1702,18 @@ export default function Watchlists() {
                   ) : null}
                 </button>
                 <button
+                  aria-label={`Copy link for saved view ${view.name}`}
+                  className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                  onClick={() => void handleCopyWatchlistViewLink(view)}
+                  type="button"
+                >
+                  Copy Link
+                </button>
+                <button
                   aria-label={`Delete saved view ${view.name}`}
                   className="rounded-md bg-rose-500/10 px-2 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
                   onClick={() => handleDeleteWatchlistView(view)}
+                  type="button"
                   disabled={deletingWatchlistViewId === view.id}
                 >
                   Delete

@@ -619,6 +619,113 @@ describe('Watchlists', () => {
     expect(screen.getAllByText('stale policy hit').length).toBeGreaterThan(0)
   })
 
+  it('hydrates a saved view from the URL query', async () => {
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: '2026-04-08T18:00:00Z',
+          last_alert_delivery_at: '2026-04-07T18:30:00Z',
+          last_alert_delivery_status: 'sent',
+          last_alert_delivery_summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_names: ['Intercom'],
+        category: 'Helpdesk',
+        vendor_alert_threshold: 7.5,
+        stale_days_threshold: 1,
+      })
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_names: ['Intercom'],
+        category: 'Helpdesk',
+        source: 'reddit',
+        min_urgency: 8,
+        include_stale: false,
+        account_alert_threshold: 8.5,
+        stale_days_threshold: 1,
+      })
+    })
+
+    expect(screen.getByDisplayValue('Fresh named Intercom')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('7.5')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('8.5')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('1')).toBeInTheDocument()
+  })
+
+  it('copies a deep link for a saved view', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: '2026-04-08T18:00:00Z',
+          last_alert_delivery_at: '2026-04-07T18:30:00Z',
+          last_alert_delivery_status: 'sent',
+          last_alert_delivery_summary: 'Delivered watchlist alert email to 1 of 1 recipient',
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy link for saved view Fresh named Intercom' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}/watchlists?view=view-1`)
+    })
+    expect(await screen.findByText('Copied link for Fresh named Intercom')).toBeInTheDocument()
+  })
+
   it('evaluates persisted alert events for the active saved view', async () => {
     const user = userEvent.setup()
     api.listWatchlistViews.mockResolvedValue({
