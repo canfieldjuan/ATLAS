@@ -1,4 +1,4 @@
-import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import UrgencyBadge from '../components/UrgencyBadge'
@@ -24,6 +24,32 @@ function DetailSkeleton() {
       </div>
     </div>
   )
+}
+
+function vendorDetailPath(vendorName: string) {
+  return `/vendors/${encodeURIComponent(vendorName)}`
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
 }
 
 export default function ReviewDetail() {
@@ -52,6 +78,7 @@ export default function ReviewDetail() {
       || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
       || (location.state as { backTo: string }).backTo.startsWith('/evidence')
       || (location.state as { backTo: string }).backTo.startsWith('/reports')
+      || (location.state as { backTo: string }).backTo.startsWith('/opportunities')
     )
     ? (location.state as { backTo: string }).backTo
     : null
@@ -63,9 +90,18 @@ export default function ReviewDetail() {
       || value.startsWith('/watchlists')
       || value.startsWith('/evidence')
       || value.startsWith('/reports')
+      || value.startsWith('/opportunities')
     ) ? value : null
   })()
   const backToReviews = stateBackTo ?? queryBackTo ?? '/reviews'
+  const reviewDetailBackPath = (() => {
+    const next = new URLSearchParams()
+    if (backToReviews !== '/reviews') {
+      next.set('back_to', backToReviews)
+    }
+    const qs = next.toString()
+    return qs ? `/reviews/${review.id}?${qs}` : `/reviews/${review.id}`
+  })()
 
   const enrichment = review.enrichment as Record<string, unknown> | null
   const urgency = enrichment?.urgency_score as number | undefined
@@ -97,6 +133,8 @@ export default function ReviewDetail() {
                 ? 'Back to Evidence'
                 : backToReviews.startsWith('/reports')
                   ? 'Back to Reports'
+                  : backToReviews.startsWith('/opportunities')
+                    ? 'Back to Opportunities'
                   : 'Back to Reviews'}
         </button>
         <button
@@ -111,6 +149,32 @@ export default function ReviewDetail() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">{review.vendor_name}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+            <Link
+              to={vendorDetailPath(review.vendor_name)}
+              className="text-cyan-400 hover:text-cyan-300 transition-colors"
+            >
+              Vendor workspace
+            </Link>
+            <Link
+              to={evidencePath(review.vendor_name, reviewDetailBackPath)}
+              className="text-violet-300 hover:text-violet-200 transition-colors"
+            >
+              Evidence
+            </Link>
+            <Link
+              to={opportunitiesPath(review.vendor_name, reviewDetailBackPath)}
+              className="text-emerald-300 hover:text-emerald-200 transition-colors"
+            >
+              Opportunities
+            </Link>
+            <Link
+              to={reportsPath(review.vendor_name, reviewDetailBackPath)}
+              className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+            >
+              Reports
+            </Link>
+          </div>
           <p className="text-sm text-slate-400 mt-1">
             {review.reviewer_company ?? 'Unknown company'}
             {review.reviewer_title && ` - ${review.reviewer_title}`}
