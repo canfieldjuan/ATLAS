@@ -213,6 +213,20 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('links the vendor workspace back to the current explorer state', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+    )
+  })
+
   it('opens review detail from witness drilldown with evidence back_to preserved', async () => {
     const user = userEvent.setup()
 

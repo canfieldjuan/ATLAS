@@ -55,6 +55,12 @@ function evidenceReportsPath(searchParams: URLSearchParams, vendorName: string) 
   return `/reports?${params.toString()}`
 }
 
+function evidenceVendorPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', evidenceExplorerPath(searchParams))
+  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
+}
+
 function parseBackTo(value: string | null) {
   if (!value) return null
   if (value.startsWith('/watchlists')) return value
@@ -430,15 +436,20 @@ export default function EvidenceExplorer() {
 
       {activeVendor && (
         <>
-          {/* Vendor reports link */}
-          {activeVendor && (
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              to={evidenceVendorPath(searchParams, activeVendor)}
+              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              Open vendor workspace <ExternalLink className="h-3 w-3" />
+            </Link>
             <Link
               to={evidenceReportsPath(searchParams, activeVendor)}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
               View library for {activeVendor} <ExternalLink className="h-3 w-3" />
             </Link>
-          )}
+          </div>
 
           {/* Tab bar */}
           <div className="flex items-center gap-1 border-b border-slate-700/50 pb-px">
