@@ -140,6 +140,7 @@ async def test_list_company_signal_candidates_uses_analyst_review_bucket_by_defa
                     vendor_name=None,
                     company_name=None,
                     candidate_bucket="analyst_review",
+                    review_status="pending",
                     canonical_gap_reason=None,
                     min_urgency=0,
                     min_confidence=None,
@@ -154,6 +155,7 @@ async def test_list_company_signal_candidates_uses_analyst_review_bucket_by_defa
         "candidates": returned,
         "count": 1,
         "candidate_bucket": "analyst_review",
+        "review_status": "pending",
     }
     scope_mock.assert_awaited_once_with(pool, None)
     read_mock.assert_awaited_once_with(
@@ -163,6 +165,7 @@ async def test_list_company_signal_candidates_uses_analyst_review_bucket_by_defa
         company_name=None,
         scoped_vendors=None,
         candidate_bucket="analyst_review",
+        review_status="pending",
         canonical_gap_reason=None,
         min_urgency=0,
         min_confidence=None,
@@ -193,6 +196,7 @@ async def test_list_company_signal_candidates_passes_scope_and_filters():
                     vendor_name="Zendesk",
                     company_name="Acme",
                     candidate_bucket="canonical_ready",
+                    review_status="approved",
                     canonical_gap_reason="below_high_intent_threshold",
                     min_urgency=6.5,
                     min_confidence=0.4,
@@ -211,6 +215,7 @@ async def test_list_company_signal_candidates_passes_scope_and_filters():
         company_name="Acme",
         scoped_vendors=scoped,
         candidate_bucket="canonical_ready",
+        review_status="approved",
         canonical_gap_reason="below_high_intent_threshold",
         min_urgency=6.5,
         min_confidence=0.4,
@@ -228,6 +233,7 @@ async def test_list_company_signal_candidates_rejects_invalid_bucket():
                 vendor_name=None,
                 company_name=None,
                 candidate_bucket="invalid",
+                review_status="pending",
                 canonical_gap_reason=None,
                 min_urgency=0,
                 min_confidence=None,
@@ -240,6 +246,142 @@ async def test_list_company_signal_candidates_rejects_invalid_bucket():
 
     assert exc.value.status_code == 400
     assert "candidate_bucket" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_list_company_signal_candidates_rejects_invalid_review_status():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.list_company_signal_candidates(
+                vendor_name=None,
+                company_name=None,
+                candidate_bucket="analyst_review",
+                review_status="invalid",
+                canonical_gap_reason=None,
+                min_urgency=0,
+                min_confidence=None,
+                decision_makers_only=False,
+                signal_evidence_present=None,
+                window_days=90,
+                limit=50,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "review_status" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "source": "reddit",
+                "urgency_score": 8.2,
+                "pain_category": "pricing",
+                "buyer_role": "vp",
+                "decision_maker": True,
+                "seat_count": 120,
+                "contract_end": "2026-07-01",
+                "buying_stage": "evaluation",
+                "confidence_score": 0.26,
+                "review_status": "pending",
+            },
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "company_name": "acme corp",
+                "vendor_name": "Zendesk",
+            },
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "review_status": "approved",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 0, tzinfo=timezone.utc),
+                "reviewed_by": "api:user-1",
+                "review_notes": "looks good",
+            },
+        ]
+    )
+    body = b2b_dashboard.CompanySignalCandidateReviewBody(notes="looks good", trigger_rebuild=True)
+    user = MagicMock(user_id="user-1")
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "_trigger_accounts_in_motion_rebuild",
+                new=AsyncMock(return_value={"triggered": True, "vendor_name": "Zendesk"}),
+            ) as rebuild_mock:
+                result = await b2b_dashboard.approve_company_signal_candidate(
+                    "11111111-1111-1111-1111-111111111111",
+                    body,
+                    user,
+                )
+
+    assert result["review_status"] == "approved"
+    assert result["review_status_updated_at"] == "2026-04-11T12:00:00+00:00"
+    assert result["company_signal_id"] == "22222222-2222-2222-2222-222222222222"
+    assert result["rebuild"]["triggered"] is True
+    rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
+
+
+@pytest.mark.asyncio
+async def test_suppress_company_signal_candidate_marks_suppressed_without_rebuild():
+    pool = MagicMock()
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "source": "reddit",
+                "urgency_score": 8.2,
+                "pain_category": "pricing",
+                "buyer_role": "vp",
+                "decision_maker": True,
+                "seat_count": 120,
+                "contract_end": "2026-07-01",
+                "buying_stage": "evaluation",
+                "confidence_score": 0.26,
+                "review_status": "pending",
+            },
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "review_status": "suppressed",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 5, tzinfo=timezone.utc),
+                "reviewed_by": "analyst",
+                "review_notes": "not a real target",
+            },
+        ]
+    )
+    body = b2b_dashboard.CompanySignalCandidateReviewBody(notes="not a real target", trigger_rebuild=False)
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            result = await b2b_dashboard.suppress_company_signal_candidate(
+                "11111111-1111-1111-1111-111111111111",
+                body,
+                None,
+            )
+
+    assert result["review_status"] == "suppressed"
+    assert result["review_status_updated_at"] == "2026-04-11T12:05:00+00:00"
+    assert result["review_notes"] == "not a real target"
 
 
 @pytest.mark.asyncio

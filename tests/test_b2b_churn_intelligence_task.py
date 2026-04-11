@@ -178,5 +178,7 @@ async def test_upsert_company_signal_candidates_persists_materialization_run_id(
     assert len(pool.executemany_calls) == 1
     query, rows = pool.executemany_calls[0]
     assert "materialization_run_id" in query
+    assert "review_status =" not in query
+    assert "review_status_updated_at =" not in query
     assert rows[0][-1] == "run-456"
     assert rows[0][-2] == "analyst_review"

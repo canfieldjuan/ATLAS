@@ -11304,6 +11304,7 @@ async def read_company_signal_candidates(
     company_name: str | None = None,
     scoped_vendors: list[str] | None = None,
     candidate_bucket: str | None = None,
+    review_status: str | None = None,
     canonical_gap_reason: str | None = None,
     min_urgency: float = 0.0,
     min_confidence: float | None = None,
@@ -11334,6 +11335,10 @@ async def read_company_signal_candidates(
         conditions.append(f"candidate_bucket = ${idx}")
         params.append(candidate_bucket)
         idx += 1
+    if review_status:
+        conditions.append(f"review_status = ${idx}")
+        params.append(review_status)
+        idx += 1
     if canonical_gap_reason:
         conditions.append(f"canonical_gap_reason = ${idx}")
         params.append(canonical_gap_reason)
@@ -11358,32 +11363,45 @@ async def read_company_signal_candidates(
     rows = await pool.fetch(
         f"""
         SELECT review_id,
-               company_name,
-               company_name_raw,
-               vendor_name,
-               product_category,
-               source,
-               reviewed_at,
-               urgency_score,
-               relevance_score,
-               pain_category,
-               buyer_role,
-               decision_maker,
-               seat_count,
-               contract_end,
-               buying_stage,
-               resolution_confidence,
-               confidence_score,
-               confidence_tier,
-               signal_evidence_present,
-               canonical_gap_reason,
-               candidate_bucket,
-               materialization_run_id,
-               first_seen_at,
-               last_seen_at
-        FROM b2b_company_signal_candidates
+               c.company_name,
+               c.company_name_raw,
+               c.vendor_name,
+               c.product_category,
+               c.source,
+               c.reviewed_at,
+               c.review_status_updated_at,
+               c.urgency_score,
+               c.relevance_score,
+               c.pain_category,
+               c.buyer_role,
+               c.decision_maker,
+               c.seat_count,
+               c.contract_end,
+               c.buying_stage,
+               c.resolution_confidence,
+               c.confidence_score,
+               c.confidence_tier,
+               c.signal_evidence_present,
+               c.canonical_gap_reason,
+               c.candidate_bucket,
+               c.review_status,
+               c.reviewed_by,
+               c.review_notes,
+               c.materialization_run_id,
+               c.first_seen_at,
+               c.last_seen_at,
+               r.summary,
+               LEFT(r.review_text, 500) AS review_excerpt,
+               r.pros,
+               r.cons,
+               r.content_type,
+               r.source_url,
+               r.enrichment->'quotable_phrases' AS quotable_phrases
+        FROM b2b_company_signal_candidates c
+        LEFT JOIN b2b_reviews r ON r.id = c.review_id
         WHERE {" AND ".join(conditions)}
         ORDER BY CASE WHEN candidate_bucket = 'canonical_ready' THEN 0 ELSE 1 END,
+                 review_status_updated_at DESC NULLS LAST,
                  urgency_score DESC NULLS LAST,
                  confidence_score DESC NULLS LAST,
                  reviewed_at DESC NULLS LAST,
@@ -11394,6 +11412,12 @@ async def read_company_signal_candidates(
     )
     results: list[dict[str, Any]] = []
     for row in rows:
+        quote_excerpt = None
+        for item in _safe_json(row.get("quotable_phrases")) or []:
+            text = _quote_text(item) if isinstance(item, dict) else str(item or "").strip()
+            if text:
+                quote_excerpt = text
+                break
         results.append({
             "review_id": str(row["review_id"]) if row.get("review_id") else None,
             "company": row.get("company_name"),
@@ -11402,6 +11426,7 @@ async def read_company_signal_candidates(
             "category": row.get("product_category"),
             "source": row.get("source"),
             "reviewed_at": str(row.get("reviewed_at") or "") or None,
+            "review_status_updated_at": str(row.get("review_status_updated_at") or "") or None,
             "urgency": float(row["urgency_score"]) if row.get("urgency_score") is not None else None,
             "relevance_score": float(row["relevance_score"]) if row.get("relevance_score") is not None else None,
             "pain": row.get("pain_category"),
@@ -11416,9 +11441,19 @@ async def read_company_signal_candidates(
             "signal_evidence_present": bool(row.get("signal_evidence_present")),
             "canonical_gap_reason": row.get("canonical_gap_reason"),
             "candidate_bucket": row.get("candidate_bucket"),
+            "review_status": row.get("review_status"),
+            "reviewed_by": row.get("reviewed_by"),
+            "review_notes": row.get("review_notes"),
             "materialization_run_id": row.get("materialization_run_id"),
             "first_seen_at": str(row.get("first_seen_at") or "") or None,
             "last_seen_at": str(row.get("last_seen_at") or "") or None,
+            "summary": row.get("summary"),
+            "review_excerpt": row.get("review_excerpt"),
+            "pros": row.get("pros"),
+            "cons": row.get("cons"),
+            "content_type": row.get("content_type"),
+            "source_url": row.get("source_url"),
+            "quote_excerpt": quote_excerpt,
         })
     return results
 

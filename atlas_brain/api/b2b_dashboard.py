@@ -37,6 +37,7 @@ from ..services.scraping.capabilities import get_capability
 from ..services.scraping.sources import ALL_SOURCES, ReviewSource, display_name as source_display_name
 from ..autonomous.tasks._b2b_shared import (
     has_complete_core_run_marker,
+    latest_complete_core_report_date,
     read_company_signal_candidates,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
@@ -45,6 +46,7 @@ from ..autonomous.tasks._b2b_shared import (
     read_vendor_signal_summary,
 )
 from ..storage.database import get_db_pool
+from ..storage.models import ScheduledTask
 
 logger = logging.getLogger("atlas.api.b2b_dashboard")
 
@@ -95,6 +97,11 @@ class CreateCorrectionBody(BaseModel):
 
 class RevertCorrectionBody(BaseModel):
     reason: str | None = None
+
+
+class CompanySignalCandidateReviewBody(BaseModel):
+    notes: str | None = Field(default=None, max_length=2000)
+    trigger_rebuild: bool = True
 
 
 def _safe_json(val):
@@ -263,6 +270,86 @@ async def _get_scoped_vendors(pool, user: AuthUser | None) -> list[str] | None:
         user.account_id,
     )
     return [r["vendor_name"] for r in rows]
+
+
+def _candidate_reviewer(user: AuthUser | None) -> str:
+    return f"api:{user.user_id}" if user else "analyst"
+
+
+async def _fetch_company_signal_candidate_or_404(
+    pool,
+    candidate_id: str,
+    user: AuthUser | None,
+) -> dict[str, Any]:
+    try:
+        cid = _uuid.UUID(candidate_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="candidate_id must be a valid UUID")
+
+    row = await pool.fetchrow(
+        """
+        SELECT id,
+               review_id,
+               company_name,
+               company_name_raw,
+               vendor_name,
+               product_category,
+               source,
+               urgency_score,
+               pain_category,
+               buyer_role,
+               decision_maker,
+               seat_count,
+               contract_end,
+               buying_stage,
+               confidence_score,
+               review_status
+        FROM b2b_company_signal_candidates
+        WHERE id = $1
+        """,
+        cid,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Company signal candidate not found")
+
+    scoped_vendors = await _get_scoped_vendors(pool, user)
+    scoped_vendor_keys = {
+        _normalize_vendor_name(vendor_name)
+        for vendor_name in (scoped_vendors or [])
+        if _normalize_vendor_name(vendor_name)
+    }
+    if scoped_vendors is not None and _normalize_vendor_name(row.get("vendor_name")) not in scoped_vendor_keys:
+        raise HTTPException(status_code=404, detail="Company signal candidate not found")
+
+    return dict(row)
+
+
+async def _trigger_accounts_in_motion_rebuild(pool, vendor_name: str) -> dict[str, Any]:
+    as_of = await latest_complete_core_report_date(pool)
+    if as_of is None:
+        return {
+            "triggered": False,
+            "reason": "no_complete_core_run",
+        }
+    from ..autonomous.tasks import b2b_accounts_in_motion as accounts_mod
+
+    task = ScheduledTask(
+        id=_uuid.uuid4(),
+        name="company_signal_candidate_review_rebuild",
+        task_type="builtin",
+        schedule_type="once",
+        metadata={
+            "maintenance_run": True,
+            "test_vendors": [vendor_name],
+        },
+    )
+    result = await accounts_mod.run(task, as_of=as_of)
+    return {
+        "triggered": True,
+        "vendor_name": vendor_name,
+        "as_of": str(as_of),
+        "result": result,
+    }
 
 
 from ..services.b2b.corrections import suppress_predicate as _suppress_predicate  # noqa: E402
@@ -2196,6 +2283,7 @@ async def list_company_signal_candidates(
     vendor_name: Optional[str] = Query(None),
     company_name: Optional[str] = Query(None),
     candidate_bucket: str = Query("analyst_review"),
+    review_status: str = Query("pending"),
     canonical_gap_reason: Optional[str] = Query(None),
     min_urgency: float = Query(0, ge=0, le=10),
     min_confidence: Optional[float] = Query(None, ge=0, le=1),
@@ -2211,6 +2299,11 @@ async def list_company_signal_candidates(
             status_code=400,
             detail="candidate_bucket must be 'analyst_review' or 'canonical_ready'",
         )
+    if review_status not in {"pending", "approved", "suppressed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_status must be 'pending', 'approved', or 'suppressed'",
+        )
 
     pool = _pool_or_503()
     scoped_vendors = await _get_scoped_vendors(pool, user)
@@ -2221,6 +2314,7 @@ async def list_company_signal_candidates(
         company_name=company_name,
         scoped_vendors=scoped_vendors,
         candidate_bucket=candidate_bucket,
+        review_status=review_status,
         canonical_gap_reason=canonical_gap_reason,
         min_urgency=min_urgency,
         min_confidence=min_confidence,
@@ -2232,6 +2326,131 @@ async def list_company_signal_candidates(
         "candidates": candidates,
         "count": len(candidates),
         "candidate_bucket": candidate_bucket,
+        "review_status": review_status,
+    }
+
+
+@router.post("/company-signal-candidates/{candidate_id}/approve")
+async def approve_company_signal_candidate(
+    candidate_id: str,
+    body: CompanySignalCandidateReviewBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
+
+    canonical_row = await pool.fetchrow(
+        """
+        INSERT INTO b2b_company_signals (
+            company_name, vendor_name, urgency_score,
+            pain_category, buyer_role, decision_maker,
+            seat_count, contract_end, buying_stage,
+            review_id, source, confidence_score, last_seen_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        ON CONFLICT (company_name, vendor_name)
+        DO UPDATE SET
+            urgency_score = GREATEST(b2b_company_signals.urgency_score, EXCLUDED.urgency_score),
+            pain_category = COALESCE(EXCLUDED.pain_category, b2b_company_signals.pain_category),
+            buyer_role = COALESCE(EXCLUDED.buyer_role, b2b_company_signals.buyer_role),
+            decision_maker = COALESCE(EXCLUDED.decision_maker, b2b_company_signals.decision_maker),
+            seat_count = COALESCE(EXCLUDED.seat_count, b2b_company_signals.seat_count),
+            contract_end = COALESCE(EXCLUDED.contract_end, b2b_company_signals.contract_end),
+            buying_stage = COALESCE(EXCLUDED.buying_stage, b2b_company_signals.buying_stage),
+            review_id = COALESCE(EXCLUDED.review_id, b2b_company_signals.review_id),
+            source = COALESCE(EXCLUDED.source, b2b_company_signals.source),
+            confidence_score = GREATEST(b2b_company_signals.confidence_score, EXCLUDED.confidence_score),
+            last_seen_at = EXCLUDED.last_seen_at
+        RETURNING id, company_name, vendor_name
+        """,
+        candidate["company_name"],
+        candidate["vendor_name"],
+        candidate.get("urgency_score"),
+        candidate.get("pain_category"),
+        candidate.get("buyer_role"),
+        candidate.get("decision_maker"),
+        candidate.get("seat_count"),
+        candidate.get("contract_end"),
+        candidate.get("buying_stage"),
+        candidate.get("review_id"),
+        candidate.get("source"),
+        candidate.get("confidence_score"),
+    )
+
+    reviewed = await pool.fetchrow(
+        """
+        UPDATE b2b_company_signal_candidates
+        SET review_status = 'approved',
+            review_status_updated_at = NOW(),
+            reviewed_by = $2,
+            review_notes = $3
+        WHERE id = $1::uuid
+        RETURNING id, review_status, review_status_updated_at, reviewed_by, review_notes
+        """,
+        candidate_id,
+        _candidate_reviewer(user),
+        body.notes,
+    )
+
+    rebuild = {"triggered": False, "reason": "disabled"}
+    if body.trigger_rebuild:
+        try:
+            rebuild = await _trigger_accounts_in_motion_rebuild(pool, candidate["vendor_name"])
+        except Exception:
+            logger.exception(
+                "Company signal candidate approval rebuild failed for %s",
+                candidate["vendor_name"],
+            )
+            rebuild = {"triggered": False, "reason": "rebuild_failed"}
+
+    return {
+        "candidate_id": str(reviewed["id"]),
+        "review_status": reviewed["review_status"],
+        "review_status_updated_at": (
+            reviewed["review_status_updated_at"].isoformat()
+            if reviewed["review_status_updated_at"]
+            else None
+        ),
+        "reviewed_by": reviewed["reviewed_by"],
+        "review_notes": reviewed["review_notes"],
+        "company_signal_id": str(canonical_row["id"]) if canonical_row else None,
+        "company_name": canonical_row["company_name"] if canonical_row else candidate["company_name"],
+        "vendor_name": canonical_row["vendor_name"] if canonical_row else candidate["vendor_name"],
+        "rebuild": rebuild,
+    }
+
+
+@router.post("/company-signal-candidates/{candidate_id}/suppress")
+async def suppress_company_signal_candidate(
+    candidate_id: str,
+    body: CompanySignalCandidateReviewBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
+    reviewed = await pool.fetchrow(
+        """
+        UPDATE b2b_company_signal_candidates
+        SET review_status = 'suppressed',
+            review_status_updated_at = NOW(),
+            reviewed_by = $2,
+            review_notes = $3
+        WHERE id = $1::uuid
+        RETURNING id, review_status, review_status_updated_at, reviewed_by, review_notes
+        """,
+        candidate_id,
+        _candidate_reviewer(user),
+        body.notes,
+    )
+    return {
+        "candidate_id": str(reviewed["id"]),
+        "review_status": reviewed["review_status"],
+        "review_status_updated_at": (
+            reviewed["review_status_updated_at"].isoformat()
+            if reviewed["review_status_updated_at"]
+            else None
+        ),
+        "reviewed_by": reviewed["reviewed_by"],
+        "review_notes": reviewed["review_notes"],
     }
 
 

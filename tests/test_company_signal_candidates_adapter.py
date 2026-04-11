@@ -71,9 +71,20 @@ def _make_candidate_row(**overrides):
         "signal_evidence_present": False,
         "canonical_gap_reason": "low_confidence_low_trust_source",
         "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "review_status_updated_at": None,
+        "reviewed_by": None,
+        "review_notes": None,
         "materialization_run_id": "run-123",
         "first_seen_at": datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc),
         "last_seen_at": datetime(2026, 4, 10, 12, 5, tzinfo=timezone.utc),
+        "summary": "Considering a switch this quarter.",
+        "review_excerpt": "We are actively evaluating alternatives because pricing keeps climbing.",
+        "pros": "Easy setup",
+        "cons": "Too expensive",
+        "content_type": "review",
+        "source_url": "https://example.com/review/1",
+        "quotable_phrases": json.dumps(["Pricing keeps climbing"]),
     }
     row.update(overrides)
     return row
@@ -170,6 +181,7 @@ async def test_read_company_signal_candidates_maps_rows_and_filters_in_sql():
         company_name="Acme",
         scoped_vendors=["Zendesk"],
         candidate_bucket="analyst_review",
+        review_status="pending",
         canonical_gap_reason="low_confidence_low_trust_source",
         min_urgency=6.0,
         min_confidence=0.2,
@@ -180,6 +192,7 @@ async def test_read_company_signal_candidates_maps_rows_and_filters_in_sql():
 
     sql = pool.fetch.call_args[0][0]
     assert "candidate_bucket =" in sql
+    assert "review_status =" in sql
     assert "company_name ILIKE" in sql
     assert "canonical_gap_reason =" in sql
     assert "urgency_score" in sql
@@ -187,11 +200,15 @@ async def test_read_company_signal_candidates_maps_rows_and_filters_in_sql():
     assert "decision_maker = true" in sql
     assert "signal_evidence_present =" in sql
     assert "ANY(" in sql
-    assert "LIMIT $9" in sql
+    assert "LIMIT $10" in sql
     assert len(results) == 1
     assert results[0]["company"] == "Acme Corp"
     assert results[0]["candidate_bucket"] == "analyst_review"
     assert results[0]["confidence_score"] == 0.26
+    assert results[0]["review_status"] == "pending"
+    assert results[0]["review_status_updated_at"] is None
+    assert results[0]["quote_excerpt"] == "Pricing keeps climbing"
+    assert results[0]["review_excerpt"].startswith("We are actively evaluating")
 
 
 @pytest.mark.asyncio
