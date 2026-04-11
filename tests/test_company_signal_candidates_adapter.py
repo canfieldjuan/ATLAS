@@ -488,15 +488,15 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             [
                 {
                     "source": "g2",
-                    "vendor_name": "Copper",
+                    "vendor_name": "Close",
                     "blocked_group_count": 1,
-                    "blocked_review_count": 2,
-                    "low_confidence_group_count": 1,
-                    "below_threshold_group_count": 0,
-                    "min_confidence_gap_to_canonical": 0.15,
-                    "avg_confidence_gap_to_canonical": 0.18,
-                    "min_urgency_gap_to_high_intent": None,
-                    "avg_urgency_gap_to_high_intent": None,
+                    "blocked_review_count": 1,
+                    "low_confidence_group_count": 0,
+                    "below_threshold_group_count": 1,
+                    "min_confidence_gap_to_canonical": None,
+                    "avg_confidence_gap_to_canonical": None,
+                    "min_urgency_gap_to_high_intent": 4.0,
+                    "avg_urgency_gap_to_high_intent": 4.0,
                 }
             ],
             [
@@ -509,15 +509,15 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             [
                 {
                     "source": "g2",
-                    "vendor_name": "Copper",
+                    "vendor_name": "Close",
                     "blocked_group_count": 1,
-                    "blocked_review_count": 2,
-                    "low_confidence_group_count": 1,
-                    "below_threshold_group_count": 0,
-                    "min_confidence_gap_to_canonical": 0.15,
-                    "avg_confidence_gap_to_canonical": 0.18,
-                    "min_urgency_gap_to_high_intent": None,
-                    "avg_urgency_gap_to_high_intent": None,
+                    "blocked_review_count": 1,
+                    "low_confidence_group_count": 0,
+                    "below_threshold_group_count": 1,
+                    "min_confidence_gap_to_canonical": None,
+                    "avg_confidence_gap_to_canonical": None,
+                    "min_urgency_gap_to_high_intent": 4.0,
+                    "avg_urgency_gap_to_high_intent": 4.0,
                 }
             ],
             [
@@ -771,10 +771,10 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["blocked_source_mix"][0]["source"] == "reddit"
     assert summary["blocked_source_mix"][0]["group_count"] == 2
     assert summary["blocked_source_vendor_gaps"][0]["source"] == "g2"
-    assert summary["blocked_source_vendor_gaps"][0]["vendor_name"] == "Copper"
-    assert summary["blocked_source_vendor_gaps"][0]["min_confidence_gap_to_canonical"] == 0.15
+    assert summary["blocked_source_vendor_gaps"][0]["vendor_name"] == "Close"
+    assert summary["blocked_source_vendor_gaps"][0]["min_urgency_gap_to_high_intent"] == 4.0
     assert summary["trusted_blocked_source_mix"][0]["source"] == "g2"
-    assert summary["trusted_blocked_source_vendor_gaps"][0]["vendor_name"] == "Copper"
+    assert summary["trusted_blocked_source_vendor_gaps"][0]["vendor_name"] == "Close"
     assert summary["near_threshold_top_vendors"][0]["vendor_name"] == "Copper"
     assert summary["near_threshold_gap_reasons"][0]["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["near_threshold_groups"][0]["vendor"] == "Copper"
@@ -784,6 +784,13 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["near_threshold_groups"][0]["urgency_gap_to_high_intent"] is None
     assert summary["near_threshold_source_mix"][0]["source"] == "reddit"
     assert summary["near_threshold_source_mix"][0]["review_count"] == 2
+    assert summary["unlock_candidates"][0]["unlock_candidate_type"] == "low_trust_near_threshold_group"
+    assert summary["unlock_candidates"][0]["vendor"] == "Copper"
+    assert summary["unlock_candidates"][0]["confidence_gap_to_canonical"] == 0.19
+    assert summary["unlock_candidates"][1]["unlock_candidate_type"] == "trusted_source_urgency_gap"
+    assert summary["unlock_candidates"][1]["source"] == "g2"
+    assert summary["unlock_candidates"][1]["vendor"] == "Close"
+    assert summary["unlock_candidates"][1]["urgency_gap_to_high_intent"] == 4.0
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"

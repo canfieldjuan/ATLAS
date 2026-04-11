@@ -11994,6 +11994,7 @@ async def read_company_signal_candidate_group_summary(
             "near_threshold_gap_reasons": [],
             "near_threshold_groups": [],
             "near_threshold_source_mix": [],
+            "unlock_candidates": [],
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -12984,6 +12985,54 @@ async def read_company_signal_candidate_group_summary(
             "confidence_gap_to_canonical": confidence_gap,
             "urgency_gap_to_high_intent": urgency_gap,
         })
+    unlock_candidates: list[dict[str, Any]] = []
+    for row in near_threshold_groups:
+        unlock_candidates.append({
+            "unlock_candidate_type": "low_trust_near_threshold_group",
+            "unlock_reason": "close_low_trust_confidence",
+            "vendor": row.get("vendor"),
+            "company": row.get("company"),
+            "display_company": row.get("display_company"),
+            "source": row.get("representative_source"),
+            "group_count": 1,
+            "review_count": row.get("review_count") or 0,
+            "canonical_gap_reason": row.get("canonical_gap_reason"),
+            "confidence_gap_to_canonical": row.get("confidence_gap_to_canonical"),
+            "urgency_gap_to_high_intent": row.get("urgency_gap_to_high_intent"),
+        })
+    for row in trusted_blocked_source_vendor_gap_rows:
+        low_confidence_count = int(row.get("low_confidence_group_count") or 0)
+        below_threshold_count = int(row.get("below_threshold_group_count") or 0)
+        if low_confidence_count > 0 and below_threshold_count <= 0:
+            canonical_gap_reason = "low_confidence_low_trust_source"
+        elif below_threshold_count > 0 and low_confidence_count <= 0:
+            canonical_gap_reason = "below_high_intent_threshold"
+        else:
+            canonical_gap_reason = "mixed"
+        unlock_candidates.append({
+            "unlock_candidate_type": "trusted_source_urgency_gap",
+            "unlock_reason": "closest_trusted_urgency_gap",
+            "vendor": row.get("vendor_name"),
+            "company": None,
+            "display_company": None,
+            "source": row.get("source"),
+            "group_count": row.get("blocked_group_count") or 0,
+            "review_count": row.get("blocked_review_count") or 0,
+            "canonical_gap_reason": canonical_gap_reason,
+            "confidence_gap_to_canonical": row.get("min_confidence_gap_to_canonical"),
+            "urgency_gap_to_high_intent": row.get("min_urgency_gap_to_high_intent"),
+        })
+    unlock_candidates.sort(
+        key=lambda item: (
+            0 if item.get("unlock_candidate_type") == "low_trust_near_threshold_group" else 1,
+            float(item.get("confidence_gap_to_canonical") or item.get("urgency_gap_to_high_intent") or 999.0),
+            -int(item.get("review_count") or 0),
+            str(item.get("vendor") or ""),
+            str(item.get("company") or ""),
+            str(item.get("source") or ""),
+        )
+    )
+    unlock_candidates = unlock_candidates[:top_n]
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
@@ -13000,6 +13049,7 @@ async def read_company_signal_candidate_group_summary(
         "near_threshold_gap_reasons": [dict(row) for row in near_threshold_reason_rows],
         "near_threshold_groups": near_threshold_groups,
         "near_threshold_source_mix": [dict(row) for row in near_threshold_source_rows],
+        "unlock_candidates": unlock_candidates,
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],
