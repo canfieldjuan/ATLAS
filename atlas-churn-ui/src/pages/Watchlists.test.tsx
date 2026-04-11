@@ -814,6 +814,28 @@ describe('Watchlists', () => {
     })
   })
 
+
+  it('hydrates named-account and changed-wedge toggles from the URL and preserves them in account drilldowns', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&named_accounts_only=true&changed_wedges_only=true']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Named accounts only' })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Changed wedges only' })).toBeChecked()
+    expect(screen.queryByRole('link', { name: 'Open primary witness for Freshdesk' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open vendor evidence for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26named_accounts_only%3Dtrue%26changed_wedges_only%3Dtrue',
+    )
+    expect(screen.getByRole('link', { name: 'Open primary witness for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26named_accounts_only%3Dtrue%26changed_wedges_only%3Dtrue%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
+  })
+
   it('hydrates a vendor-focused watchlist URL and renders an evidence return link', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit']}>

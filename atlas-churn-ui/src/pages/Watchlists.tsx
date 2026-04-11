@@ -499,8 +499,8 @@ export default function Watchlists() {
   const [selectedSourceFilter, setSelectedSourceFilter] = useState(searchParams.get('source')?.trim() || '')
   const [selectedMinUrgency, setSelectedMinUrgency] = useState(searchParams.get('min_urgency')?.trim() || '')
   const [freshOnly, setFreshOnly] = useState(() => parseBooleanSearchParam(searchParams.get('fresh_only')))
-  const [namedAccountsOnly, setNamedAccountsOnly] = useState(false)
-  const [changedWedgesOnly, setChangedWedgesOnly] = useState(false)
+  const [namedAccountsOnly, setNamedAccountsOnly] = useState(() => parseBooleanSearchParam(searchParams.get('named_accounts_only')))
+  const [changedWedgesOnly, setChangedWedgesOnly] = useState(() => parseBooleanSearchParam(searchParams.get('changed_wedges_only')))
   const [vendorAlertThreshold, setVendorAlertThreshold] = useState('')
   const [accountAlertThreshold, setAccountAlertThreshold] = useState('')
   const [staleDaysThreshold, setStaleDaysThreshold] = useState('')
@@ -1256,6 +1256,53 @@ export default function Watchlists() {
   }, [
     activeWatchlistView?.id,
     freshOnly,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    setSearchParams,
+  ])
+
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentNamedAccountsOnly = parseBooleanSearchParam(searchParams.get('named_accounts_only'))
+    if (currentNamedAccountsOnly === namedAccountsOnly) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (namedAccountsOnly) {
+        next.set('named_accounts_only', 'true')
+      } else {
+        next.delete('named_accounts_only')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    loading,
+    namedAccountsOnly,
+    requestedWatchlistView,
+    searchParams,
+    setSearchParams,
+  ])
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentChangedWedgesOnly = parseBooleanSearchParam(searchParams.get('changed_wedges_only'))
+    if (currentChangedWedgesOnly === changedWedgesOnly) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (changedWedgesOnly) {
+        next.set('changed_wedges_only', 'true')
+      } else {
+        next.delete('changed_wedges_only')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    changedWedgesOnly,
     loading,
     requestedWatchlistView,
     searchParams,
