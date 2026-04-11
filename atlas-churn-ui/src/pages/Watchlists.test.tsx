@@ -749,6 +749,38 @@ describe('Watchlists', () => {
     expect(screen.getByDisplayValue('1')).toBeInTheDocument()
   })
 
+  it('hydrates category from the URL and preserves it in vendor evidence links', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&category=Helpdesk']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open vendor evidence for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26category%3DHelpdesk',
+    )
+
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_names: ['Zendesk'],
+        category: 'Helpdesk',
+        vendor_alert_threshold: undefined,
+        stale_days_threshold: undefined,
+      })
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_names: ['Zendesk'],
+        category: 'Helpdesk',
+        source: undefined,
+        min_urgency: undefined,
+        include_stale: undefined,
+        account_alert_threshold: undefined,
+        stale_days_threshold: undefined,
+      })
+    })
+  })
+
   it('hydrates a vendor-focused watchlist URL and renders an evidence return link', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit']}>
