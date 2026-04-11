@@ -13251,6 +13251,7 @@ def _company_signal_review_event_filters(
     review_scope: str | None = None,
     review_action: str | None = None,
     company_signal_action: str | None = None,
+    canonical_gap_reason: str | None = None,
     review_priority_band: str | None = None,
     review_priority_reason: str | None = None,
     review_unlock_path: str | None = None,
@@ -13282,6 +13283,10 @@ def _company_signal_review_event_filters(
     if company_signal_action:
         conditions.append(f"company_signal_action = ${idx}")
         params.append(company_signal_action)
+        idx += 1
+    if canonical_gap_reason:
+        conditions.append(f"COALESCE(canonical_gap_reason, 'unknown') = ${idx}")
+        params.append(canonical_gap_reason)
         idx += 1
     if review_priority_band:
         conditions.append(f"COALESCE(review_priority_band, 'unknown') = ${idx}")
@@ -13316,6 +13321,7 @@ async def read_company_signal_review_impact_summary(
     review_scope: str | None = None,
     review_action: str | None = None,
     company_signal_action: str | None = None,
+    canonical_gap_reason: str | None = None,
     review_priority_band: str | None = None,
     review_priority_reason: str | None = None,
     review_unlock_path: str | None = None,
@@ -13331,6 +13337,7 @@ async def read_company_signal_review_impact_summary(
         review_scope=review_scope,
         review_action=review_action,
         company_signal_action=company_signal_action,
+        canonical_gap_reason=canonical_gap_reason,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
         review_unlock_path=review_unlock_path,
@@ -13363,6 +13370,7 @@ async def read_company_signal_review_impact_summary(
             },
             "scopes": [],
             "review_scope": review_scope,
+            "canonical_gap_reason": canonical_gap_reason,
             "unlock_paths": [],
             "priority_bands": [],
             "priority_reasons": [],
@@ -13794,6 +13802,7 @@ async def read_company_signal_review_impact_summary(
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
+        "canonical_gap_reason": canonical_gap_reason,
         "scopes": [dict(row) for row in scope_rows],
         "unlock_paths": [_with_effect_metrics(row) for row in unlock_path_rows],
         "priority_bands": [_with_effect_metrics(row) for row in priority_rows],

@@ -971,6 +971,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         review_scope="bulk_group",
         review_action="approved",
         company_signal_action="created",
+        canonical_gap_reason="low_confidence_low_trust_source",
         review_priority_band="promote_now",
         review_priority_reason="canonical_ready",
         review_unlock_path="low_trust_near_threshold_group",
@@ -989,6 +990,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "review_scope =" in totals_sql
     assert "review_action =" in totals_sql
     assert "company_signal_action =" in totals_sql
+    assert "canonical_gap_reason" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
     assert "review_priority_band" in totals_sql
     assert "review_priority_reason" in totals_sql
@@ -1011,6 +1013,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "vendor_reason_actions" in vendor_reasons_sql
     assert "vendor_reason_rebuilds" in vendor_reasons_sql
     assert summary["review_scope"] == "bulk_group"
+    assert summary["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["totals"]["total_actions"] == 6
     assert summary["totals"]["company_signal_effect_rate"] == 1.0
     assert summary["totals"]["company_signal_creation_rate"] == 0.5

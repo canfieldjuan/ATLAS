@@ -2902,6 +2902,7 @@ async def get_company_signal_review_impact_summary(
     review_scope: Optional[str] = Query(None),
     review_action: Optional[str] = Query(None),
     company_signal_action: Optional[str] = Query(None),
+    canonical_gap_reason: Optional[str] = Query(None),
     review_priority_band: Optional[str] = Query(None),
     review_priority_reason: Optional[str] = Query(None),
     review_unlock_path: Optional[str] = Query(None),
@@ -2916,6 +2917,7 @@ async def get_company_signal_review_impact_summary(
     review_scope = _optional_query_text(review_scope)
     review_action = _optional_query_text(review_action)
     company_signal_action = _optional_query_text(company_signal_action)
+    canonical_gap_reason = _optional_query_text(canonical_gap_reason)
     review_priority_band = _optional_query_text(review_priority_band)
     review_priority_reason = _optional_query_text(review_priority_reason)
     review_unlock_path = _optional_query_text(review_unlock_path)
@@ -2953,6 +2955,7 @@ async def get_company_signal_review_impact_summary(
         review_scope=review_scope,
         review_action=review_action,
         company_signal_action=company_signal_action,
+        canonical_gap_reason=canonical_gap_reason,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
         review_unlock_path=review_unlock_path,
@@ -2963,6 +2966,7 @@ async def get_company_signal_review_impact_summary(
     summary["review_scope"] = review_scope
     summary["review_action"] = review_action
     summary["company_signal_action"] = company_signal_action
+    summary["canonical_gap_reason"] = canonical_gap_reason
     summary["review_priority_band"] = review_priority_band
     summary["review_priority_reason"] = review_priority_reason
     summary["review_unlock_path"] = review_unlock_path
