@@ -31,6 +31,7 @@ interface AccountMovementDrawerProps {
   onViewVendor: (vendorName: string) => void
   onCopyVendorLink?: () => void
   onOpenWitness?: (witnessId: string, vendorName: string) => void
+  onCopyWitnessLink?: (witnessId: string) => void
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
   onViewReport?: (item: AccountsInMotionFeedItem) => void
   onCopyReportLink?: (item: AccountsInMotionFeedItem) => void
@@ -86,6 +87,7 @@ export default function AccountMovementDrawer({
   onViewVendor,
   onCopyVendorLink,
   onOpenWitness,
+  onCopyWitnessLink,
   onGenerateCampaign,
   onViewReport,
   onCopyReportLink,
@@ -112,6 +114,7 @@ export default function AccountMovementDrawer({
   const witnessIds = item.reasoning_reference_ids?.witness_ids ?? []
   const metricIds = item.reasoning_reference_ids?.metric_ids ?? []
   const primaryReviewId = item.source_reviews[0]?.id || ''
+  const primaryWitnessId = witnessIds[0] || ''
   const accountName = item.company || 'Anonymous signal cluster'
   const evidencePreview = item.evidence.slice(0, Math.max(item.evidence.length, 1))
 
@@ -196,6 +199,25 @@ export default function AccountMovementDrawer({
               >
                 <Copy className="h-3.5 w-3.5" />
                 Copy evidence
+              </button>
+            )}
+            {primaryWitnessId && onOpenWitness && (
+              <button
+                aria-label="Open primary witness detail"
+                className="inline-flex items-center gap-1 rounded-md bg-fuchsia-500/10 px-2.5 py-1.5 text-xs font-medium text-fuchsia-300 hover:bg-fuchsia-500/20"
+                onClick={() => onOpenWitness(primaryWitnessId, item.vendor)}
+              >
+                Witness
+              </button>
+            )}
+            {primaryWitnessId && onCopyWitnessLink && (
+              <button
+                aria-label="Copy primary witness link"
+                className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={() => onCopyWitnessLink(primaryWitnessId)}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy witness
               </button>
             )}
             <button

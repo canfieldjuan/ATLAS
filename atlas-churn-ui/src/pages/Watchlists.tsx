@@ -1576,6 +1576,21 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopySelectedWitnessLink(witnessId: string) {
+    if (!selectedAccount) return
+    const witnessSource = selectedSourceFilter || selectedAccount.source_reviews[0]?.source || null
+    try {
+      await navigator.clipboard.writeText(
+        `${window.location.origin}${watchlistAccountEvidenceExplorerPath(selectedAccountSearchParams, selectedAccount, witnessId, witnessSource)}`,
+      )
+      setActionError(null)
+      setActionMessage(`Copied witness link for ${selectedAccount.company || selectedAccount.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy witness link')
+    }
+  }
+
   async function handleCopyVendorRowLink(vendorName: string) {
     try {
       await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, vendorName))
@@ -3929,6 +3944,7 @@ export default function Watchlists() {
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(watchlistVendorPath(selectedAccountSearchParams, vendorName))}
         onCopyVendorLink={() => void handleCopySelectedVendorLink()}
+        onCopyWitnessLink={(witnessId) => void handleCopySelectedWitnessLink(witnessId)}
         onCopyLink={() => void handleCopySelectedAccountLink()}
         onCopyEvidenceLink={() => void handleCopySelectedEvidenceLink()}
         evidenceExplorerUrl={selectedAccount
