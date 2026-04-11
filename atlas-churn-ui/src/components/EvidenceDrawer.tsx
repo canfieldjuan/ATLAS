@@ -6,8 +6,8 @@ import {
   Pin, Flag, EyeOff, RotateCcw,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { fetchWitness, fetchAnnotations, setAnnotation, removeAnnotations } from '../api/client'
-import type { EvidenceWitnessDetail, EvidenceAnnotation } from '../api/client'
+import { fetchWitness, fetchAnnotations, setAnnotation, removeAnnotations, fetchAccountsInMotionFeed } from '../api/client'
+import type { EvidenceWitnessDetail, EvidenceAnnotation, AccountsInMotionFeedItem } from '../api/client'
 
 // Inject keyframes once at module load (not per-render)
 if (typeof document !== 'undefined' && !document.getElementById('evidence-drawer-keyframes')) {
@@ -100,6 +100,18 @@ function reviewDetailPath(reviewId: string, backToPath?: string | null) {
   return query ? `/reviews/${reviewId}?${query}` : `/reviews/${reviewId}`
 }
 
+function accountReviewPath(row: AccountsInMotionFeedItem, backToPath?: string | null) {
+  const params = new URLSearchParams()
+  params.set('account_vendor', row.vendor || '')
+  params.set('account_company', row.company || '')
+  params.set('account_report_date', row.report_date || '')
+  params.set('account_watch_vendor', row.watch_vendor || '')
+  params.set('account_category', row.category || '')
+  params.set('account_track_mode', row.track_mode || '')
+  if (backToPath) params.set('back_to', backToPath)
+  return `/watchlists?${params.toString()}`
+}
+
 export default function EvidenceDrawer({
   vendorName,
   witnessId,
@@ -114,6 +126,7 @@ export default function EvidenceDrawer({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [annotation, setAnnotationState] = useState<EvidenceAnnotation | null>(null)
+  const [matchedAccountReviewPath, setMatchedAccountReviewPath] = useState<string | null>(null)
   const [annotating, setAnnotating] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -122,6 +135,7 @@ export default function EvidenceDrawer({
     setLoading(true)
     setError('')
     setAnnotationState(null)
+    setMatchedAccountReviewPath(null)
     Promise.all([
       fetchWitness(witnessId, vendorName, {
         as_of_date: asOfDate || undefined,
@@ -137,6 +151,35 @@ export default function EvidenceDrawer({
       .catch(err => setError(err instanceof Error ? err.message : 'Failed to load witness'))
       .finally(() => setLoading(false))
   }, [open, witnessId, vendorName, asOfDate, windowDays])
+
+  useEffect(() => {
+    if (!open || !witness?.reviewer_company || !vendorName) {
+      setMatchedAccountReviewPath(null)
+      return
+    }
+    if (backToPath?.startsWith('/watchlists')) {
+      setMatchedAccountReviewPath(null)
+      return
+    }
+    let cancelled = false
+    fetchAccountsInMotionFeed({
+      vendor_name: vendorName,
+      include_stale: true,
+    })
+      .then((res) => {
+        if (cancelled) return
+        const reviewerCompany = witness.reviewer_company?.trim().toLowerCase()
+        const match = (res.accounts || []).find((row) => row.company?.trim().toLowerCase() === reviewerCompany)
+        setMatchedAccountReviewPath(match ? accountReviewPath(match, backToPath) : null)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setMatchedAccountReviewPath(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [backToPath, open, vendorName, witness?.reviewer_company])
 
   async function handleAnnotate(type: 'pin' | 'flag' | 'suppress') {
     if (!witnessId || !vendorName) return
@@ -225,6 +268,15 @@ export default function EvidenceDrawer({
                   Open in Evidence Explorer
                 </a>
               )}
+              {matchedAccountReviewPath ? (
+                <Link
+                  to={matchedAccountReviewPath}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+                >
+                  <Building2 className="h-3 w-3" />
+                  Open account review
+                </Link>
+              ) : null}
               {annotation ? (
                 <button
                   onClick={handleRemoveAnnotation}

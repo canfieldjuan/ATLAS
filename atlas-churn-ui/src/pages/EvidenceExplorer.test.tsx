@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EvidenceExplorer from './EvidenceExplorer'
 
 const api = vi.hoisted(() => ({
+  fetchAccountsInMotionFeed: vi.fn(),
   listTrackedVendors: vi.fn(),
   searchAvailableVendors: vi.fn(),
   fetchWitnesses: vi.fn(),
@@ -30,6 +31,22 @@ describe('EvidenceExplorer', () => {
     api.listTrackedVendors.mockResolvedValue({
       vendors: [{ vendor_name: 'Zendesk' }],
       count: 1,
+    })
+    api.fetchAccountsInMotionFeed.mockResolvedValue({
+      accounts: [{
+        company: 'Acme Corp',
+        vendor: 'Zendesk',
+        watch_vendor: 'Zendesk',
+        track_mode: 'competitor',
+        category: 'Helpdesk',
+        report_date: '2026-04-05',
+      }],
+      count: 1,
+      tracked_vendor_count: 1,
+      vendors_with_accounts: 1,
+      min_urgency: 7,
+      per_vendor_limit: 10,
+      freshest_report_date: '2026-04-05',
     })
     api.searchAvailableVendors.mockResolvedValue({ vendors: [], count: 0 })
     api.fetchWitnesses.mockResolvedValue({
@@ -166,6 +183,10 @@ describe('EvidenceExplorer', () => {
         window_days: 30,
       })
     })
+    expect(await screen.findByRole('link', { name: 'Open account review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
+    )
   })
 
   it('accepts vendor back_to and renders a vendor return link', async () => {
