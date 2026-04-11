@@ -11869,6 +11869,195 @@ async def read_company_signal_candidate_group_summary(
     }
 
 
+def _company_signal_review_event_filters(
+    *,
+    window_days: int = 30,
+    vendor_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    review_action: str | None = None,
+) -> tuple[list[str], list[Any], int]:
+    conditions = ["created_at >= NOW() - make_interval(days => $1)"]
+    params: list[Any] = [window_days]
+    idx = 2
+
+    if scoped_vendors is not None:
+        if not scoped_vendors:
+            return [], [], 0
+        conditions.append(f"vendor_name = ANY(${idx}::text[])")
+        params.append(scoped_vendors)
+        idx += 1
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+    if review_action:
+        conditions.append(f"review_action = ${idx}")
+        params.append(review_action)
+        idx += 1
+
+    return conditions, params, idx
+
+
+async def read_company_signal_review_impact_summary(
+    pool,
+    *,
+    window_days: int = 30,
+    vendor_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    review_action: str | None = None,
+    top_n: int = 10,
+) -> dict[str, Any]:
+    """Summarize downstream impact from company-signal review actions."""
+    conditions, params, idx = _company_signal_review_event_filters(
+        window_days=window_days,
+        vendor_name=vendor_name,
+        scoped_vendors=scoped_vendors,
+        review_action=review_action,
+    )
+    if not conditions:
+        return {
+            "totals": {
+                "total_actions": 0,
+                "total_batches": 0,
+                "distinct_vendors": 0,
+                "approvals": 0,
+                "suppressions": 0,
+                "company_signal_creations": 0,
+                "company_signal_updates": 0,
+                "company_signal_deletions": 0,
+                "company_signal_noops": 0,
+                "rebuild_requests": 0,
+                "rebuild_triggered": 0,
+                "rebuild_blocked": 0,
+                "rebuild_persisted_runs": 0,
+                "rebuild_persisted_reports": 0,
+                "rebuild_total_accounts": 0,
+            },
+            "scopes": [],
+            "top_vendors": [],
+        }
+
+    where_clause = " AND ".join(conditions)
+    top_n_param = idx
+    totals = await pool.fetchrow(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        rebuilds AS (
+            SELECT DISTINCT ON (review_batch_id, vendor_name)
+                   review_batch_id,
+                   vendor_name,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_reason, '') AS rebuild_reason,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY review_batch_id, vendor_name, created_at DESC
+        )
+        SELECT COUNT(*)::int AS total_actions,
+               COUNT(DISTINCT review_batch_id)::int AS total_batches,
+               COUNT(DISTINCT vendor_name)::int AS distinct_vendors,
+               COUNT(*) FILTER (WHERE review_action = 'approved')::int AS approvals,
+               COUNT(*) FILTER (WHERE review_action = 'suppressed')::int AS suppressions,
+               COUNT(*) FILTER (WHERE company_signal_action = 'created')::int AS company_signal_creations,
+               COUNT(*) FILTER (WHERE company_signal_action = 'updated')::int AS company_signal_updates,
+               COUNT(*) FILTER (WHERE company_signal_action = 'deleted')::int AS company_signal_deletions,
+               COUNT(*) FILTER (WHERE company_signal_action = 'none')::int AS company_signal_noops,
+               COALESCE((SELECT COUNT(*) FROM rebuilds WHERE rebuild_requested), 0)::int AS rebuild_requests,
+               COALESCE((SELECT COUNT(*) FROM rebuilds WHERE rebuild_triggered), 0)::int AS rebuild_triggered,
+               COALESCE((SELECT COUNT(*) FROM rebuilds WHERE rebuild_requested AND NOT rebuild_triggered), 0)::int AS rebuild_blocked,
+               COALESCE((SELECT COUNT(*) FROM rebuilds WHERE rebuild_triggered AND rebuild_persisted_count > 0), 0)::int AS rebuild_persisted_runs,
+               COALESCE((SELECT SUM(rebuild_persisted_count) FROM rebuilds WHERE rebuild_triggered), 0)::int AS rebuild_persisted_reports,
+               COALESCE((SELECT SUM(rebuild_total_accounts) FROM rebuilds WHERE rebuild_triggered), 0)::int AS rebuild_total_accounts
+        FROM filtered
+        """,
+        *params,
+    )
+    scope_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        )
+        SELECT review_scope,
+               COUNT(*)::int AS action_count
+        FROM filtered
+        GROUP BY 1
+        ORDER BY action_count DESC, review_scope ASC
+        """,
+        *params,
+    )
+    vendor_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        vendor_actions AS (
+            SELECT vendor_name,
+                   COUNT(*)::int AS action_count,
+                   COUNT(*) FILTER (WHERE review_action = 'approved')::int AS approvals,
+                   COUNT(*) FILTER (WHERE review_action = 'suppressed')::int AS suppressions,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'created')::int AS company_signal_creations,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'updated')::int AS company_signal_updates,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'deleted')::int AS company_signal_deletions
+            FROM filtered
+            GROUP BY 1
+        ),
+        rebuild_rows AS (
+            SELECT DISTINCT ON (review_batch_id, vendor_name)
+                   review_batch_id,
+                   vendor_name,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY review_batch_id, vendor_name, created_at DESC
+        ),
+        vendor_rebuilds AS (
+            SELECT vendor_name,
+                   COUNT(*) FILTER (WHERE rebuild_requested)::int AS rebuild_requests,
+                   COUNT(*) FILTER (WHERE rebuild_triggered)::int AS rebuild_triggered,
+                   COALESCE(SUM(rebuild_persisted_count), 0)::int AS rebuild_persisted_reports,
+                   COALESCE(SUM(rebuild_total_accounts), 0)::int AS rebuild_total_accounts
+            FROM rebuild_rows
+            GROUP BY 1
+        )
+        SELECT va.vendor_name,
+               va.action_count,
+               va.approvals,
+               va.suppressions,
+               va.company_signal_creations,
+               va.company_signal_updates,
+               va.company_signal_deletions,
+               COALESCE(vr.rebuild_requests, 0)::int AS rebuild_requests,
+               COALESCE(vr.rebuild_triggered, 0)::int AS rebuild_triggered,
+               COALESCE(vr.rebuild_persisted_reports, 0)::int AS rebuild_persisted_reports,
+               COALESCE(vr.rebuild_total_accounts, 0)::int AS rebuild_total_accounts
+        FROM vendor_actions va
+        LEFT JOIN vendor_rebuilds vr ON vr.vendor_name = va.vendor_name
+        ORDER BY va.approvals DESC,
+                 va.action_count DESC,
+                 va.vendor_name ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    return {
+        "totals": dict(totals or {}),
+        "scopes": [dict(row) for row in scope_rows],
+        "top_vendors": [dict(row) for row in vendor_rows],
+    }
+
+
 async def read_review_details(
     pool,
     *,

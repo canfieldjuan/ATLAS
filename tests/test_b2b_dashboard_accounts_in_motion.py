@@ -4,7 +4,7 @@ import importlib
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -325,6 +325,108 @@ async def test_get_company_signal_candidate_group_summary_rejects_invalid_bucket
 
 
 @pytest.mark.asyncio
+async def test_get_company_signal_review_impact_summary_uses_shared_reader():
+    pool = MagicMock()
+    returned = {
+        "totals": {"total_actions": 4, "approvals": 3},
+        "scopes": [{"review_scope": "group", "action_count": 4}],
+        "top_vendors": [{"vendor_name": "Zendesk", "action_count": 4}],
+    }
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=["Zendesk"]),
+        ) as scope_mock:
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_review_impact_summary",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.get_company_signal_review_impact_summary(
+                    vendor_name="Zen",
+                    review_action="approved",
+                    window_days=14,
+                    top_n=5,
+                    user=MagicMock(),
+                )
+
+    assert result == {
+        **returned,
+        "review_action": "approved",
+    }
+    scope_mock.assert_awaited_once_with(pool, ANY)
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=14,
+        vendor_name="Zen",
+        scoped_vendors=["Zendesk"],
+        review_action="approved",
+        top_n=5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_review_impact_summary_rejects_invalid_action():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_company_signal_review_impact_summary(
+                vendor_name=None,
+                review_action="invalid",
+                window_days=30,
+                top_n=10,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "review_action" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_record_company_signal_review_event_persists_rebuild_outcome():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+
+    await b2b_dashboard._record_company_signal_review_event(
+        pool,
+        review_batch_id="77777777-7777-7777-7777-777777777777",
+        review_scope="group",
+        review_action="approved",
+        candidate_id=None,
+        candidate_group_id="33333333-3333-3333-3333-333333333333",
+        company_name="acme",
+        vendor_name="Zendesk",
+        reviewer="api:user-1",
+        review_notes="approved cluster",
+        rebuild_requested=True,
+        rebuild={
+            "triggered": True,
+            "as_of": "2026-04-11",
+            "persisted": 1,
+            "total_accounts": 4,
+            "vendors": 1,
+        },
+        company_signal_id="22222222-2222-2222-2222-222222222222",
+        company_signal_action="created",
+    )
+
+    sql = pool.execute.call_args[0][0]
+    args = pool.execute.call_args[0][1:]
+    assert "INSERT INTO b2b_company_signal_review_events" in sql
+    assert args[0] == "77777777-7777-7777-7777-777777777777"
+    assert args[1] == "group"
+    assert args[2] == "approved"
+    assert args[4] == "33333333-3333-3333-3333-333333333333"
+    assert args[10] == "created"
+    assert args[11] is True
+    assert args[12] is True
+    assert args[14] == "2026-04-11"
+    assert args[15] == 1
+    assert args[16] == 4
+    assert args[17] == 1
+
+
+@pytest.mark.asyncio
 async def test_list_company_signal_candidates_passes_scope_and_filters():
     pool = MagicMock()
     user = MagicMock()
@@ -424,6 +526,7 @@ async def test_list_company_signal_candidates_rejects_invalid_review_status():
 async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
     pool = MagicMock()
     pool.execute = AsyncMock(return_value=None)
+    pool.fetchval = AsyncMock(return_value=None)
     pool.fetchrow = AsyncMock(
         side_effect=[
             {
@@ -480,6 +583,7 @@ async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
     assert result["review_status"] == "approved"
     assert result["review_status_updated_at"] == "2026-04-11T12:00:00+00:00"
     assert result["company_signal_id"] == "22222222-2222-2222-2222-222222222222"
+    assert result["company_signal_action"] == "created"
     assert result["rebuild"]["triggered"] is True
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
 
@@ -488,6 +592,7 @@ async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
 async def test_approve_company_signal_candidate_group_promotes_and_triggers_rebuild():
     pool = MagicMock()
     pool.execute = AsyncMock(return_value=None)
+    pool.fetchval = AsyncMock(return_value=None)
     pool.fetchrow = AsyncMock(
         side_effect=[
             {
@@ -544,10 +649,11 @@ async def test_approve_company_signal_candidate_group_promotes_and_triggers_rebu
 
     assert result["review_status"] == "approved"
     assert result["company_signal_id"] == "22222222-2222-2222-2222-222222222222"
+    assert result["company_signal_action"] == "created"
     assert result["review_count"] == 4
     assert result["rebuild"]["triggered"] is True
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
-    pool.execute.assert_awaited_once()
+    assert pool.execute.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -605,6 +711,7 @@ async def test_suppress_company_signal_candidate_marks_suppressed_without_rebuil
     assert result["review_status_updated_at"] == "2026-04-11T12:05:00+00:00"
     assert result["review_notes"] == "not a real target"
     assert result["retracted_company_signal_id"] == "22222222-2222-2222-2222-222222222222"
+    assert result["company_signal_action"] == "deleted"
     assert result["rebuild"]["reason"] == "disabled"
 
 
@@ -664,8 +771,9 @@ async def test_suppress_company_signal_candidate_group_marks_members_suppressed(
     assert result["review_status_updated_at"] == "2026-04-11T12:15:00+00:00"
     assert result["review_count"] == 4
     assert result["retracted_company_signal_id"] == "44444444-4444-4444-4444-444444444444"
+    assert result["company_signal_action"] == "deleted"
     assert result["rebuild"]["reason"] == "disabled"
-    pool.execute.assert_awaited_once()
+    assert pool.execute.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -673,6 +781,7 @@ async def test_bulk_approve_company_signal_candidate_groups_promotes_and_rebuild
     pool = MagicMock()
     conn = MagicMock()
     conn.execute = AsyncMock(return_value=None)
+    conn.fetchval = AsyncMock(side_effect=[None, None])
     conn.fetchrow = AsyncMock(
         side_effect=[
             {
@@ -763,8 +872,11 @@ async def test_bulk_approve_company_signal_candidate_groups_promotes_and_rebuild
                 result = await b2b_dashboard.approve_company_signal_candidate_groups(body, user)
 
     assert result["count"] == 2
+    assert result["review_batch_id"]
     assert result["groups"][0]["company_signal_id"] == "55555555-5555-5555-5555-555555555555"
     assert result["groups"][1]["company_signal_id"] == "66666666-6666-6666-6666-666666666666"
+    assert result["groups"][0]["company_signal_action"] == "created"
+    assert result["groups"][1]["company_signal_action"] == "created"
     assert result["rebuilds"] == [{"vendor_name": "Zendesk", "triggered": True}]
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
     assert conn.execute.await_count == 2
@@ -865,8 +977,11 @@ async def test_bulk_suppress_company_signal_candidate_groups_retracts_and_rebuil
                 result = await b2b_dashboard.suppress_company_signal_candidate_groups(body, user)
 
     assert result["count"] == 2
+    assert result["review_batch_id"]
     assert result["groups"][0]["retracted_company_signal_id"] == "55555555-5555-5555-5555-555555555555"
     assert result["groups"][1]["retracted_company_signal_id"] == "66666666-6666-6666-6666-666666666666"
+    assert result["groups"][0]["company_signal_action"] == "deleted"
+    assert result["groups"][1]["company_signal_action"] == "deleted"
     assert result["rebuilds"] == [{"vendor_name": "Zendesk", "triggered": True}]
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
     assert conn.execute.await_count == 2

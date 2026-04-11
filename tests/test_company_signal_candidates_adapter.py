@@ -12,6 +12,7 @@ from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
 from atlas_brain.autonomous.tasks._b2b_shared import (
     read_company_signal_candidate_groups,
     read_company_signal_candidate_group_summary,
+    read_company_signal_review_impact_summary,
     read_company_signal_candidates,
 )
 
@@ -415,3 +416,74 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["gap_reasons"][0]["gap_reason"] == "low_confidence_low_trust_source"
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_aggregates_actions_and_rebuilds():
+    pool = type("ImpactSummaryPool", (), {})()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "total_actions": 6,
+            "total_batches": 4,
+            "distinct_vendors": 2,
+            "approvals": 4,
+            "suppressions": 2,
+            "company_signal_creations": 3,
+            "company_signal_updates": 1,
+            "company_signal_deletions": 2,
+            "company_signal_noops": 0,
+            "rebuild_requests": 4,
+            "rebuild_triggered": 3,
+            "rebuild_blocked": 1,
+            "rebuild_persisted_runs": 2,
+            "rebuild_persisted_reports": 2,
+            "rebuild_total_accounts": 9,
+        }
+    )
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "review_scope": "bulk_group",
+                    "action_count": 4,
+                }
+            ],
+            [
+                {
+                    "vendor_name": "Zendesk",
+                    "action_count": 5,
+                    "approvals": 3,
+                    "suppressions": 2,
+                    "company_signal_creations": 2,
+                    "company_signal_updates": 1,
+                    "company_signal_deletions": 2,
+                    "rebuild_requests": 3,
+                    "rebuild_triggered": 2,
+                    "rebuild_persisted_reports": 2,
+                    "rebuild_total_accounts": 9,
+                }
+            ],
+        ]
+    )
+
+    summary = await read_company_signal_review_impact_summary(
+        pool,
+        window_days=30,
+        scoped_vendors=["Zendesk"],
+        review_action="approved",
+        top_n=5,
+    )
+
+    totals_sql = pool.fetchrow.call_args[0][0]
+    scopes_sql = pool.fetch.call_args_list[0][0][0]
+    vendors_sql = pool.fetch.call_args_list[1][0][0]
+    assert "review_action =" in totals_sql
+    assert "vendor_name = ANY(" in totals_sql
+    assert "COUNT(DISTINCT review_batch_id)" in totals_sql
+    assert "FROM b2b_company_signal_review_events" in totals_sql
+    assert "GROUP BY 1" in scopes_sql
+    assert "vendor_actions" in vendors_sql
+    assert "vendor_rebuilds" in vendors_sql
+    assert summary["totals"]["total_actions"] == 6
+    assert summary["scopes"][0]["review_scope"] == "bulk_group"
+    assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"

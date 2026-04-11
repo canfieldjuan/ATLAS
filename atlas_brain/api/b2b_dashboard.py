@@ -41,6 +41,7 @@ from ..autonomous.tasks._b2b_shared import (
     read_company_signal_candidates,
     read_company_signal_candidate_groups,
     read_company_signal_candidate_group_summary,
+    read_company_signal_review_impact_summary,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
     read_vendor_signal_detail,
@@ -129,6 +130,15 @@ def _safe_float(val, default=None):
         return default
     try:
         return float(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(val, default=None):
+    if val is None:
+        return default
+    try:
+        return int(val)
     except (ValueError, TypeError):
         return default
 
@@ -469,6 +479,16 @@ async def _upsert_company_signal(
     source: Any,
     confidence_score: Any,
 ) -> dict[str, Any] | None:
+    existing_id = await pool.fetchval(
+        """
+        SELECT id
+        FROM b2b_company_signals
+        WHERE company_name = $1
+          AND vendor_name = $2
+        """,
+        company_name,
+        vendor_name,
+    )
     row = await pool.fetchrow(
         """
         INSERT INTO b2b_company_signals (
@@ -505,7 +525,11 @@ async def _upsert_company_signal(
         source,
         confidence_score,
     )
-    return dict(row) if row else None
+    if not row:
+        return None
+    payload = dict(row)
+    payload["company_signal_action"] = "updated" if existing_id else "created"
+    return payload
 
 
 async def _delete_company_signal(
@@ -524,11 +548,129 @@ async def _delete_company_signal(
         company_name,
         vendor_name,
     )
-    return dict(row) if row else None
+    if row:
+        payload = dict(row)
+        payload["company_signal_action"] = "deleted"
+        return payload
+    return {
+        "id": None,
+        "company_name": company_name,
+        "vendor_name": vendor_name,
+        "company_signal_action": "none",
+    }
 
 
 def _unique_strings_preserving_order(values: list[str]) -> list[str]:
     return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+
+
+def _normalize_company_signal_review_rebuild(
+    rebuild: dict[str, Any] | None,
+    *,
+    rebuild_requested: bool,
+) -> dict[str, Any]:
+    payload = rebuild or {}
+    result = _safe_dict(payload.get("result"))
+    return {
+        "rebuild_requested": bool(rebuild_requested),
+        "rebuild_triggered": bool(payload.get("triggered")),
+        "rebuild_reason": payload.get("reason"),
+        "rebuild_as_of": payload.get("as_of"),
+        "rebuild_persisted_count": _safe_int(payload.get("persisted"), _safe_int(result.get("persisted"), 0)),
+        "rebuild_total_accounts": _safe_int(payload.get("total_accounts"), _safe_int(result.get("total_accounts"), 0)),
+        "rebuild_vendor_count": _safe_int(payload.get("vendors"), _safe_int(result.get("vendors"), 0)),
+    }
+
+
+async def _record_company_signal_review_event(
+    pool,
+    *,
+    review_batch_id: str,
+    review_scope: str,
+    review_action: str,
+    company_name: str,
+    vendor_name: str,
+    reviewer: str,
+    review_notes: str | None,
+    rebuild_requested: bool,
+    rebuild: dict[str, Any] | None,
+    candidate_id: str | None = None,
+    candidate_group_id: str | None = None,
+    company_signal_id: str | None = None,
+    company_signal_action: str = "none",
+) -> None:
+    outcome = _normalize_company_signal_review_rebuild(
+        rebuild,
+        rebuild_requested=rebuild_requested,
+    )
+    try:
+        await pool.execute(
+            """
+            INSERT INTO b2b_company_signal_review_events (
+                review_batch_id,
+                review_scope,
+                review_action,
+                candidate_id,
+                candidate_group_id,
+                company_name,
+                vendor_name,
+                reviewer,
+                review_notes,
+                company_signal_id,
+                company_signal_action,
+                rebuild_requested,
+                rebuild_triggered,
+                rebuild_reason,
+                rebuild_as_of,
+                rebuild_persisted_count,
+                rebuild_total_accounts,
+                rebuild_vendor_count
+            ) VALUES (
+                $1::uuid,
+                $2,
+                $3,
+                $4::uuid,
+                $5::uuid,
+                $6,
+                $7,
+                $8,
+                $9,
+                $10::uuid,
+                $11,
+                $12,
+                $13,
+                $14,
+                $15::date,
+                $16,
+                $17,
+                $18
+            )
+            """,
+            review_batch_id,
+            review_scope,
+            review_action,
+            candidate_id,
+            candidate_group_id,
+            company_name,
+            vendor_name,
+            reviewer,
+            review_notes,
+            company_signal_id,
+            company_signal_action,
+            outcome["rebuild_requested"],
+            outcome["rebuild_triggered"],
+            outcome["rebuild_reason"],
+            outcome["rebuild_as_of"],
+            outcome["rebuild_persisted_count"],
+            outcome["rebuild_total_accounts"],
+            outcome["rebuild_vendor_count"],
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist company signal review event for %s/%s",
+            vendor_name,
+            company_name,
+        )
 
 
 async def _trigger_accounts_in_motion_rebuilds(
@@ -589,6 +731,9 @@ async def _trigger_accounts_in_motion_rebuild(pool, vendor_name: str) -> dict[st
         "triggered": True,
         "vendor_name": vendor_name,
         "as_of": str(as_of),
+        "persisted": _safe_int(_safe_dict(result).get("persisted"), 0),
+        "total_accounts": _safe_int(_safe_dict(result).get("total_accounts"), 0),
+        "vendors": _safe_int(_safe_dict(result).get("vendors"), 0),
         "result": result,
     }
 
@@ -2624,6 +2769,35 @@ async def get_company_signal_candidate_group_summary(
     return summary
 
 
+@router.get("/company-signal-review-impact-summary")
+async def get_company_signal_review_impact_summary(
+    vendor_name: Optional[str] = Query(None),
+    review_action: Optional[str] = Query(None),
+    window_days: int = Query(30, ge=1, le=3650),
+    top_n: int = Query(10, ge=1, le=25),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Summarize downstream yield from company-signal review actions."""
+    if review_action is not None and review_action not in {"approved", "suppressed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_action must be 'approved' or 'suppressed'",
+        )
+
+    pool = _pool_or_503()
+    scoped_vendors = await _get_scoped_vendors(pool, user)
+    summary = await read_company_signal_review_impact_summary(
+        pool,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        scoped_vendors=scoped_vendors,
+        review_action=review_action,
+        top_n=top_n,
+    )
+    summary["review_action"] = review_action
+    return summary
+
+
 @router.get("/company-signal-candidates")
 async def list_company_signal_candidates(
     vendor_name: Optional[str] = Query(None),
@@ -2685,6 +2859,7 @@ async def approve_company_signal_candidate(
     pool = _pool_or_503()
     candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
     reviewer = _candidate_reviewer(user)
+    review_batch_id = str(_uuid.uuid4())
 
     canonical_row = await _upsert_company_signal(
         pool,
@@ -2744,7 +2919,28 @@ async def approve_company_signal_candidate(
             )
             rebuild = {"triggered": False, "reason": "rebuild_failed"}
 
+    await _record_company_signal_review_event(
+        pool,
+        review_batch_id=review_batch_id,
+        review_scope="candidate",
+        review_action="approved",
+        candidate_id=candidate_id,
+        company_name=candidate["company_name"],
+        vendor_name=candidate["vendor_name"],
+        reviewer=reviewer,
+        review_notes=body.notes,
+        rebuild_requested=body.trigger_rebuild,
+        rebuild=rebuild,
+        company_signal_id=str(canonical_row["id"]) if canonical_row and canonical_row.get("id") else None,
+        company_signal_action=(
+            canonical_row.get("company_signal_action")
+            if canonical_row
+            else "none"
+        ),
+    )
+
     return {
+        "review_batch_id": review_batch_id,
         "candidate_id": str(reviewed["id"]),
         "review_status": reviewed["review_status"],
         "review_status_updated_at": (
@@ -2755,6 +2951,11 @@ async def approve_company_signal_candidate(
         "reviewed_by": reviewed["reviewed_by"],
         "review_notes": reviewed["review_notes"],
         "company_signal_id": str(canonical_row["id"]) if canonical_row else None,
+        "company_signal_action": (
+            canonical_row.get("company_signal_action")
+            if canonical_row
+            else "none"
+        ),
         "company_name": canonical_row["company_name"] if canonical_row else candidate["company_name"],
         "vendor_name": canonical_row["vendor_name"] if canonical_row else candidate["vendor_name"],
         "rebuild": rebuild,
@@ -2770,6 +2971,7 @@ async def suppress_company_signal_candidate(
     pool = _pool_or_503()
     candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
     reviewer = _candidate_reviewer(user)
+    review_batch_id = str(_uuid.uuid4())
     deleted_signal = await _delete_company_signal(
         pool,
         company_name=candidate["company_name"],
@@ -2810,7 +3012,32 @@ async def suppress_company_signal_candidate(
         [candidate["vendor_name"]],
         enabled=body.trigger_rebuild,
     )
+    rebuild = rebuilds[0] if rebuilds else {"triggered": False, "reason": "disabled"}
+    await _record_company_signal_review_event(
+        pool,
+        review_batch_id=review_batch_id,
+        review_scope="candidate",
+        review_action="suppressed",
+        candidate_id=candidate_id,
+        company_name=candidate["company_name"],
+        vendor_name=candidate["vendor_name"],
+        reviewer=reviewer,
+        review_notes=body.notes,
+        rebuild_requested=body.trigger_rebuild,
+        rebuild=rebuild,
+        company_signal_id=(
+            str(deleted_signal["id"])
+            if deleted_signal and deleted_signal.get("id")
+            else None
+        ),
+        company_signal_action=(
+            deleted_signal.get("company_signal_action")
+            if deleted_signal
+            else "none"
+        ),
+    )
     return {
+        "review_batch_id": review_batch_id,
         "candidate_id": str(reviewed["id"]),
         "review_status": reviewed["review_status"],
         "review_status_updated_at": (
@@ -2825,7 +3052,12 @@ async def suppress_company_signal_candidate(
             if deleted_signal and deleted_signal.get("id")
             else None
         ),
-        "rebuild": rebuilds[0] if rebuilds else {"triggered": False, "reason": "disabled"},
+        "company_signal_action": (
+            deleted_signal.get("company_signal_action")
+            if deleted_signal
+            else "none"
+        ),
+        "rebuild": rebuild,
     }
 
 
@@ -2838,6 +3070,7 @@ async def approve_company_signal_candidate_group(
     pool = _pool_or_503()
     group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
     reviewer = _candidate_reviewer(user)
+    review_batch_id = str(_uuid.uuid4())
 
     canonical_row = await _upsert_company_signal(
         pool,
@@ -2883,7 +3116,28 @@ async def approve_company_signal_candidate_group(
             )
             rebuild = {"triggered": False, "reason": "rebuild_failed"}
 
+    await _record_company_signal_review_event(
+        pool,
+        review_batch_id=review_batch_id,
+        review_scope="group",
+        review_action="approved",
+        candidate_group_id=group_id,
+        company_name=group["company_name"],
+        vendor_name=group["vendor_name"],
+        reviewer=reviewer,
+        review_notes=body.notes,
+        rebuild_requested=body.trigger_rebuild,
+        rebuild=rebuild,
+        company_signal_id=str(canonical_row["id"]) if canonical_row and canonical_row.get("id") else None,
+        company_signal_action=(
+            canonical_row.get("company_signal_action")
+            if canonical_row
+            else "none"
+        ),
+    )
+
     return {
+        "review_batch_id": review_batch_id,
         "group_id": str(reviewed["id"]) if reviewed else group_id,
         "review_status": reviewed["review_status"] if reviewed else "approved",
         "review_status_updated_at": (
@@ -2894,6 +3148,11 @@ async def approve_company_signal_candidate_group(
         "reviewed_by": reviewed["reviewed_by"] if reviewed else reviewer,
         "review_notes": reviewed["review_notes"] if reviewed else body.notes,
         "company_signal_id": str(canonical_row["id"]) if canonical_row else None,
+        "company_signal_action": (
+            canonical_row.get("company_signal_action")
+            if canonical_row
+            else "none"
+        ),
         "company_name": canonical_row["company_name"] if canonical_row else group["company_name"],
         "vendor_name": canonical_row["vendor_name"] if canonical_row else group["vendor_name"],
         "review_count": group.get("review_count") or 0,
@@ -2910,6 +3169,7 @@ async def suppress_company_signal_candidate_group(
     pool = _pool_or_503()
     group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
     reviewer = _candidate_reviewer(user)
+    review_batch_id = str(_uuid.uuid4())
     deleted_signal = await _delete_company_signal(
         pool,
         company_name=group["company_name"],
@@ -2937,7 +3197,32 @@ async def suppress_company_signal_candidate_group(
         [group["vendor_name"]],
         enabled=body.trigger_rebuild,
     )
+    rebuild = rebuilds[0] if rebuilds else {"triggered": False, "reason": "disabled"}
+    await _record_company_signal_review_event(
+        pool,
+        review_batch_id=review_batch_id,
+        review_scope="group",
+        review_action="suppressed",
+        candidate_group_id=group_id,
+        company_name=group["company_name"],
+        vendor_name=group["vendor_name"],
+        reviewer=reviewer,
+        review_notes=body.notes,
+        rebuild_requested=body.trigger_rebuild,
+        rebuild=rebuild,
+        company_signal_id=(
+            str(deleted_signal["id"])
+            if deleted_signal and deleted_signal.get("id")
+            else None
+        ),
+        company_signal_action=(
+            deleted_signal.get("company_signal_action")
+            if deleted_signal
+            else "none"
+        ),
+    )
     return {
+        "review_batch_id": review_batch_id,
         "group_id": str(reviewed["id"]) if reviewed else group_id,
         "review_status": reviewed["review_status"] if reviewed else "suppressed",
         "review_status_updated_at": (
@@ -2953,7 +3238,12 @@ async def suppress_company_signal_candidate_group(
             if deleted_signal and deleted_signal.get("id")
             else None
         ),
-        "rebuild": rebuilds[0] if rebuilds else {"triggered": False, "reason": "disabled"},
+        "company_signal_action": (
+            deleted_signal.get("company_signal_action")
+            if deleted_signal
+            else "none"
+        ),
+        "rebuild": rebuild,
     }
 
 
@@ -2964,6 +3254,7 @@ async def approve_company_signal_candidate_groups(
 ):
     pool = _pool_or_503()
     reviewer = _candidate_reviewer(user)
+    review_batch_id = str(_uuid.uuid4())
     group_ids = _unique_strings_preserving_order(body.group_ids)
     if not group_ids:
         raise HTTPException(status_code=400, detail="group_ids must include at least one non-empty UUID")
@@ -3018,6 +3309,11 @@ async def approve_company_signal_candidate_groups(
                     "reviewed_by": reviewed["reviewed_by"] if reviewed else reviewer,
                     "review_notes": reviewed["review_notes"] if reviewed else body.notes,
                     "company_signal_id": str(canonical_row["id"]) if canonical_row else None,
+                    "company_signal_action": (
+                        canonical_row.get("company_signal_action")
+                        if canonical_row
+                        else "none"
+                    ),
                     "company_name": canonical_row["company_name"] if canonical_row else group["company_name"],
                     "vendor_name": canonical_row["vendor_name"] if canonical_row else group["vendor_name"],
                     "review_count": group.get("review_count") or 0,
@@ -3029,7 +3325,30 @@ async def approve_company_signal_candidate_groups(
         [group["vendor_name"] for group in groups],
         enabled=body.trigger_rebuild,
     )
+    rebuilds_by_vendor = {
+        _normalize_vendor_name(item.get("vendor_name")): item
+        for item in rebuilds
+        if _normalize_vendor_name(item.get("vendor_name"))
+    }
+    for result in results:
+        rebuild = rebuilds_by_vendor.get(_normalize_vendor_name(result.get("vendor_name")))
+        await _record_company_signal_review_event(
+            pool,
+            review_batch_id=review_batch_id,
+            review_scope="bulk_group",
+            review_action="approved",
+            candidate_group_id=result.get("group_id"),
+            company_name=result.get("company_name") or "",
+            vendor_name=result.get("vendor_name") or "",
+            reviewer=reviewer,
+            review_notes=body.notes,
+            rebuild_requested=body.trigger_rebuild,
+            rebuild=rebuild,
+            company_signal_id=result.get("company_signal_id"),
+            company_signal_action=result.get("company_signal_action") or "none",
+        )
     return {
+        "review_batch_id": review_batch_id,
         "groups": results,
         "count": len(results),
         "rebuilds": rebuilds,
@@ -3043,6 +3362,7 @@ async def suppress_company_signal_candidate_groups(
 ):
     pool = _pool_or_503()
     reviewer = _candidate_reviewer(user)
+    review_batch_id = str(_uuid.uuid4())
     group_ids = _unique_strings_preserving_order(body.group_ids)
     if not group_ids:
         raise HTTPException(status_code=400, detail="group_ids must include at least one non-empty UUID")
@@ -3094,6 +3414,11 @@ async def suppress_company_signal_candidate_groups(
                         if deleted_signal and deleted_signal.get("id")
                         else None
                     ),
+                    "company_signal_action": (
+                        deleted_signal.get("company_signal_action")
+                        if deleted_signal
+                        else "none"
+                    ),
                 }
             )
 
@@ -3102,7 +3427,30 @@ async def suppress_company_signal_candidate_groups(
         [group["vendor_name"] for group in groups],
         enabled=body.trigger_rebuild,
     )
+    rebuilds_by_vendor = {
+        _normalize_vendor_name(item.get("vendor_name")): item
+        for item in rebuilds
+        if _normalize_vendor_name(item.get("vendor_name"))
+    }
+    for result in results:
+        rebuild = rebuilds_by_vendor.get(_normalize_vendor_name(result.get("vendor_name")))
+        await _record_company_signal_review_event(
+            pool,
+            review_batch_id=review_batch_id,
+            review_scope="bulk_group",
+            review_action="suppressed",
+            candidate_group_id=result.get("group_id"),
+            company_name=result.get("company_name") or "",
+            vendor_name=result.get("vendor_name") or "",
+            reviewer=reviewer,
+            review_notes=body.notes,
+            rebuild_requested=body.trigger_rebuild,
+            rebuild=rebuild,
+            company_signal_id=result.get("retracted_company_signal_id"),
+            company_signal_action=result.get("company_signal_action") or "none",
+        )
     return {
+        "review_batch_id": review_batch_id,
         "groups": results,
         "count": len(results),
         "rebuilds": rebuilds,
