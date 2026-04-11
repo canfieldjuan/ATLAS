@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Watchlists from './Watchlists'
 
@@ -38,6 +38,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useNavigate: () => mockNavigate,
   }
 })
+
+function LocationSearchProbe() {
+  const location = useLocation()
+  return <div data-testid="location-search">{location.search}</div>
+}
 
 describe('Watchlists', () => {
   afterEach(() => {
@@ -677,6 +682,30 @@ describe('Watchlists', () => {
     expect(screen.getByDisplayValue('7.5')).toBeInTheDocument()
     expect(screen.getByDisplayValue('8.5')).toBeInTheDocument()
     expect(screen.getByDisplayValue('1')).toBeInTheDocument()
+  })
+
+  it('adds account drawer focus to the URL when an account row is opened', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <LocationSearchProbe />
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    await user.click(screen.getByText('Acme Corp'))
+    await screen.findByLabelText('Account movement evidence')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search')).toHaveTextContent('account_vendor=Zendesk')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('account_company=Acme+Corp')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('account_report_date=2026-04-05')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('account_watch_vendor=Zendesk')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('account_category=Helpdesk')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('account_track_mode=competitor')
+    })
   })
 
   it('copies a deep link for a saved view', async () => {

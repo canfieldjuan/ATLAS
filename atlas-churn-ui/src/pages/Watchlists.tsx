@@ -308,6 +308,36 @@ function watchlistViewUrl(viewId: string) {
   return `${window.location.origin}/watchlists?${params.toString()}`
 }
 
+function accountFocusFromRow(row: AccountsInMotionFeedItem) {
+  return {
+    vendor: row.vendor || '',
+    company: row.company || '',
+    report_date: row.report_date || '',
+    watch_vendor: row.watch_vendor || '',
+    category: row.category || '',
+    track_mode: row.track_mode || '',
+  }
+}
+
+function accountFocusMatchesRow(
+  row: AccountsInMotionFeedItem,
+  focus: {
+    vendor: string
+    company: string
+    report_date: string
+    watch_vendor: string
+    category: string
+    track_mode: string
+  },
+) {
+  return (row.vendor || '') === focus.vendor
+    && (row.company || '') === focus.company
+    && (row.report_date || '') === focus.report_date
+    && (row.watch_vendor || '') === focus.watch_vendor
+    && (row.category || '') === focus.category
+    && (row.track_mode || '') === focus.track_mode
+}
+
 function alertEventTone(event: WatchlistAlertEvent) {
   if (event.event_type === 'stale_data') {
     return 'border-amber-500/30 bg-amber-500/10 text-amber-200'
@@ -701,6 +731,24 @@ export default function Watchlists() {
   const staleThresholdHitCount = vendorStaleThresholdHitCount + accountStaleThresholdHitCount
   const activeAlertEvents = activeAlertEventsData?.events ?? []
   const activeAlertEmailDeliveries = activeAlertEmailLogData?.deliveries ?? []
+  const requestedAccountFocus = useMemo(
+    () => ({
+      vendor: searchParams.get('account_vendor')?.trim() || '',
+      company: searchParams.get('account_company')?.trim() || '',
+      report_date: searchParams.get('account_report_date')?.trim() || '',
+      watch_vendor: searchParams.get('account_watch_vendor')?.trim() || '',
+      category: searchParams.get('account_category')?.trim() || '',
+      track_mode: searchParams.get('account_track_mode')?.trim() || '',
+    }),
+    [searchParams],
+  )
+  const hasRequestedAccountFocus = Object.values(requestedAccountFocus).some(Boolean)
+  const requestedAccount = useMemo(
+    () => (hasRequestedAccountFocus
+      ? visibleAccounts.find((account) => accountFocusMatchesRow(account, requestedAccountFocus)) ?? null
+      : null),
+    [hasRequestedAccountFocus, requestedAccountFocus, visibleAccounts],
+  )
   const hasActiveAlertPolicy = (
     activeVendorAlertThreshold != null
     || activeAccountAlertThreshold != null
@@ -730,6 +778,64 @@ export default function Watchlists() {
       setSelectedAccount(currentAccount)
     }
   }, [selectedAccount, visibleAccounts])
+
+  useEffect(() => {
+    if (!hasRequestedAccountFocus || !requestedAccount) return
+    if (selectedAccount && isSameAccountMovementRow(selectedAccount, requestedAccount)) return
+    setSelectedAccount(requestedAccount)
+  }, [hasRequestedAccountFocus, requestedAccount, selectedAccount])
+
+  useEffect(() => {
+    if (loading) return
+    if (hasRequestedAccountFocus && !requestedAccount && !selectedAccount) return
+    const nextFocus = selectedAccount ? accountFocusFromRow(selectedAccount) : null
+    const currentFocus = {
+      vendor: searchParams.get('account_vendor')?.trim() || '',
+      company: searchParams.get('account_company')?.trim() || '',
+      report_date: searchParams.get('account_report_date')?.trim() || '',
+      watch_vendor: searchParams.get('account_watch_vendor')?.trim() || '',
+      category: searchParams.get('account_category')?.trim() || '',
+      track_mode: searchParams.get('account_track_mode')?.trim() || '',
+    }
+    if (
+      (nextFocus?.vendor || '') === currentFocus.vendor
+      && (nextFocus?.company || '') === currentFocus.company
+      && (nextFocus?.report_date || '') === currentFocus.report_date
+      && (nextFocus?.watch_vendor || '') === currentFocus.watch_vendor
+      && (nextFocus?.category || '') === currentFocus.category
+      && (nextFocus?.track_mode || '') === currentFocus.track_mode
+    ) {
+      return
+    }
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      const accountKeys = [
+        'account_vendor',
+        'account_company',
+        'account_report_date',
+        'account_watch_vendor',
+        'account_category',
+        'account_track_mode',
+      ]
+      for (const key of accountKeys) next.delete(key)
+      if (nextFocus) {
+        next.set('account_vendor', nextFocus.vendor)
+        next.set('account_company', nextFocus.company)
+        next.set('account_report_date', nextFocus.report_date)
+        next.set('account_watch_vendor', nextFocus.watch_vendor)
+        next.set('account_category', nextFocus.category)
+        next.set('account_track_mode', nextFocus.track_mode)
+      }
+      return next
+    }, { replace: true })
+  }, [
+    hasRequestedAccountFocus,
+    loading,
+    requestedAccount,
+    searchParams,
+    selectedAccount,
+    setSearchParams,
+  ])
 
   useEffect(() => {
     if (editingCompetitiveSetId) return
@@ -813,6 +919,20 @@ export default function Watchlists() {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : `Failed to copy link for ${view.name}`)
     }
+  }
+
+  function handleCloseSelectedAccount() {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('account_vendor')
+      next.delete('account_company')
+      next.delete('account_report_date')
+      next.delete('account_watch_vendor')
+      next.delete('account_category')
+      next.delete('account_track_mode')
+      return next
+    }, { replace: true })
+    setSelectedAccount(null)
   }
 
   async function handleSaveWatchlistView() {
@@ -2677,7 +2797,7 @@ export default function Watchlists() {
       <AccountMovementDrawer
         item={selectedAccount}
         open={selectedAccount != null}
-        onClose={() => setSelectedAccount(null)}
+        onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
