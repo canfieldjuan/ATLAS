@@ -443,4 +443,27 @@ describe('ReportDetail', () => {
     expect(screen.getByText('Section has evidence metadata, but no linked witness citations yet.')).toBeInTheDocument()
     expect(screen.getByText('Backend flagged this section for operator review.')).toBeInTheDocument()
   })
+
+  it('returns to the evidence workspace when back_to targets evidence explorer', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/evidence', element: <div data-testid="evidence-route">Evidence route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Zendesk')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Evidence' }))
+
+    expect(await screen.findByTestId('evidence-route')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/evidence')
+    expect(router.state.location.search).toBe('?vendor=Zendesk&tab=witnesses&source=reddit')
+  })
 })

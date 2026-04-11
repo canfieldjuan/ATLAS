@@ -43,6 +43,18 @@ function evidenceExplorerUrl(searchParams: URLSearchParams) {
   return `${window.location.origin}/evidence${query ? `?${query}` : ''}`
 }
 
+function evidenceExplorerPath(searchParams: URLSearchParams) {
+  const query = searchParams.toString()
+  return `/evidence${query ? `?${query}` : ''}`
+}
+
+function evidenceReportsPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', evidenceExplorerPath(searchParams))
+  return `/reports?${params.toString()}`
+}
+
 function parseBackTo(value: string | null) {
   if (!value) return null
   if (value.startsWith('/watchlists')) return value
@@ -397,7 +409,7 @@ export default function EvidenceExplorer() {
           {/* Vendor reports link */}
           {activeVendor && (
             <Link
-              to={`/reports?vendor_filter=${encodeURIComponent(activeVendor)}`}
+              to={evidenceReportsPath(searchParams, activeVendor)}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
               View library for {activeVendor} <ExternalLink className="h-3 w-3" />

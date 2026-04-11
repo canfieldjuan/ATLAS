@@ -199,6 +199,20 @@ describe('EvidenceExplorer', () => {
     expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
   })
 
+  it('links the vendor report library back to the current explorer state', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View library for Zendesk' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+    )
+  })
+
   it('keeps the page usable when witness loading fails', async () => {
     api.fetchWitnesses.mockRejectedValue(new Error('API 500: witness search unavailable'))
 

@@ -154,7 +154,7 @@ function reportDetailLocation(reportId: string, backTo: string) {
 function reportExternalBackTarget(searchParams: URLSearchParams) {
   const value = searchParams.get('back_to')
   if (!value) return null
-  if (value.startsWith('/vendors/') || value.startsWith('/watchlists')) return value
+  if (value.startsWith('/vendors/') || value.startsWith('/watchlists') || value.startsWith('/evidence')) return value
   return null
 }
 
@@ -275,6 +275,8 @@ export default function Reports() {
     ? 'Back to Vendor'
     : reportsBackTarget.startsWith('/watchlists')
       ? 'Back to Watchlists'
+      : reportsBackTarget.startsWith('/evidence')
+        ? 'Back to Evidence'
       : 'Back to Library'
 
   useEffect(() => {
