@@ -169,7 +169,7 @@ async def test_fetch_review_funnel_audit_filters_recent_scrape_intake_counts_to_
             return_value={
                 "intelligence_eligible_reviews": 4,
                 "company_signal_eligible_reviews": 2,
-                "high_confidence_named_account_reviews": 1,
+                "trusted_named_account_reviews": 1,
             }
         ),
     )
@@ -190,6 +190,8 @@ async def test_fetch_review_funnel_audit_filters_recent_scrape_intake_counts_to_
     assert result["scrape_retained_raw_only"] == 2
     assert result["scrape_inserted"] == 9
     assert result["scrape_company_signal_eligible"] == 4
+    assert result["trusted_named_account"] == 1
+    assert result["high_confidence_named_account"] == 1
 
 
 def test_parse_task_result_payload_accepts_legacy_python_literal():

@@ -809,7 +809,7 @@ async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
                 WHERE reviewer_company_norm IS NOT NULL
                   AND reviewer_company_norm <> ''
                   AND source <> ALL($3::text[])
-            ) AS high_confidence_named_account_reviews
+            ) AS trusted_named_account_reviews
         FROM b2b_reviews
         WHERE {eligible_filters}
         """,
@@ -825,7 +825,7 @@ async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
 
     intelligence_eligible_reviews = _row_count("intelligence_eligible_reviews")
     company_signal_eligible_reviews = _row_count("company_signal_eligible_reviews")
-    high_conf_named_account_reviews = _row_count("high_confidence_named_account_reviews")
+    trusted_named_account_reviews = _row_count("trusted_named_account_reviews")
     scrape_intake = await _fetch_recent_scrape_intake_funnel(pool, window_days, sources)
     return {
         "found": sum(status_counts.values()),
@@ -839,7 +839,8 @@ async def _fetch_review_funnel_audit(pool, window_days: int) -> dict[str, Any]:
         "duplicate": status_counts.get("duplicate", 0),
         "intelligence_eligible": intelligence_eligible_reviews,
         "company_signal_eligible": company_signal_eligible_reviews,
-        "high_confidence_named_account": high_conf_named_account_reviews,
+        "trusted_named_account": trusted_named_account_reviews,
+        "high_confidence_named_account": trusted_named_account_reviews,
         "scrape_runs": scrape_intake["runs"],
         "scrape_found": scrape_intake["found"],
         "scrape_filtered": scrape_intake["filtered"],
