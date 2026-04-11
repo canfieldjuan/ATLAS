@@ -681,7 +681,7 @@ async def _fetch_latest_tenant_vendor_report(
         FROM b2b_intelligence
         WHERE report_type = $1
           AND LOWER(vendor_filter) = LOWER($2)
-        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, b2b_intelligence.id DESC
+        ORDER BY report_date DESC NULLS LAST, b2b_intelligence.created_at DESC NULLS LAST, b2b_intelligence.id DESC
         LIMIT 1
         """,
         report_type,
@@ -3422,8 +3422,8 @@ async def list_tenant_reports(
 
     rows = await pool.fetch(
         f"""
-        SELECT id, report_date, report_type, executive_summary,
-               vendor_filter, category_filter, status, created_at,
+        SELECT b2b_intelligence.id, report_date, report_type, executive_summary,
+               vendor_filter, category_filter, status, b2b_intelligence.created_at,
                latest_failure_step, latest_error_code, latest_error_summary,
                COALESCE((intelligence_data->>'data_stale')::boolean, false) AS data_stale,
                blocker_count, warning_count,
@@ -3461,7 +3461,7 @@ async def list_tenant_reports(
             LIMIT 1
         ) rs ON TRUE
         {where}
-        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, b2b_intelligence.id DESC
+        ORDER BY report_date DESC NULLS LAST, b2b_intelligence.created_at DESC NULLS LAST, b2b_intelligence.id DESC
         LIMIT ${idx}
         """,
         *params,
