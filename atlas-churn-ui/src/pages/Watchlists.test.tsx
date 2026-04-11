@@ -424,6 +424,27 @@ describe('Watchlists', () => {
     )
   })
 
+  it('copies an opportunity link directly from an account row', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy account opportunity link for Zendesk' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/opportunities?vendor=Zendesk&back_to=%2Fwatchlists`,
+      )
+    })
+    expect(await screen.findByText('Copied opportunity link for Acme Corp')).toBeInTheDocument()
+  })
+
   it('renders empty states when no tracked vendors or persisted accounts exist', async () => {
     api.listTrackedVendors.mockResolvedValue({ vendors: [], count: 0 })
     api.listCompetitiveSets.mockResolvedValue({ competitive_sets: [], count: 0, defaults: null })

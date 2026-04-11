@@ -1486,6 +1486,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyAccountRowOpportunityLink(row: AccountsInMotionFeedItem) {
+    try {
+      await navigator.clipboard.writeText(watchlistOpportunitiesUrl(searchParams, row.vendor))
+      setActionError(null)
+      setActionMessage(`Copied opportunity link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy opportunity link')
+    }
+  }
+
   async function handleCopyVendorRowLink(vendorName: string) {
     try {
       await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, vendorName))
@@ -2526,6 +2537,20 @@ export default function Watchlists() {
               >
                 <Telescope className="inline h-3 w-3" />
               </Link>
+            )}
+            {row.company && (
+              <button
+                type="button"
+                className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyAccountRowOpportunityLink(row)
+                }}
+                aria-label={`Copy account opportunity link for ${row.vendor}`}
+                title="Copy opportunity link"
+              >
+                Copy opportunity
+              </button>
             )}
             {row.company && (
               <button
