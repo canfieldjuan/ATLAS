@@ -18,6 +18,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { clsx } from 'clsx'
 import UrgencyBadge from './UrgencyBadge'
 import { SourceBadge } from './EvidenceDrawer'
@@ -32,6 +33,7 @@ interface AccountMovementDrawerProps {
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
   onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
   onCopyLink?: () => void
+  evidenceExplorerUrl?: string | null
   generating?: boolean
 }
 
@@ -80,6 +82,7 @@ export default function AccountMovementDrawer({
   onGenerateCampaign,
   onViewOpportunity,
   onCopyLink,
+  evidenceExplorerUrl,
   generating,
 }: AccountMovementDrawerProps) {
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
@@ -163,6 +166,15 @@ export default function AccountMovementDrawer({
                 <Copy className="h-3.5 w-3.5" />
                 Copy link
               </button>
+            )}
+            {evidenceExplorerUrl && (
+              <Link
+                className="inline-flex items-center gap-1 rounded-md bg-violet-500/10 px-2.5 py-1.5 text-xs font-medium text-violet-300 hover:bg-violet-500/20"
+                to={evidenceExplorerUrl}
+              >
+                <Fingerprint className="h-3.5 w-3.5" />
+                Evidence Explorer
+              </Link>
             )}
             <button
               className="inline-flex items-center gap-1 rounded-md bg-cyan-500/10 px-2.5 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"

@@ -316,6 +316,11 @@ function watchlistViewUrl(viewId: string) {
   return `${window.location.origin}/watchlists?${params.toString()}`
 }
 
+function watchlistPath(searchParams: URLSearchParams) {
+  const query = searchParams.toString()
+  return `/watchlists${query ? `?${query}` : ''}`
+}
+
 function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
   const next = new URLSearchParams(searchParams)
   const focus = accountFocusFromRow(row)
@@ -325,17 +330,20 @@ function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotio
   next.set('account_watch_vendor', focus.watch_vendor)
   next.set('account_category', focus.category)
   next.set('account_track_mode', focus.track_mode)
-  return `${window.location.origin}/watchlists?${next.toString()}`
+  return `${window.location.origin}${watchlistPath(next)}`
 }
 
-function watchlistWitnessExplorerUrl(searchParams: URLSearchParams, vendorName: string, witnessId: string) {
+function watchlistEvidenceExplorerPath(
+  searchParams: URLSearchParams,
+  vendorName: string,
+  witnessId?: string | null,
+) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
-  params.set('witness_id', witnessId)
-  const backToQuery = searchParams.toString()
-  params.set('back_to', `/watchlists${backToQuery ? `?${backToQuery}` : ''}`)
-  return `${window.location.origin}/evidence?${params.toString()}`
+  if (witnessId) params.set('witness_id', witnessId)
+  params.set('back_to', watchlistPath(searchParams))
+  return `/evidence?${params.toString()}`
 }
 
 function accountFocusFromRow(row: AccountsInMotionFeedItem) {
@@ -2950,6 +2958,7 @@ export default function Watchlists() {
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
         onCopyLink={() => void handleCopySelectedAccountLink()}
+        evidenceExplorerUrl={selectedAccount ? watchlistEvidenceExplorerPath(searchParams, selectedAccount.vendor) : null}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
         onViewOpportunity={(item) => navigate(`/opportunities?vendor=${encodeURIComponent(item.vendor)}`)}
@@ -2963,7 +2972,7 @@ export default function Watchlists() {
         onClose={handleCloseWitnessDrawer}
         explorerUrl={
           evidenceDrawerWitnessId && evidenceDrawerVendor
-            ? watchlistWitnessExplorerUrl(searchParams, evidenceDrawerVendor, evidenceDrawerWitnessId)
+            ? watchlistEvidenceExplorerPath(searchParams, evidenceDrawerVendor, evidenceDrawerWitnessId)
             : null
         }
       />

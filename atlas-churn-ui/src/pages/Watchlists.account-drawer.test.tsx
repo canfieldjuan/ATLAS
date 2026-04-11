@@ -327,6 +327,10 @@ describe('Watchlists account drawer', () => {
 
     const drawer = await screen.findByLabelText('Account movement evidence')
     expect(within(drawer).getByText('Renewal warning from URL hydration.')).toBeInTheDocument()
+    expect(within(drawer).getByRole('link', { name: 'Evidence Explorer' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
   })
 
   it('hydrates the witness drawer from URL focus params', async () => {
@@ -405,7 +409,7 @@ describe('Watchlists account drawer', () => {
     })
     expect(screen.getByRole('link', { name: 'Open in Evidence Explorer' })).toHaveAttribute(
       'href',
-      'http://localhost:3000/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor%26witness_id%3Dwitness%253Azendesk%253A1%26witness_vendor%3DZendesk',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor%26witness_id%3Dwitness%253Azendesk%253A1%26witness_vendor%3DZendesk',
     )
   })
 
