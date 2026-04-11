@@ -194,10 +194,19 @@ describe('Watchlists account drawer', () => {
     await user.click(within(drawer).getByRole('button', { name: 'Copy review link for review-1' }))
 
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/reviews/review-1?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor`,
-      )
+      expect(clipboardSpy).toHaveBeenCalled()
     })
+    const copiedReviewUrl = new URL(clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string)
+    expect(copiedReviewUrl.pathname).toBe('/reviews/review-1')
+    const copiedReviewBackTo = new URL(copiedReviewUrl.searchParams.get('back_to')!, window.location.origin)
+    expect(copiedReviewBackTo.pathname).toBe('/watchlists')
+    expect(copiedReviewBackTo.searchParams.get('view')).toBe('view-1')
+    expect(copiedReviewBackTo.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(copiedReviewBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(copiedReviewBackTo.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(copiedReviewBackTo.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(copiedReviewBackTo.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(copiedReviewBackTo.searchParams.get('account_track_mode')).toBe('competitor')
     expect(await screen.findByText('Copied review link for Acme Corp')).toBeInTheDocument()
   })
 
@@ -487,7 +496,7 @@ describe('Watchlists account drawer', () => {
     })
 
     render(
-      <MemoryRouter initialEntries={['/watchlists']}>
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
         <Watchlists />
       </MemoryRouter>,
     )
@@ -497,9 +506,18 @@ describe('Watchlists account drawer', () => {
     const drawer = await screen.findByLabelText('Account movement evidence')
     await user.click(within(drawer).getByRole('button', { name: 'Open review detail' }))
 
-    expect(mockNavigate).toHaveBeenCalledWith(
-      '/reviews/review-1?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
-    )
+    const reviewPath = mockNavigate.mock.calls[mockNavigate.mock.calls.length - 1]?.[0] as string
+    const reviewUrl = new URL(reviewPath, window.location.origin)
+    expect(reviewUrl.pathname).toBe('/reviews/review-1')
+    const reviewBackTo = new URL(reviewUrl.searchParams.get('back_to')!, window.location.origin)
+    expect(reviewBackTo.pathname).toBe('/watchlists')
+    expect(reviewBackTo.searchParams.get('view')).toBe('view-1')
+    expect(reviewBackTo.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(reviewBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(reviewBackTo.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(reviewBackTo.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(reviewBackTo.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(reviewBackTo.searchParams.get('account_track_mode')).toBe('competitor')
   })
 
   it('opens reports from the account movement drawer with focused account context', async () => {
@@ -566,7 +584,7 @@ describe('Watchlists account drawer', () => {
     })
 
     render(
-      <MemoryRouter initialEntries={['/watchlists']}>
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
         <Watchlists />
       </MemoryRouter>,
     )
@@ -576,9 +594,19 @@ describe('Watchlists account drawer', () => {
     const drawer = await screen.findByLabelText('Account movement evidence')
     await user.click(within(drawer).getByRole('button', { name: 'View reports' }))
 
-    expect(mockNavigate).toHaveBeenCalledWith(
-      '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
-    )
+    const reportsPath = mockNavigate.mock.calls[mockNavigate.mock.calls.length - 1]?.[0] as string
+    const reportsUrl = new URL(reportsPath, window.location.origin)
+    expect(reportsUrl.pathname).toBe('/reports')
+    expect(reportsUrl.searchParams.get('vendor_filter')).toBe('Zendesk')
+    const reportsBackTo = new URL(reportsUrl.searchParams.get('back_to')!, window.location.origin)
+    expect(reportsBackTo.pathname).toBe('/watchlists')
+    expect(reportsBackTo.searchParams.get('view')).toBe('view-1')
+    expect(reportsBackTo.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(reportsBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(reportsBackTo.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(reportsBackTo.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(reportsBackTo.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(reportsBackTo.searchParams.get('account_track_mode')).toBe('competitor')
   })
 
   it('copies a reports link from the account movement drawer with focused account context', async () => {
@@ -646,7 +674,7 @@ describe('Watchlists account drawer', () => {
     })
 
     render(
-      <MemoryRouter initialEntries={['/watchlists']}>
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
         <Watchlists />
       </MemoryRouter>,
     )
@@ -657,10 +685,20 @@ describe('Watchlists account drawer', () => {
     await user.click(within(drawer).getByRole('button', { name: 'Copy reports' }))
 
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor`,
-      )
+      expect(clipboardSpy).toHaveBeenCalled()
     })
+    const copiedReportsUrl = new URL(clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string)
+    expect(copiedReportsUrl.pathname).toBe('/reports')
+    expect(copiedReportsUrl.searchParams.get('vendor_filter')).toBe('Zendesk')
+    const copiedReportsBackTo = new URL(copiedReportsUrl.searchParams.get('back_to')!, window.location.origin)
+    expect(copiedReportsBackTo.pathname).toBe('/watchlists')
+    expect(copiedReportsBackTo.searchParams.get('view')).toBe('view-1')
+    expect(copiedReportsBackTo.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(copiedReportsBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(copiedReportsBackTo.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(copiedReportsBackTo.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(copiedReportsBackTo.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(copiedReportsBackTo.searchParams.get('account_track_mode')).toBe('competitor')
   })
 
   it('hydrates the witness drawer from URL focus params', async () => {

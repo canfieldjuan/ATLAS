@@ -834,6 +834,12 @@ export default function Watchlists() {
     }
     return next
   }, [activeWatchlistView?.id, requestedWatchlistViewId, searchParams])
+  const selectedAccountSearchParams = useMemo(
+    () => (selectedAccount
+      ? accountFocusParams(outboundWatchlistSearchParams, selectedAccount)
+      : outboundWatchlistSearchParams),
+    [outboundWatchlistSearchParams, selectedAccount],
+  )
   const {
     data: activeAlertEventsData,
     refresh: refreshAlertEvents,
@@ -1451,7 +1457,7 @@ export default function Watchlists() {
   async function handleCopySelectedAccountLink() {
     if (!selectedAccount) return
     try {
-      await navigator.clipboard.writeText(watchlistAccountUrl(searchParams, selectedAccount))
+      await navigator.clipboard.writeText(`${window.location.origin}${watchlistPath(selectedAccountSearchParams)}`)
       setActionError(null)
       setActionMessage(`Copied account link for ${selectedAccount.company || selectedAccount.vendor}`)
     } catch (err) {
@@ -1526,6 +1532,18 @@ export default function Watchlists() {
       await navigator.clipboard.writeText(watchlistReportsUrl(outboundWatchlistSearchParams, row.vendor))
       setActionError(null)
       setActionMessage(`Copied reports link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy reports link')
+    }
+  }
+
+  async function handleCopySelectedReportsLink() {
+    if (!selectedAccount) return
+    try {
+      await navigator.clipboard.writeText(watchlistReportsUrl(selectedAccountSearchParams, selectedAccount.vendor))
+      setActionError(null)
+      setActionMessage(`Copied reports link for ${selectedAccount.company || selectedAccount.vendor}`)
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy reports link')
@@ -1609,7 +1627,7 @@ export default function Watchlists() {
   async function handleCopySelectedReviewLink(reviewId: string) {
     if (!selectedAccount) return
     try {
-      await navigator.clipboard.writeText(watchlistReviewUrl(searchParams, selectedAccount, reviewId))
+      await navigator.clipboard.writeText(watchlistReviewUrl(selectedAccountSearchParams, selectedAccount, reviewId))
       setActionError(null)
       setActionMessage(`Copied review link for ${selectedAccount.company || selectedAccount.vendor}`)
     } catch (err) {
@@ -3883,26 +3901,18 @@ export default function Watchlists() {
         item={selectedAccount}
         open={selectedAccount != null}
         onClose={handleCloseSelectedAccount}
-        onViewVendor={(vendorName) => navigate(watchlistVendorPath(searchParams, vendorName))}
+        onViewVendor={(vendorName) => navigate(watchlistVendorPath(selectedAccountSearchParams, vendorName))}
         onCopyLink={() => void handleCopySelectedAccountLink()}
         evidenceExplorerUrl={selectedAccount
-          ? watchlistAccountEvidenceExplorerPath(searchParams, selectedAccount, null, selectedSourceFilter)
+          ? watchlistEvidenceExplorerPath(selectedAccountSearchParams, selectedAccount.vendor, null, selectedSourceFilter)
           : null}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
-        onViewReport={(item) => navigate(watchlistReportsPath(searchParams, item.vendor))}
-        onCopyReportLink={(item) => void navigator.clipboard.writeText(watchlistReportsUrl(searchParams, item.vendor))
-          .then(() => {
-            setActionError(null)
-            setActionMessage(`Copied reports link for ${item.company || item.vendor}`)
-          })
-          .catch((err) => {
-            setActionMessage(null)
-            setActionError(err instanceof Error ? err.message : 'Failed to copy reports link')
-          })}
-        onViewOpportunity={(item) => navigate(watchlistOpportunitiesPath(searchParams, item.vendor))}
+        onViewReport={(item) => navigate(watchlistReportsPath(selectedAccountSearchParams, item.vendor))}
+        onCopyReportLink={() => void handleCopySelectedReportsLink()}
+        onViewOpportunity={(item) => navigate(watchlistOpportunitiesPath(selectedAccountSearchParams, item.vendor))}
         onViewReview={(reviewId) => selectedAccount
-          ? navigate(watchlistReviewDetailPath(searchParams, selectedAccount, reviewId))
+          ? navigate(watchlistReviewDetailPath(selectedAccountSearchParams, selectedAccount, reviewId))
           : null}
         onCopyReviewLink={(reviewId) => void handleCopySelectedReviewLink(reviewId)}
         generating={selectedAccount ? generatingCampaignFor === `${selectedAccount.company}::${selectedAccount.vendor}` : false}
