@@ -300,7 +300,7 @@ export default function VendorDetail() {
     'support_sentiment' | 'legacy_support_score' | 'new_feature_velocity' | 'employee_growth_rate'
   >('support_sentiment')
   const [copied, setCopied] = useState(false)
-  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'evidence' | 'watchlists'; status: 'copied' | 'error' } | null>(null)
+  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'evidence' | 'watchlists' | 'reports'; status: 'copied' | 'error' } | null>(null)
 
   const { data, loading, error, refresh, refreshing } = useApiData<VendorData>(
     async () => {
@@ -363,7 +363,7 @@ export default function VendorDetail() {
       setTimeout(() => setCopied(false), 2000)
     })
   }
-  const handleCopyShortcutLink = (key: 'evidence' | 'watchlists', path: string) => {
+  const handleCopyShortcutLink = (key: 'evidence' | 'watchlists' | 'reports', path: string) => {
     navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
       setCopiedShortcutState({ key, status: 'copied' })
       setTimeout(() => setCopiedShortcutState((current) => (
@@ -744,12 +744,25 @@ export default function VendorDetail() {
                   : <Copy className="h-3.5 w-3.5" />}
               </button>
             </span>
-            <button
-              onClick={() => navigate(reportsPath)}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
-            >
-              View Reports
-            </button>
+            <span className="inline-flex items-center gap-2">
+              <button
+                onClick={() => navigate(reportsPath)}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+              >
+                View Reports
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCopyShortcutLink('reports', reportsPath)}
+                className="text-slate-400 hover:text-white transition-colors"
+                aria-label="Copy reports link"
+                title="Copy reports link"
+              >
+                {copiedShortcutState?.key === 'reports' && copiedShortcutState.status === 'copied'
+                  ? <Check className="h-3.5 w-3.5 text-green-400" />
+                  : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </span>
           </div>
           {signal && (
             <div className="text-right">
@@ -822,12 +835,25 @@ export default function VendorDetail() {
               : <Copy className="h-3.5 w-3.5" />}
           </button>
         </span>
-        <button
-          onClick={() => navigate(reportsPath)}
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
-        >
-          View Reports
-        </button>
+        <span className="inline-flex items-center gap-2">
+          <button
+            onClick={() => navigate(reportsPath)}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+          >
+            View Reports
+          </button>
+          <button
+            type="button"
+            onClick={() => handleCopyShortcutLink('reports', reportsPath)}
+            className="text-slate-400 hover:text-white transition-colors"
+            aria-label="Copy reports link"
+            title="Copy reports link"
+          >
+            {copiedShortcutState?.key === 'reports' && copiedShortcutState.status === 'copied'
+              ? <Check className="h-3.5 w-3.5 text-green-400" />
+              : <Copy className="h-3.5 w-3.5" />}
+          </button>
+        </span>
       </div>
 
       <div className="flex gap-1 border-b border-slate-700/50">
