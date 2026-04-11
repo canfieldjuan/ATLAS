@@ -13327,6 +13327,7 @@ async def read_company_signal_review_impact_summary(
                 "avg_rebuild_accounts_per_triggered": 0.0,
             },
             "scopes": [],
+            "unlock_paths": [],
             "priority_bands": [],
             "priority_reasons": [],
             "top_vendors": [],
@@ -13387,6 +13388,78 @@ async def read_company_signal_review_impact_summary(
         ORDER BY action_count DESC, review_scope ASC
         """,
         *params,
+    )
+    unlock_path_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        rebuild_rows AS (
+            SELECT DISTINCT ON (
+                review_batch_id,
+                vendor_name,
+                COALESCE(review_unlock_path, 'unknown'),
+                COALESCE(review_unlock_reason, 'unknown'),
+                COALESCE(candidate_source, 'unknown')
+            )
+                   review_batch_id,
+                   vendor_name,
+                   COALESCE(review_unlock_path, 'unknown') AS review_unlock_path,
+                   COALESCE(review_unlock_reason, 'unknown') AS review_unlock_reason,
+                   COALESCE(candidate_source, 'unknown') AS candidate_source,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY review_batch_id,
+                     vendor_name,
+                     COALESCE(review_unlock_path, 'unknown'),
+                     COALESCE(review_unlock_reason, 'unknown'),
+                     COALESCE(candidate_source, 'unknown'),
+                     created_at DESC
+        ),
+        unlock_rebuilds AS (
+            SELECT review_unlock_path,
+                   review_unlock_reason,
+                   candidate_source,
+                   COUNT(*) FILTER (WHERE rebuild_requested)::int AS rebuild_requests,
+                   COUNT(*) FILTER (WHERE rebuild_triggered)::int AS rebuild_triggered,
+                   COALESCE(SUM(rebuild_persisted_count), 0)::int AS rebuild_persisted_reports,
+                   COALESCE(SUM(rebuild_total_accounts), 0)::int AS rebuild_total_accounts
+            FROM rebuild_rows
+            GROUP BY 1, 2, 3
+        )
+        SELECT COALESCE(f.review_unlock_path, 'unknown') AS review_unlock_path,
+               COALESCE(f.review_unlock_reason, 'unknown') AS review_unlock_reason,
+               COALESCE(f.candidate_source, 'unknown') AS candidate_source,
+               COUNT(*)::int AS action_count,
+               COUNT(*) FILTER (WHERE f.review_action = 'approved')::int AS approvals,
+               COUNT(*) FILTER (WHERE f.review_action = 'suppressed')::int AS suppressions,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'created')::int AS company_signal_creations,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'updated')::int AS company_signal_updates,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'deleted')::int AS company_signal_deletions,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'none')::int AS company_signal_noops,
+               COALESCE(ur.rebuild_requests, 0)::int AS rebuild_requests,
+               COALESCE(ur.rebuild_triggered, 0)::int AS rebuild_triggered,
+               COALESCE(ur.rebuild_persisted_reports, 0)::int AS rebuild_persisted_reports,
+               COALESCE(ur.rebuild_total_accounts, 0)::int AS rebuild_total_accounts
+        FROM filtered f
+        LEFT JOIN unlock_rebuilds ur
+          ON ur.review_unlock_path = COALESCE(f.review_unlock_path, 'unknown')
+         AND ur.review_unlock_reason = COALESCE(f.review_unlock_reason, 'unknown')
+         AND ur.candidate_source = COALESCE(f.candidate_source, 'unknown')
+        GROUP BY 1, 2, 3, ur.rebuild_requests, ur.rebuild_triggered, ur.rebuild_persisted_reports, ur.rebuild_total_accounts
+        ORDER BY action_count DESC,
+                 approvals DESC,
+                 review_unlock_path ASC,
+                 candidate_source ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
     )
     priority_rows = await pool.fetch(
         f"""
@@ -13685,6 +13758,7 @@ async def read_company_signal_review_impact_summary(
     return {
         "totals": totals_payload,
         "scopes": [dict(row) for row in scope_rows],
+        "unlock_paths": [_with_effect_metrics(row) for row in unlock_path_rows],
         "priority_bands": [_with_effect_metrics(row) for row in priority_rows],
         "priority_reasons": [_with_effect_metrics(row) for row in priority_reason_rows],
         "top_vendors": [_with_effect_metrics(row) for row in vendor_rows],
@@ -14545,6 +14619,72 @@ def _company_signal_exclusion_reason(
             return "low_confidence_low_trust_source"
 
     return None
+
+
+def company_signal_review_unlock_snapshot(
+    *,
+    source: Any = None,
+    canonical_gap_reason: Any = None,
+    confidence_score: Any = None,
+    urgency_score: Any = None,
+) -> dict[str, Any]:
+    """Classify a review/group into a stable unlock path for review telemetry."""
+    normalized_source = str(source or "").strip().lower() or None
+    gap_reason = str(canonical_gap_reason or "").strip() or None
+    confidence = _normalize_company_signal_confidence(confidence_score)
+    try:
+        urgency = float(urgency_score) if urgency_score is not None else None
+    except (TypeError, ValueError):
+        urgency = None
+
+    windows = _company_signal_queue_near_threshold_windows()
+    confidence_floor = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
+    )
+    if confidence_floor is None:
+        confidence_floor = 0.6
+    try:
+        urgency_threshold = float(getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0))
+    except (TypeError, ValueError):
+        urgency_threshold = 7.0
+
+    confidence_gap = None
+    if gap_reason == "low_confidence_low_trust_source" and confidence is not None:
+        confidence_gap = max(0.0, round(confidence_floor - confidence, 3))
+
+    urgency_gap = None
+    if gap_reason == "below_high_intent_threshold" and urgency is not None:
+        urgency_gap = max(0.0, round(urgency_threshold - urgency, 2))
+
+    low_trust = normalized_source in _company_signal_low_trust_sources() if normalized_source else False
+    if gap_reason == "low_confidence_low_trust_source" and low_trust:
+        if confidence_gap is not None and confidence_gap <= windows["confidence_gap"]:
+            review_unlock_path = "low_trust_near_threshold_group"
+            review_unlock_reason = "close_low_trust_confidence"
+        else:
+            review_unlock_path = "low_trust_confidence_gap"
+            review_unlock_reason = "low_trust_below_confidence_threshold"
+    elif gap_reason == "below_high_intent_threshold" and not low_trust:
+        review_unlock_path = "trusted_source_urgency_gap"
+        review_unlock_reason = "trusted_source_below_high_intent_threshold"
+    elif gap_reason == "missing_signal_evidence":
+        review_unlock_path = "missing_signal_evidence"
+        review_unlock_reason = "missing_signal_evidence"
+    elif gap_reason:
+        review_unlock_path = "other"
+        review_unlock_reason = gap_reason
+    else:
+        review_unlock_path = "canonical_or_unblocked"
+        review_unlock_reason = "canonical_or_unblocked"
+
+    return {
+        "candidate_source": normalized_source,
+        "canonical_gap_reason": gap_reason,
+        "review_unlock_path": review_unlock_path,
+        "review_unlock_reason": review_unlock_reason,
+        "confidence_gap_to_canonical": confidence_gap,
+        "urgency_gap_to_high_intent": urgency_gap,
+    }
 
 
 def _high_intent_signal_evidence_enabled() -> bool:

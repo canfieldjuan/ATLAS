@@ -36,6 +36,7 @@ from ..services.tracing import (
 from ..services.scraping.capabilities import get_capability
 from ..services.scraping.sources import ALL_SOURCES, ReviewSource, display_name as source_display_name
 from ..autonomous.tasks._b2b_shared import (
+    company_signal_review_unlock_snapshot,
     has_complete_core_run_marker,
     latest_complete_core_report_date,
     read_company_signal_candidates,
@@ -631,6 +632,28 @@ def _company_signal_review_priority_snapshot(
     return _company_signal_group_review_priority_values(row)
 
 
+def _company_signal_review_unlock_snapshot(
+    row: Mapping[str, Any] | None,
+    *,
+    scope: str,
+) -> dict[str, Any]:
+    if not row:
+        return company_signal_review_unlock_snapshot()
+    if scope == "candidate":
+        return company_signal_review_unlock_snapshot(
+            source=row.get("source"),
+            canonical_gap_reason=row.get("canonical_gap_reason"),
+            confidence_score=row.get("confidence_score"),
+            urgency_score=row.get("urgency_score"),
+        )
+    return company_signal_review_unlock_snapshot(
+        source=row.get("representative_source"),
+        canonical_gap_reason=row.get("canonical_gap_reason"),
+        confidence_score=row.get("corroborated_confidence_score"),
+        urgency_score=row.get("max_urgency_score"),
+    )
+
+
 async def _record_company_signal_review_event(
     pool,
     *,
@@ -647,6 +670,10 @@ async def _record_company_signal_review_event(
     candidate_group_id: str | None = None,
     review_priority_band: str | None = None,
     review_priority_reason: str | None = None,
+    candidate_source: str | None = None,
+    canonical_gap_reason: str | None = None,
+    review_unlock_path: str | None = None,
+    review_unlock_reason: str | None = None,
     company_signal_id: str | None = None,
     company_signal_action: str = "none",
 ) -> None:
@@ -669,6 +696,10 @@ async def _record_company_signal_review_event(
                 review_notes,
                 review_priority_band,
                 review_priority_reason,
+                candidate_source,
+                canonical_gap_reason,
+                review_unlock_path,
+                review_unlock_reason,
                 company_signal_id,
                 company_signal_action,
                 rebuild_requested,
@@ -690,14 +721,18 @@ async def _record_company_signal_review_event(
                 $9,
                 $10,
                 $11,
-                $12::uuid,
+                $12,
                 $13,
                 $14,
                 $15,
-                $16::date,
+                $16::uuid,
                 $17,
                 $18,
-                $19
+                $19,
+                $20::date,
+                $21,
+                $22,
+                $23
             )
             """,
             review_batch_id,
@@ -711,6 +746,10 @@ async def _record_company_signal_review_event(
             review_notes,
             review_priority_band,
             review_priority_reason,
+            candidate_source,
+            canonical_gap_reason,
+            review_unlock_path,
+            review_unlock_reason,
             company_signal_id,
             company_signal_action,
             outcome["rebuild_requested"],
@@ -2959,6 +2998,10 @@ async def approve_company_signal_candidate(
         candidate,
         scope="candidate",
     )
+    unlock_snapshot = _company_signal_review_unlock_snapshot(
+        candidate,
+        scope="candidate",
+    )
 
     canonical_row = await _upsert_company_signal(
         pool,
@@ -3032,6 +3075,10 @@ async def approve_company_signal_candidate(
         rebuild=rebuild,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
+        candidate_source=unlock_snapshot.get("candidate_source"),
+        canonical_gap_reason=unlock_snapshot.get("canonical_gap_reason"),
+        review_unlock_path=unlock_snapshot.get("review_unlock_path"),
+        review_unlock_reason=unlock_snapshot.get("review_unlock_reason"),
         company_signal_id=str(canonical_row["id"]) if canonical_row and canonical_row.get("id") else None,
         company_signal_action=(
             canonical_row.get("company_signal_action")
@@ -3074,6 +3121,10 @@ async def suppress_company_signal_candidate(
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
     review_priority_band, review_priority_reason = _company_signal_review_priority_snapshot(
+        candidate,
+        scope="candidate",
+    )
+    unlock_snapshot = _company_signal_review_unlock_snapshot(
         candidate,
         scope="candidate",
     )
@@ -3132,6 +3183,10 @@ async def suppress_company_signal_candidate(
         rebuild=rebuild,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
+        candidate_source=unlock_snapshot.get("candidate_source"),
+        canonical_gap_reason=unlock_snapshot.get("canonical_gap_reason"),
+        review_unlock_path=unlock_snapshot.get("review_unlock_path"),
+        review_unlock_reason=unlock_snapshot.get("review_unlock_reason"),
         company_signal_id=(
             str(deleted_signal["id"])
             if deleted_signal and deleted_signal.get("id")
@@ -3179,6 +3234,10 @@ async def approve_company_signal_candidate_group(
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
     review_priority_band, review_priority_reason = _company_signal_review_priority_snapshot(
+        group,
+        scope="group",
+    )
+    unlock_snapshot = _company_signal_review_unlock_snapshot(
         group,
         scope="group",
     )
@@ -3241,6 +3300,10 @@ async def approve_company_signal_candidate_group(
         rebuild=rebuild,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
+        candidate_source=unlock_snapshot.get("candidate_source"),
+        canonical_gap_reason=unlock_snapshot.get("canonical_gap_reason"),
+        review_unlock_path=unlock_snapshot.get("review_unlock_path"),
+        review_unlock_reason=unlock_snapshot.get("review_unlock_reason"),
         company_signal_id=str(canonical_row["id"]) if canonical_row and canonical_row.get("id") else None,
         company_signal_action=(
             canonical_row.get("company_signal_action")
@@ -3287,6 +3350,10 @@ async def suppress_company_signal_candidate_group(
         group,
         scope="group",
     )
+    unlock_snapshot = _company_signal_review_unlock_snapshot(
+        group,
+        scope="group",
+    )
     deleted_signal = await _delete_company_signal(
         pool,
         company_name=group["company_name"],
@@ -3329,6 +3396,10 @@ async def suppress_company_signal_candidate_group(
         rebuild=rebuild,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
+        candidate_source=unlock_snapshot.get("candidate_source"),
+        canonical_gap_reason=unlock_snapshot.get("canonical_gap_reason"),
+        review_unlock_path=unlock_snapshot.get("review_unlock_path"),
+        review_unlock_reason=unlock_snapshot.get("review_unlock_reason"),
         company_signal_id=(
             str(deleted_signal["id"])
             if deleted_signal and deleted_signal.get("id")
@@ -3384,6 +3455,10 @@ async def approve_company_signal_candidate_groups(
         for group_id in group_ids:
             groups.append(await _fetch_company_signal_candidate_group_or_404(conn, group_id, user))
         for group_id, group in zip(group_ids, groups):
+            unlock_snapshot = _company_signal_review_unlock_snapshot(
+                group,
+                scope="group",
+            )
             canonical_row = await _upsert_company_signal(
                 conn,
                 company_name=group["company_name"],
@@ -3438,6 +3513,10 @@ async def approve_company_signal_candidate_groups(
                     "review_count": group.get("review_count") or 0,
                     "review_priority_band": _company_signal_group_review_priority_values(group)[0],
                     "review_priority_reason": _company_signal_group_review_priority_values(group)[1],
+                    "candidate_source": unlock_snapshot.get("candidate_source"),
+                    "canonical_gap_reason": unlock_snapshot.get("canonical_gap_reason"),
+                    "review_unlock_path": unlock_snapshot.get("review_unlock_path"),
+                    "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
                 }
             )
 
@@ -3467,6 +3546,10 @@ async def approve_company_signal_candidate_groups(
             rebuild=rebuild,
             review_priority_band=result.get("review_priority_band"),
             review_priority_reason=result.get("review_priority_reason"),
+            candidate_source=result.get("candidate_source"),
+            canonical_gap_reason=result.get("canonical_gap_reason"),
+            review_unlock_path=result.get("review_unlock_path"),
+            review_unlock_reason=result.get("review_unlock_reason"),
             company_signal_id=result.get("company_signal_id"),
             company_signal_action=result.get("company_signal_action") or "none",
         )
@@ -3496,6 +3579,10 @@ async def suppress_company_signal_candidate_groups(
         for group_id in group_ids:
             groups.append(await _fetch_company_signal_candidate_group_or_404(conn, group_id, user))
         for group_id, group in zip(group_ids, groups):
+            unlock_snapshot = _company_signal_review_unlock_snapshot(
+                group,
+                scope="group",
+            )
             deleted_signal = await _delete_company_signal(
                 conn,
                 company_name=group["company_name"],
@@ -3544,6 +3631,10 @@ async def suppress_company_signal_candidate_groups(
                     ),
                     "review_priority_band": _company_signal_group_review_priority_values(group)[0],
                     "review_priority_reason": _company_signal_group_review_priority_values(group)[1],
+                    "candidate_source": unlock_snapshot.get("candidate_source"),
+                    "canonical_gap_reason": unlock_snapshot.get("canonical_gap_reason"),
+                    "review_unlock_path": unlock_snapshot.get("review_unlock_path"),
+                    "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
                 }
             )
 
@@ -3573,6 +3664,10 @@ async def suppress_company_signal_candidate_groups(
             rebuild=rebuild,
             review_priority_band=result.get("review_priority_band"),
             review_priority_reason=result.get("review_priority_reason"),
+            candidate_source=result.get("candidate_source"),
+            canonical_gap_reason=result.get("canonical_gap_reason"),
+            review_unlock_path=result.get("review_unlock_path"),
+            review_unlock_reason=result.get("review_unlock_reason"),
             company_signal_id=result.get("retracted_company_signal_id"),
             company_signal_action=result.get("company_signal_action") or "none",
         )

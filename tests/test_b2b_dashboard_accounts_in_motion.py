@@ -479,6 +479,10 @@ async def test_record_company_signal_review_event_persists_rebuild_outcome():
         },
         review_priority_band="high",
         review_priority_reason="has_signal_evidence_and_decision_maker",
+        candidate_source="reddit",
+        canonical_gap_reason="low_confidence_low_trust_source",
+        review_unlock_path="low_trust_near_threshold_group",
+        review_unlock_reason="close_low_trust_confidence",
         company_signal_id="22222222-2222-2222-2222-222222222222",
         company_signal_action="created",
     )
@@ -492,13 +496,17 @@ async def test_record_company_signal_review_event_persists_rebuild_outcome():
     assert args[4] == "33333333-3333-3333-3333-333333333333"
     assert args[9] == "high"
     assert args[10] == "has_signal_evidence_and_decision_maker"
-    assert args[12] == "created"
-    assert args[13] is True
-    assert args[14] is True
-    assert args[16] == "2026-04-11"
-    assert args[17] == 1
-    assert args[18] == 4
-    assert args[19] == 1
+    assert args[11] == "reddit"
+    assert args[12] == "low_confidence_low_trust_source"
+    assert args[13] == "low_trust_near_threshold_group"
+    assert args[14] == "close_low_trust_confidence"
+    assert args[16] == "created"
+    assert args[17] is True
+    assert args[18] is True
+    assert args[20] == "2026-04-11"
+    assert args[21] == 1
+    assert args[22] == 4
+    assert args[23] == 1
 
 
 @pytest.mark.asyncio
@@ -661,6 +669,12 @@ async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
     assert result["company_signal_action"] == "created"
     assert result["rebuild"]["triggered"] is True
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
+    event_sql = pool.execute.await_args_list[-1][0][0]
+    event_args = pool.execute.await_args_list[-1][0][1:]
+    assert "review_unlock_path" in event_sql
+    assert event_args[11] == "reddit"
+    assert event_args[12] is None
+    assert event_args[13] == "canonical_or_unblocked"
 
 
 @pytest.mark.asyncio
@@ -729,6 +743,11 @@ async def test_approve_company_signal_candidate_group_promotes_and_triggers_rebu
     assert result["rebuild"]["triggered"] is True
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
     assert pool.execute.await_count == 2
+    event_sql = pool.execute.await_args_list[-1][0][0]
+    event_args = pool.execute.await_args_list[-1][0][1:]
+    assert "review_unlock_path" in event_sql
+    assert event_args[11] == "reddit"
+    assert event_args[13] == "canonical_or_unblocked"
 
 
 @pytest.mark.asyncio

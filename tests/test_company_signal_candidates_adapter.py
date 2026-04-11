@@ -879,6 +879,24 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
             ],
             [
                 {
+                    "review_unlock_path": "low_trust_near_threshold_group",
+                    "review_unlock_reason": "close_low_trust_confidence",
+                    "candidate_source": "reddit",
+                    "action_count": 2,
+                    "approvals": 2,
+                    "suppressions": 0,
+                    "company_signal_creations": 1,
+                    "company_signal_updates": 0,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 1,
+                    "rebuild_requests": 1,
+                    "rebuild_triggered": 1,
+                    "rebuild_persisted_reports": 1,
+                    "rebuild_total_accounts": 4,
+                }
+            ],
+            [
+                {
                     "review_priority_band": "promote_now",
                     "action_count": 3,
                     "approvals": 3,
@@ -958,10 +976,11 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
 
     totals_sql = pool.fetchrow.call_args[0][0]
     scopes_sql = pool.fetch.call_args_list[0][0][0]
-    priority_sql = pool.fetch.call_args_list[1][0][0]
-    priority_reason_sql = pool.fetch.call_args_list[2][0][0]
-    vendors_sql = pool.fetch.call_args_list[3][0][0]
-    vendor_reasons_sql = pool.fetch.call_args_list[4][0][0]
+    unlock_paths_sql = pool.fetch.call_args_list[1][0][0]
+    priority_sql = pool.fetch.call_args_list[2][0][0]
+    priority_reason_sql = pool.fetch.call_args_list[3][0][0]
+    vendors_sql = pool.fetch.call_args_list[4][0][0]
+    vendor_reasons_sql = pool.fetch.call_args_list[5][0][0]
     assert "review_action =" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
     assert "review_priority_band" in totals_sql
@@ -969,6 +988,10 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "COUNT(DISTINCT review_batch_id)" in totals_sql
     assert "FROM b2b_company_signal_review_events" in totals_sql
     assert "GROUP BY 1" in scopes_sql
+    assert "review_unlock_path" in unlock_paths_sql
+    assert "review_unlock_reason" in unlock_paths_sql
+    assert "candidate_source" in unlock_paths_sql
+    assert "unlock_rebuilds" in unlock_paths_sql
     assert "review_priority_band" in priority_sql
     assert "band_rebuilds" in priority_sql
     assert "review_priority_reason" in priority_reason_sql
@@ -984,6 +1007,10 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["totals"]["avg_rebuild_reports_per_triggered"] == 2 / 3
     assert summary["totals"]["avg_rebuild_accounts_per_triggered"] == 3.0
     assert summary["scopes"][0]["review_scope"] == "bulk_group"
+    assert summary["unlock_paths"][0]["review_unlock_path"] == "low_trust_near_threshold_group"
+    assert summary["unlock_paths"][0]["candidate_source"] == "reddit"
+    assert summary["unlock_paths"][0]["company_signal_effect_rate"] == 0.5
+    assert summary["unlock_paths"][0]["rebuild_trigger_rate"] == 1.0
     assert summary["priority_bands"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_bands"][0]["company_signal_effect_rate"] == 1.0
     assert summary["priority_bands"][0]["company_signal_creation_rate"] == 2 / 3
