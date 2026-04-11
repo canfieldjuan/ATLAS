@@ -54,6 +54,12 @@ function evidenceExplorerPath(searchParams: URLSearchParams) {
   return `/evidence${query ? `?${query}` : ''}`
 }
 
+function evidenceWitnessPath(searchParams: URLSearchParams, witnessId: string) {
+  const next = new URLSearchParams(searchParams.toString())
+  next.set('witness_id', witnessId)
+  return evidenceExplorerPath(next)
+}
+
 function evidenceOpportunitiesPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -216,6 +222,7 @@ export default function EvidenceExplorer() {
   const [drawerOpen, setDrawerOpen] = useState(Boolean(requestedVendor && requestedWitnessId))
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const matchedWatchlistViewId = useMemo(() => {
     if (!activeVendor) return null
     const normalizedVendor = activeVendor.toLowerCase()
@@ -473,6 +480,15 @@ export default function EvidenceExplorer() {
       setCopyState('copied')
     } catch {
       setCopyState('error')
+    }
+  }
+
+  async function handleCopyWitnessLink(witnessId: string) {
+    try {
+      await copyText(`${window.location.origin}${evidenceWitnessPath(searchParams, witnessId)}`)
+      setCopiedWitnessState({ id: witnessId, status: 'copied' })
+    } catch {
+      setCopiedWitnessState({ id: witnessId, status: 'error' })
     }
   }
 
@@ -784,8 +800,19 @@ export default function EvidenceExplorer() {
                               </div>
                             )}
                           </button>
-                          {w.review_id ? (
-                            <div className="border-t border-slate-700/30 px-4 py-2">
+                          <div className="border-t border-slate-700/30 px-4 py-2 flex items-center gap-3">
+                            <button
+                              type="button"
+                              aria-label={`Copy link for witness ${w.witness_id}`}
+                              onClick={() => void handleCopyWitnessLink(w.witness_id)}
+                              className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-white"
+                            >
+                              <Copy className="h-3 w-3" />
+                              {copiedWitnessState?.id === w.witness_id
+                                ? (copiedWitnessState.status === 'copied' ? 'Copied' : 'Copy Failed')
+                                : 'Copy witness link'}
+                            </button>
+                            {w.review_id ? (
                               <Link
                                 to={reviewDetailPath(searchParams, w.review_id)}
                                 className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
@@ -793,8 +820,8 @@ export default function EvidenceExplorer() {
                                 Open review detail
                                 <ExternalLink className="h-3 w-3" />
                               </Link>
-                            </div>
-                          ) : null}
+                            ) : null}
+                          </div>
                         </div>
                       ))}
                     </div>
