@@ -854,6 +854,24 @@ describe('Watchlists', () => {
     )
   })
 
+  it('preserves the selected source filter on vendor evidence shortcuts', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open vendor evidence for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1%26source%3Dreddit',
+    )
+    expect(screen.getByRole('link', { name: 'Open vendor witness for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Avendor%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1%26source%3Dreddit',
+    )
+  })
+
   it('preserves direct vendor witness drilldown from the movement feed', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?view=view-1']}>

@@ -490,7 +490,7 @@ export default function Watchlists() {
     setEvidenceDrawerOpen(true)
   }, [])
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('')
-  const [selectedSourceFilter, setSelectedSourceFilter] = useState('')
+  const [selectedSourceFilter, setSelectedSourceFilter] = useState(searchParams.get('source')?.trim() || '')
   const [selectedMinUrgency, setSelectedMinUrgency] = useState('')
   const [freshOnly, setFreshOnly] = useState(false)
   const [namedAccountsOnly, setNamedAccountsOnly] = useState(false)
@@ -1157,6 +1157,30 @@ export default function Watchlists() {
     searchParams,
     selectedVendorFilter,
     selectedVendorFilters,
+    setSearchParams,
+  ])
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentSource = searchParams.get('source')?.trim() || ''
+    const nextSource = selectedSourceFilter.trim()
+    if (currentSource === nextSource) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextSource) {
+        next.set('source', nextSource)
+      } else {
+        next.delete('source')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    selectedSourceFilter,
     setSearchParams,
   ])
 
