@@ -487,6 +487,20 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             ],
             [
                 {
+                    "source": "g2",
+                    "vendor_name": "Copper",
+                    "blocked_group_count": 1,
+                    "blocked_review_count": 2,
+                    "low_confidence_group_count": 1,
+                    "below_threshold_group_count": 0,
+                    "min_confidence_gap_to_canonical": 0.15,
+                    "avg_confidence_gap_to_canonical": 0.18,
+                    "min_urgency_gap_to_high_intent": None,
+                    "avg_urgency_gap_to_high_intent": None,
+                }
+            ],
+            [
+                {
                     "source": "reddit",
                     "group_count": 1,
                     "review_count": 2,
@@ -639,17 +653,18 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     near_threshold_reason_sql = pool.fetch.call_args_list[7][0][0]
     near_threshold_group_sql = pool.fetch.call_args_list[8][0][0]
     blocked_source_sql = pool.fetch.call_args_list[9][0][0]
-    near_threshold_source_sql = pool.fetch.call_args_list[10][0][0]
-    confidence_sql = pool.fetch.call_args_list[11][0][0]
-    priority_sql = pool.fetch.call_args_list[12][0][0]
-    pending_band_sql = pool.fetch.call_args_list[13][0][0]
-    pending_reason_sql = pool.fetch.call_args_list[14][0][0]
-    pending_sla_band_sql = pool.fetch.call_args_list[15][0][0]
-    pending_sla_reason_sql = pool.fetch.call_args_list[16][0][0]
-    oldest_pending_sql = pool.fetch.call_args_list[17][0][0]
-    pending_sla_band_args = pool.fetch.call_args_list[15][0][1:]
-    pending_sla_reason_args = pool.fetch.call_args_list[16][0][1:]
-    oldest_pending_args = pool.fetch.call_args_list[17][0][1:]
+    blocked_source_vendor_gap_sql = pool.fetch.call_args_list[10][0][0]
+    near_threshold_source_sql = pool.fetch.call_args_list[11][0][0]
+    confidence_sql = pool.fetch.call_args_list[12][0][0]
+    priority_sql = pool.fetch.call_args_list[13][0][0]
+    pending_band_sql = pool.fetch.call_args_list[14][0][0]
+    pending_reason_sql = pool.fetch.call_args_list[15][0][0]
+    pending_sla_band_sql = pool.fetch.call_args_list[16][0][0]
+    pending_sla_reason_sql = pool.fetch.call_args_list[17][0][0]
+    oldest_pending_sql = pool.fetch.call_args_list[18][0][0]
+    pending_sla_band_args = pool.fetch.call_args_list[16][0][1:]
+    pending_sla_reason_args = pool.fetch.call_args_list[17][0][1:]
+    oldest_pending_args = pool.fetch.call_args_list[18][0][1:]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -685,6 +700,9 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "representative_source" in near_threshold_group_sql
     assert "jsonb_each_text" in blocked_source_sql
     assert "representative_source" in blocked_source_sql
+    assert "min_confidence_gap_to_canonical" in blocked_source_vendor_gap_sql
+    assert "avg_urgency_gap_to_high_intent" in blocked_source_vendor_gap_sql
+    assert "vendor_name" in blocked_source_vendor_gap_sql
     assert "jsonb_each_text" in near_threshold_source_sql
     assert "source_review_count" in near_threshold_source_sql
     assert "GROUP BY 1" in confidence_sql
@@ -727,6 +745,9 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["blocked_top_vendor_reasons"][0]["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["blocked_source_mix"][0]["source"] == "reddit"
     assert summary["blocked_source_mix"][0]["group_count"] == 2
+    assert summary["blocked_source_vendor_gaps"][0]["source"] == "g2"
+    assert summary["blocked_source_vendor_gaps"][0]["vendor_name"] == "Copper"
+    assert summary["blocked_source_vendor_gaps"][0]["min_confidence_gap_to_canonical"] == 0.15
     assert summary["near_threshold_top_vendors"][0]["vendor_name"] == "Copper"
     assert summary["near_threshold_gap_reasons"][0]["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["near_threshold_groups"][0]["vendor"] == "Copper"
