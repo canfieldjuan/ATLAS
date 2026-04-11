@@ -254,6 +254,7 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
         "gap_reasons": [{"gap_reason": "low_confidence_low_trust_source", "group_count": 2, "review_count": 5}],
         "top_vendors": [{"vendor_name": "Zendesk", "group_count": 3, "review_count": 7, "pending_groups": 2, "canonical_ready_groups": 1}],
         "confidence_tiers": [{"confidence_tier": "low", "group_count": 3}],
+        "pending_priority_reasons": [{"review_priority_band": "medium", "review_priority_reason": "cross_source_corroboration", "group_count": 2, "review_count": 5}],
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(
@@ -369,6 +370,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "totals": {"total_actions": 4, "approvals": 3},
         "scopes": [{"review_scope": "group", "action_count": 4}],
         "priority_bands": [{"review_priority_band": "high", "action_count": 3}],
+        "priority_reasons": [{"review_priority_band": "high", "review_priority_reason": "has_signal_evidence_and_decision_maker", "action_count": 3}],
         "top_vendors": [{"vendor_name": "Zendesk", "action_count": 4}],
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
