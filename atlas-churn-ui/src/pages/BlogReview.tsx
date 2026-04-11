@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   FileSearch,
   RefreshCw,
@@ -35,6 +35,54 @@ type StatusFilter = 'draft' | 'published' | 'archived' | 'rejected' | 'failed' |
 type ReviewTab = 'copy' | 'preview'
 type PreviewViewport = 'desktop' | 'mobile'
 type AffiliatePlacement = { href: string; text: string; placement: string }
+const DEFAULT_STATUS_FILTER: StatusFilter = 'draft'
+
+function parseStatusFilter(value: string | null): StatusFilter {
+  return value === 'published' || value === 'archived' || value === 'rejected' || value === 'failed'
+    ? value
+    : DEFAULT_STATUS_FILTER
+}
+
+function buildBlogReviewSearchParams(statusFilter: StatusFilter, draftId: string | null) {
+  const params = new URLSearchParams()
+  if (statusFilter !== DEFAULT_STATUS_FILTER) params.set('status', statusFilter)
+  if (draftId?.trim()) params.set('draft', draftId.trim())
+  return params
+}
+
+function blogReviewPath(statusFilter: StatusFilter, draftId: string | null) {
+  const params = buildBlogReviewSearchParams(statusFilter, draftId)
+  const query = params.toString()
+  return query ? `/blog-review?${query}` : '/blog-review'
+}
+
+function blogVendorWorkspacePath(statusFilter: StatusFilter, draftId: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', blogReviewPath(statusFilter, draftId))
+  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
+}
+
+function blogEvidencePath(statusFilter: StatusFilter, draftId: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  params.set('back_to', blogReviewPath(statusFilter, draftId))
+  return `/evidence?${params.toString()}`
+}
+
+function blogReportsPath(statusFilter: StatusFilter, draftId: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', blogReviewPath(statusFilter, draftId))
+  return `/reports?${params.toString()}`
+}
+
+function blogOpportunitiesPath(statusFilter: StatusFilter, draftId: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', blogReviewPath(statusFilter, draftId))
+  return `/opportunities?${params.toString()}`
+}
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -111,7 +159,9 @@ function extractLinks(html: string) {
 }
 
 export default function BlogReview() {
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('draft')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const statusFilter = parseStatusFilter(searchParams.get('status'))
+  const selectedDraftId = searchParams.get('draft')?.trim() || null
   const [selectedDraft, setSelectedDraft] = useState<BlogDraft | null>(null)
   const [activeTab, setActiveTab] = useState<ReviewTab>('copy')
   const [evidence, setEvidence] = useState<BlogEvidence[]>([])
@@ -125,6 +175,7 @@ export default function BlogReview() {
   const [highlightCharts, setHighlightCharts] = useState(true)
   const [highlightCtas, setHighlightCtas] = useState(true)
   const [relatedPreviewPosts, setRelatedPreviewPosts] = useState<BlogPostType[]>([])
+  const openingDraftIdRef = useRef<string | null>(null)
 
   const { data: drafts, loading, error, refresh, refreshing } = useApiData(
     () => fetchBlogDrafts(statusFilter || undefined),
@@ -135,7 +186,10 @@ export default function BlogReview() {
     [],
   )
 
-  const openDraft = async (row: BlogDraftSummary) => {
+  const openDraft = useCallback(async (row: BlogDraftSummary, options?: { syncSearch?: boolean }) => {
+    if (options?.syncSearch !== false) {
+      setSearchParams(buildBlogReviewSearchParams(statusFilter, row.id))
+    }
     setLoadingDetail(true)
     setSelectedDraft(null)
     setEvidence([])
@@ -162,14 +216,21 @@ export default function BlogReview() {
     } finally {
       setLoadingDetail(false)
     }
-  }
+  }, [setSearchParams, statusFilter])
+
+  const closeDraft = useCallback(() => {
+    setSearchParams(buildBlogReviewSearchParams(statusFilter, null))
+    setSelectedDraft(null)
+    setEvidence([])
+    setNotes('')
+  }, [setSearchParams, statusFilter])
 
   const handlePublish = async () => {
     if (!selectedDraft) return
     setPublishing(true)
     try {
       await publishBlogDraft(selectedDraft.id)
-      setSelectedDraft(null)
+      closeDraft()
       refresh()
     } finally {
       setPublishing(false)
@@ -181,7 +242,7 @@ export default function BlogReview() {
     setArchiving(true)
     try {
       await updateBlogDraft(selectedDraft.id, { status: 'archived' })
-      setSelectedDraft(null)
+      closeDraft()
       refresh()
     } finally {
       setArchiving(false)
@@ -202,6 +263,30 @@ export default function BlogReview() {
     () => (selectedDraft ? derivePreviewPost(selectedDraft) : null),
     [selectedDraft],
   )
+  const selectedVendorName = useMemo(() => {
+    const ctaVendor = selectedDraft?.cta?.vendor_filter
+    if (typeof ctaVendor === 'string' && ctaVendor.trim()) return ctaVendor.trim()
+    const contextVendor = selectedDraft?.data_context?.vendor_name
+    if (typeof contextVendor === 'string' && contextVendor.trim()) return contextVendor.trim()
+    const evidenceVendor = evidence.find((item) => item.vendor_name?.trim())?.vendor_name
+    return evidenceVendor?.trim() || null
+  }, [evidence, selectedDraft])
+  useEffect(() => {
+    if (!selectedDraftId) {
+      openingDraftIdRef.current = null
+      return
+    }
+    if (openingDraftIdRef.current === selectedDraftId || loading || loadingDetail) return
+    if (selectedDraft?.id === selectedDraftId) return
+    const requestedDraft = drafts?.find((draft) => draft.id === selectedDraftId)
+    if (!requestedDraft) return
+    openingDraftIdRef.current = selectedDraftId
+    void openDraft(requestedDraft, { syncSearch: false }).finally(() => {
+      if (openingDraftIdRef.current === selectedDraftId) {
+        openingDraftIdRef.current = null
+      }
+    })
+  }, [drafts, loading, loadingDetail, openDraft, selectedDraft?.id, selectedDraftId])
   useEffect(() => {
     let cancelled = false
     const relatedSlugs = previewPost?.related_slugs || []
@@ -347,7 +432,7 @@ export default function BlogReview() {
           ([val, label]) => (
             <button
               key={val}
-              onClick={() => setStatusFilter(val as StatusFilter)}
+              onClick={() => setSearchParams(buildBlogReviewSearchParams(val as StatusFilter, null))}
               className={clsx(
                 'px-4 py-2 text-sm font-medium transition-colors border-b-2',
                 statusFilter === val
@@ -474,11 +559,39 @@ export default function BlogReview() {
                         <span className="text-cyan-400">{selectedDraft?.unresolved_issue_count} open issue{selectedDraft?.unresolved_issue_count === 1 ? '' : 's'}</span>
                       )}
                     </div>
+                    {selectedVendorName && (
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                        <Link
+                          to={blogVendorWorkspacePath(statusFilter, selectedDraft?.id ?? selectedDraftId, selectedVendorName)}
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                        >
+                          Vendor workspace
+                        </Link>
+                        <Link
+                          to={blogEvidencePath(statusFilter, selectedDraft?.id ?? selectedDraftId, selectedVendorName)}
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                        >
+                          Evidence
+                        </Link>
+                        <Link
+                          to={blogReportsPath(statusFilter, selectedDraft?.id ?? selectedDraftId, selectedVendorName)}
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                        >
+                          Reports
+                        </Link>
+                        <Link
+                          to={blogOpportunitiesPath(statusFilter, selectedDraft?.id ?? selectedDraftId, selectedVendorName)}
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                        >
+                          Opportunities
+                        </Link>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
               <button
-                onClick={() => setSelectedDraft(null)}
+                onClick={closeDraft}
                 className="ml-4 text-slate-400 hover:text-white"
               >
                 <X className="h-5 w-5" />

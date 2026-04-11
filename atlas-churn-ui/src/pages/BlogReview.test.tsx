@@ -59,6 +59,7 @@ const draftDetail = {
     body: 'Get the full report before renewal.',
     button_text: 'Book briefing',
     report_type: 'migration_guide',
+    vendor_filter: 'Shopify',
   },
 }
 
@@ -114,5 +115,45 @@ describe('BlogReview preview mode', () => {
     expect(screen.getAllByText('Stored CTA Payload').length).toBeGreaterThan(0)
     expect(screen.getAllByText('See the full migration brief').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Book briefing').length).toBeGreaterThan(0)
+  })
+
+  it('hydrates the URL state and exposes vendor workflow shortcuts for the selected draft', async () => {
+    api.fetchBlogDrafts.mockResolvedValue([{ ...draftSummary, status: 'published' }])
+    api.fetchBlogDraft.mockResolvedValue({ ...draftDetail, status: 'published' })
+
+    render(
+      <MemoryRouter initialEntries={['/blog-review?status=published&draft=draft-1']}>
+        <BlogReview />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(api.fetchBlogDrafts).toHaveBeenCalledWith('published')
+    })
+    await waitFor(() => {
+      expect(api.fetchBlogDraft).toHaveBeenCalledWith('draft-1')
+    })
+
+    expect((await screen.findAllByText('Reviewer Notes')).length).toBeGreaterThan(0)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Vendor workspace' })
+        .some((link) => link.getAttribute('href') === '/vendors/Shopify?back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Evidence' })
+        .some((link) => link.getAttribute('href') === '/evidence?vendor=Shopify&tab=witnesses&back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Reports' })
+        .some((link) => link.getAttribute('href') === '/reports?vendor_filter=Shopify&back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1'),
+    ).toBe(true)
+    expect(
+      screen
+        .getAllByRole('link', { name: 'Opportunities' })
+        .some((link) => link.getAttribute('href') === '/opportunities?vendor=Shopify&back_to=%2Fblog-review%3Fstatus%3Dpublished%26draft%3Ddraft-1'),
+    ).toBe(true)
   })
 })
