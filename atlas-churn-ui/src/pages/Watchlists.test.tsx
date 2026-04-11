@@ -392,10 +392,21 @@ describe('Watchlists', () => {
     await user.click(copyButton)
 
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/reviews/review-1?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor`,
-      )
+      expect(clipboardSpy).toHaveBeenCalled()
     })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/reviews/review-1')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(backToUrl.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(backToUrl.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(backToUrl.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(backToUrl.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(backToUrl.searchParams.get('account_track_mode')).toBe('competitor')
     expect(await screen.findByText('Copied review link for Acme Corp')).toBeInTheDocument()
   })
 
@@ -1019,6 +1030,34 @@ describe('Watchlists', () => {
     )
   })
 
+  it('copies a focused account review link directly from a vendor movement row', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy vendor account review link for Zendesk' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/watchlists')
+    expect(copiedUrl.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(copiedUrl.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(copiedUrl.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(copiedUrl.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(copiedUrl.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(copiedUrl.searchParams.get('account_track_mode')).toBe('competitor')
+    expect(await screen.findByText('Copied account review link for Zendesk')).toBeInTheDocument()
+  })
+
   it('preserves the selected source filter on vendor evidence shortcuts', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit']}>
@@ -1051,10 +1090,20 @@ describe('Watchlists', () => {
     await user.click(copyButton)
 
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Avendor%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fsource%3Dreddit`,
-      )
+      expect(clipboardSpy).toHaveBeenCalled()
     })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/evidence')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
+    expect(copiedUrl.searchParams.get('tab')).toBe('witnesses')
+    expect(copiedUrl.searchParams.get('witness_id')).toBe('witness:vendor:zendesk:1')
+    expect(copiedUrl.searchParams.get('source')).toBe('reddit')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('source')).toBe('reddit')
     expect(await screen.findByText('Copied witness link for Zendesk')).toBeInTheDocument()
   })
 
@@ -1243,10 +1292,17 @@ describe('Watchlists', () => {
     await user.click(copyButton)
 
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor`,
-      )
+      expect(clipboardSpy).toHaveBeenCalled()
     })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/watchlists')
+    expect(copiedUrl.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(copiedUrl.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(copiedUrl.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(copiedUrl.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(copiedUrl.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(copiedUrl.searchParams.get('account_track_mode')).toBe('competitor')
     expect(await screen.findByText('Copied account link for Acme Corp')).toBeInTheDocument()
   })
 
