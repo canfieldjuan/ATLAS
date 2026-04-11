@@ -1883,6 +1883,8 @@ export default function Watchlists() {
         const genKey = `${row.company}::${row.vendor}`
         const isGenerating = generatingCampaignFor === genKey
         const primaryReviewId = row.source_reviews[0]?.id || ''
+        const primaryWitnessId = row.reasoning_reference_ids?.witness_ids?.[0] || ''
+        const primaryWitnessSource = selectedSourceFilter || row.source_reviews[0]?.source || null
         return (
           <div className="flex items-center gap-1">
             <button
@@ -1903,6 +1905,17 @@ export default function Watchlists() {
                 title="Open in Evidence Explorer"
               >
                 <Fingerprint className="inline h-3 w-3" />
+              </Link>
+            )}
+            {primaryWitnessId && (
+              <Link
+                to={watchlistAccountEvidenceExplorerPath(searchParams, row, primaryWitnessId, primaryWitnessSource)}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={`Open primary witness for ${row.vendor}`}
+                className="rounded-md bg-fuchsia-500/10 px-2 py-1 text-xs font-medium text-fuchsia-300 hover:bg-fuchsia-500/20"
+                title="Open witness drilldown"
+              >
+                Witness
               </Link>
             )}
             {primaryReviewId && (
