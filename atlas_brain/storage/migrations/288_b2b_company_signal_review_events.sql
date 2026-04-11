@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS b2b_company_signal_review_events (
     vendor_name TEXT NOT NULL,
     reviewer TEXT NOT NULL,
     review_notes TEXT,
+    review_priority_band TEXT,
+    review_priority_reason TEXT,
     company_signal_id UUID REFERENCES b2b_company_signals(id) ON DELETE SET NULL,
     company_signal_action TEXT NOT NULL CHECK (company_signal_action IN ('created', 'updated', 'deleted', 'none')),
     rebuild_requested BOOLEAN NOT NULL DEFAULT FALSE,

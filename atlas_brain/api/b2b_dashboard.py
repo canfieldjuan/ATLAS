@@ -14,7 +14,7 @@ import logging
 import re
 import uuid as _uuid
 from datetime import date, datetime, timezone
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -314,6 +314,7 @@ async def _fetch_company_signal_candidate_or_404(
                product_category,
                source,
                urgency_score,
+               signal_evidence_present,
                pain_category,
                buyer_role,
                decision_maker,
@@ -321,6 +322,8 @@ async def _fetch_company_signal_candidate_or_404(
                contract_end,
                buying_stage,
                confidence_score,
+               canonical_gap_reason,
+               candidate_bucket,
                review_status
         FROM b2b_company_signal_candidates
         WHERE id = $1
@@ -360,8 +363,14 @@ async def _fetch_company_signal_candidate_group_or_404(
                vendor_name,
                product_category,
                review_count,
+               distinct_source_count,
+               decision_maker_count,
+               signal_evidence_count,
+               canonical_ready_review_count,
                max_urgency_score,
                corroborated_confidence_score,
+               canonical_gap_reason,
+               candidate_bucket,
                representative_review_id,
                representative_source,
                representative_pain_category,
@@ -582,6 +591,46 @@ def _normalize_company_signal_review_rebuild(
     }
 
 
+def _company_signal_candidate_review_priority_values(row: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    if row.get("candidate_bucket") == "canonical_ready":
+        return "promote_now", "canonical_ready"
+    if bool(row.get("signal_evidence_present")) and bool(row.get("decision_maker")):
+        return "high", "has_signal_evidence_and_decision_maker"
+    if bool(row.get("signal_evidence_present")):
+        return "medium", "has_signal_evidence"
+    if bool(row.get("decision_maker")):
+        return "medium", "has_decision_maker"
+    return "low", str(row.get("canonical_gap_reason") or "low_signal")
+
+
+def _company_signal_group_review_priority_values(row: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    if row.get("candidate_bucket") == "canonical_ready":
+        return "promote_now", "canonical_ready"
+    if _safe_int(row.get("canonical_ready_review_count"), 0) > 0:
+        return "high", "has_canonical_ready_member"
+    if _safe_int(row.get("signal_evidence_count"), 0) > 0 and _safe_int(row.get("decision_maker_count"), 0) > 0:
+        return "high", "has_signal_evidence_and_decision_maker"
+    if _safe_int(row.get("signal_evidence_count"), 0) > 0:
+        return "medium", "has_signal_evidence"
+    if _safe_int(row.get("decision_maker_count"), 0) > 0:
+        return "medium", "has_decision_maker"
+    if _safe_int(row.get("distinct_source_count"), 0) > 1:
+        return "medium", "cross_source_corroboration"
+    return "low", str(row.get("canonical_gap_reason") or "low_signal")
+
+
+def _company_signal_review_priority_snapshot(
+    row: Mapping[str, Any] | None,
+    *,
+    scope: str,
+) -> tuple[str | None, str | None]:
+    if not row:
+        return None, None
+    if scope == "candidate":
+        return _company_signal_candidate_review_priority_values(row)
+    return _company_signal_group_review_priority_values(row)
+
+
 async def _record_company_signal_review_event(
     pool,
     *,
@@ -596,6 +645,8 @@ async def _record_company_signal_review_event(
     rebuild: dict[str, Any] | None,
     candidate_id: str | None = None,
     candidate_group_id: str | None = None,
+    review_priority_band: str | None = None,
+    review_priority_reason: str | None = None,
     company_signal_id: str | None = None,
     company_signal_action: str = "none",
 ) -> None:
@@ -616,6 +667,8 @@ async def _record_company_signal_review_event(
                 vendor_name,
                 reviewer,
                 review_notes,
+                review_priority_band,
+                review_priority_reason,
                 company_signal_id,
                 company_signal_action,
                 rebuild_requested,
@@ -635,15 +688,16 @@ async def _record_company_signal_review_event(
                 $7,
                 $8,
                 $9,
-                $10::uuid,
+                $10,
                 $11,
-                $12,
+                $12::uuid,
                 $13,
                 $14,
-                $15::date,
-                $16,
+                $15,
+                $16::date,
                 $17,
-                $18
+                $18,
+                $19
             )
             """,
             review_batch_id,
@@ -655,6 +709,8 @@ async def _record_company_signal_review_event(
             vendor_name,
             reviewer,
             review_notes,
+            review_priority_band,
+            review_priority_reason,
             company_signal_id,
             company_signal_action,
             outcome["rebuild_requested"],
@@ -2860,6 +2916,10 @@ async def approve_company_signal_candidate(
     candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
+    review_priority_band, review_priority_reason = _company_signal_review_priority_snapshot(
+        candidate,
+        scope="candidate",
+    )
 
     canonical_row = await _upsert_company_signal(
         pool,
@@ -2931,6 +2991,8 @@ async def approve_company_signal_candidate(
         review_notes=body.notes,
         rebuild_requested=body.trigger_rebuild,
         rebuild=rebuild,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
         company_signal_id=str(canonical_row["id"]) if canonical_row and canonical_row.get("id") else None,
         company_signal_action=(
             canonical_row.get("company_signal_action")
@@ -2972,6 +3034,10 @@ async def suppress_company_signal_candidate(
     candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
+    review_priority_band, review_priority_reason = _company_signal_review_priority_snapshot(
+        candidate,
+        scope="candidate",
+    )
     deleted_signal = await _delete_company_signal(
         pool,
         company_name=candidate["company_name"],
@@ -3025,6 +3091,8 @@ async def suppress_company_signal_candidate(
         review_notes=body.notes,
         rebuild_requested=body.trigger_rebuild,
         rebuild=rebuild,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
         company_signal_id=(
             str(deleted_signal["id"])
             if deleted_signal and deleted_signal.get("id")
@@ -3071,6 +3139,10 @@ async def approve_company_signal_candidate_group(
     group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
+    review_priority_band, review_priority_reason = _company_signal_review_priority_snapshot(
+        group,
+        scope="group",
+    )
 
     canonical_row = await _upsert_company_signal(
         pool,
@@ -3128,6 +3200,8 @@ async def approve_company_signal_candidate_group(
         review_notes=body.notes,
         rebuild_requested=body.trigger_rebuild,
         rebuild=rebuild,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
         company_signal_id=str(canonical_row["id"]) if canonical_row and canonical_row.get("id") else None,
         company_signal_action=(
             canonical_row.get("company_signal_action")
@@ -3170,6 +3244,10 @@ async def suppress_company_signal_candidate_group(
     group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
     reviewer = _candidate_reviewer(user)
     review_batch_id = str(_uuid.uuid4())
+    review_priority_band, review_priority_reason = _company_signal_review_priority_snapshot(
+        group,
+        scope="group",
+    )
     deleted_signal = await _delete_company_signal(
         pool,
         company_name=group["company_name"],
@@ -3210,6 +3288,8 @@ async def suppress_company_signal_candidate_group(
         review_notes=body.notes,
         rebuild_requested=body.trigger_rebuild,
         rebuild=rebuild,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
         company_signal_id=(
             str(deleted_signal["id"])
             if deleted_signal and deleted_signal.get("id")
@@ -3317,6 +3397,8 @@ async def approve_company_signal_candidate_groups(
                     "company_name": canonical_row["company_name"] if canonical_row else group["company_name"],
                     "vendor_name": canonical_row["vendor_name"] if canonical_row else group["vendor_name"],
                     "review_count": group.get("review_count") or 0,
+                    "review_priority_band": _company_signal_group_review_priority_values(group)[0],
+                    "review_priority_reason": _company_signal_group_review_priority_values(group)[1],
                 }
             )
 
@@ -3344,6 +3426,8 @@ async def approve_company_signal_candidate_groups(
             review_notes=body.notes,
             rebuild_requested=body.trigger_rebuild,
             rebuild=rebuild,
+            review_priority_band=result.get("review_priority_band"),
+            review_priority_reason=result.get("review_priority_reason"),
             company_signal_id=result.get("company_signal_id"),
             company_signal_action=result.get("company_signal_action") or "none",
         )
@@ -3419,6 +3503,8 @@ async def suppress_company_signal_candidate_groups(
                         if deleted_signal
                         else "none"
                     ),
+                    "review_priority_band": _company_signal_group_review_priority_values(group)[0],
+                    "review_priority_reason": _company_signal_group_review_priority_values(group)[1],
                 }
             )
 
@@ -3446,6 +3532,8 @@ async def suppress_company_signal_candidate_groups(
             review_notes=body.notes,
             rebuild_requested=body.trigger_rebuild,
             rebuild=rebuild,
+            review_priority_band=result.get("review_priority_band"),
+            review_priority_reason=result.get("review_priority_reason"),
             company_signal_id=result.get("retracted_company_signal_id"),
             company_signal_action=result.get("company_signal_action") or "none",
         )

@@ -12168,6 +12168,7 @@ async def read_company_signal_review_impact_summary(
                 "rebuild_total_accounts": 0,
             },
             "scopes": [],
+            "priority_bands": [],
             "top_vendors": [],
         }
 
@@ -12223,6 +12224,61 @@ async def read_company_signal_review_impact_summary(
         FROM filtered
         GROUP BY 1
         ORDER BY action_count DESC, review_scope ASC
+        """,
+        *params,
+    )
+    priority_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        rebuild_rows AS (
+            SELECT DISTINCT ON (review_batch_id, vendor_name)
+                   review_batch_id,
+                   vendor_name,
+                   COALESCE(review_priority_band, 'unknown') AS review_priority_band,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY review_batch_id, vendor_name, created_at DESC
+        ),
+        band_rebuilds AS (
+            SELECT review_priority_band,
+                   COUNT(*) FILTER (WHERE rebuild_requested)::int AS rebuild_requests,
+                   COUNT(*) FILTER (WHERE rebuild_triggered)::int AS rebuild_triggered,
+                   COALESCE(SUM(rebuild_persisted_count), 0)::int AS rebuild_persisted_reports,
+                   COALESCE(SUM(rebuild_total_accounts), 0)::int AS rebuild_total_accounts
+            FROM rebuild_rows
+            GROUP BY 1
+        )
+        SELECT COALESCE(f.review_priority_band, 'unknown') AS review_priority_band,
+               COUNT(*)::int AS action_count,
+               COUNT(*) FILTER (WHERE f.review_action = 'approved')::int AS approvals,
+               COUNT(*) FILTER (WHERE f.review_action = 'suppressed')::int AS suppressions,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'created')::int AS company_signal_creations,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'updated')::int AS company_signal_updates,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'deleted')::int AS company_signal_deletions,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'none')::int AS company_signal_noops,
+               COALESCE(br.rebuild_requests, 0)::int AS rebuild_requests,
+               COALESCE(br.rebuild_triggered, 0)::int AS rebuild_triggered,
+               COALESCE(br.rebuild_persisted_reports, 0)::int AS rebuild_persisted_reports,
+               COALESCE(br.rebuild_total_accounts, 0)::int AS rebuild_total_accounts
+        FROM filtered f
+        LEFT JOIN band_rebuilds br
+          ON br.review_priority_band = COALESCE(f.review_priority_band, 'unknown')
+        GROUP BY 1, br.rebuild_requests, br.rebuild_triggered, br.rebuild_persisted_reports, br.rebuild_total_accounts
+        ORDER BY CASE COALESCE(f.review_priority_band, 'unknown')
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     WHEN 'low' THEN 3
+                     ELSE 4
+                 END,
+                 action_count DESC
         """,
         *params,
     )
@@ -12288,6 +12344,7 @@ async def read_company_signal_review_impact_summary(
     return {
         "totals": dict(totals or {}),
         "scopes": [dict(row) for row in scope_rows],
+        "priority_bands": [dict(row) for row in priority_rows],
         "top_vendors": [dict(row) for row in vendor_rows],
     }
 

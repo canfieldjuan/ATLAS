@@ -330,6 +330,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
     returned = {
         "totals": {"total_actions": 4, "approvals": 3},
         "scopes": [{"review_scope": "group", "action_count": 4}],
+        "priority_bands": [{"review_priority_band": "high", "action_count": 3}],
         "top_vendors": [{"vendor_name": "Zendesk", "action_count": 4}],
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
@@ -406,6 +407,8 @@ async def test_record_company_signal_review_event_persists_rebuild_outcome():
             "total_accounts": 4,
             "vendors": 1,
         },
+        review_priority_band="high",
+        review_priority_reason="has_signal_evidence_and_decision_maker",
         company_signal_id="22222222-2222-2222-2222-222222222222",
         company_signal_action="created",
     )
@@ -417,13 +420,15 @@ async def test_record_company_signal_review_event_persists_rebuild_outcome():
     assert args[1] == "group"
     assert args[2] == "approved"
     assert args[4] == "33333333-3333-3333-3333-333333333333"
-    assert args[10] == "created"
-    assert args[11] is True
-    assert args[12] is True
-    assert args[14] == "2026-04-11"
-    assert args[15] == 1
-    assert args[16] == 4
+    assert args[9] == "high"
+    assert args[10] == "has_signal_evidence_and_decision_maker"
+    assert args[12] == "created"
+    assert args[13] is True
+    assert args[14] is True
+    assert args[16] == "2026-04-11"
     assert args[17] == 1
+    assert args[18] == 4
+    assert args[19] == 1
 
 
 @pytest.mark.asyncio

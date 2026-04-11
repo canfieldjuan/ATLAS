@@ -518,6 +518,22 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
             ],
             [
                 {
+                    "review_priority_band": "promote_now",
+                    "action_count": 3,
+                    "approvals": 3,
+                    "suppressions": 0,
+                    "company_signal_creations": 2,
+                    "company_signal_updates": 1,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 0,
+                    "rebuild_requests": 2,
+                    "rebuild_triggered": 2,
+                    "rebuild_persisted_reports": 2,
+                    "rebuild_total_accounts": 9,
+                }
+            ],
+            [
+                {
                     "vendor_name": "Zendesk",
                     "action_count": 5,
                     "approvals": 3,
@@ -544,14 +560,18 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
 
     totals_sql = pool.fetchrow.call_args[0][0]
     scopes_sql = pool.fetch.call_args_list[0][0][0]
-    vendors_sql = pool.fetch.call_args_list[1][0][0]
+    priority_sql = pool.fetch.call_args_list[1][0][0]
+    vendors_sql = pool.fetch.call_args_list[2][0][0]
     assert "review_action =" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
     assert "COUNT(DISTINCT review_batch_id)" in totals_sql
     assert "FROM b2b_company_signal_review_events" in totals_sql
     assert "GROUP BY 1" in scopes_sql
+    assert "review_priority_band" in priority_sql
+    assert "band_rebuilds" in priority_sql
     assert "vendor_actions" in vendors_sql
     assert "vendor_rebuilds" in vendors_sql
     assert summary["totals"]["total_actions"] == 6
     assert summary["scopes"][0]["review_scope"] == "bulk_group"
+    assert summary["priority_bands"][0]["review_priority_band"] == "promote_now"
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
