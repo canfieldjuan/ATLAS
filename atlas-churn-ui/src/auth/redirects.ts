@@ -46,9 +46,10 @@ export function buildLoginRedirectPath(target?: string | null, product?: string 
 
 export function buildSignupRedirectPath(target?: string | null, product?: string | null): string {
   const redirectTarget = normalizeRedirectTarget(target)
+  const resolvedProduct = product?.trim() || inferRedirectProduct(redirectTarget)
   const params = new URLSearchParams()
+  params.set('product', resolvedProduct)
   params.set('redirect_to', redirectTarget)
-  params.set('product', product?.trim() || inferRedirectProduct(redirectTarget))
   return `/signup?${params.toString()}`
 }
 

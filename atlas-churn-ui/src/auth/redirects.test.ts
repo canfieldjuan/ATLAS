@@ -32,7 +32,7 @@ describe('auth redirects', () => {
       '/login?redirect_to=%2Freports%3Fvendor%3DZendesk&product=b2b_retention',
     )
     expect(buildSignupRedirectPath('/reports?vendor=Zendesk')).toBe(
-      '/signup?redirect_to=%2Freports%3Fvendor%3DZendesk&product=b2b_retention',
+      '/signup?product=b2b_retention&redirect_to=%2Freports%3Fvendor%3DZendesk',
     )
   })
 

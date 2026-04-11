@@ -4,25 +4,14 @@ import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import { loadAllPosts } from '../content/blog'
 import type { BlogPost } from '../content/blog'
+import { buildLoginRedirectPath, buildSignupRedirectPath } from '../auth/redirects'
 
 const AtlasRobotScene = React.lazy(() => import('../components/AtlasRobotScene'))
 
-const RETENTION_SIGNUP = `/signup?${new URLSearchParams({
-  product: 'b2b_retention',
-  redirect_to: '/watchlists',
-}).toString()}`
-const CHALLENGER_SIGNUP = `/signup?${new URLSearchParams({
-  product: 'b2b_challenger',
-  redirect_to: '/challengers',
-}).toString()}`
-const RETENTION_LOGIN = `/login?${new URLSearchParams({
-  redirect_to: '/watchlists',
-  product: 'b2b_retention',
-}).toString()}`
-const CHALLENGER_LOGIN = `/login?${new URLSearchParams({
-  redirect_to: '/challengers',
-  product: 'b2b_challenger',
-}).toString()}`
+const RETENTION_SIGNUP = buildSignupRedirectPath('/watchlists', 'b2b_retention')
+const CHALLENGER_SIGNUP = buildSignupRedirectPath('/challengers', 'b2b_challenger')
+const RETENTION_LOGIN = buildLoginRedirectPath('/watchlists', 'b2b_retention')
+const CHALLENGER_LOGIN = buildLoginRedirectPath('/challengers', 'b2b_challenger')
 
 function formatDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {

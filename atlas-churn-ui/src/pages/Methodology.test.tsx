@@ -17,7 +17,7 @@ describe('Methodology', () => {
     )
     expect(screen.getByRole('link', { name: 'Sign in to Watchlists' })).toHaveAttribute(
       'href',
-      '/login?product=b2b_retention&redirect_to=%2Fwatchlists',
+      '/login?redirect_to=%2Fwatchlists&product=b2b_retention',
     )
     expect(screen.getByRole('link', { name: 'Open Challenger Workflow' })).toHaveAttribute(
       'href',
@@ -25,7 +25,7 @@ describe('Methodology', () => {
     )
     expect(screen.getByRole('link', { name: 'Sign in to Challengers' })).toHaveAttribute(
       'href',
-      '/login?product=b2b_challenger&redirect_to=%2Fchallengers',
+      '/login?redirect_to=%2Fchallengers&product=b2b_challenger',
     )
     expect(screen.getByRole('link', { name: 'Browse Blog Analysis' })).toHaveAttribute('href', '/blog')
   })

@@ -8,6 +8,7 @@ import {
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import { useAuth } from '../auth/AuthContext'
+import { buildLoginRedirectPath, buildSignupRedirectPath } from '../auth/redirects'
 import { StructuredReportData } from '../components/report-renderers/StructuredReportData'
 import { isSpecializedReportType } from '../lib/reportConstants'
 import { SpecializedReportData } from '../components/report-renderers/SpecializedReportData'
@@ -18,22 +19,10 @@ const GATE_URL = `${API_BASE}/api/v1/b2b/briefings/gate`
 const REPORT_DATA_URL = `${API_BASE}/api/v1/b2b/briefings/report-data`
 const CHECKOUT_URL = `${API_BASE}/api/v1/b2b/briefings/checkout`
 const CACHE_BUSTER_PARAM = '_ts'
-const WATCHLISTS_LOGIN_URL = `/login?${new URLSearchParams({
-  redirect_to: '/watchlists',
-  product: 'b2b_retention',
-}).toString()}`
-const CHALLENGERS_LOGIN_URL = `/login?${new URLSearchParams({
-  redirect_to: '/challengers',
-  product: 'b2b_challenger',
-}).toString()}`
-const WATCHLISTS_SIGNUP_URL = `/signup?${new URLSearchParams({
-  product: 'b2b_retention',
-  redirect_to: '/watchlists',
-}).toString()}`
-const CHALLENGERS_SIGNUP_URL = `/signup?${new URLSearchParams({
-  product: 'b2b_challenger',
-  redirect_to: '/challengers',
-}).toString()}`
+const WATCHLISTS_LOGIN_URL = buildLoginRedirectPath('/watchlists', 'b2b_retention')
+const CHALLENGERS_LOGIN_URL = buildLoginRedirectPath('/challengers', 'b2b_challenger')
+const WATCHLISTS_SIGNUP_URL = buildSignupRedirectPath('/watchlists', 'b2b_retention')
+const CHALLENGERS_SIGNUP_URL = buildSignupRedirectPath('/challengers', 'b2b_challenger')
 
 function addFreshParam(url: string, params: Record<string, string>): string {
   const next = new URL(url, window.location.origin)

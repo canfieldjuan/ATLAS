@@ -26,7 +26,7 @@ describe('PublicLayout', () => {
     )
     expect(screen.getByRole('link', { name: 'Start Free Trial' })).toHaveAttribute(
       'href',
-      '/signup?redirect_to=%2Fwatchlists&product=b2b_retention',
+      '/signup?product=b2b_retention&redirect_to=%2Fwatchlists',
     )
   })
 
