@@ -371,6 +371,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             "pending_groups": 8,
             "actionable_pending_groups": 6,
             "actionable_pending_reviews": 17,
+            "blocked_pending_groups": 2,
+            "blocked_pending_reviews": 4,
             "approved_groups": 3,
             "suppressed_groups": 1,
             "canonical_ready_groups": 2,
@@ -422,6 +424,25 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
                     "review_priority_reason": "has_signal_evidence_and_decision_maker",
                     "actionable_group_count": 2,
                     "actionable_review_count": 5,
+                }
+            ],
+            [
+                {
+                    "vendor_name": "Copper",
+                    "blocked_group_count": 2,
+                    "blocked_review_count": 4,
+                    "low_confidence_group_count": 2,
+                    "below_threshold_group_count": 0,
+                    "missing_signal_evidence_group_count": 0,
+                }
+            ],
+            [
+                {
+                    "vendor_name": "Copper",
+                    "canonical_gap_reason": "low_confidence_low_trust_source",
+                    "review_priority_reason": "low_confidence_low_trust_source",
+                    "blocked_group_count": 2,
+                    "blocked_review_count": 4,
                 }
             ],
             [
@@ -565,16 +586,18 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     vendor_sql = pool.fetch.call_args_list[1][0][0]
     actionable_vendor_sql = pool.fetch.call_args_list[2][0][0]
     actionable_vendor_reason_sql = pool.fetch.call_args_list[3][0][0]
-    confidence_sql = pool.fetch.call_args_list[4][0][0]
-    priority_sql = pool.fetch.call_args_list[5][0][0]
-    pending_band_sql = pool.fetch.call_args_list[6][0][0]
-    pending_reason_sql = pool.fetch.call_args_list[7][0][0]
-    pending_sla_band_sql = pool.fetch.call_args_list[8][0][0]
-    pending_sla_reason_sql = pool.fetch.call_args_list[9][0][0]
-    oldest_pending_sql = pool.fetch.call_args_list[10][0][0]
-    pending_sla_band_args = pool.fetch.call_args_list[8][0][1:]
-    pending_sla_reason_args = pool.fetch.call_args_list[9][0][1:]
-    oldest_pending_args = pool.fetch.call_args_list[10][0][1:]
+    blocked_vendor_sql = pool.fetch.call_args_list[4][0][0]
+    blocked_vendor_reason_sql = pool.fetch.call_args_list[5][0][0]
+    confidence_sql = pool.fetch.call_args_list[6][0][0]
+    priority_sql = pool.fetch.call_args_list[7][0][0]
+    pending_band_sql = pool.fetch.call_args_list[8][0][0]
+    pending_reason_sql = pool.fetch.call_args_list[9][0][0]
+    pending_sla_band_sql = pool.fetch.call_args_list[10][0][0]
+    pending_sla_reason_sql = pool.fetch.call_args_list[11][0][0]
+    oldest_pending_sql = pool.fetch.call_args_list[12][0][0]
+    pending_sla_band_args = pool.fetch.call_args_list[10][0][1:]
+    pending_sla_reason_args = pool.fetch.call_args_list[11][0][1:]
+    oldest_pending_args = pool.fetch.call_args_list[12][0][1:]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -596,6 +619,10 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "HAVING COUNT(*) FILTER" in actionable_vendor_sql
     assert "review_priority_reason" in actionable_vendor_reason_sql
     assert "GROUP BY 1, 2, 3" in actionable_vendor_reason_sql
+    assert "blocked_group_count" in blocked_vendor_sql
+    assert "= 'low'" in blocked_vendor_sql
+    assert "canonical_gap_reason" in blocked_vendor_reason_sql
+    assert "review_priority_reason" in blocked_vendor_reason_sql
     assert "GROUP BY 1" in confidence_sql
     assert "review_priority_band" in priority_sql
     assert "review_priority_reason" in priority_sql
@@ -621,6 +648,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["totals"]["avg_pending_age_days"] == 2.75
     assert summary["totals"]["actionable_pending_groups"] == 6
     assert summary["totals"]["actionable_pending_reviews"] == 17
+    assert summary["totals"]["blocked_pending_groups"] == 2
+    assert summary["totals"]["blocked_pending_reviews"] == 4
     assert summary["totals"]["overdue_pending_groups"] == 3
     assert summary["totals"]["overdue_pending_reviews"] == 9
     assert summary["gap_reasons"][0]["gap_reason"] == "low_confidence_low_trust_source"
@@ -628,6 +657,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["actionable_top_vendors"][0]["vendor_name"] == "Zendesk"
     assert summary["actionable_top_vendors"][0]["actionable_group_count"] == 3
     assert summary["actionable_top_vendor_reasons"][0]["review_priority_reason"] == "has_signal_evidence_and_decision_maker"
+    assert summary["blocked_top_vendors"][0]["vendor_name"] == "Copper"
+    assert summary["blocked_top_vendor_reasons"][0]["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"
