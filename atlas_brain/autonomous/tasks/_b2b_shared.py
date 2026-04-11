@@ -640,6 +640,22 @@ def _company_signal_queue_sla_days() -> dict[str, float]:
     }
 
 
+def _company_signal_queue_near_threshold_windows() -> dict[str, float]:
+    """Return tunable windows for blocked groups that are close to actionable thresholds."""
+
+    def _read(name: str, default: float, upper: float) -> float:
+        try:
+            value = float(getattr(settings.b2b_churn, name, default))
+        except (TypeError, ValueError):
+            value = default
+        return min(max(0.0, value), upper)
+
+    return {
+        "confidence_gap": round(_read("company_signal_queue_near_confidence_gap_max", 0.1, 1.0), 3),
+        "urgency_gap": round(_read("company_signal_queue_near_urgency_gap_max", 1.0, 10.0), 3),
+    }
+
+
 def _company_signal_candidate_group_pending_age_days_sql(alias: str = "") -> str:
     """Return SQL for grouped candidate queue age in days."""
     p = f"{alias}." if alias else ""
@@ -11682,6 +11698,32 @@ def _company_signal_candidate_group_sla_days_sql(alias: str = "") -> str:
     )
 
 
+def _company_signal_candidate_group_near_threshold_sql(alias: str = "") -> str:
+    """Return SQL for blocked groups that are close to canonical confidence or urgency thresholds."""
+    p = f"{alias}." if alias else ""
+    windows = _company_signal_queue_near_threshold_windows()
+    confidence_floor = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
+    )
+    if confidence_floor is None:
+        confidence_floor = 0.6
+    confidence_min = max(0.0, confidence_floor - windows["confidence_gap"])
+    try:
+        urgency_threshold = float(getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0))
+    except (TypeError, ValueError):
+        urgency_threshold = 7.0
+    urgency_min = max(0.0, urgency_threshold - windows["urgency_gap"])
+    return (
+        "("
+        f"({p}canonical_gap_reason = 'low_confidence_low_trust_source' "
+        f"AND COALESCE({p}corroborated_confidence_score, 0) >= {round(confidence_min, 3)}) "
+        "OR "
+        f"({p}canonical_gap_reason = 'below_high_intent_threshold' "
+        f"AND COALESCE({p}max_urgency_score, 0) >= {round(urgency_min, 3)})"
+        ")"
+    )
+
+
 def _company_signal_candidate_group_priority_values(row: Mapping[str, Any]) -> tuple[str, str]:
     if row.get("candidate_bucket") == "canonical_ready":
         return "promote_now", "canonical_ready"
@@ -11914,6 +11956,8 @@ async def read_company_signal_candidate_group_summary(
                 "actionable_pending_reviews": 0,
                 "blocked_pending_groups": 0,
                 "blocked_pending_reviews": 0,
+                "near_threshold_blocked_groups": 0,
+                "near_threshold_blocked_reviews": 0,
                 "approved_groups": 0,
                 "suppressed_groups": 0,
                 "canonical_ready_groups": 0,
@@ -11933,6 +11977,8 @@ async def read_company_signal_candidate_group_summary(
             "actionable_top_vendor_reasons": [],
             "blocked_top_vendors": [],
             "blocked_top_vendor_reasons": [],
+            "near_threshold_top_vendors": [],
+            "near_threshold_gap_reasons": [],
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -11948,6 +11994,7 @@ async def read_company_signal_candidate_group_summary(
     pending_priority_band_sql = _company_signal_candidate_group_priority_band_sql()
     pending_priority_reason_sql = _company_signal_candidate_group_priority_reason_sql()
     pending_sla_days_sql = _company_signal_candidate_group_sla_days_sql()
+    near_threshold_sql = _company_signal_candidate_group_near_threshold_sql()
     totals = await pool.fetchrow(
         f"""
         WITH filtered AS (
@@ -11981,6 +12028,19 @@ async def read_company_signal_candidate_group_summary(
                    ),
                    0
                )::int AS blocked_pending_reviews,
+               COUNT(*) FILTER (
+                   WHERE review_status = 'pending'
+                     AND {pending_priority_band_sql} = 'low'
+                     AND {near_threshold_sql}
+               )::int AS near_threshold_blocked_groups,
+               COALESCE(
+                   SUM(review_count) FILTER (
+                       WHERE review_status = 'pending'
+                         AND {pending_priority_band_sql} = 'low'
+                         AND {near_threshold_sql}
+                   ),
+                   0
+               )::int AS near_threshold_blocked_reviews,
                COUNT(*) FILTER (WHERE review_status = 'approved')::int AS approved_groups,
                COUNT(*) FILTER (WHERE review_status = 'suppressed')::int AS suppressed_groups,
                COUNT(*) FILTER (WHERE candidate_bucket = 'canonical_ready')::int AS canonical_ready_groups,
@@ -12201,6 +12261,65 @@ async def read_company_signal_candidate_group_summary(
         ORDER BY blocked_group_count DESC,
                  blocked_review_count DESC,
                  vendor_name ASC,
+                 canonical_gap_reason ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    near_threshold_vendor_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT vendor_name,
+                   review_count,
+                   COALESCE(canonical_gap_reason, 'low_signal') AS canonical_gap_reason
+            FROM filtered
+            WHERE review_status = 'pending'
+              AND {pending_priority_band_sql} = 'low'
+              AND {near_threshold_sql}
+        )
+        SELECT vendor_name,
+               COUNT(*)::int AS near_threshold_group_count,
+               COALESCE(SUM(review_count), 0)::int AS near_threshold_review_count,
+               COUNT(*) FILTER (WHERE canonical_gap_reason = 'low_confidence_low_trust_source')::int AS low_confidence_near_threshold_groups,
+               COUNT(*) FILTER (WHERE canonical_gap_reason = 'below_high_intent_threshold')::int AS below_threshold_near_threshold_groups
+        FROM pending
+        GROUP BY 1
+        ORDER BY near_threshold_group_count DESC,
+                 near_threshold_review_count DESC,
+                 vendor_name ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    near_threshold_reason_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT review_count,
+                   COALESCE(canonical_gap_reason, 'low_signal') AS canonical_gap_reason
+            FROM filtered
+            WHERE review_status = 'pending'
+              AND {pending_priority_band_sql} = 'low'
+              AND {near_threshold_sql}
+        )
+        SELECT canonical_gap_reason,
+               COUNT(*)::int AS near_threshold_group_count,
+               COALESCE(SUM(review_count), 0)::int AS near_threshold_review_count
+        FROM pending
+        GROUP BY 1
+        ORDER BY near_threshold_group_count DESC,
+                 near_threshold_review_count DESC,
                  canonical_gap_reason ASC
         LIMIT ${top_n_param}
         """,
@@ -12464,6 +12583,8 @@ async def read_company_signal_candidate_group_summary(
         "actionable_top_vendor_reasons": [dict(row) for row in actionable_vendor_reason_rows],
         "blocked_top_vendors": [dict(row) for row in blocked_vendor_rows],
         "blocked_top_vendor_reasons": [dict(row) for row in blocked_vendor_reason_rows],
+        "near_threshold_top_vendors": [dict(row) for row in near_threshold_vendor_rows],
+        "near_threshold_gap_reasons": [dict(row) for row in near_threshold_reason_rows],
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],

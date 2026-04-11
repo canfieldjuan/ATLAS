@@ -3514,6 +3514,18 @@ class B2BChurnConfig(BaseSettings):
         ge=0.0,
         description="Target queue age in days for low-priority company-signal candidate groups before they count as overdue",
     )
+    company_signal_queue_near_confidence_gap_max: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Max confidence gap for low-trust blocked company-signal groups to count as near-threshold and worth upstream attention",
+    )
+    company_signal_queue_near_urgency_gap_max: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=10.0,
+        description="Max urgency gap for below-threshold company-signal groups to count as near-threshold and worth upstream attention",
+    )
     company_signal_group_per_extra_review_boost: float = Field(
         default=0.1,
         ge=0.0,
