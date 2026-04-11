@@ -37,6 +37,7 @@ interface AccountMovementDrawerProps {
   onViewReview?: (reviewId: string) => void
   onCopyReviewLink?: (reviewId: string) => void
   onCopyLink?: () => void
+  onCopyEvidenceLink?: () => void
   evidenceExplorerUrl?: string | null
   generating?: boolean
 }
@@ -90,6 +91,7 @@ export default function AccountMovementDrawer({
   onViewReview,
   onCopyReviewLink,
   onCopyLink,
+  onCopyEvidenceLink,
   evidenceExplorerUrl,
   generating,
 }: AccountMovementDrawerProps) {
@@ -183,6 +185,15 @@ export default function AccountMovementDrawer({
                 <Fingerprint className="h-3.5 w-3.5" />
                 Evidence Explorer
               </Link>
+            )}
+            {evidenceExplorerUrl && onCopyEvidenceLink && (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={onCopyEvidenceLink}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy evidence
+              </button>
             )}
             <button
               className="inline-flex items-center gap-1 rounded-md bg-cyan-500/10 px-2.5 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
