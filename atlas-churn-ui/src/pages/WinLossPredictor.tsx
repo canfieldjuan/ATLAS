@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Search, Target, TrendingUp, TrendingDown, Shield, Quote, AlertTriangle, ArrowRight, Loader2, ShieldAlert, CheckCircle2, XCircle, Lightbulb, Clock, Zap, Copy, Download, Check } from 'lucide-react'
 import { predictWinLoss, searchAvailableVendors, fetchRecentPredictions, fetchPredictionById, compareWinLoss, downloadPredictionCsv } from '../api/client'
 import type { WinLossPrediction, WinLossFactor, WinLossDataGate, RecentPrediction, WinLossCompareResponse } from '../api/client'
@@ -180,20 +181,66 @@ function FactorBar({ factor }: { factor: WinLossFactor }) {
   )
 }
 
+function buildPredictorSearchParams({
+  vendor,
+  vendorB,
+  companySize,
+  industry,
+  compareMode,
+}: {
+  vendor: string
+  vendorB: string
+  companySize: string
+  industry: string
+  compareMode: boolean
+}) {
+  const next = new URLSearchParams()
+  if (vendor.trim()) next.set('vendor', vendor.trim())
+  if (compareMode) next.set('compare', '1')
+  if (compareMode && vendorB.trim()) next.set('vendor_b', vendorB.trim())
+  if (companySize.trim()) next.set('company_size', companySize.trim())
+  if (industry.trim()) next.set('industry', industry.trim())
+  return next
+}
+
+function buildBackToPath(pathname: string, search: string) {
+  return search ? `${pathname}${search}` : pathname
+}
+
+function buildVendorWorkspacePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/vendors/${encodeURIComponent(vendorName)}?${next.toString()}`
+}
+
+function buildVendorScopedPath(pathname: string, vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `${pathname}?${next.toString()}`
+}
+
 // -- Main page ---------------------------------------------------------------
 
 export default function WinLossPredictor() {
-  const [vendorInput, setVendorInput] = useState('')
-  const [companySize, setCompanySize] = useState('')
-  const [industry, setIndustry] = useState('')
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialVendor = searchParams.get('vendor')?.trim() || ''
+  const initialVendorB = searchParams.get('vendor_b')?.trim() || ''
+  const initialCompanySize = searchParams.get('company_size')?.trim() || ''
+  const initialIndustry = searchParams.get('industry')?.trim() || ''
+  const initialCompareMode = searchParams.get('compare') === '1'
+  const [vendorInput, setVendorInput] = useState(initialVendor)
+  const [companySize, setCompanySize] = useState(initialCompanySize)
+  const [industry, setIndustry] = useState(initialIndustry)
   const [prediction, setPrediction] = useState<WinLossPrediction | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [recentPredictions, setRecentPredictions] = useState<RecentPrediction[]>([])
-  const [compareMode, setCompareMode] = useState(false)
-  const [vendorBInput, setVendorBInput] = useState('')
+  const [compareMode, setCompareMode] = useState(initialCompareMode)
+  const [vendorBInput, setVendorBInput] = useState(initialVendorB)
   const [comparison, setComparison] = useState<WinLossCompareResponse | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -258,6 +305,17 @@ export default function WinLossPredictor() {
   }, [])
 
   const suggestionsContainerRef = useRef<HTMLDivElement>(null)
+  const predictorBackTo = useMemo(() => {
+    const next = buildPredictorSearchParams({
+      vendor: vendorInput,
+      vendorB: vendorBInput,
+      companySize,
+      industry,
+      compareMode,
+    })
+    const query = next.toString()
+    return query ? `${location.pathname}?${query}` : buildBackToPath(location.pathname, location.search)
+  }, [compareMode, companySize, industry, location.pathname, location.search, vendorBInput, vendorInput])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -269,6 +327,18 @@ export default function WinLossPredictor() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  useEffect(() => {
+    const next = buildPredictorSearchParams({
+      vendor: vendorInput,
+      vendorB: vendorBInput,
+      companySize,
+      industry,
+      compareMode,
+    })
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [compareMode, companySize, industry, searchParams, setSearchParams, vendorBInput, vendorInput])
 
   const handlePredict = async () => {
     if (!vendorInput.trim()) return
@@ -591,6 +661,32 @@ export default function WinLossPredictor() {
                         ? `Calibrated (v${pred.calibration_version ?? '?'})`
                         : 'Default weights'}
                     </p>
+                    <div className="mt-4 flex flex-wrap justify-center gap-2 text-xs">
+                      <Link
+                        to={buildVendorWorkspacePath(pred.vendor_name, predictorBackTo)}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                      >
+                        Vendor workspace
+                      </Link>
+                      <Link
+                        to={buildVendorScopedPath('/evidence', pred.vendor_name, predictorBackTo)}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                      >
+                        Evidence
+                      </Link>
+                      <Link
+                        to={buildVendorScopedPath('/reports', pred.vendor_name, predictorBackTo)}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                      >
+                        Reports
+                      </Link>
+                      <Link
+                        to={buildVendorScopedPath('/opportunities', pred.vendor_name, predictorBackTo)}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                      >
+                        Opportunities
+                      </Link>
+                    </div>
                   </div>
                 )}
               </div>
@@ -702,23 +798,51 @@ export default function WinLossPredictor() {
       {prediction && !prediction.is_gated && (
         <div className="space-y-6">
           {/* Export toolbar */}
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => copyPredictionSummary(prediction)}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
-            >
-              {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-              {copied ? 'Copied' : 'Copy Summary'}
-            </button>
-            {prediction.prediction_id != null && (
+          <div className="flex flex-wrap justify-between gap-3">
+            <div className="flex flex-wrap gap-2 text-sm">
+              <Link
+                to={buildVendorWorkspacePath(prediction.vendor_name, predictorBackTo)}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                Vendor workspace
+              </Link>
+              <Link
+                to={buildVendorScopedPath('/evidence', prediction.vendor_name, predictorBackTo)}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                Evidence
+              </Link>
+              <Link
+                to={buildVendorScopedPath('/reports', prediction.vendor_name, predictorBackTo)}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                Reports
+              </Link>
+              <Link
+                to={buildVendorScopedPath('/opportunities', prediction.vendor_name, predictorBackTo)}
+                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                Opportunities
+              </Link>
+            </div>
+            <div className="flex gap-2">
               <button
-                onClick={() => { if (prediction.prediction_id) downloadPredictionCsv(prediction.prediction_id) }}
+                onClick={() => copyPredictionSummary(prediction)}
                 className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
               >
-                <Download className="w-4 h-4" />
-                Export CSV
+                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
+                {copied ? 'Copied' : 'Copy Summary'}
               </button>
-            )}
+              {prediction.prediction_id != null && (
+                <button
+                  onClick={() => { if (prediction.prediction_id) downloadPredictionCsv(prediction.prediction_id) }}
+                  className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Export CSV
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Top: Gauge + Factors */}

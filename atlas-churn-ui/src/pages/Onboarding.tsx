@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Search, Plus, X, AlertTriangle, Loader2 } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import {
@@ -12,8 +12,10 @@ import {
 
 export default function Onboarding() {
   const { user, refreshUser } = useAuth()
+  const location = useLocation()
   const navigate = useNavigate()
-  const [query, setQuery] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [query, setQuery] = useState(searchParams.get('q')?.trim() || '')
   const [results, setResults] = useState<VendorSearchResult[]>([])
   const [added, setAdded] = useState<string[]>([])
   const [searching, setSearching] = useState(false)
@@ -22,6 +24,9 @@ export default function Onboarding() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const limit = user?.vendor_limit ?? 5
+  const onboardingBackTo = query.trim()
+    ? `${location.pathname}?${new URLSearchParams({ q: query.trim() }).toString()}`
+    : location.pathname
 
   useEffect(() => {
     let cancelled = false
@@ -55,6 +60,13 @@ export default function Onboarding() {
     }
     debounceRef.current = setTimeout(() => doSearch(value), 300)
   }
+
+  useEffect(() => {
+    const next = new URLSearchParams()
+    if (query.trim()) next.set('q', query.trim())
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [query, searchParams, setSearchParams])
 
   async function handleAdd(vendor: string) {
     if (added.length >= limit) return
@@ -164,7 +176,12 @@ export default function Onboarding() {
                   key={vendor}
                   className="inline-flex items-center gap-1.5 px-3 py-1 bg-cyan-900/30 text-cyan-300 text-sm rounded-full border border-cyan-700/50"
                 >
-                  {vendor}
+                  <Link
+                    to={`/vendors/${encodeURIComponent(vendor)}?${new URLSearchParams({ back_to: onboardingBackTo }).toString()}`}
+                    className="hover:text-white"
+                  >
+                    {vendor}
+                  </Link>
                   <button
                     onClick={() => handleRemove(vendor)}
                     disabled={removing === vendor}
@@ -186,7 +203,7 @@ export default function Onboarding() {
           onClick={handleContinue}
           className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium transition-colors"
         >
-          {added.length > 0 ? 'Continue to dashboard' : 'Skip for now'}
+          {added.length > 0 ? 'Continue to watchlists' : 'Skip for now'}
         </button>
       </div>
     </div>
