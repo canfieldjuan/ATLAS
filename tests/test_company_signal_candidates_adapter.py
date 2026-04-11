@@ -369,6 +369,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             "total_reviews": 37,
             "canonical_ready_reviews": 5,
             "pending_groups": 8,
+            "actionable_pending_groups": 6,
+            "actionable_pending_reviews": 17,
             "approved_groups": 3,
             "suppressed_groups": 1,
             "canonical_ready_groups": 2,
@@ -399,6 +401,18 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
                     "review_count": 14,
                     "pending_groups": 4,
                     "canonical_ready_groups": 1,
+                }
+            ],
+            [
+                {
+                    "vendor_name": "Zendesk",
+                    "actionable_group_count": 3,
+                    "actionable_review_count": 9,
+                    "promote_now_group_count": 1,
+                    "high_group_count": 1,
+                    "medium_group_count": 1,
+                    "actionable_signal_evidence_groups": 2,
+                    "actionable_decision_maker_groups": 1,
                 }
             ],
             [
@@ -540,16 +554,17 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     totals_sql = pool.fetchrow.call_args[0][0]
     gap_sql = pool.fetch.call_args_list[0][0][0]
     vendor_sql = pool.fetch.call_args_list[1][0][0]
-    confidence_sql = pool.fetch.call_args_list[2][0][0]
-    priority_sql = pool.fetch.call_args_list[3][0][0]
-    pending_band_sql = pool.fetch.call_args_list[4][0][0]
-    pending_reason_sql = pool.fetch.call_args_list[5][0][0]
-    pending_sla_band_sql = pool.fetch.call_args_list[6][0][0]
-    pending_sla_reason_sql = pool.fetch.call_args_list[7][0][0]
-    oldest_pending_sql = pool.fetch.call_args_list[8][0][0]
-    pending_sla_band_args = pool.fetch.call_args_list[6][0][1:]
-    pending_sla_reason_args = pool.fetch.call_args_list[7][0][1:]
-    oldest_pending_args = pool.fetch.call_args_list[8][0][1:]
+    actionable_vendor_sql = pool.fetch.call_args_list[2][0][0]
+    confidence_sql = pool.fetch.call_args_list[3][0][0]
+    priority_sql = pool.fetch.call_args_list[4][0][0]
+    pending_band_sql = pool.fetch.call_args_list[5][0][0]
+    pending_reason_sql = pool.fetch.call_args_list[6][0][0]
+    pending_sla_band_sql = pool.fetch.call_args_list[7][0][0]
+    pending_sla_reason_sql = pool.fetch.call_args_list[8][0][0]
+    oldest_pending_sql = pool.fetch.call_args_list[9][0][0]
+    pending_sla_band_args = pool.fetch.call_args_list[7][0][1:]
+    pending_sla_reason_args = pool.fetch.call_args_list[8][0][1:]
+    oldest_pending_args = pool.fetch.call_args_list[9][0][1:]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -566,6 +581,9 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "ANY(" in totals_sql
     assert "GROUP BY 1" in gap_sql
     assert "GROUP BY 1" in vendor_sql
+    assert "actionable_group_count" in actionable_vendor_sql
+    assert "review_priority_band IN ('promote_now', 'high', 'medium')" in actionable_vendor_sql
+    assert "HAVING COUNT(*) FILTER" in actionable_vendor_sql
     assert "GROUP BY 1" in confidence_sql
     assert "review_priority_band" in priority_sql
     assert "review_priority_reason" in priority_sql
@@ -589,10 +607,14 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "WHERE review_status = 'pending'" in oldest_pending_sql
     assert summary["totals"]["total_groups"] == 12
     assert summary["totals"]["avg_pending_age_days"] == 2.75
+    assert summary["totals"]["actionable_pending_groups"] == 6
+    assert summary["totals"]["actionable_pending_reviews"] == 17
     assert summary["totals"]["overdue_pending_groups"] == 3
     assert summary["totals"]["overdue_pending_reviews"] == 9
     assert summary["gap_reasons"][0]["gap_reason"] == "low_confidence_low_trust_source"
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
+    assert summary["actionable_top_vendors"][0]["vendor_name"] == "Zendesk"
+    assert summary["actionable_top_vendors"][0]["actionable_group_count"] == 3
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"

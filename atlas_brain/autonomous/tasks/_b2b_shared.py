@@ -11910,6 +11910,8 @@ async def read_company_signal_candidate_group_summary(
                 "total_reviews": 0,
                 "canonical_ready_reviews": 0,
                 "pending_groups": 0,
+                "actionable_pending_groups": 0,
+                "actionable_pending_reviews": 0,
                 "approved_groups": 0,
                 "suppressed_groups": 0,
                 "canonical_ready_groups": 0,
@@ -11925,6 +11927,7 @@ async def read_company_signal_candidate_group_summary(
             },
             "gap_reasons": [],
             "top_vendors": [],
+            "actionable_top_vendors": [],
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -11951,6 +11954,17 @@ async def read_company_signal_candidate_group_summary(
                COALESCE(SUM(review_count), 0)::int AS total_reviews,
                COALESCE(SUM(canonical_ready_review_count), 0)::int AS canonical_ready_reviews,
                COUNT(*) FILTER (WHERE review_status = 'pending')::int AS pending_groups,
+               COUNT(*) FILTER (
+                   WHERE review_status = 'pending'
+                     AND {pending_priority_band_sql} IN ('promote_now', 'high', 'medium')
+               )::int AS actionable_pending_groups,
+               COALESCE(
+                   SUM(review_count) FILTER (
+                       WHERE review_status = 'pending'
+                         AND {pending_priority_band_sql} IN ('promote_now', 'high', 'medium')
+                   ),
+                   0
+               )::int AS actionable_pending_reviews,
                COUNT(*) FILTER (WHERE review_status = 'approved')::int AS approved_groups,
                COUNT(*) FILTER (WHERE review_status = 'suppressed')::int AS suppressed_groups,
                COUNT(*) FILTER (WHERE candidate_bucket = 'canonical_ready')::int AS canonical_ready_groups,
@@ -12023,6 +12037,53 @@ async def read_company_signal_candidate_group_summary(
         FROM filtered
         GROUP BY 1
         ORDER BY pending_groups DESC, group_count DESC, review_count DESC, vendor_name ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    actionable_vendor_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT vendor_name,
+                   review_count,
+                   signal_evidence_count,
+                   decision_maker_count,
+                   {pending_priority_band_sql} AS review_priority_band
+            FROM filtered
+            WHERE review_status = 'pending'
+        )
+        SELECT vendor_name,
+               COUNT(*) FILTER (
+                   WHERE review_priority_band IN ('promote_now', 'high', 'medium')
+               )::int AS actionable_group_count,
+               COALESCE(SUM(review_count) FILTER (
+                   WHERE review_priority_band IN ('promote_now', 'high', 'medium')
+               ), 0)::int AS actionable_review_count,
+               COUNT(*) FILTER (WHERE review_priority_band = 'promote_now')::int AS promote_now_group_count,
+               COUNT(*) FILTER (WHERE review_priority_band = 'high')::int AS high_group_count,
+               COUNT(*) FILTER (WHERE review_priority_band = 'medium')::int AS medium_group_count,
+               COUNT(*) FILTER (
+                   WHERE review_priority_band IN ('promote_now', 'high', 'medium')
+                     AND signal_evidence_count > 0
+               )::int AS actionable_signal_evidence_groups,
+               COUNT(*) FILTER (
+                   WHERE review_priority_band IN ('promote_now', 'high', 'medium')
+                     AND decision_maker_count > 0
+               )::int AS actionable_decision_maker_groups
+        FROM pending
+        GROUP BY 1
+        HAVING COUNT(*) FILTER (
+            WHERE review_priority_band IN ('promote_now', 'high', 'medium')
+        ) > 0
+        ORDER BY actionable_group_count DESC,
+                 actionable_review_count DESC,
+                 vendor_name ASC
         LIMIT ${top_n_param}
         """,
         *params,
@@ -12281,6 +12342,7 @@ async def read_company_signal_candidate_group_summary(
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
         "top_vendors": [dict(row) for row in vendor_rows],
+        "actionable_top_vendors": [dict(row) for row in actionable_vendor_rows],
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],
