@@ -40,6 +40,7 @@ from ..autonomous.tasks._b2b_shared import (
     latest_complete_core_report_date,
     read_company_signal_candidates,
     read_company_signal_candidate_groups,
+    read_company_signal_candidate_group_summary,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
     read_vendor_signal_detail,
@@ -2570,6 +2571,57 @@ async def list_company_signal_candidate_groups(
         "candidate_bucket": candidate_bucket,
         "review_status": review_status,
     }
+
+
+@router.get("/company-signal-candidate-group-summary")
+async def get_company_signal_candidate_group_summary(
+    vendor_name: Optional[str] = Query(None),
+    company_name: Optional[str] = Query(None),
+    candidate_bucket: Optional[str] = Query(None),
+    review_status: Optional[str] = Query(None),
+    canonical_gap_reason: Optional[str] = Query(None),
+    min_urgency: float = Query(0, ge=0, le=10),
+    min_confidence: Optional[float] = Query(None, ge=0, le=1),
+    min_reviews: int = Query(1, ge=1, le=100),
+    decision_makers_only: bool = Query(False),
+    signal_evidence_present: Optional[bool] = Query(None),
+    window_days: int = Query(90, ge=1, le=3650),
+    top_n: int = Query(10, ge=1, le=25),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """Summarize grouped company-signal queue health for analyst review."""
+    if candidate_bucket is not None and candidate_bucket not in {"analyst_review", "canonical_ready"}:
+        raise HTTPException(
+            status_code=400,
+            detail="candidate_bucket must be 'analyst_review' or 'canonical_ready'",
+        )
+    if review_status is not None and review_status not in {"pending", "approved", "suppressed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_status must be 'pending', 'approved', or 'suppressed'",
+        )
+
+    pool = _pool_or_503()
+    scoped_vendors = await _get_scoped_vendors(pool, user)
+    summary = await read_company_signal_candidate_group_summary(
+        pool,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        company_name=company_name,
+        scoped_vendors=scoped_vendors,
+        candidate_bucket=candidate_bucket,
+        review_status=review_status,
+        canonical_gap_reason=canonical_gap_reason,
+        min_urgency=min_urgency,
+        min_confidence=min_confidence,
+        min_reviews=min_reviews,
+        decision_makers_only=decision_makers_only,
+        signal_evidence_present=signal_evidence_present,
+        top_n=top_n,
+    )
+    summary["candidate_bucket"] = candidate_bucket
+    summary["review_status"] = review_status
+    return summary
 
 
 @router.get("/company-signal-candidates")

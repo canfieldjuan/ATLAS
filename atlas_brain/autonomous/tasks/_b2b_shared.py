@@ -11501,8 +11501,7 @@ async def _load_company_signal_candidate_support_reviews(
     return results
 
 
-async def read_company_signal_candidate_groups(
-    pool,
+def _company_signal_candidate_group_filters(
     *,
     window_days: int = 90,
     vendor_name: str | None = None,
@@ -11516,16 +11515,14 @@ async def read_company_signal_candidate_groups(
     min_reviews: int = 1,
     decision_makers_only: bool = False,
     signal_evidence_present: bool | None = None,
-    limit: int = 100,
-) -> list[dict[str, Any]]:
-    """Primary grouped operator surface for analyst-assist company-signal review."""
+) -> tuple[list[str], list[Any], int]:
     conditions = ["last_seen_at >= NOW() - make_interval(days => $1)"]
     params: list[Any] = [window_days]
     idx = 2
 
     if scoped_vendors is not None:
         if not scoped_vendors:
-            return []
+            return [], [], 0
         conditions.append(f"vendor_name = ANY(${idx}::text[])")
         params.append(scoped_vendors)
         idx += 1
@@ -11534,7 +11531,9 @@ async def read_company_signal_candidate_groups(
         params.append(vendor_name)
         idx += 1
     if company_name:
-        conditions.append(f"(company_name ILIKE '%' || ${idx} || '%' OR display_company_name ILIKE '%' || ${idx} || '%')")
+        conditions.append(
+            f"(company_name ILIKE '%' || ${idx} || '%' OR display_company_name ILIKE '%' || ${idx} || '%')"
+        )
         params.append(company_name)
         idx += 1
     if candidate_bucket:
@@ -11566,6 +11565,44 @@ async def read_company_signal_candidate_groups(
     if signal_evidence_present is not None:
         operator = ">" if signal_evidence_present else "="
         conditions.append(f"signal_evidence_count {operator} 0")
+
+    return conditions, params, idx
+
+
+async def read_company_signal_candidate_groups(
+    pool,
+    *,
+    window_days: int = 90,
+    vendor_name: str | None = None,
+    company_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    candidate_bucket: str | None = None,
+    review_status: str | None = None,
+    canonical_gap_reason: str | None = None,
+    min_urgency: float = 0.0,
+    min_confidence: float | None = None,
+    min_reviews: int = 1,
+    decision_makers_only: bool = False,
+    signal_evidence_present: bool | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Primary grouped operator surface for analyst-assist company-signal review."""
+    conditions, params, idx = _company_signal_candidate_group_filters(
+        window_days=window_days,
+        vendor_name=vendor_name,
+        company_name=company_name,
+        scoped_vendors=scoped_vendors,
+        candidate_bucket=candidate_bucket,
+        review_status=review_status,
+        canonical_gap_reason=canonical_gap_reason,
+        min_urgency=min_urgency,
+        min_confidence=min_confidence,
+        min_reviews=min_reviews,
+        decision_makers_only=decision_makers_only,
+        signal_evidence_present=signal_evidence_present,
+    )
+    if not conditions:
+        return []
 
     limit_param = idx
     params.append(limit)
@@ -11681,6 +11718,155 @@ async def read_company_signal_candidate_groups(
             "supporting_reviews": supporting_reviews,
         })
     return results
+
+
+async def read_company_signal_candidate_group_summary(
+    pool,
+    *,
+    window_days: int = 90,
+    vendor_name: str | None = None,
+    company_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    candidate_bucket: str | None = None,
+    review_status: str | None = None,
+    canonical_gap_reason: str | None = None,
+    min_urgency: float = 0.0,
+    min_confidence: float | None = None,
+    min_reviews: int = 1,
+    decision_makers_only: bool = False,
+    signal_evidence_present: bool | None = None,
+    top_n: int = 10,
+) -> dict[str, Any]:
+    """Return queue-health summary for grouped company-signal candidates."""
+    conditions, params, idx = _company_signal_candidate_group_filters(
+        window_days=window_days,
+        vendor_name=vendor_name,
+        company_name=company_name,
+        scoped_vendors=scoped_vendors,
+        candidate_bucket=candidate_bucket,
+        review_status=review_status,
+        canonical_gap_reason=canonical_gap_reason,
+        min_urgency=min_urgency,
+        min_confidence=min_confidence,
+        min_reviews=min_reviews,
+        decision_makers_only=decision_makers_only,
+        signal_evidence_present=signal_evidence_present,
+    )
+    if not conditions:
+        return {
+            "totals": {
+                "total_groups": 0,
+                "total_reviews": 0,
+                "canonical_ready_reviews": 0,
+                "pending_groups": 0,
+                "approved_groups": 0,
+                "suppressed_groups": 0,
+                "canonical_ready_groups": 0,
+                "analyst_review_groups": 0,
+                "pending_canonical_ready_groups": 0,
+                "pending_analyst_review_groups": 0,
+                "decision_maker_groups": 0,
+                "signal_evidence_groups": 0,
+            },
+            "gap_reasons": [],
+            "top_vendors": [],
+            "confidence_tiers": [],
+        }
+
+    where_clause = " AND ".join(conditions)
+    top_n_param = idx
+    totals = await pool.fetchrow(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT COUNT(*)::int AS total_groups,
+               COALESCE(SUM(review_count), 0)::int AS total_reviews,
+               COALESCE(SUM(canonical_ready_review_count), 0)::int AS canonical_ready_reviews,
+               COUNT(*) FILTER (WHERE review_status = 'pending')::int AS pending_groups,
+               COUNT(*) FILTER (WHERE review_status = 'approved')::int AS approved_groups,
+               COUNT(*) FILTER (WHERE review_status = 'suppressed')::int AS suppressed_groups,
+               COUNT(*) FILTER (WHERE candidate_bucket = 'canonical_ready')::int AS canonical_ready_groups,
+               COUNT(*) FILTER (WHERE candidate_bucket = 'analyst_review')::int AS analyst_review_groups,
+               COUNT(*) FILTER (
+                   WHERE review_status = 'pending' AND candidate_bucket = 'canonical_ready'
+               )::int AS pending_canonical_ready_groups,
+               COUNT(*) FILTER (
+                   WHERE review_status = 'pending' AND candidate_bucket = 'analyst_review'
+               )::int AS pending_analyst_review_groups,
+               COUNT(*) FILTER (WHERE decision_maker_count > 0)::int AS decision_maker_groups,
+               COUNT(*) FILTER (WHERE signal_evidence_count > 0)::int AS signal_evidence_groups
+        FROM filtered
+        """,
+        *params,
+    )
+    gap_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT COALESCE(canonical_gap_reason, 'canonical_ready') AS gap_reason,
+               COUNT(*)::int AS group_count,
+               COALESCE(SUM(review_count), 0)::int AS review_count
+        FROM filtered
+        GROUP BY 1
+        ORDER BY group_count DESC, review_count DESC, gap_reason ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    vendor_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT vendor_name,
+               COUNT(*)::int AS group_count,
+               COALESCE(SUM(review_count), 0)::int AS review_count,
+               COUNT(*) FILTER (WHERE review_status = 'pending')::int AS pending_groups,
+               COUNT(*) FILTER (WHERE candidate_bucket = 'canonical_ready')::int AS canonical_ready_groups
+        FROM filtered
+        GROUP BY 1
+        ORDER BY pending_groups DESC, group_count DESC, review_count DESC, vendor_name ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    confidence_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT COALESCE(confidence_tier, 'unknown') AS confidence_tier,
+               COUNT(*)::int AS group_count
+        FROM filtered
+        GROUP BY 1
+        ORDER BY CASE COALESCE(confidence_tier, 'unknown')
+                     WHEN 'high' THEN 0
+                     WHEN 'medium' THEN 1
+                     WHEN 'low' THEN 2
+                     ELSE 3
+                 END,
+                 group_count DESC
+        """,
+        *params,
+    )
+    return {
+        "totals": dict(totals or {}),
+        "gap_reasons": [dict(row) for row in gap_rows],
+        "top_vendors": [dict(row) for row in vendor_rows],
+        "confidence_tiers": [dict(row) for row in confidence_rows],
+    }
 
 
 async def read_review_details(

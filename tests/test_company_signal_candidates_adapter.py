@@ -11,6 +11,7 @@ import pytest
 from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
 from atlas_brain.autonomous.tasks._b2b_shared import (
     read_company_signal_candidate_groups,
+    read_company_signal_candidate_group_summary,
     read_company_signal_candidates,
 )
 
@@ -328,3 +329,89 @@ async def test_read_company_signal_candidate_groups_maps_rows_and_support_review
     assert results[0]["review_count"] == 3
     assert results[0]["corroborated_confidence_score"] == 0.68
     assert results[0]["supporting_reviews"][0]["quote_excerpt"] == "Renewal risk keeps coming up"
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_candidate_group_summary_aggregates_queue_health():
+    pool = type("SummaryPool", (), {})()
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "total_groups": 12,
+            "total_reviews": 37,
+            "canonical_ready_reviews": 5,
+            "pending_groups": 8,
+            "approved_groups": 3,
+            "suppressed_groups": 1,
+            "canonical_ready_groups": 2,
+            "analyst_review_groups": 10,
+            "pending_canonical_ready_groups": 2,
+            "pending_analyst_review_groups": 6,
+            "decision_maker_groups": 7,
+            "signal_evidence_groups": 4,
+        }
+    )
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "gap_reason": "low_confidence_low_trust_source",
+                    "group_count": 7,
+                    "review_count": 21,
+                }
+            ],
+            [
+                {
+                    "vendor_name": "Zendesk",
+                    "group_count": 5,
+                    "review_count": 14,
+                    "pending_groups": 4,
+                    "canonical_ready_groups": 1,
+                }
+            ],
+            [
+                {
+                    "confidence_tier": "high",
+                    "group_count": 2,
+                },
+                {
+                    "confidence_tier": "low",
+                    "group_count": 10,
+                },
+            ],
+        ]
+    )
+
+    summary = await read_company_signal_candidate_group_summary(
+        pool,
+        window_days=90,
+        company_name="Acme",
+        scoped_vendors=["Zendesk"],
+        candidate_bucket="analyst_review",
+        review_status="pending",
+        min_urgency=6.0,
+        min_confidence=0.25,
+        min_reviews=2,
+        decision_makers_only=True,
+        signal_evidence_present=True,
+        top_n=5,
+    )
+
+    totals_sql = pool.fetchrow.call_args[0][0]
+    gap_sql = pool.fetch.call_args_list[0][0][0]
+    vendor_sql = pool.fetch.call_args_list[1][0][0]
+    confidence_sql = pool.fetch.call_args_list[2][0][0]
+    assert "candidate_bucket =" in totals_sql
+    assert "review_status =" in totals_sql
+    assert "review_count >=" in totals_sql
+    assert "corroborated_confidence_score" in totals_sql
+    assert "signal_evidence_count > 0" in totals_sql
+    assert "decision_maker_count > 0" in totals_sql
+    assert "vendor_name ILIKE" not in totals_sql
+    assert "ANY(" in totals_sql
+    assert "GROUP BY 1" in gap_sql
+    assert "GROUP BY 1" in vendor_sql
+    assert "GROUP BY 1" in confidence_sql
+    assert summary["totals"]["total_groups"] == 12
+    assert summary["gap_reasons"][0]["gap_reason"] == "low_confidence_low_trust_source"
+    assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
+    assert summary["confidence_tiers"][0]["confidence_tier"] == "high"

@@ -241,6 +241,90 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
 
 
 @pytest.mark.asyncio
+async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
+    pool = MagicMock()
+    returned = {
+        "totals": {"total_groups": 3, "pending_groups": 2},
+        "gap_reasons": [{"gap_reason": "low_confidence_low_trust_source", "group_count": 2, "review_count": 5}],
+        "top_vendors": [{"vendor_name": "Zendesk", "group_count": 3, "review_count": 7, "pending_groups": 2, "canonical_ready_groups": 1}],
+        "confidence_tiers": [{"confidence_tier": "low", "group_count": 3}],
+    }
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ) as scope_mock:
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidate_group_summary",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.get_company_signal_candidate_group_summary(
+                    vendor_name=None,
+                    company_name=None,
+                    candidate_bucket=None,
+                    review_status=None,
+                    canonical_gap_reason=None,
+                    min_urgency=0,
+                    min_confidence=None,
+                    min_reviews=1,
+                    decision_makers_only=False,
+                    signal_evidence_present=None,
+                    window_days=90,
+                    top_n=10,
+                    user=None,
+                )
+
+    assert result == {
+        **returned,
+        "candidate_bucket": None,
+        "review_status": None,
+    }
+    scope_mock.assert_awaited_once_with(pool, None)
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name=None,
+        company_name=None,
+        scoped_vendors=None,
+        candidate_bucket=None,
+        review_status=None,
+        canonical_gap_reason=None,
+        min_urgency=0,
+        min_confidence=None,
+        min_reviews=1,
+        decision_makers_only=False,
+        signal_evidence_present=None,
+        top_n=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_candidate_group_summary_rejects_invalid_bucket():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_company_signal_candidate_group_summary(
+                vendor_name=None,
+                company_name=None,
+                candidate_bucket="invalid",
+                review_status=None,
+                canonical_gap_reason=None,
+                min_urgency=0,
+                min_confidence=None,
+                min_reviews=1,
+                decision_makers_only=False,
+                signal_evidence_present=None,
+                window_days=90,
+                top_n=10,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "candidate_bucket" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_list_company_signal_candidates_passes_scope_and_filters():
     pool = MagicMock()
     user = MagicMock()
