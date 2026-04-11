@@ -33,6 +33,70 @@ const CHANNEL_OPTIONS: Array<{ value: WebhookChannel; label: string }> = [
   { value: 'crm_pipedrive', label: 'Pipedrive CRM' },
 ]
 
+const WEBHOOK_PRESETS: Array<{
+  id: string
+  label: string
+  description: string
+  channel: WebhookChannel
+  event_types: WebhookEventType[]
+}> = [
+  {
+    id: 'incident-response',
+    label: 'Incident Response',
+    description: 'High-signal churn and change alerts for paging or routing systems.',
+    channel: 'generic',
+    event_types: ['churn_alert', 'change_event'],
+  },
+  {
+    id: 'evidence-monitoring',
+    label: 'Evidence Monitoring',
+    description: 'Ongoing signal and evidence refreshes for watchlist consumers.',
+    channel: 'generic',
+    event_types: ['change_event', 'signal_update'],
+  },
+  {
+    id: 'artifact-delivery',
+    label: 'Artifact Delivery',
+    description: 'Notify downstream systems when new reports or battle cards are materialized.',
+    channel: 'generic',
+    event_types: ['report_generated'],
+  },
+  {
+    id: 'crm-escalation',
+    label: 'CRM Escalation',
+    description: 'Push urgent churn incidents into CRM workflows with authenticated delivery.',
+    channel: 'crm_hubspot',
+    event_types: ['churn_alert', 'report_generated'],
+  },
+]
+
+const CHANNEL_GUIDANCE: Record<WebhookChannel, { title: string; detail: string }> = {
+  generic: {
+    title: 'Signed JSON delivery',
+    detail: 'Use any HTTPS endpoint that can verify the Atlas signing secret and accept the selected event payloads.',
+  },
+  slack: {
+    title: 'Slack incoming webhook',
+    detail: 'Point this at a Slack incoming webhook URL. Atlas formats the payload for Slack automatically.',
+  },
+  teams: {
+    title: 'Teams workflow webhook',
+    detail: 'Use a Microsoft Teams workflow or connector URL that accepts message-card style webhook payloads.',
+  },
+  crm_hubspot: {
+    title: 'HubSpot CRM push',
+    detail: 'Requires an auth header. Atlas will log downstream CRM pushes separately so delivery and CRM outcomes can be reviewed independently.',
+  },
+  crm_salesforce: {
+    title: 'Salesforce CRM push',
+    detail: 'Requires an auth header. Use this when churn incidents should create or update Salesforce records directly.',
+  },
+  crm_pipedrive: {
+    title: 'Pipedrive CRM push',
+    detail: 'Requires an auth header. Atlas will send authenticated CRM payloads and retain push history on this page.',
+  },
+}
+
 const SUMMARY_WINDOWS = [7, 30, 90] as const
 
 function formatTs(value: string | null | undefined) {
@@ -81,6 +145,7 @@ export default function IncidentAlerts() {
   const [saving, setSaving] = useState(false)
   const [busyWebhookId, setBusyWebhookId] = useState<string | null>(null)
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null)
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -148,6 +213,7 @@ export default function IncidentAlerts() {
   const sortedEvents = useMemo(() => new Set(form.event_types), [form.event_types])
   const activityLoading = deliveryLoading || crmPushLoading
   const activityRefreshing = deliveryRefreshing || crmPushRefreshing
+  const channelGuidance = CHANNEL_GUIDANCE[form.channel]
 
   async function refreshAll() {
     refreshSummary()
@@ -159,10 +225,12 @@ export default function IncidentAlerts() {
   }
 
   function setFormValue<K extends keyof WebhookCreateBody>(key: K, value: WebhookCreateBody[K]) {
+    setSelectedPresetId(null)
     setForm((current) => ({ ...current, [key]: value }))
   }
 
   function toggleEventType(eventType: WebhookEventType) {
+    setSelectedPresetId(null)
     setForm((current) => {
       const next = new Set(current.event_types)
       if (next.has(eventType)) {
@@ -172,6 +240,17 @@ export default function IncidentAlerts() {
       }
       return { ...current, event_types: Array.from(next) as WebhookEventType[] }
     })
+  }
+
+  function applyPreset(presetId: string) {
+    const preset = WEBHOOK_PRESETS.find((item) => item.id === presetId)
+    if (!preset) return
+    setSelectedPresetId(preset.id)
+    setForm((current) => ({
+      ...current,
+      channel: preset.channel,
+      event_types: preset.event_types,
+    }))
   }
 
   async function handleCreateWebhook(event: FormEvent<HTMLFormElement>) {
@@ -217,6 +296,7 @@ export default function IncidentAlerts() {
         auth_header: '',
         description: '',
       })
+      setSelectedPresetId(null)
       await refreshAll()
     } catch (err) {
       setMessage(null)
@@ -562,6 +642,37 @@ export default function IncidentAlerts() {
           </p>
 
           <form className="mt-4 space-y-4" onSubmit={handleCreateWebhook}>
+            <fieldset>
+              <legend className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                Presets
+              </legend>
+              <div className="grid gap-2">
+                {WEBHOOK_PRESETS.map((preset) => {
+                  const active = selectedPresetId === preset.id
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyPreset(preset.id)}
+                      className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+                        active
+                          ? 'border-cyan-500/40 bg-cyan-500/10'
+                          : 'border-slate-800 bg-slate-950/50 hover:border-slate-700 hover:bg-slate-900/80'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-white">{preset.label}</span>
+                        <span className="text-[11px] uppercase tracking-wide text-slate-400">
+                          {CHANNEL_OPTIONS.find((option) => option.value === preset.channel)?.label ?? preset.channel}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">{preset.description}</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </fieldset>
+
             <div>
               <label htmlFor="webhook-url" className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
                 Endpoint URL
@@ -590,6 +701,10 @@ export default function IncidentAlerts() {
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
+                <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+                  <div className="font-medium text-white">{channelGuidance.title}</div>
+                  <div className="mt-1 text-slate-400">{channelGuidance.detail}</div>
+                </div>
               </div>
 
               <div>

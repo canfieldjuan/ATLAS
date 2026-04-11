@@ -124,6 +124,24 @@ describe('IncidentAlerts', () => {
     })
   })
 
+  it('applies presets and shows channel guidance', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+    await user.click(screen.getByRole('button', { name: /CRM Escalation/i }))
+
+    expect(screen.getByLabelText('Channel')).toHaveValue('crm_hubspot')
+    expect(screen.getByLabelText('Auth Header')).toBeInTheDocument()
+    expect(screen.getByText(/Requires an auth header/i)).toBeInTheDocument()
+    expect(screen.getByText('2 event types selected')).toBeInTheDocument()
+  })
+
   it('creates a webhook from the form', async () => {
     const user = userEvent.setup()
 
