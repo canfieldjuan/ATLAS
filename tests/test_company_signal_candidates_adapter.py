@@ -1118,3 +1118,6 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_focus"]["direction"] == "down"
     assert summary["trend_focus"]["recent_value"] == 0.5
     assert summary["trend_focus"]["prior_value"] == 1.0
+    assert len(summary["trend_alerts"]) == 2
+    assert summary["trend_alerts"][0]["focus"] == "effect_rate_down"
+    assert summary["trend_alerts"][1]["focus"] == "approval_volume_up"
