@@ -3,6 +3,23 @@ import { useEffect } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
 
+const RETENTION_SIGNUP = `/signup?${new URLSearchParams({
+  product: 'b2b_retention',
+  redirect_to: '/watchlists',
+}).toString()}`
+const CHALLENGER_SIGNUP = `/signup?${new URLSearchParams({
+  product: 'b2b_challenger',
+  redirect_to: '/challengers',
+}).toString()}`
+const RETENTION_LOGIN = `/login?${new URLSearchParams({
+  product: 'b2b_retention',
+  redirect_to: '/watchlists',
+}).toString()}`
+const CHALLENGER_LOGIN = `/login?${new URLSearchParams({
+  product: 'b2b_challenger',
+  redirect_to: '/challengers',
+}).toString()}`
+
 export default function Methodology() {
   useEffect(() => {
     document.title = 'Our Methodology | Churn Signals'
@@ -163,6 +180,42 @@ export default function Methodology() {
             </a>.
           </p>
         </div>
+
+        <section className="mt-16 rounded-2xl border border-slate-700/50 bg-slate-800/40 p-6">
+          <h2 className="text-2xl font-semibold">Use the workflow behind the research</h2>
+          <p className="mt-3 text-slate-400">
+            The methodology is shared. The product surfaces are where teams actually operate the intelligence.
+          </p>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <Link
+              to={RETENTION_SIGNUP}
+              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium transition-colors"
+            >
+              Open Watchlists Workflow
+            </Link>
+            <Link
+              to={RETENTION_LOGIN}
+              className="px-4 py-2 border border-cyan-500/40 bg-cyan-500/10 hover:border-cyan-400/50 hover:bg-cyan-500/15 rounded-lg text-cyan-100 font-medium transition-colors"
+            >
+              Sign in to Watchlists
+            </Link>
+            <Link
+              to={CHALLENGER_SIGNUP}
+              className="px-4 py-2 border border-amber-500/40 bg-amber-500/10 hover:border-amber-400/50 hover:bg-amber-500/15 rounded-lg text-amber-100 font-medium transition-colors"
+            >
+              Open Challenger Workflow
+            </Link>
+            <Link
+              to={CHALLENGER_LOGIN}
+              className="px-4 py-2 border border-amber-500/40 hover:border-amber-400/50 rounded-lg text-amber-100 font-medium transition-colors"
+            >
+              Sign in to Challengers
+            </Link>
+            <Link to="/blog" className="px-4 py-2 border border-slate-600 hover:border-slate-500 rounded-lg text-slate-300 font-medium transition-colors">
+              Browse Blog Analysis
+            </Link>
+          </div>
+        </section>
       </article>
     </PublicLayout>
   )

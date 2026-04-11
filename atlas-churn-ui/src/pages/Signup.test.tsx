@@ -70,4 +70,17 @@ describe('Signup', () => {
       '/login?redirect_to=%2Fwatchlists&product=b2b_challenger',
     )
   })
+
+  it('normalizes invalid redirect_to on the sign in link', () => {
+    render(
+      <MemoryRouter initialEntries={['/signup?redirect_to=https%3A%2F%2Fevil.example&product=b2b_challenger']}>
+        <Signup />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute(
+      'href',
+      '/login?redirect_to=%2Fwatchlists&product=b2b_challenger',
+    )
+  })
 })

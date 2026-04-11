@@ -2,17 +2,27 @@ import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
+import { normalizeRedirectTarget } from '../auth/redirects'
 import AtlasRobotLogo from '../components/AtlasRobotLogo'
 
 export default function Login() {
   const { user, login } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const redirectTo = searchParams.get('redirect_to')?.trim() || '/'
+  const rawRedirectTo = searchParams.get('redirect_to')
+  const redirectTo = rawRedirectTo ? normalizeRedirectTarget(rawRedirectTo) : '/'
+  const product = searchParams.get('product')?.trim() || ''
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  const auxiliaryParams = new URLSearchParams()
+  if (redirectTo && redirectTo !== '/') auxiliaryParams.set('redirect_to', redirectTo)
+  if (product) auxiliaryParams.set('product', product)
+  const auxiliarySearch = auxiliaryParams.toString()
+  const signupHref = auxiliarySearch ? `/signup?${auxiliarySearch}` : '/signup'
+  const forgotPasswordHref = auxiliarySearch ? `/forgot-password?${auxiliarySearch}` : '/forgot-password'
 
   if (user) return <Navigate to={redirectTo} replace />
 
@@ -73,7 +83,7 @@ export default function Login() {
           </div>
 
           <div className="flex justify-end">
-            <Link to="/forgot-password" className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+            <Link to={forgotPasswordHref} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
               Forgot password?
             </Link>
           </div>
@@ -88,12 +98,7 @@ export default function Login() {
 
           <p className="text-center text-sm text-slate-400">
             No account?{' '}
-            <Link
-              to={`/signup?${new URLSearchParams(
-                redirectTo && redirectTo !== '/' ? { redirect_to: redirectTo } : {},
-              ).toString()}`}
-              className="text-cyan-400 hover:text-cyan-300"
-            >
+            <Link to={signupHref} className="text-cyan-400 hover:text-cyan-300">
               Create one
             </Link>
           </p>

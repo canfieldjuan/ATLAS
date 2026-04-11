@@ -1,4 +1,5 @@
 import { tryRefreshToken } from '../auth/AuthContext'
+import { buildCurrentRedirectTarget, buildLoginRedirectPath } from '../auth/redirects'
 import type {
   ChurnSignal,
   ChurnSignalDetail,
@@ -100,7 +101,8 @@ function authHeaders(): Record<string, string> {
 function forceLogout() {
   localStorage.removeItem('atlas_token')
   localStorage.removeItem('atlas_refresh_token')
-  window.location.href = '/landing'
+  const redirectTarget = buildCurrentRedirectTarget(window.location)
+  window.location.replace(buildLoginRedirectPath(redirectTarget))
 }
 
 async function handleResponse<T>(res: Response, retryFetch: () => Promise<Response>): Promise<T> {

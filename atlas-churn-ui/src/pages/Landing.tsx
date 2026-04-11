@@ -5,6 +5,19 @@ import PublicLayout from '../components/PublicLayout'
 
 const AtlasHeroScene = React.lazy(() => import('../components/AtlasHeroScene'))
 
+function buildSignupPath(product: 'b2b_retention' | 'b2b_challenger', redirectTo: string): string {
+  return `/signup?${new URLSearchParams({ product, redirect_to: redirectTo }).toString()}`
+}
+
+function buildLoginPath(product: 'b2b_retention' | 'b2b_challenger', redirectTo: string): string {
+  return `/login?${new URLSearchParams({ redirect_to: redirectTo, product }).toString()}`
+}
+
+const RETENTION_SIGNUP = buildSignupPath('b2b_retention', '/watchlists')
+const CHALLENGER_SIGNUP = buildSignupPath('b2b_challenger', '/challengers')
+const RETENTION_LOGIN = buildLoginPath('b2b_retention', '/watchlists')
+const CHALLENGER_LOGIN = buildLoginPath('b2b_challenger', '/challengers')
+
 const FEATURES = [
   {
     icon: TrendingDown,
@@ -35,6 +48,27 @@ const STATS = [
   { value: '24h', label: 'Signal freshness' },
 ]
 
+const PRODUCT_WORKFLOWS = [
+  {
+    title: 'Vendor Retention',
+    desc: 'Track your current vendors, monitor risk, validate evidence, and move directly into account action.',
+    surfaces: ['Watchlists', 'Vendor workspace', 'Evidence', 'Opportunities'],
+    signupHref: RETENTION_SIGNUP,
+    loginHref: RETENTION_LOGIN,
+    signupLabel: 'Start Vendor Retention',
+    loginLabel: 'Sign in to Watchlists',
+  },
+  {
+    title: 'Challenger Lead Gen',
+    desc: 'Monitor competitor weakness, spot displacement windows, and route high-intent opportunities into action.',
+    surfaces: ['Challengers', 'Vendor Targets', 'Evidence', 'Opportunities'],
+    signupHref: CHALLENGER_SIGNUP,
+    loginHref: CHALLENGER_LOGIN,
+    signupLabel: 'Start Challenger Lead Gen',
+    loginLabel: 'Sign in to Challengers',
+  },
+] as const
+
 const PLANS = [
   {
     name: 'Starter',
@@ -46,7 +80,7 @@ const PLANS = [
       'CSV export',
     ],
     cta: 'Start Free Trial',
-    href: '/signup',
+    href: RETENTION_SIGNUP,
     highlight: false,
   },
   {
@@ -60,7 +94,7 @@ const PLANS = [
       'API access',
     ],
     cta: 'Start Free Trial',
-    href: '/signup',
+    href: RETENTION_SIGNUP,
     highlight: true,
   },
   {
@@ -74,7 +108,7 @@ const PLANS = [
       'Dedicated support',
     ],
     cta: 'Start Free Trial',
-    href: '/signup',
+    href: RETENTION_SIGNUP,
     highlight: false,
   },
 ]
@@ -120,10 +154,16 @@ export default function Landing() {
         </p>
         <div className="mt-10 flex items-center justify-center gap-4">
           <Link
-            to="/signup"
+            to={RETENTION_SIGNUP}
             className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors"
           >
-            Start Free Trial
+            Start Vendor Retention Trial
+          </Link>
+          <Link
+            to={CHALLENGER_SIGNUP}
+            className="px-6 py-3 border border-amber-500/40 bg-amber-500/10 hover:border-amber-400/50 hover:bg-amber-500/15 rounded-lg text-amber-100 font-medium transition-colors"
+          >
+            Start Challenger Trial
           </Link>
           <a
             href="#pricing"
@@ -142,6 +182,43 @@ export default function Landing() {
             <div key={s.label} className="text-center">
               <div className="text-3xl font-bold text-cyan-400">{s.value}</div>
               <div className="mt-1 text-sm text-slate-400">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="max-w-6xl mx-auto px-6 pb-24">
+        <h2 className="text-2xl font-bold text-center mb-4">Choose the product workflow</h2>
+        <p className="text-center text-slate-400 max-w-3xl mx-auto mb-12">
+          Atlas is now built around the operating surfaces your team uses directly. Start in the workflow that matches the job.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {PRODUCT_WORKFLOWS.map(workflow => (
+            <div key={workflow.title} className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-6">
+              <h3 className="text-xl font-semibold">{workflow.title}</h3>
+              <p className="mt-3 text-sm text-slate-400 leading-relaxed">{workflow.desc}</p>
+              <ul className="mt-5 space-y-2">
+                {workflow.surfaces.map(surface => (
+                  <li key={surface} className="flex items-start gap-2 text-sm text-slate-300">
+                    <Check className="h-4 w-4 text-cyan-400 mt-0.5 shrink-0" />
+                    {surface}
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-6 flex flex-wrap items-center gap-3">
+                <Link
+                  to={workflow.signupHref}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium transition-colors"
+                >
+                  {workflow.signupLabel}
+                </Link>
+                <Link
+                  to={workflow.loginHref}
+                  className="px-4 py-2 border border-slate-600 hover:border-slate-500 rounded-lg text-slate-300 font-medium transition-colors"
+                >
+                  {workflow.loginLabel}
+                </Link>
+              </div>
             </div>
           ))}
         </div>

@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertCircle, ShieldCheck, Target } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '../auth/AuthContext'
+import { normalizeRedirectTarget } from '../auth/redirects'
 import AtlasRobotLogo from '../components/AtlasRobotLogo'
 
 const PRODUCTS = [
@@ -28,7 +29,8 @@ export default function Signup() {
   const { user, signup } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const redirectTo = searchParams.get('redirect_to')?.trim() || '/'
+  const rawRedirectTo = searchParams.get('redirect_to')
+  const redirectTo = rawRedirectTo ? normalizeRedirectTarget(rawRedirectTo) : '/'
   const requestedProduct = searchParams.get('product')?.trim() || 'b2b_retention'
   const selectedProduct = PRODUCTS.some((entry) => entry.id === requestedProduct) ? requestedProduct : 'b2b_retention'
   const [product, setProduct] = useState<string>(selectedProduct)

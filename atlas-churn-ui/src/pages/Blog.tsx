@@ -7,6 +7,23 @@ import type { BlogPost } from '../content/blog'
 
 const AtlasRobotScene = React.lazy(() => import('../components/AtlasRobotScene'))
 
+const RETENTION_SIGNUP = `/signup?${new URLSearchParams({
+  product: 'b2b_retention',
+  redirect_to: '/watchlists',
+}).toString()}`
+const CHALLENGER_SIGNUP = `/signup?${new URLSearchParams({
+  product: 'b2b_challenger',
+  redirect_to: '/challengers',
+}).toString()}`
+const RETENTION_LOGIN = `/login?${new URLSearchParams({
+  redirect_to: '/watchlists',
+  product: 'b2b_retention',
+}).toString()}`
+const CHALLENGER_LOGIN = `/login?${new URLSearchParams({
+  redirect_to: '/challengers',
+  product: 'b2b_challenger',
+}).toString()}`
+
 function formatDate(iso: string) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
     year: 'numeric',
@@ -152,6 +169,31 @@ export default function Blog() {
         <p className="mt-4 text-lg text-slate-400 max-w-2xl mx-auto">
           B2B software churn intelligence, vendor comparisons, and migration analysis backed by real enterprise review data.
         </p>
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <Link
+            to={RETENTION_SIGNUP}
+            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium transition-colors"
+          >
+            Start Vendor Retention
+          </Link>
+          <Link
+            to={CHALLENGER_SIGNUP}
+            className="px-4 py-2 border border-amber-500/40 bg-amber-500/10 hover:border-amber-400/50 hover:bg-amber-500/15 rounded-lg text-amber-100 font-medium transition-colors"
+          >
+            Start Challenger Lead Gen
+          </Link>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-sm text-slate-400">
+          <Link to={RETENTION_LOGIN} className="hover:text-white transition-colors">
+            Sign in to Watchlists
+          </Link>
+          <Link to={CHALLENGER_LOGIN} className="hover:text-white transition-colors">
+            Sign in to Challengers
+          </Link>
+          <Link to="/methodology" className="hover:text-white transition-colors">
+            Read Methodology
+          </Link>
+        </div>
       </section>
 
       {/* Post grid */}

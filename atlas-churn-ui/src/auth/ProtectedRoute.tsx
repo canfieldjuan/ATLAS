@@ -1,8 +1,10 @@
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './AuthContext'
+import { buildCurrentRedirectTarget, buildLoginRedirectPath } from './redirects'
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
+  const location = useLocation()
 
   if (loading) {
     return (
@@ -13,7 +15,8 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
   }
 
   if (!user) {
-    return <Navigate to="/landing" replace />
+    const redirectTo = buildCurrentRedirectTarget(location)
+    return <Navigate to={buildLoginRedirectPath(redirectTo)} replace />
   }
 
   return <>{children}</>

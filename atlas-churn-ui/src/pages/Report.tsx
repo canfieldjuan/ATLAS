@@ -18,6 +18,22 @@ const GATE_URL = `${API_BASE}/api/v1/b2b/briefings/gate`
 const REPORT_DATA_URL = `${API_BASE}/api/v1/b2b/briefings/report-data`
 const CHECKOUT_URL = `${API_BASE}/api/v1/b2b/briefings/checkout`
 const CACHE_BUSTER_PARAM = '_ts'
+const WATCHLISTS_LOGIN_URL = `/login?${new URLSearchParams({
+  redirect_to: '/watchlists',
+  product: 'b2b_retention',
+}).toString()}`
+const CHALLENGERS_LOGIN_URL = `/login?${new URLSearchParams({
+  redirect_to: '/challengers',
+  product: 'b2b_challenger',
+}).toString()}`
+const WATCHLISTS_SIGNUP_URL = `/signup?${new URLSearchParams({
+  product: 'b2b_retention',
+  redirect_to: '/watchlists',
+}).toString()}`
+const CHALLENGERS_SIGNUP_URL = `/signup?${new URLSearchParams({
+  product: 'b2b_challenger',
+  redirect_to: '/challengers',
+}).toString()}`
 
 function addFreshParam(url: string, params: Record<string, string>): string {
   const next = new URL(url, window.location.origin)
@@ -620,6 +636,14 @@ function ReportView({ data }: { data: ReportData }) {
           >
             Get Weekly Intelligence
           </button>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-4 text-sm text-slate-400">
+            <a href={WATCHLISTS_LOGIN_URL} className="hover:text-white transition-colors">
+              Sign in to Watchlists
+            </a>
+            <a href={CHALLENGERS_LOGIN_URL} className="hover:text-white transition-colors">
+              Sign in to Challengers
+            </a>
+          </div>
           <p className="text-xs text-slate-500 mt-2">Starting at $499/mo</p>
         </div>
       </div>
@@ -689,7 +713,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
         await login(sessionEmail, password)
       }
       setAccountCreated(true)
-      setTimeout(() => navigate('/landing'), 2000)
+      setTimeout(() => navigate('/watchlists'), 2000)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Something went wrong'
       if (msg.toLowerCase().includes('already registered')) {
@@ -852,7 +876,7 @@ function CheckoutSuccess({ vendor, sessionId }: { vendor: string; sessionId: str
           ) : (
             <div className="bg-green-900/20 border border-green-800/50 rounded-xl p-6 text-center">
               <Check className="h-6 w-6 text-green-400 mx-auto mb-2" />
-              <p className="text-sm text-green-400 font-medium">Account created! Redirecting to your dashboard...</p>
+              <p className="text-sm text-green-400 font-medium">Account ready. Redirecting to Watchlists...</p>
             </div>
           )}
 
@@ -1056,6 +1080,20 @@ export default function Report() {
           <div className="mt-8 flex items-center justify-center gap-2 text-xs text-slate-500">
             <ShieldCheck className="h-4 w-4" />
             <span>No spam. Unsubscribe anytime. Data sourced from public reviews.</span>
+          </div>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-3 text-sm">
+            <a href={WATCHLISTS_LOGIN_URL} className="text-cyan-400 hover:text-cyan-300 transition-colors">
+              Sign in to Watchlists
+            </a>
+            <a href={CHALLENGERS_LOGIN_URL} className="text-cyan-400 hover:text-cyan-300 transition-colors">
+              Sign in to Challengers
+            </a>
+            <a href={WATCHLISTS_SIGNUP_URL} className="text-slate-400 hover:text-white transition-colors">
+              Start Vendor Retention
+            </a>
+            <a href={CHALLENGERS_SIGNUP_URL} className="text-slate-400 hover:text-white transition-colors">
+              Start Challenger Lead Gen
+            </a>
           </div>
         </div>
       </div>

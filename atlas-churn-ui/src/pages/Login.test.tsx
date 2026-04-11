@@ -45,16 +45,37 @@ describe('Login', () => {
     expect(await screen.findByText('Watchlists Destination')).toBeInTheDocument()
   })
 
-  it('preserves redirect_to on the signup link', () => {
+  it('preserves redirect_to and product on account-creation and recovery links', () => {
     render(
-      <MemoryRouter initialEntries={['/login?redirect_to=%2Fvendors']}>
+      <MemoryRouter initialEntries={['/login?redirect_to=%2Fchallengers&product=b2b_challenger']}>
         <Login />
       </MemoryRouter>,
     )
 
     expect(screen.getByRole('link', { name: 'Create one' })).toHaveAttribute(
       'href',
-      '/signup?redirect_to=%2Fvendors',
+      '/signup?redirect_to=%2Fchallengers&product=b2b_challenger',
+    )
+    expect(screen.getByRole('link', { name: 'Forgot password?' })).toHaveAttribute(
+      'href',
+      '/forgot-password?redirect_to=%2Fchallengers&product=b2b_challenger',
+    )
+  })
+
+  it('normalizes invalid redirect_to on account-creation and recovery links', () => {
+    render(
+      <MemoryRouter initialEntries={['/login?redirect_to=https%3A%2F%2Fevil.example&product=b2b_challenger']}>
+        <Login />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByRole('link', { name: 'Create one' })).toHaveAttribute(
+      'href',
+      '/signup?redirect_to=%2Fwatchlists&product=b2b_challenger',
+    )
+    expect(screen.getByRole('link', { name: 'Forgot password?' })).toHaveAttribute(
+      'href',
+      '/forgot-password?redirect_to=%2Fwatchlists&product=b2b_challenger',
     )
   })
 })

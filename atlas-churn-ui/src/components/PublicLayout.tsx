@@ -3,7 +3,17 @@ import AtlasRobotLogo from './AtlasRobotLogo'
 
 const NAV_LINKS = [
   { label: 'Blog', to: '/blog' },
+  { label: 'Methodology', to: '/methodology' },
 ]
+
+const DEFAULT_LOGIN_TO = `/login?${new URLSearchParams({
+  redirect_to: '/watchlists',
+  product: 'b2b_retention',
+}).toString()}`
+const DEFAULT_SIGNUP_TO = `/signup?${new URLSearchParams({
+  product: 'b2b_retention',
+  redirect_to: '/watchlists',
+}).toString()}`
 
 type Props = {
   children: React.ReactNode
@@ -51,18 +61,18 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
         </div>
         <div className="flex items-center gap-4">
           {!isReport && (
-            <Link to="/login" className="text-sm text-slate-400 hover:text-white transition-colors">
+            <Link to={DEFAULT_LOGIN_TO} className="text-sm text-slate-400 hover:text-white transition-colors">
               Sign in
             </Link>
           )}
           {reportCta}
           {!isReport && !reportCta && (
-            <a
-              href="/signup"
+            <Link
+              to={DEFAULT_SIGNUP_TO}
               className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors"
             >
               Start Free Trial
-            </a>
+            </Link>
           )}
         </div>
       </nav>
@@ -81,7 +91,8 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
             {!isReport && (
               <>
                 <Link to="/blog" className="hover:text-slate-300 transition-colors">Blog</Link>
-                <Link to="/login" className="hover:text-slate-300 transition-colors">Sign in</Link>
+                <Link to="/methodology" className="hover:text-slate-300 transition-colors">Methodology</Link>
+                <Link to={DEFAULT_LOGIN_TO} className="hover:text-slate-300 transition-colors">Sign in</Link>
               </>
             )}
             {isReport ? (
@@ -91,7 +102,7 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
                 </button>
               )
             ) : (
-              <a href="/signup" className="hover:text-slate-300 transition-colors">Sign up</a>
+              <Link to={DEFAULT_SIGNUP_TO} className="hover:text-slate-300 transition-colors">Sign up</Link>
             )}
           </div>
         </div>

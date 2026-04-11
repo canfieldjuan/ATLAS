@@ -7,6 +7,23 @@ import useApiData from '../hooks/useApiData'
 import { loadPostBySlug, loadPostsBySlugs } from '../content/blog'
 import type { BlogPost as BlogPostType } from '../content/blog'
 
+const RETENTION_SIGNUP = `/signup?${new URLSearchParams({
+  product: 'b2b_retention',
+  redirect_to: '/watchlists',
+}).toString()}`
+const CHALLENGER_SIGNUP = `/signup?${new URLSearchParams({
+  product: 'b2b_challenger',
+  redirect_to: '/challengers',
+}).toString()}`
+const RETENTION_LOGIN = `/login?${new URLSearchParams({
+  redirect_to: '/watchlists',
+  product: 'b2b_retention',
+}).toString()}`
+const CHALLENGER_LOGIN = `/login?${new URLSearchParams({
+  redirect_to: '/challengers',
+  product: 'b2b_challenger',
+}).toString()}`
+
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
   const { data } = useApiData(
@@ -128,6 +145,36 @@ export default function BlogPost() {
         jsonLd={jsonLd}
       />
       <BlogArticleView post={post} relatedPosts={relatedPosts} />
+      <section className="max-w-3xl mx-auto px-6 pb-24">
+        <div className="rounded-2xl border border-slate-700/50 bg-slate-800/40 p-6">
+          <h2 className="text-2xl font-semibold">Put this analysis into the product workflow</h2>
+          <p className="mt-3 text-slate-400">
+            Read publicly. Operate privately. Move from article context into the watchlists or challenger workflow that matches the job.
+          </p>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <a
+              href={RETENTION_SIGNUP}
+              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-medium transition-colors"
+            >
+              Start Vendor Retention
+            </a>
+            <a
+              href={CHALLENGER_SIGNUP}
+              className="px-4 py-2 border border-amber-500/40 bg-amber-500/10 hover:border-amber-400/50 hover:bg-amber-500/15 rounded-lg text-amber-100 font-medium transition-colors"
+            >
+              Start Challenger Lead Gen
+            </a>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-slate-400">
+            <a href={RETENTION_LOGIN} className="hover:text-white transition-colors">
+              Sign in to Watchlists
+            </a>
+            <a href={CHALLENGER_LOGIN} className="hover:text-white transition-colors">
+              Sign in to Challengers
+            </a>
+          </div>
+        </div>
+      </section>
     </PublicLayout>
   )
 }

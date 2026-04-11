@@ -1,15 +1,25 @@
 import { useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react'
+import { inferRedirectProduct, normalizeRedirectTarget } from '../auth/redirects'
 import AtlasRobotLogo from '../components/AtlasRobotLogo'
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 export default function ForgotPassword() {
+  const [searchParams] = useSearchParams()
+  const rawRedirectTo = searchParams.get('redirect_to')
+  const redirectTo = rawRedirectTo ? normalizeRedirectTarget(rawRedirectTo) : ''
+  const product = searchParams.get('product')?.trim() || (redirectTo ? inferRedirectProduct(redirectTo) : '')
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
   const [sent, setSent] = useState(false)
   const [loading, setLoading] = useState(false)
+
+  const loginParams = new URLSearchParams()
+  if (redirectTo) loginParams.set('redirect_to', redirectTo)
+  if (product) loginParams.set('product', product)
+  const loginHref = loginParams.toString() ? `/login?${loginParams.toString()}` : '/login'
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -53,7 +63,7 @@ export default function ForgotPassword() {
                 you'll receive a password reset link within a few minutes.
               </p>
               <Link
-                to="/login"
+                to={loginHref}
                 className="flex items-center justify-center gap-2 text-sm text-cyan-400 hover:text-cyan-300 mt-2"
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -95,7 +105,7 @@ export default function ForgotPassword() {
               </button>
 
               <Link
-                to="/login"
+                to={loginHref}
                 className="flex items-center justify-center gap-2 text-sm text-cyan-400 hover:text-cyan-300"
               >
                 <ArrowLeft className="h-4 w-4" />
