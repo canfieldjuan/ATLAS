@@ -13493,6 +13493,14 @@ async def read_company_signal_review_impact_summary(
                 "rationale": None,
             },
             "trend_alerts": [],
+            "trend_recommendation": {
+                "status": "no_data",
+                "action": None,
+                "priority": None,
+                "owner": None,
+                "rationale": None,
+                "supporting_focuses": [],
+            },
         }
 
     where_clause = " AND ".join(conditions)
@@ -14236,11 +14244,74 @@ async def read_company_signal_review_impact_summary(
             "rationale": "Recent review impact is broadly flat relative to the prior window.",
         }
 
+    def _build_trend_recommendation(
+        comparison: Mapping[str, Any],
+        focus: Mapping[str, Any],
+        alerts: list[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        default = {
+            "status": "no_data",
+            "action": None,
+            "priority": None,
+            "owner": None,
+            "rationale": None,
+            "supporting_focuses": [],
+        }
+        if not comparison.get("anchor_day"):
+            return default
+        focus_name = focus.get("focus") if isinstance(focus, Mapping) else None
+        supporting_focuses = [str(item.get("focus")) for item in alerts if item.get("focus")]
+        if focus_name in {"rebuild_blocks_up", "rebuild_trigger_rate_down"}:
+            return {
+                "status": "act",
+                "action": "inspect_rebuild_pipeline",
+                "priority": "high",
+                "owner": "backend_pipeline",
+                "rationale": "Recent review actions are losing momentum in the rebuild handoff path.",
+                "supporting_focuses": supporting_focuses,
+            }
+        if focus_name == "effect_rate_down":
+            return {
+                "status": "act",
+                "action": "review_effect_quality",
+                "priority": "high",
+                "owner": "review_ops",
+                "rationale": "Recent review actions are producing fewer downstream company-signal effects per action.",
+                "supporting_focuses": supporting_focuses,
+            }
+        if focus_name == "approval_volume_down":
+            return {
+                "status": "act",
+                "action": "increase_review_throughput",
+                "priority": "medium",
+                "owner": "review_ops",
+                "rationale": "Approval throughput is down relative to the prior window.",
+                "supporting_focuses": supporting_focuses,
+            }
+        if focus.get("status") == "improving":
+            return {
+                "status": "maintain",
+                "action": "maintain_current_course",
+                "priority": "low",
+                "owner": "review_ops",
+                "rationale": "Recent review impact is improving; keep the current operating path stable.",
+                "supporting_focuses": supporting_focuses,
+            }
+        return {
+            "status": "monitor",
+            "action": "monitor_trends",
+            "priority": "low",
+            "owner": "review_ops",
+            "rationale": "Recent review impact is broadly flat relative to the prior window.",
+            "supporting_focuses": supporting_focuses,
+        }
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
     trend_comparison = _build_trend_comparison(daily_trends)
     trend_alerts = _build_trend_alerts(trend_comparison)
     trend_focus = _build_trend_focus(trend_comparison, trend_alerts)
+    trend_recommendation = _build_trend_recommendation(trend_comparison, trend_focus, trend_alerts)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14258,6 +14329,7 @@ async def read_company_signal_review_impact_summary(
         "trend_comparison": trend_comparison,
         "trend_focus": trend_focus,
         "trend_alerts": trend_alerts,
+        "trend_recommendation": trend_recommendation,
     }
 
 
