@@ -8,7 +8,7 @@ import {
 import { clsx } from 'clsx'
 import EvidenceDrawer, { SourceBadge, SIGNAL_COLORS } from '../components/EvidenceDrawer'
 import {
-  searchAvailableVendors, fetchWitnesses, fetchEvidenceVault, fetchEvidenceTrace,
+  listTrackedVendors, searchAvailableVendors, fetchWitnesses, fetchEvidenceVault, fetchEvidenceTrace,
 } from '../api/client'
 import type {
   EvidenceWitness, EvidenceFacets, EvidenceVault, EvidenceTrace,
@@ -66,6 +66,13 @@ function evidenceVendorPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('back_to', evidenceExplorerPath(searchParams))
   return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
+}
+
+function evidenceWatchlistsPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor_name', vendorName)
+  params.set('back_to', evidenceExplorerPath(searchParams))
+  return `/watchlists?${params.toString()}`
 }
 
 function parseBackTo(value: string | null) {
@@ -148,6 +155,7 @@ export default function EvidenceExplorer() {
   const [activeVendor, setActiveVendor] = useState(requestedVendor)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [trackedVendorNames, setTrackedVendorNames] = useState<string[]>([])
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Tab state
@@ -180,6 +188,10 @@ export default function EvidenceExplorer() {
   const [drawerOpen, setDrawerOpen] = useState(Boolean(requestedVendor && requestedWitnessId))
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const isTrackedVendor = useMemo(
+    () => Boolean(activeVendor) && trackedVendorNames.includes(activeVendor.toLowerCase()),
+    [activeVendor, trackedVendorNames],
+  )
   const drawerBackToPath = useMemo(() => {
     const next = new URLSearchParams(searchParams.toString())
     if (activeVendor) next.set('vendor', activeVendor)
@@ -229,6 +241,22 @@ export default function EvidenceExplorer() {
 
   useEffect(() => {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    listTrackedVendors()
+      .then((res) => {
+        if (cancelled) return
+        setTrackedVendorNames((res.vendors || []).map((vendor) => vendor.vendor_name.toLowerCase()))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setTrackedVendorNames([])
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   // Request version counter to prevent stale responses from overwriting state
@@ -423,6 +451,14 @@ export default function EvidenceExplorer() {
               <span className="text-slate-500">
                 Focused on <span className="text-slate-300">{activeVendor}</span>
               </span>
+              {isTrackedVendor ? (
+                <Link
+                  to={evidenceWatchlistsPath(searchParams, activeVendor)}
+                  className="text-violet-300 hover:text-violet-200 transition-colors"
+                >
+                  Watchlists
+                </Link>
+              ) : null}
               <Link
                 to={evidenceVendorPath(searchParams, activeVendor)}
                 className="text-cyan-400 hover:text-cyan-300 transition-colors"

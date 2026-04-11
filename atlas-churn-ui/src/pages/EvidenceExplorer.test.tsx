@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import EvidenceExplorer from './EvidenceExplorer'
 
 const api = vi.hoisted(() => ({
+  listTrackedVendors: vi.fn(),
   searchAvailableVendors: vi.fn(),
   fetchWitnesses: vi.fn(),
   fetchEvidenceVault: vi.fn(),
@@ -26,6 +27,10 @@ describe('EvidenceExplorer', () => {
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
+    api.listTrackedVendors.mockResolvedValue({
+      vendors: [{ vendor_name: 'Zendesk' }],
+      count: 1,
+    })
     api.searchAvailableVendors.mockResolvedValue({ vendors: [], count: 0 })
     api.fetchWitnesses.mockResolvedValue({
       vendor_name: 'Zendesk',
@@ -227,7 +232,7 @@ describe('EvidenceExplorer', () => {
     )
   })
 
-  it('shows vendor workspace, opportunities, and reports shortcuts for the active vendor', async () => {
+  it('shows watchlists, vendor workspace, opportunities, and reports shortcuts for the active vendor', async () => {
     render(
       <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
         <EvidenceExplorer />
@@ -235,6 +240,10 @@ describe('EvidenceExplorer', () => {
     )
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+    )
     expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
       '/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',

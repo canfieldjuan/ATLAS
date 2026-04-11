@@ -734,6 +734,37 @@ describe('Watchlists', () => {
     expect(screen.getByDisplayValue('1')).toBeInTheDocument()
   })
 
+  it('hydrates a vendor-focused watchlist URL and renders an evidence return link', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Back to Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&source=reddit',
+    )
+
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_names: ['Zendesk'],
+        category: undefined,
+        vendor_alert_threshold: undefined,
+        stale_days_threshold: undefined,
+      })
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_names: ['Zendesk'],
+        category: undefined,
+        source: undefined,
+        min_urgency: undefined,
+        include_stale: undefined,
+        account_alert_threshold: undefined,
+        stale_days_threshold: undefined,
+      })
+    })
+  })
+
   it('adds account drawer focus to the URL when an account row is opened', async () => {
     const user = userEvent.setup()
 

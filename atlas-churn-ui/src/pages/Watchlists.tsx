@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Activity,
+  ArrowLeft,
   BellRing,
   Building2,
   Download,
@@ -317,6 +318,42 @@ function watchlistViewUrl(viewId: string) {
   return `${window.location.origin}/watchlists?${params.toString()}`
 }
 
+function parseBackTo(value: string | null) {
+  if (!value) return null
+  if (
+    value.startsWith('/evidence')
+    || value.startsWith('/vendors/')
+    || value.startsWith('/reports')
+    || value.startsWith('/opportunities')
+  ) return value
+  try {
+    const url = new URL(value, window.location.origin)
+    if (
+      url.origin === window.location.origin
+      && (
+        url.pathname === '/evidence'
+        || url.pathname.startsWith('/vendors/')
+        || url.pathname === '/reports'
+        || url.pathname === '/opportunities'
+      )
+    ) {
+      return `${url.pathname}${url.search}`
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function backToLabel(value: string | null) {
+  if (!value) return 'Back'
+  if (value.startsWith('/evidence')) return 'Back to Evidence'
+  if (value.startsWith('/vendors/')) return 'Back to Vendor'
+  if (value.startsWith('/reports')) return 'Back to Reports'
+  if (value.startsWith('/opportunities')) return 'Back to Opportunities'
+  return 'Back'
+}
+
 function watchlistPath(searchParams: URLSearchParams) {
   const query = searchParams.toString()
   return `/watchlists${query ? `?${query}` : ''}`
@@ -431,6 +468,8 @@ function alertEventLabel(event: WatchlistAlertEvent) {
 export default function Watchlists() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const requestedVendorName = searchParams.get('vendor_name')?.trim() || ''
+  const requestedBackTo = parseBackTo(searchParams.get('back_to'))
   const [searchInput, setSearchInput] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [savedViewName, setSavedViewName] = useState('')
@@ -1053,6 +1092,19 @@ export default function Watchlists() {
   }, [activeWatchlistView?.id, applyWatchlistView, requestedWatchlistView])
 
   useEffect(() => {
+    if (!requestedVendorName || requestedWatchlistView) return
+    if (
+      selectedVendorFilters.length === 1
+      && selectedVendorFilters[0] === requestedVendorName
+      && selectedVendorFilter === requestedVendorName
+    ) {
+      return
+    }
+    setSelectedVendorFilter(requestedVendorName)
+    setSelectedVendorFilters([requestedVendorName])
+  }, [requestedVendorName, requestedWatchlistView, selectedVendorFilter, selectedVendorFilters])
+
+  useEffect(() => {
     if (loading) return
     if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
     const currentViewId = searchParams.get('view')?.trim() || ''
@@ -1072,6 +1124,33 @@ export default function Watchlists() {
     loading,
     requestedWatchlistView,
     searchParams,
+    setSearchParams,
+  ])
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentVendorName = searchParams.get('vendor_name')?.trim() || ''
+    const nextVendorName = activeWatchlistView
+      ? ''
+      : (selectedVendorFilters.length === 1 ? selectedVendorFilters[0] : selectedVendorFilter).trim()
+    if (currentVendorName === nextVendorName) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextVendorName) {
+        next.set('vendor_name', nextVendorName)
+      } else {
+        next.delete('vendor_name')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    selectedVendorFilter,
+    selectedVendorFilters,
     setSearchParams,
   ])
 
@@ -1855,6 +1934,15 @@ export default function Watchlists() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
+          {requestedBackTo ? (
+            <Link
+              to={requestedBackTo}
+              className="mb-3 inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              {backToLabel(requestedBackTo)}
+            </Link>
+          ) : null}
           <h1 className="text-2xl font-bold text-white">Watchlists</h1>
           <p className="mt-1 max-w-3xl text-sm text-slate-400">
             Track the vendors that matter, monitor movement across the slow-burn feed, and jump directly into vendor detail for evidence-backed review.
