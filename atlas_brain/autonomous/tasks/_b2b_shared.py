@@ -11996,6 +11996,7 @@ async def read_company_signal_candidate_group_summary(
             "near_threshold_source_mix": [],
             "unlock_candidates": [],
             "unlock_path_summary": [],
+            "unlock_focus": None,
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -13096,6 +13097,86 @@ async def read_company_signal_candidate_group_summary(
                 else None
             ),
         })
+    unlock_focus = None
+    if unlock_candidates:
+        primary_unlock_candidate = unlock_candidates[0]
+        alternate_unlock_candidate = next(
+            (
+                item
+                for item in unlock_candidates[1:]
+                if item.get("unlock_candidate_type") != primary_unlock_candidate.get("unlock_candidate_type")
+            ),
+            unlock_candidates[1] if len(unlock_candidates) > 1 else None,
+        )
+        if primary_unlock_candidate.get("unlock_candidate_type") == "low_trust_near_threshold_group":
+            recommended_action = "review_near_threshold_low_trust"
+            rationale = (
+                "closer_than_trusted_source_backlog"
+                if alternate_unlock_candidate is not None
+                else "only_near_threshold_path_available"
+            )
+        else:
+            recommended_action = "review_trusted_source_urgency_gap"
+            rationale = "no_near_threshold_low_trust_groups"
+        unlock_focus = {
+            "recommended_action": recommended_action,
+            "rationale": rationale,
+            "primary_unlock_candidate_type": primary_unlock_candidate.get("unlock_candidate_type"),
+            "primary_unlock_reason": primary_unlock_candidate.get("unlock_reason"),
+            "primary_vendor": primary_unlock_candidate.get("vendor"),
+            "primary_company": primary_unlock_candidate.get("company"),
+            "primary_display_company": primary_unlock_candidate.get("display_company"),
+            "primary_source": primary_unlock_candidate.get("source"),
+            "primary_group_count": primary_unlock_candidate.get("group_count"),
+            "primary_review_count": primary_unlock_candidate.get("review_count"),
+            "primary_confidence_gap_to_canonical": primary_unlock_candidate.get("confidence_gap_to_canonical"),
+            "primary_urgency_gap_to_high_intent": primary_unlock_candidate.get("urgency_gap_to_high_intent"),
+            "alternate_unlock_candidate_type": (
+                alternate_unlock_candidate.get("unlock_candidate_type")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_vendor": (
+                alternate_unlock_candidate.get("vendor")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_company": (
+                alternate_unlock_candidate.get("company")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_display_company": (
+                alternate_unlock_candidate.get("display_company")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_source": (
+                alternate_unlock_candidate.get("source")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_group_count": (
+                alternate_unlock_candidate.get("group_count")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_review_count": (
+                alternate_unlock_candidate.get("review_count")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_confidence_gap_to_canonical": (
+                alternate_unlock_candidate.get("confidence_gap_to_canonical")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+            "alternate_urgency_gap_to_high_intent": (
+                alternate_unlock_candidate.get("urgency_gap_to_high_intent")
+                if alternate_unlock_candidate is not None
+                else None
+            ),
+        }
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
@@ -13114,6 +13195,7 @@ async def read_company_signal_candidate_group_summary(
         "near_threshold_source_mix": [dict(row) for row in near_threshold_source_rows],
         "unlock_candidates": unlock_candidates,
         "unlock_path_summary": unlock_path_summary,
+        "unlock_focus": unlock_focus,
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],

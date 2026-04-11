@@ -803,6 +803,16 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["unlock_path_summary"][1]["lead_vendor"] == "Close"
     assert summary["unlock_path_summary"][1]["lead_source"] == "g2"
     assert summary["unlock_path_summary"][1]["min_urgency_gap_to_high_intent"] == 4.0
+    assert summary["unlock_focus"]["recommended_action"] == "review_near_threshold_low_trust"
+    assert summary["unlock_focus"]["rationale"] == "closer_than_trusted_source_backlog"
+    assert summary["unlock_focus"]["primary_unlock_candidate_type"] == "low_trust_near_threshold_group"
+    assert summary["unlock_focus"]["primary_vendor"] == "Copper"
+    assert summary["unlock_focus"]["primary_source"] == "reddit"
+    assert summary["unlock_focus"]["primary_confidence_gap_to_canonical"] == 0.19
+    assert summary["unlock_focus"]["alternate_unlock_candidate_type"] == "trusted_source_urgency_gap"
+    assert summary["unlock_focus"]["alternate_vendor"] == "Close"
+    assert summary["unlock_focus"]["alternate_source"] == "g2"
+    assert summary["unlock_focus"]["alternate_urgency_gap_to_high_intent"] == 4.0
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"
