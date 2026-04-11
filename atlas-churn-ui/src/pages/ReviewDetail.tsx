@@ -27,8 +27,12 @@ function DetailSkeleton() {
   )
 }
 
-function vendorDetailPath(vendorName: string) {
-  return `/vendors/${encodeURIComponent(vendorName)}`
+function vendorDetailPath(vendorName: string, backTo?: string) {
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  if (!backTo) return base
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `${base}?${next.toString()}`
 }
 
 function evidencePath(vendorName: string, backTo: string) {
@@ -177,7 +181,7 @@ export default function ReviewDetail() {
           <h1 className="text-2xl font-bold text-white">{review.vendor_name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
             <Link
-              to={vendorDetailPath(review.vendor_name)}
+              to={vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
               className="text-cyan-400 hover:text-cyan-300 transition-colors"
             >
               Vendor workspace

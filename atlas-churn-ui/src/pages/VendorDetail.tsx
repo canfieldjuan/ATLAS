@@ -146,7 +146,7 @@ function vendorDetailPath(vendorName: string): string {
 
 function normalizeBackTo(value: string | null | undefined): string | null {
   if (!value) return null
-  const allowedPrefixes = ['/vendors', '/watchlists', '/evidence', '/reports', '/opportunities']
+  const allowedPrefixes = ['/vendors', '/watchlists', '/evidence', '/reports', '/opportunities', '/reviews']
   const isAllowedPath = (candidate: string) => allowedPrefixes.some((prefix) => candidate.startsWith(prefix))
   if (isAllowedPath(value)) return value
   try {
@@ -173,6 +173,7 @@ function backToLabel(backTo: string): string {
   if (backTo.startsWith('/evidence')) return 'Back to Evidence'
   if (backTo.startsWith('/reports')) return 'Back to Reports'
   if (backTo.startsWith('/opportunities')) return 'Back to Opportunities'
+  if (backTo.startsWith('/reviews')) return 'Back to Review'
   return 'Back to Vendors'
 }
 
