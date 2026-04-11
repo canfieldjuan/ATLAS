@@ -675,6 +675,15 @@ def _extract_scrape_intake_funnel_from_result(
         except (TypeError, ValueError):
             return 0
 
+    def _company_signal_count(row: dict[str, Any]) -> int:
+        if "company_signal_eligible_reviews" in row:
+            return _count(row.get("company_signal_eligible_reviews"))
+        if "company_signal_reviews" in row:
+            return _count(row.get("company_signal_reviews"))
+        # Legacy scrape payloads only persisted named_company_reviews before the
+        # eligible-vs-raw_only split existed in task results.
+        return _count(row.get("named_company_reviews"))
+
     rows = payload.get("results")
     if not isinstance(rows, list):
         return None
@@ -704,7 +713,7 @@ def _extract_scrape_intake_funnel_from_result(
         totals["retained_pending"] += _count(row.get("retained_pending"))
         totals["retained_raw_only"] += _count(row.get("retained_raw_only"))
         totals["inserted"] += _count(row.get("inserted"))
-        totals["company_signal_eligible"] += _count(row.get("company_signal_eligible_reviews"))
+        totals["company_signal_eligible"] += _company_signal_count(row)
     return totals if matched else None
 
 
