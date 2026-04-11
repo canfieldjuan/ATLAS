@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useMemo } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Search, RefreshCw, X, Loader2, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
@@ -20,12 +20,52 @@ function formatGrowthRate(value: number | null) {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
+function vendorsPath(search: string, minUrgency: number, category: string) {
+  const next = new URLSearchParams()
+  if (search.trim()) next.set('search', search.trim())
+  if (minUrgency > 0) next.set('min_urgency', String(minUrgency))
+  if (category.trim()) next.set('category', category.trim())
+  const qs = next.toString()
+  return qs ? `/vendors?${qs}` : '/vendors'
+}
+
+function vendorDetailPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  if (backTo !== '/vendors') next.set('back_to', backTo)
+  const qs = next.toString()
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  return qs ? `${base}?${qs}` : base
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
+
 export default function Vendors() {
   const navigate = useNavigate()
-  const [search, setSearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [minUrgency, setMinUrgency] = useState(0)
-  const [category, setCategory] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '')
+  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('search') ?? '')
+  const [minUrgency, setMinUrgency] = useState(() => Number(searchParams.get('min_urgency') ?? '0') || 0)
+  const [category, setCategory] = useState(() => searchParams.get('category') ?? '')
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -33,6 +73,18 @@ export default function Vendors() {
     }, 300)
     return () => clearTimeout(timer)
   }, [search])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
+    else next.delete('search')
+    if (minUrgency > 0) next.set('min_urgency', String(minUrgency))
+    else next.delete('min_urgency')
+    if (category.trim()) next.set('category', category.trim())
+    else next.delete('category')
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [category, debouncedSearch, minUrgency, searchParams, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
@@ -49,6 +101,10 @@ export default function Vendors() {
   const categories = [...new Set(signals.map((s) => s.product_category).filter(Boolean))]
   const hasFilters = search !== '' || minUrgency > 0 || category !== ''
   const debouncePending = search !== debouncedSearch
+  const currentListPath = useMemo(
+    () => vendorsPath(debouncedSearch, minUrgency, category),
+    [category, debouncedSearch, minUrgency],
+  )
 
   function clearFilters() {
     setSearch('')
@@ -153,6 +209,35 @@ export default function Vendors() {
       sortable: true,
       sortValue: (r) => r.total_reviews,
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (r) => (
+        <div className="flex items-center gap-3 text-xs">
+          <Link
+            to={evidencePath(r.vendor_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-violet-300 hover:text-violet-200 transition-colors"
+          >
+            Evidence
+          </Link>
+          <Link
+            to={reportsPath(r.vendor_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+          >
+            Reports
+          </Link>
+          <Link
+            to={opportunitiesPath(r.vendor_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-emerald-300 hover:text-emerald-200 transition-colors"
+          >
+            Opportunities
+          </Link>
+        </div>
+      ),
+    },
   ]
 
   if (error) return <PageError error={error} onRetry={refresh} />
@@ -251,7 +336,7 @@ export default function Vendors() {
           <DataTable
             columns={columns}
             data={signals}
-            onRowClick={(r) => navigate(`/vendors/${encodeURIComponent(r.vendor_name)}`)}
+            onRowClick={(r) => navigate(vendorDetailPath(r.vendor_name, currentListPath))}
             emptyMessage="No signals match your filters"
             emptyAction={hasFilters ? { label: 'Clear all filters', onClick: clearFilters } : undefined}
           />
