@@ -1055,6 +1055,27 @@ describe('Watchlists', () => {
     )
   })
 
+  it('copies a vendor-focused link from the tracked vendor list', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit&category=Helpdesk']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy vendor link for Intercom' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/watchlists?source=reddit&category=Helpdesk&vendor_name=Intercom`,
+      )
+    })
+    expect(await screen.findByText('Copied vendor link for Intercom')).toBeInTheDocument()
+  })
+
   it('shows a header evidence explorer shortcut for single-vendor saved views', async () => {
     api.listWatchlistViews.mockResolvedValue({
       views: [

@@ -1435,11 +1435,11 @@ export default function Watchlists() {
     }
   }
 
-  async function handleCopyVendorRowLink(row: ChurnSignal) {
+  async function handleCopyVendorRowLink(vendorName: string) {
     try {
-      await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, row.vendor_name))
+      await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, vendorName))
       setActionError(null)
-      setActionMessage(`Copied vendor link for ${row.vendor_name}`)
+      setActionMessage(`Copied vendor link for ${vendorName}`)
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy vendor link')
@@ -1902,6 +1902,17 @@ export default function Watchlists() {
             Opportunities
           </Link>
           <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleCopyVendorRowLink(row.vendor_name)
+            }}
+            aria-label={`Copy vendor link for ${row.vendor_name}`}
+            className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+          >
+            Copy Link
+          </button>
+          <button
             onClick={(event) => {
               event.stopPropagation()
               handleRemoveVendor(row.vendor_name)
@@ -2007,7 +2018,7 @@ export default function Watchlists() {
               type="button"
               onClick={(event) => {
                 event.stopPropagation()
-                void handleCopyVendorRowLink(row)
+                void handleCopyVendorRowLink(row.vendor_name)
               }}
               aria-label={`Copy vendor link for ${row.vendor_name}`}
               className="text-slate-300 hover:text-slate-200"
