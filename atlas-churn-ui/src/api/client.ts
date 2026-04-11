@@ -68,6 +68,7 @@ const EVIDENCE_BASE = `${API_BASE}/api/v1/b2b/evidence`
 const BLOG_ADMIN_BASE = `${API_BASE}/api/v1/admin/blog`
 const PROSPECTS_BASE = `${API_BASE}/api/v1/b2b/prospects`
 const BRIEFINGS_BASE = `${API_BASE}/api/v1/b2b/briefings`
+const WEBHOOKS_BASE = `${API_BASE}/api/v1/b2b/dashboard`
 const AUTONOMOUS_BASE = `${API_BASE}/api/v1/autonomous`
 const CACHE_BUSTER_PARAM = '_ts'
 
@@ -473,6 +474,81 @@ export async function pushToCrm(
   return post<{ pushed: number; failed: { company: string; vendor: string; reason: string }[] }>(
     TENANT_BASE, '/push-to-crm', { opportunities },
   )
+}
+
+export type WebhookEventType = 'change_event' | 'churn_alert' | 'report_generated' | 'signal_update'
+export type WebhookChannel = 'generic' | 'slack' | 'teams' | 'crm_hubspot' | 'crm_salesforce' | 'crm_pipedrive'
+
+export interface WebhookSubscription {
+  id: string
+  url: string
+  event_types: WebhookEventType[]
+  channel: WebhookChannel
+  enabled: boolean
+  description: string | null
+  created_at: string
+  updated_at?: string
+  recent_deliveries_7d?: number
+  recent_success_rate_7d?: number | null
+}
+
+export interface WebhookDeliverySummary {
+  window_days: number
+  active_subscriptions: number
+  total_deliveries: number
+  successful: number
+  failed: number
+  success_rate: number | null
+  avg_success_duration_ms: number | null
+  p95_success_duration_ms: number | null
+  last_delivery_at: string | null
+}
+
+export interface WebhookCreateBody {
+  url: string
+  secret: string
+  event_types: WebhookEventType[]
+  channel: WebhookChannel
+  auth_header?: string
+  description?: string
+}
+
+export interface WebhookUpdateBody {
+  url?: string
+  event_types?: WebhookEventType[]
+  enabled?: boolean
+  description?: string
+}
+
+export interface WebhookTestResult {
+  success: boolean
+  subscription_id: string
+  channel: WebhookChannel
+  error?: string
+}
+
+export async function listWebhooks() {
+  return get<{ webhooks: WebhookSubscription[]; count: number }>(WEBHOOKS_BASE, '/webhooks')
+}
+
+export async function fetchWebhookDeliverySummary(days = 7) {
+  return get<WebhookDeliverySummary>(WEBHOOKS_BASE, '/webhooks/delivery-summary', { days })
+}
+
+export async function createWebhook(body: WebhookCreateBody) {
+  return post<WebhookSubscription>(WEBHOOKS_BASE, '/webhooks', body)
+}
+
+export async function updateWebhookSubscription(webhookId: string, body: WebhookUpdateBody) {
+  return patch<WebhookSubscription>(WEBHOOKS_BASE, `/webhooks/${encodeURIComponent(webhookId)}`, body)
+}
+
+export async function deleteWebhookSubscription(webhookId: string) {
+  return del<{ deleted: boolean; id: string }>(WEBHOOKS_BASE, `/webhooks/${encodeURIComponent(webhookId)}`)
+}
+
+export async function testWebhookSubscription(webhookId: string) {
+  return post<WebhookTestResult>(WEBHOOKS_BASE, `/webhooks/${encodeURIComponent(webhookId)}/test`)
 }
 
 export async function approveCampaign(id: string) {
