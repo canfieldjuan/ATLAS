@@ -2899,6 +2899,7 @@ async def get_company_signal_candidate_group_summary(
 @router.get("/company-signal-review-impact-summary")
 async def get_company_signal_review_impact_summary(
     vendor_name: Optional[str] = Query(None),
+    review_scope: Optional[str] = Query(None),
     review_action: Optional[str] = Query(None),
     company_signal_action: Optional[str] = Query(None),
     review_priority_band: Optional[str] = Query(None),
@@ -2912,6 +2913,7 @@ async def get_company_signal_review_impact_summary(
 ):
     """Summarize downstream yield from company-signal review actions."""
     vendor_name = _optional_query_text(vendor_name)
+    review_scope = _optional_query_text(review_scope)
     review_action = _optional_query_text(review_action)
     company_signal_action = _optional_query_text(company_signal_action)
     review_priority_band = _optional_query_text(review_priority_band)
@@ -2920,6 +2922,11 @@ async def get_company_signal_review_impact_summary(
     review_unlock_reason = _optional_query_text(review_unlock_reason)
     candidate_source = _optional_query_text(candidate_source)
 
+    if review_scope is not None and review_scope not in {"candidate", "group", "bulk_group"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_scope must be 'candidate', 'group', or 'bulk_group'",
+        )
     if review_action is not None and review_action not in {"approved", "suppressed"}:
         raise HTTPException(
             status_code=400,
@@ -2943,6 +2950,7 @@ async def get_company_signal_review_impact_summary(
         window_days=window_days,
         vendor_name=vendor_name,
         scoped_vendors=scoped_vendors,
+        review_scope=review_scope,
         review_action=review_action,
         company_signal_action=company_signal_action,
         review_priority_band=review_priority_band,
@@ -2952,6 +2960,7 @@ async def get_company_signal_review_impact_summary(
         candidate_source=candidate_source,
         top_n=top_n,
     )
+    summary["review_scope"] = review_scope
     summary["review_action"] = review_action
     summary["company_signal_action"] = company_signal_action
     summary["review_priority_band"] = review_priority_band

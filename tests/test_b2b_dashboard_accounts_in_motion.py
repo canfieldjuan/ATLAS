@@ -393,6 +393,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
             ) as read_mock:
                 result = await b2b_dashboard.get_company_signal_review_impact_summary(
                     vendor_name="Zen",
+                    review_scope="group",
                     review_action="approved",
                     company_signal_action="created",
                     review_priority_band="high",
@@ -407,6 +408,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
 
     assert result == {
         **returned,
+        "review_scope": "group",
         "review_action": "approved",
         "company_signal_action": "created",
         "review_priority_band": "high",
@@ -421,6 +423,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         window_days=14,
         vendor_name="Zen",
         scoped_vendors=["Zendesk"],
+        review_scope="group",
         review_action="approved",
         company_signal_action="created",
         review_priority_band="high",
@@ -430,6 +433,22 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         candidate_source="reddit",
         top_n=5,
     )
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_review_impact_summary_rejects_invalid_review_scope():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_company_signal_review_impact_summary(
+                vendor_name=None,
+                review_scope="item",
+                window_days=30,
+                top_n=10,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "review_scope" in exc.value.detail
 
 
 @pytest.mark.asyncio

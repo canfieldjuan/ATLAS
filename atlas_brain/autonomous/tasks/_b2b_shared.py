@@ -13248,6 +13248,7 @@ def _company_signal_review_event_filters(
     window_days: int = 30,
     vendor_name: str | None = None,
     scoped_vendors: list[str] | None = None,
+    review_scope: str | None = None,
     review_action: str | None = None,
     company_signal_action: str | None = None,
     review_priority_band: str | None = None,
@@ -13269,6 +13270,10 @@ def _company_signal_review_event_filters(
     if vendor_name:
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
         params.append(vendor_name)
+        idx += 1
+    if review_scope:
+        conditions.append(f"review_scope = ${idx}")
+        params.append(review_scope)
         idx += 1
     if review_action:
         conditions.append(f"review_action = ${idx}")
@@ -13308,6 +13313,7 @@ async def read_company_signal_review_impact_summary(
     window_days: int = 30,
     vendor_name: str | None = None,
     scoped_vendors: list[str] | None = None,
+    review_scope: str | None = None,
     review_action: str | None = None,
     company_signal_action: str | None = None,
     review_priority_band: str | None = None,
@@ -13322,6 +13328,7 @@ async def read_company_signal_review_impact_summary(
         window_days=window_days,
         vendor_name=vendor_name,
         scoped_vendors=scoped_vendors,
+        review_scope=review_scope,
         review_action=review_action,
         company_signal_action=company_signal_action,
         review_priority_band=review_priority_band,
@@ -13355,6 +13362,7 @@ async def read_company_signal_review_impact_summary(
                 "avg_rebuild_accounts_per_triggered": 0.0,
             },
             "scopes": [],
+            "review_scope": review_scope,
             "unlock_paths": [],
             "priority_bands": [],
             "priority_reasons": [],
@@ -13785,6 +13793,7 @@ async def read_company_signal_review_impact_summary(
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     return {
         "totals": totals_payload,
+        "review_scope": review_scope,
         "scopes": [dict(row) for row in scope_rows],
         "unlock_paths": [_with_effect_metrics(row) for row in unlock_path_rows],
         "priority_bands": [_with_effect_metrics(row) for row in priority_rows],

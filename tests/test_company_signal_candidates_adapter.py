@@ -968,6 +968,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         pool,
         window_days=30,
         scoped_vendors=["Zendesk"],
+        review_scope="bulk_group",
         review_action="approved",
         company_signal_action="created",
         review_priority_band="promote_now",
@@ -985,6 +986,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     priority_reason_sql = pool.fetch.call_args_list[3][0][0]
     vendors_sql = pool.fetch.call_args_list[4][0][0]
     vendor_reasons_sql = pool.fetch.call_args_list[5][0][0]
+    assert "review_scope =" in totals_sql
     assert "review_action =" in totals_sql
     assert "company_signal_action =" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
@@ -1008,6 +1010,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "vendor_rebuilds" in vendors_sql
     assert "vendor_reason_actions" in vendor_reasons_sql
     assert "vendor_reason_rebuilds" in vendor_reasons_sql
+    assert summary["review_scope"] == "bulk_group"
     assert summary["totals"]["total_actions"] == 6
     assert summary["totals"]["company_signal_effect_rate"] == 1.0
     assert summary["totals"]["company_signal_creation_rate"] == 0.5
