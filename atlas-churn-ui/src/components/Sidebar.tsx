@@ -52,7 +52,7 @@ const supportingLinks: SidebarLink[] = [
   { to: '/overview', icon: LayoutDashboard, label: 'Overview' },
   { to: '/reviews', icon: MessageSquareText, label: 'Reviews' },
   { to: '/reports', icon: FileBarChart, label: 'Reports', gate: 'reports' },
-  { to: '/alerts-api', icon: BellRing, label: 'Alerts API' },
+  { to: '/alerts', icon: BellRing, label: 'Alerts API' },
   { to: '/predictor', icon: Target, label: 'Win/Loss' },
   { to: '/affiliates', icon: Handshake, label: 'Affiliates' },
   { to: '/blog', icon: Newspaper, label: 'Blog' },

@@ -101,7 +101,8 @@ export default function App() {
             <Route path="/reports/:id" element={renderLazyRoute(ReportDetail)} />
             <Route path="/leads" element={<Navigate to="/opportunities" replace />} />
             <Route path="/opportunities" element={renderLazyRoute(Opportunities)} />
-            <Route path="/alerts-api" element={renderLazyRoute(IncidentAlerts)} />
+            <Route path="/alerts" element={renderLazyRoute(IncidentAlerts)} />
+            <Route path="/alerts-api" element={<Navigate to="/alerts" replace />} />
             <Route path="/vendor-targets" element={renderLazyRoute(VendorTargets)} />
             <Route path="/challengers" element={renderLazyRoute(Challengers)} />
             <Route path="/affiliates" element={renderLazyRoute(Affiliates)} />
