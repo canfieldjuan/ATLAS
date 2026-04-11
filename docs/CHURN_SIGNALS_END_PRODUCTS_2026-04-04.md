@@ -20,6 +20,10 @@ Do not expand this benchmark with:
 - Amazon or consumer-review products
 - generic "AI chat over everything" ideas
 
+See also:
+
+- [CHURN_SIGNALS_UI_FIRST_GUARDRAILS_2026-04-10.md](/home/juan-canfield/Desktop/Atlas/docs/CHURN_SIGNALS_UI_FIRST_GUARDRAILS_2026-04-10.md)
+
 ---
 
 ## Benchmark Ranking
