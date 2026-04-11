@@ -1439,6 +1439,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyAccountRowReviewLink(row: AccountsInMotionFeedItem, reviewId: string) {
+    try {
+      await navigator.clipboard.writeText(watchlistReviewUrl(searchParams, row, reviewId))
+      setActionError(null)
+      setActionMessage(`Copied review link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy review link')
+    }
+  }
+
   async function handleCopyVendorRowLink(vendorName: string) {
     try {
       await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, vendorName))
@@ -2261,6 +2272,20 @@ export default function Watchlists() {
               >
                 Review
               </Link>
+            )}
+            {primaryReviewId && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyAccountRowReviewLink(row, primaryReviewId)
+                }}
+                aria-label={`Copy review link for ${row.vendor}`}
+                className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                title="Copy review link"
+              >
+                Copy review
+              </button>
             )}
             {row.company && (
               <button
