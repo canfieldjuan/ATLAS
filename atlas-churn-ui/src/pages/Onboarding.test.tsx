@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Onboarding from './Onboarding'
 
@@ -18,15 +19,18 @@ vi.mock('../auth/AuthContext', () => auth)
 vi.mock('../api/client', () => api)
 
 describe('Onboarding', () => {
+  const refreshUser = vi.fn()
+
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
+    refreshUser.mockResolvedValue(undefined)
     auth.useAuth.mockReturnValue({
       user: {
         vendor_limit: 5,
         product: 'b2b_growth',
       },
-      refreshUser: vi.fn().mockResolvedValue(undefined),
+      refreshUser,
     })
     api.searchAvailableVendors.mockResolvedValue({ vendors: [] })
     api.addTrackedVendor.mockResolvedValue({})
@@ -60,5 +64,23 @@ describe('Onboarding', () => {
       '/vendors/Zendesk?back_to=%2Fonboarding%3Fq%3DZendesk',
     )
     expect(screen.getByRole('button', { name: 'Continue to watchlists' })).toBeInTheDocument()
+  })
+
+  it('preserves back_to when continuing', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/onboarding?back_to=%2Faccount&q=Zendesk']}>
+        <Routes>
+          <Route path="/onboarding" element={<Onboarding />} />
+          <Route path="/account" element={<div>Account Destination</div>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Skip for now' }))
+
+    expect(refreshUser).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Account Destination')).toBeInTheDocument()
   })
 })

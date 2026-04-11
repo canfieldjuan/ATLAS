@@ -15,6 +15,7 @@ export default function Onboarding() {
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const returnPath = searchParams.get('back_to')?.trim() || '/'
   const [query, setQuery] = useState(searchParams.get('q')?.trim() || '')
   const [results, setResults] = useState<VendorSearchResult[]>([])
   const [added, setAdded] = useState<string[]>([])
@@ -63,10 +64,11 @@ export default function Onboarding() {
 
   useEffect(() => {
     const next = new URLSearchParams()
+    if (returnPath && returnPath !== '/') next.set('back_to', returnPath)
     if (query.trim()) next.set('q', query.trim())
     if (next.toString() === searchParams.toString()) return
     setSearchParams(next, { replace: true })
-  }, [query, searchParams, setSearchParams])
+  }, [query, returnPath, searchParams, setSearchParams])
 
   async function handleAdd(vendor: string) {
     if (added.length >= limit) return
@@ -96,7 +98,7 @@ export default function Onboarding() {
 
   async function handleContinue() {
     await refreshUser()
-    navigate('/')
+    navigate(returnPath)
   }
 
   return (
