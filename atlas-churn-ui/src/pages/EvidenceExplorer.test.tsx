@@ -131,12 +131,16 @@ describe('EvidenceExplorer', () => {
 
   it('hydrates vendor, filters, and witness focus from the URL', async () => {
     render(
-      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1']}>
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
         <EvidenceExplorer />
       </MemoryRouter>,
     )
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1&account_vendor=Zendesk',
+    )
 
     await waitFor(() => {
       expect(api.fetchWitnesses).toHaveBeenLastCalledWith({

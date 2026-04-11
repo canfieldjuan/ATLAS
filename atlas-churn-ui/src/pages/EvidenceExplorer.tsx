@@ -3,7 +3,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import {
   Search, Fingerprint, Loader2, Database, GitBranch,
   ShieldCheck, ShieldAlert, ChevronDown, ChevronRight,
-  ArrowRight, FileText, Layers, Filter, ExternalLink, Copy,
+  ArrowLeft, ArrowRight, FileText, Layers, Filter, ExternalLink, Copy,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import EvidenceDrawer, { SourceBadge, SIGNAL_COLORS } from '../components/EvidenceDrawer'
@@ -43,6 +43,20 @@ function evidenceExplorerUrl(searchParams: URLSearchParams) {
   return `${window.location.origin}/evidence${query ? `?${query}` : ''}`
 }
 
+function parseBackTo(value: string | null) {
+  if (!value) return null
+  if (value.startsWith('/watchlists')) return value
+  try {
+    const url = new URL(value, window.location.origin)
+    if (url.origin === window.location.origin && url.pathname === '/watchlists') {
+      return `${url.pathname}${url.search}`
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -80,6 +94,7 @@ export default function EvidenceExplorer() {
   const requestedSource = searchParams.get('source')?.trim() || ''
   const requestedWitnessType = searchParams.get('witness_type')?.trim() || ''
   const requestedWitnessId = searchParams.get('witness_id')?.trim() || ''
+  const requestedBackTo = parseBackTo(searchParams.get('back_to'))
 
   // Search state
   const [vendorInput, setVendorInput] = useState(requestedVendor)
@@ -316,6 +331,15 @@ export default function EvidenceExplorer() {
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
+          {requestedBackTo && (
+            <Link
+              to={requestedBackTo}
+              className="mb-3 inline-flex items-center gap-2 text-sm text-cyan-300 hover:text-cyan-200"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back to Watchlists
+            </Link>
+          )}
           <h1 className="text-2xl font-bold text-white flex items-center gap-2.5">
             <Fingerprint className="w-7 h-7 text-cyan-400" />
             Evidence Explorer

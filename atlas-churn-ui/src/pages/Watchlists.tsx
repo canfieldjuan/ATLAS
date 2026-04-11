@@ -328,11 +328,13 @@ function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotio
   return `${window.location.origin}/watchlists?${next.toString()}`
 }
 
-function watchlistWitnessExplorerUrl(vendorName: string, witnessId: string) {
+function watchlistWitnessExplorerUrl(searchParams: URLSearchParams, vendorName: string, witnessId: string) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
   params.set('witness_id', witnessId)
+  const backToQuery = searchParams.toString()
+  params.set('back_to', `/watchlists${backToQuery ? `?${backToQuery}` : ''}`)
   return `${window.location.origin}/evidence?${params.toString()}`
 }
 
@@ -876,7 +878,7 @@ export default function Watchlists() {
 
   useEffect(() => {
     if (loading) return
-    if (hasRequestedAccountFocus && !requestedAccount && !selectedAccount) return
+    if (requestedAccount && !selectedAccount) return
     const nextFocus = selectedAccount ? accountFocusFromRow(selectedAccount) : null
     const currentFocus = {
       vendor: searchParams.get('account_vendor')?.trim() || '',
@@ -2961,7 +2963,7 @@ export default function Watchlists() {
         onClose={handleCloseWitnessDrawer}
         explorerUrl={
           evidenceDrawerWitnessId && evidenceDrawerVendor
-            ? watchlistWitnessExplorerUrl(evidenceDrawerVendor, evidenceDrawerWitnessId)
+            ? watchlistWitnessExplorerUrl(searchParams, evidenceDrawerVendor, evidenceDrawerWitnessId)
             : null
         }
       />
