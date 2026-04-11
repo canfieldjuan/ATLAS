@@ -3478,6 +3478,18 @@ class B2BChurnConfig(BaseSettings):
         le=1.0,
         description="Minimum unit-confidence required for low-trust company signals to enter canonical named-account products",
     )
+    company_signal_candidate_medium_confidence: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum unit-confidence for analyst-assist company-signal candidates to be labeled medium confidence",
+    )
+    company_signal_candidate_high_confidence: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum unit-confidence for analyst-assist company-signal candidates to be labeled high confidence",
+    )
     high_intent_require_signal_evidence: bool = Field(
         default=True,
         description="Require explicit churn/evaluation/renewal signal evidence before reviewer-company rows enter named-account high-intent products",

@@ -601,6 +601,24 @@ def _normalize_company_signal_confidence(value: Any) -> float | None:
     return round(min(1.0, max(0.0, confidence)), 3)
 
 
+def _company_signal_candidate_confidence_tier(value: Any) -> str:
+    """Bucket candidate confidence into operator-friendly tiers."""
+    confidence = _normalize_company_signal_confidence(value) or 0.0
+    medium_threshold = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_candidate_medium_confidence", 0.3),
+    ) or 0.3
+    high_threshold = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_candidate_high_confidence", 0.6),
+    ) or 0.6
+    if high_threshold < medium_threshold:
+        high_threshold = medium_threshold
+    if confidence >= high_threshold:
+        return "high"
+    if confidence >= medium_threshold:
+        return "medium"
+    return "low"
+
+
 def _eligible_review_timestamp_expr(*, alias: str = "") -> str:
     """Stable review-occurrence timestamp for intelligence windows."""
     p = f"{alias}." if alias else ""
@@ -5978,6 +5996,179 @@ async def _fetch_high_intent_companies(
     return results
 
 
+async def _fetch_company_signal_review_candidates(
+    pool,
+    *,
+    window_days: int,
+    urgency_threshold: float | None = None,
+    vendor_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    candidate_bucket: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch review-level company-signal candidates for analyst-assist workflows."""
+    sources = _intelligence_source_allowlist()
+    filters = _eligible_review_filters(window_param=1, source_param=2, alias="r")
+    params: list[Any] = [window_days, sources]
+    extra_where = ""
+    idx = 3
+    if vendor_name:
+        extra_where += f"\n          AND r.vendor_name ILIKE '%' || ${idx} || '%'"
+        params.append(vendor_name)
+        idx += 1
+    if scoped_vendors is not None:
+        if not scoped_vendors:
+            return []
+        extra_where += f"\n          AND r.vendor_name = ANY(${idx}::text[])"
+        params.append(scoped_vendors)
+        idx += 1
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = f"\n        LIMIT ${idx}"
+        params.append(limit)
+        idx += 1
+    rows = await pool.fetch(
+        f"""
+        SELECT r.id AS review_id,
+               r.source,
+               COALESCE(
+                   CASE
+                       WHEN ar.confidence_label IN ('high', 'medium')
+                       THEN ar.resolved_company_name
+                       ELSE NULL
+                   END,
+                   r.reviewer_company
+               ) AS reviewer_company,
+               r.reviewer_company AS raw_reviewer_company,
+               ar.confidence_label AS resolution_confidence,
+               r.vendor_name,
+               r.product_category,
+               COALESCE(r.reviewed_at, r.imported_at, r.enriched_at) AS reviewed_at,
+               r.reviewer_title,
+               r.company_size_raw,
+               COALESCE(
+                   poc.industry,
+                   r.reviewer_industry,
+                   r.enrichment->'reviewer_context'->>'industry'
+               ) AS industry,
+               poc.domain AS company_domain,
+               r.enrichment->'reviewer_context'->>'role_level' AS role_level,
+               (r.enrichment->'reviewer_context'->>'decision_maker')::boolean AS is_dm,
+               (r.enrichment->>'urgency_score')::numeric AS urgency,
+               r.enrichment->>'pain_category' AS pain,
+               r.enrichment->'competitors_mentioned' AS alternatives,
+               r.enrichment->'budget_signals'->>'seat_count' AS seat_count,
+               r.enrichment->'timeline'->>'contract_end' AS contract_end,
+               r.enrichment->'buyer_authority'->>'buying_stage' AS buying_stage,
+               r.relevance_score,
+               r.author_churn_score,
+               (r.enrichment->'churn_signals'->>'intent_to_leave')::boolean AS intent_to_leave,
+               (r.enrichment->'churn_signals'->>'actively_evaluating')::boolean AS actively_evaluating,
+               (r.enrichment->'churn_signals'->>'contract_renewal_mentioned')::boolean AS contract_renewal_mentioned,
+               (r.enrichment->'urgency_indicators'->>'explicit_cancel_language')::boolean AS indicator_cancel,
+               (r.enrichment->'urgency_indicators'->>'active_migration_language')::boolean AS indicator_migration,
+               (r.enrichment->'urgency_indicators'->>'active_evaluation_language')::boolean AS indicator_evaluation,
+               (r.enrichment->'urgency_indicators'->>'completed_switch_language')::boolean AS indicator_switch
+        FROM b2b_reviews r
+        LEFT JOIN b2b_account_resolution ar
+            ON ar.review_id = r.id AND ar.resolution_status = 'resolved'
+        LEFT JOIN prospect_org_cache poc
+            ON poc.company_name_norm = CASE
+                WHEN ar.confidence_label IN ('high', 'medium')
+                THEN ar.normalized_company_name
+                ELSE NULL
+            END
+        WHERE {filters}{extra_where}
+          AND r.reviewer_company IS NOT NULL AND r.reviewer_company <> ''
+          AND COALESCE(r.relevance_score, 0.5) >= 0.3
+        ORDER BY COALESCE((r.enrichment->>'urgency_score')::numeric, 0) DESC,
+                 COALESCE(r.relevance_score, 0.5) DESC,
+                 COALESCE(r.reviewed_at, r.imported_at, r.enriched_at) DESC{limit_clause}
+        """,
+        *params,
+    )
+    min_urgency = float(
+        urgency_threshold
+        if urgency_threshold is not None
+        else getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0)
+    )
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        alternatives = _safe_json(row.get("alternatives"))
+        blocked_names = {
+            normalize_company_name(name)
+            for name in _extract_alternative_names(alternatives)
+            if normalize_company_name(name)
+        }
+        seat_count = None
+        if row.get("seat_count"):
+            try:
+                seat_count = int(row["seat_count"])
+            except (TypeError, ValueError):
+                pass
+        confidence_score = _compute_company_signal_confidence({
+            "source": row.get("source"),
+            "decision_maker": bool(row["is_dm"]) if row.get("is_dm") is not None else None,
+            "buying_stage": row.get("buying_stage"),
+            "seat_count": seat_count,
+        })
+        exclusion_reason = _company_signal_exclusion_reason(
+            row.get("reviewer_company"),
+            current_vendor=row.get("vendor_name") or "",
+            blocked_names=blocked_names,
+            source=row.get("source"),
+            confidence_score=confidence_score,
+        )
+        if exclusion_reason in {"ineligible_company_name", "deprecated_source"}:
+            continue
+        try:
+            urgency = float(row["urgency"]) if row.get("urgency") is not None else 0.0
+        except (TypeError, ValueError):
+            urgency = 0.0
+        signal_evidence_present = _high_intent_row_has_signal_evidence(dict(row))
+        canonical_gap_reason = exclusion_reason
+        if canonical_gap_reason is None and urgency < min_urgency:
+            canonical_gap_reason = "below_high_intent_threshold"
+        if (
+            canonical_gap_reason is None
+            and _high_intent_signal_evidence_enabled()
+            and not signal_evidence_present
+        ):
+            canonical_gap_reason = "missing_signal_evidence"
+        bucket = "canonical_ready" if canonical_gap_reason is None else "analyst_review"
+        if candidate_bucket and bucket != candidate_bucket:
+            continue
+        results.append({
+            "review_id": str(row["review_id"]) if row.get("review_id") else None,
+            "company_name": row.get("reviewer_company"),
+            "company_name_raw": row.get("raw_reviewer_company"),
+            "resolution_confidence": row.get("resolution_confidence"),
+            "vendor_name": row.get("vendor_name"),
+            "product_category": row.get("product_category"),
+            "source": row.get("source"),
+            "reviewed_at": row.get("reviewed_at"),
+            "title": row.get("reviewer_title"),
+            "company_size": row.get("company_size_raw"),
+            "industry": row.get("industry"),
+            "company_domain": row.get("company_domain"),
+            "role_level": row.get("role_level"),
+            "decision_maker": row.get("is_dm"),
+            "urgency_score": urgency,
+            "pain_category": row.get("pain"),
+            "seat_count": seat_count,
+            "contract_end": row.get("contract_end"),
+            "buying_stage": row.get("buying_stage"),
+            "relevance_score": float(row["relevance_score"]) if row.get("relevance_score") is not None else None,
+            "author_churn_score": float(row["author_churn_score"]) if row.get("author_churn_score") is not None else None,
+            "confidence_score": confidence_score,
+            "confidence_tier": _company_signal_candidate_confidence_tier(confidence_score),
+            "signal_evidence_present": signal_evidence_present,
+            "canonical_gap_reason": canonical_gap_reason,
+            "candidate_bucket": bucket,
+        })
+    return results
+
+
 async def _fetch_existing_company_signals(
     pool,
     *,
@@ -11103,6 +11294,105 @@ async def read_high_intent_companies(
         scoped_vendors=scoped_vendors,
         limit=limit,
     )
+
+
+async def read_company_signal_candidates(
+    pool,
+    *,
+    window_days: int = 90,
+    vendor_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    candidate_bucket: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Shared adapter for persisted analyst-assist company-signal candidates."""
+    conditions = ["last_seen_at >= NOW() - make_interval(days => $1)"]
+    params: list[Any] = [window_days]
+    idx = 2
+
+    if scoped_vendors is not None:
+        if not scoped_vendors:
+            return []
+        conditions.append(f"vendor_name = ANY(${idx}::text[])")
+        params.append(scoped_vendors)
+        idx += 1
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+    if candidate_bucket:
+        conditions.append(f"candidate_bucket = ${idx}")
+        params.append(candidate_bucket)
+        idx += 1
+
+    limit_param = idx
+    params.append(limit)
+    rows = await pool.fetch(
+        f"""
+        SELECT review_id,
+               company_name,
+               company_name_raw,
+               vendor_name,
+               product_category,
+               source,
+               reviewed_at,
+               urgency_score,
+               relevance_score,
+               pain_category,
+               buyer_role,
+               decision_maker,
+               seat_count,
+               contract_end,
+               buying_stage,
+               resolution_confidence,
+               confidence_score,
+               confidence_tier,
+               signal_evidence_present,
+               canonical_gap_reason,
+               candidate_bucket,
+               materialization_run_id,
+               first_seen_at,
+               last_seen_at
+        FROM b2b_company_signal_candidates
+        WHERE {" AND ".join(conditions)}
+        ORDER BY CASE WHEN candidate_bucket = 'canonical_ready' THEN 0 ELSE 1 END,
+                 urgency_score DESC NULLS LAST,
+                 confidence_score DESC NULLS LAST,
+                 reviewed_at DESC NULLS LAST,
+                 last_seen_at DESC
+        LIMIT ${limit_param}
+        """,
+        *params,
+    )
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        results.append({
+            "review_id": str(row["review_id"]) if row.get("review_id") else None,
+            "company": row.get("company_name"),
+            "raw_company": row.get("company_name_raw"),
+            "vendor": row.get("vendor_name"),
+            "category": row.get("product_category"),
+            "source": row.get("source"),
+            "reviewed_at": str(row.get("reviewed_at") or "") or None,
+            "urgency": float(row["urgency_score"]) if row.get("urgency_score") is not None else None,
+            "relevance_score": float(row["relevance_score"]) if row.get("relevance_score") is not None else None,
+            "pain": row.get("pain_category"),
+            "role_level": row.get("buyer_role"),
+            "decision_maker": row.get("decision_maker"),
+            "seat_count": row.get("seat_count"),
+            "contract_end": row.get("contract_end"),
+            "buying_stage": row.get("buying_stage"),
+            "resolution_confidence": row.get("resolution_confidence"),
+            "confidence_score": float(row["confidence_score"]) if row.get("confidence_score") is not None else None,
+            "confidence_tier": row.get("confidence_tier"),
+            "signal_evidence_present": bool(row.get("signal_evidence_present")),
+            "canonical_gap_reason": row.get("canonical_gap_reason"),
+            "candidate_bucket": row.get("candidate_bucket"),
+            "materialization_run_id": row.get("materialization_run_id"),
+            "first_seen_at": str(row.get("first_seen_at") or "") or None,
+            "last_seen_at": str(row.get("last_seen_at") or "") or None,
+        })
+    return results
 
 
 async def read_review_details(

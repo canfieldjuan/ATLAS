@@ -51,6 +51,7 @@ _PERSISTENCE_PHASES = (
     "displacement_edges",
     "churn_signals",
     "company_signals",
+    "company_signal_candidates",
     "pain_points",
     "use_cases",
     "integrations",
@@ -117,6 +118,7 @@ from ._b2b_shared import (  # noqa: E402
     read_vendor_scorecards,
     _sync_vendor_firmographics,
     _fetch_high_intent_companies,
+    _fetch_company_signal_review_candidates,
     _fetch_existing_company_signals,
     _fetch_competitive_displacement_source_of_truth,
     _fetch_displacement_provenance,
@@ -739,6 +741,7 @@ def _apply_vendor_scope_to_churn_inputs(
         "vendor_scores": ("vendor_name", "vendor"),
         "vendor_scores_from_signals": ("vendor_name", "vendor"),
         "high_intent": ("vendor", "vendor_name"),
+        "company_signal_candidates": ("vendor_name", "vendor"),
         "competitive_disp": ("vendor", "vendor_name", "from_vendor"),
         "pain_dist": ("vendor", "vendor_name"),
         "feature_gaps": ("vendor", "vendor_name"),
@@ -1486,7 +1489,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
 
     # Gather all data sources + data_context + provenance in parallel
     (
-        vendor_scores, high_intent, existing_company_signals,
+        vendor_scores, high_intent, company_signal_candidates, existing_company_signals,
         competitive_disp,
         pain_dist, feature_gaps,
         negative_counts, price_rates, dm_rates,
@@ -1509,6 +1512,11 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     ) = await asyncio.gather(
         _fetch_vendor_churn_scores(pool, window_days, min_reviews),
         _fetch_high_intent_companies(pool, urgency_threshold, window_days),
+        _fetch_company_signal_review_candidates(
+            pool,
+            window_days=window_days,
+            urgency_threshold=urgency_threshold,
+        ),
         _fetch_existing_company_signals(pool, window_days=window_days),
         _fetch_competitive_displacement_source_of_truth(
             pool,
@@ -1565,6 +1573,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     if isinstance(existing_company_signals, Exception):
         logger.warning("existing_company_signals fetch failed: %s", existing_company_signals)
         existing_company_signals = {}
+    if isinstance(company_signal_candidates, Exception):
+        logger.warning("company_signal_candidates fetch failed: %s", company_signal_candidates)
+        company_signal_candidates = []
     competitive_disp = _aggregate_competitive_disp(_safe(competitive_disp, "competitive_disp"))
     pain_dist = _safe(pain_dist, "pain_dist")
     feature_gaps = _safe(feature_gaps, "feature_gaps")
@@ -1635,6 +1646,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             {
                 "vendor_scores": vendor_scores,
                 "high_intent": high_intent,
+                "company_signal_candidates": company_signal_candidates,
                 "existing_company_signals": existing_company_signals,
                 "competitive_disp": competitive_disp,
                 "pain_dist": pain_dist,
@@ -1670,6 +1682,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         )
         vendor_scores = scoped_data["vendor_scores"]
         high_intent = scoped_data["high_intent"]
+        company_signal_candidates = scoped_data["company_signal_candidates"]
         existing_company_signals = scoped_data["existing_company_signals"]
         competitive_disp = scoped_data["competitive_disp"]
         pain_dist = scoped_data["pain_dist"]
@@ -2480,6 +2493,12 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     displacement_edges_persisted = 0
     upsert_failures = 0
     company_signals_persisted = 0
+    company_signal_candidates_persisted = 0
+    canonical_ready_company_signal_candidates = sum(
+        1
+        for item in (company_signal_candidates or [])
+        if item.get("candidate_bucket") == "canonical_ready"
+    )
     pain_points_persisted = 0
     use_cases_persisted = 0
     integrations_persisted = 0
@@ -2501,6 +2520,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             upsert_failures=upsert_failures,
             displacement_edges_persisted=displacement_edges_persisted,
             company_signals_persisted=company_signals_persisted,
+            company_signal_candidates_persisted=company_signal_candidates_persisted,
+            canonical_ready_company_signal_candidates=canonical_ready_company_signal_candidates,
             pain_points_persisted=pain_points_persisted,
             use_cases_persisted=use_cases_persisted,
             integrations_persisted=integrations_persisted,
@@ -2723,6 +2744,18 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         company_signals_persisted = 0
         logger.exception("Failed to persist company signals")
+    persistence_progress += 1
+    await _update_persist_progress()
+
+    try:
+        company_signal_candidates_persisted = await _upsert_company_signal_candidates(
+            pool,
+            company_signal_candidates,
+            materialization_run_id=materialization_run_id,
+        )
+    except Exception:
+        company_signal_candidates_persisted = 0
+        logger.exception("Failed to persist company signal candidates")
     persistence_progress += 1
     await _update_persist_progress()
 
@@ -2995,6 +3028,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         upsert_failures=upsert_failures,
         displacement_edges_persisted=displacement_edges_persisted,
         company_signals_persisted=company_signals_persisted,
+        company_signal_candidates_persisted=company_signal_candidates_persisted,
+        canonical_ready_company_signal_candidates=canonical_ready_company_signal_candidates,
         pain_points_persisted=pain_points_persisted,
         use_cases_persisted=use_cases_persisted,
         integrations_persisted=integrations_persisted,
@@ -3020,6 +3055,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "upsert_failures": upsert_failures,
         "displacement_edges_persisted": displacement_edges_persisted,
         "company_signals_persisted": company_signals_persisted,
+        "company_signal_candidates": len(company_signal_candidates),
+        "canonical_ready_company_signal_candidates": canonical_ready_company_signal_candidates,
+        "company_signal_candidates_persisted": company_signal_candidates_persisted,
         "pain_points_persisted": pain_points_persisted,
         "use_cases_persisted": use_cases_persisted,
         "integrations_persisted": integrations_persisted,
@@ -3503,6 +3541,118 @@ async def _upsert_churn_signals(
             logger.exception("Failed to upsert churn signal for %s", vendor)
 
     return failures
+
+
+async def _upsert_company_signal_candidates(
+    pool,
+    candidates: list[dict[str, Any]],
+    *,
+    materialization_run_id: str | None = None,
+) -> int:
+    """Persist review-level company candidates for analyst-assist workflows."""
+    rows: list[tuple[Any, ...]] = []
+    for candidate in candidates or []:
+        review_id_raw = candidate.get("review_id")
+        if not review_id_raw:
+            continue
+        try:
+            review_id = _uuid.UUID(str(review_id_raw))
+        except (TypeError, ValueError):
+            continue
+        vendor_name = _canonicalize_vendor(candidate.get("vendor_name") or "")
+        company_name = normalize_company_name(candidate.get("company_name") or "")
+        if not vendor_name or not company_name:
+            continue
+        reviewed_at = candidate.get("reviewed_at")
+        if isinstance(reviewed_at, str) and reviewed_at:
+            try:
+                reviewed_at = datetime.fromisoformat(reviewed_at)
+            except ValueError:
+                reviewed_at = None
+        rows.append((
+            review_id,
+            company_name,
+            candidate.get("company_name_raw"),
+            vendor_name,
+            candidate.get("product_category"),
+            candidate.get("source"),
+            reviewed_at,
+            candidate.get("urgency_score"),
+            candidate.get("relevance_score"),
+            candidate.get("pain_category"),
+            candidate.get("role_level"),
+            candidate.get("decision_maker"),
+            candidate.get("seat_count"),
+            candidate.get("contract_end"),
+            candidate.get("buying_stage"),
+            candidate.get("resolution_confidence"),
+            candidate.get("confidence_score"),
+            candidate.get("confidence_tier"),
+            bool(candidate.get("signal_evidence_present")),
+            candidate.get("canonical_gap_reason"),
+            candidate.get("candidate_bucket") or "analyst_review",
+            materialization_run_id,
+        ))
+    if not rows:
+        return 0
+    await pool.executemany(
+        """
+        INSERT INTO b2b_company_signal_candidates (
+            review_id,
+            company_name,
+            company_name_raw,
+            vendor_name,
+            product_category,
+            source,
+            reviewed_at,
+            urgency_score,
+            relevance_score,
+            pain_category,
+            buyer_role,
+            decision_maker,
+            seat_count,
+            contract_end,
+            buying_stage,
+            resolution_confidence,
+            confidence_score,
+            confidence_tier,
+            signal_evidence_present,
+            canonical_gap_reason,
+            candidate_bucket,
+            materialization_run_id,
+            last_seen_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+            $12, $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22, NOW()
+        )
+        ON CONFLICT (review_id) DO UPDATE SET
+            company_name = EXCLUDED.company_name,
+            company_name_raw = EXCLUDED.company_name_raw,
+            vendor_name = EXCLUDED.vendor_name,
+            product_category = EXCLUDED.product_category,
+            source = EXCLUDED.source,
+            reviewed_at = EXCLUDED.reviewed_at,
+            urgency_score = EXCLUDED.urgency_score,
+            relevance_score = EXCLUDED.relevance_score,
+            pain_category = EXCLUDED.pain_category,
+            buyer_role = EXCLUDED.buyer_role,
+            decision_maker = EXCLUDED.decision_maker,
+            seat_count = EXCLUDED.seat_count,
+            contract_end = EXCLUDED.contract_end,
+            buying_stage = EXCLUDED.buying_stage,
+            resolution_confidence = EXCLUDED.resolution_confidence,
+            confidence_score = EXCLUDED.confidence_score,
+            confidence_tier = EXCLUDED.confidence_tier,
+            signal_evidence_present = EXCLUDED.signal_evidence_present,
+            canonical_gap_reason = EXCLUDED.canonical_gap_reason,
+            candidate_bucket = EXCLUDED.candidate_bucket,
+            materialization_run_id = EXCLUDED.materialization_run_id,
+            last_seen_at = EXCLUDED.last_seen_at
+        """,
+        rows,
+    )
+    return len(rows)
 
 
 # ------------------------------------------------------------------

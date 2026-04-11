@@ -10,9 +10,13 @@ from atlas_brain.autonomous.tasks import b2b_churn_intelligence as mod
 class CapturePool:
     def __init__(self):
         self.execute_calls = []
+        self.executemany_calls = []
 
     async def execute(self, query, *params):
         self.execute_calls.append((str(query), params))
+
+    async def executemany(self, query, rows):
+        self.executemany_calls.append((str(query), list(rows)))
 
 
 @pytest.mark.asyncio
@@ -134,3 +138,45 @@ async def test_upsert_churn_signals_persists_materialization_run_id():
     query, params = pool.execute_calls[0]
     assert "materialization_run_id" in query
     assert params[-2] == "run-123"
+
+
+@pytest.mark.asyncio
+async def test_upsert_company_signal_candidates_persists_materialization_run_id():
+    pool = CapturePool()
+
+    persisted = await mod._upsert_company_signal_candidates(
+        pool,
+        candidates=[
+            {
+                "review_id": str(uuid4()),
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "source": "reddit",
+                "reviewed_at": "2026-04-10T12:00:00+00:00",
+                "urgency_score": 6.8,
+                "relevance_score": 0.71,
+                "pain_category": "pricing",
+                "role_level": "vp",
+                "decision_maker": True,
+                "seat_count": 120,
+                "contract_end": "2026-07-01",
+                "buying_stage": "evaluation",
+                "resolution_confidence": "medium",
+                "confidence_score": 0.26,
+                "confidence_tier": "low",
+                "signal_evidence_present": False,
+                "canonical_gap_reason": "low_confidence_low_trust_source",
+                "candidate_bucket": "analyst_review",
+            },
+        ],
+        materialization_run_id="run-456",
+    )
+
+    assert persisted == 1
+    assert len(pool.executemany_calls) == 1
+    query, rows = pool.executemany_calls[0]
+    assert "materialization_run_id" in query
+    assert rows[0][-1] == "run-456"
+    assert rows[0][-2] == "analyst_review"
