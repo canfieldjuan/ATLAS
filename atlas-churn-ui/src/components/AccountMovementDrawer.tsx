@@ -32,6 +32,7 @@ interface AccountMovementDrawerProps {
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
   onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
+  onViewReview?: (reviewId: string) => void
   onCopyLink?: () => void
   evidenceExplorerUrl?: string | null
   generating?: boolean
@@ -81,6 +82,7 @@ export default function AccountMovementDrawer({
   onOpenWitness,
   onGenerateCampaign,
   onViewOpportunity,
+  onViewReview,
   onCopyLink,
   evidenceExplorerUrl,
   generating,
@@ -349,17 +351,29 @@ export default function AccountMovementDrawer({
                           {review.reviewer_title ? ` - ${review.reviewer_title}` : ''}
                         </div>
                       </div>
-                      {review.source_url && (
-                        <a
-                          className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2 py-1 text-xs text-cyan-300 hover:bg-slate-700"
-                          href={review.source_url}
-                          rel="noopener noreferrer"
-                          target="_blank"
-                        >
-                          Source
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {review.id && onViewReview ? (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2 py-1 text-xs text-cyan-300 hover:bg-slate-700"
+                            onClick={() => onViewReview(review.id)}
+                          >
+                            Open review detail
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                        {review.source_url && (
+                          <a
+                            className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2 py-1 text-xs text-cyan-300 hover:bg-slate-700"
+                            href={review.source_url}
+                            rel="noopener noreferrer"
+                            target="_blank"
+                          >
+                            Source
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
                     </div>
                     <p className="mt-3 text-sm leading-relaxed text-slate-300">
                       {review.review_excerpt || review.summary || 'No review excerpt preserved'}

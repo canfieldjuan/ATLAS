@@ -379,6 +379,12 @@ function watchlistReportsPath(searchParams: URLSearchParams, vendorName: string)
   return `/reports?${params.toString()}`
 }
 
+function watchlistReviewDetailPath(searchParams: URLSearchParams, row: AccountsInMotionFeedItem, reviewId: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', watchlistPath(accountFocusParams(searchParams, row)))
+  return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
+}
+
 function accountFocusParams(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
   const next = new URLSearchParams(searchParams)
   const focus = accountFocusFromRow(row)
@@ -3158,6 +3164,9 @@ export default function Watchlists() {
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
         onViewOpportunity={(item) => navigate(watchlistOpportunitiesPath(searchParams, item.vendor))}
+        onViewReview={(reviewId) => selectedAccount
+          ? navigate(watchlistReviewDetailPath(searchParams, selectedAccount, reviewId))
+          : null}
         generating={selectedAccount ? generatingCampaignFor === `${selectedAccount.company}::${selectedAccount.vendor}` : false}
       />
 
