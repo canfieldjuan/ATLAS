@@ -501,9 +501,9 @@ export default function Watchlists() {
   const [freshOnly, setFreshOnly] = useState(() => parseBooleanSearchParam(searchParams.get('fresh_only')))
   const [namedAccountsOnly, setNamedAccountsOnly] = useState(() => parseBooleanSearchParam(searchParams.get('named_accounts_only')))
   const [changedWedgesOnly, setChangedWedgesOnly] = useState(() => parseBooleanSearchParam(searchParams.get('changed_wedges_only')))
-  const [vendorAlertThreshold, setVendorAlertThreshold] = useState('')
-  const [accountAlertThreshold, setAccountAlertThreshold] = useState('')
-  const [staleDaysThreshold, setStaleDaysThreshold] = useState('')
+  const [vendorAlertThreshold, setVendorAlertThreshold] = useState(searchParams.get('vendor_alert_threshold')?.trim() || '')
+  const [accountAlertThreshold, setAccountAlertThreshold] = useState(searchParams.get('account_alert_threshold')?.trim() || '')
+  const [staleDaysThreshold, setStaleDaysThreshold] = useState(searchParams.get('stale_days_threshold')?.trim() || '')
   const [alertEmailEnabled, setAlertEmailEnabled] = useState(false)
   const [alertDeliveryFrequency, setAlertDeliveryFrequency] = useState<'daily' | 'weekly'>('daily')
   const [trackMode, setTrackMode] = useState<'own' | 'competitor'>('competitor')
@@ -1307,6 +1307,79 @@ export default function Watchlists() {
     requestedWatchlistView,
     searchParams,
     setSearchParams,
+  ])
+
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentVendorAlertThreshold = searchParams.get('vendor_alert_threshold')?.trim() || ''
+    const nextVendorAlertThreshold = vendorAlertThreshold.trim()
+    if (currentVendorAlertThreshold === nextVendorAlertThreshold) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextVendorAlertThreshold) {
+        next.set('vendor_alert_threshold', nextVendorAlertThreshold)
+      } else {
+        next.delete('vendor_alert_threshold')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    setSearchParams,
+    vendorAlertThreshold,
+  ])
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentAccountAlertThreshold = searchParams.get('account_alert_threshold')?.trim() || ''
+    const nextAccountAlertThreshold = accountAlertThreshold.trim()
+    if (currentAccountAlertThreshold === nextAccountAlertThreshold) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextAccountAlertThreshold) {
+        next.set('account_alert_threshold', nextAccountAlertThreshold)
+      } else {
+        next.delete('account_alert_threshold')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    accountAlertThreshold,
+    activeWatchlistView?.id,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    setSearchParams,
+  ])
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentStaleDaysThreshold = searchParams.get('stale_days_threshold')?.trim() || ''
+    const nextStaleDaysThreshold = staleDaysThreshold.trim()
+    if (currentStaleDaysThreshold === nextStaleDaysThreshold) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextStaleDaysThreshold) {
+        next.set('stale_days_threshold', nextStaleDaysThreshold)
+      } else {
+        next.delete('stale_days_threshold')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    setSearchParams,
+    staleDaysThreshold,
   ])
 
   async function handleCopyWatchlistViewLink(view: WatchlistView) {

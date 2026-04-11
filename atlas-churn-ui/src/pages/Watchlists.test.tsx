@@ -836,6 +836,42 @@ describe('Watchlists', () => {
     )
   })
 
+
+  it('hydrates alert thresholds from the URL and preserves them in vendor evidence links', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&vendor_alert_threshold=7.5&account_alert_threshold=8.5&stale_days_threshold=1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('7.5')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('8.5')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('1')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open vendor evidence for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26vendor_alert_threshold%3D7.5%26account_alert_threshold%3D8.5%26stale_days_threshold%3D1',
+    )
+
+    await waitFor(() => {
+      expect(api.fetchSlowBurnWatchlist).toHaveBeenLastCalledWith({
+        vendor_names: ['Zendesk'],
+        category: undefined,
+        vendor_alert_threshold: 7.5,
+        stale_days_threshold: 1,
+      })
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_names: ['Zendesk'],
+        category: undefined,
+        source: undefined,
+        min_urgency: undefined,
+        include_stale: undefined,
+        account_alert_threshold: 8.5,
+        stale_days_threshold: 1,
+      })
+    })
+  })
+
   it('hydrates a vendor-focused watchlist URL and renders an evidence return link', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit']}>
