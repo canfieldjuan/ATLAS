@@ -11928,6 +11928,7 @@ async def read_company_signal_candidate_group_summary(
             "gap_reasons": [],
             "top_vendors": [],
             "actionable_top_vendors": [],
+            "actionable_top_vendor_reasons": [],
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -12084,6 +12085,44 @@ async def read_company_signal_candidate_group_summary(
         ORDER BY actionable_group_count DESC,
                  actionable_review_count DESC,
                  vendor_name ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    actionable_vendor_reason_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT vendor_name,
+                   review_count,
+                   {pending_priority_band_sql} AS review_priority_band,
+                   {pending_priority_reason_sql} AS review_priority_reason
+            FROM filtered
+            WHERE review_status = 'pending'
+              AND {pending_priority_band_sql} IN ('promote_now', 'high', 'medium')
+        )
+        SELECT vendor_name,
+               review_priority_band,
+               review_priority_reason,
+               COUNT(*)::int AS actionable_group_count,
+               COALESCE(SUM(review_count), 0)::int AS actionable_review_count
+        FROM pending
+        GROUP BY 1, 2, 3
+        ORDER BY actionable_group_count DESC,
+                 actionable_review_count DESC,
+                 CASE review_priority_band
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     ELSE 3
+                 END,
+                 vendor_name ASC,
+                 review_priority_reason ASC
         LIMIT ${top_n_param}
         """,
         *params,
@@ -12343,6 +12382,7 @@ async def read_company_signal_candidate_group_summary(
         "gap_reasons": [dict(row) for row in gap_rows],
         "top_vendors": [dict(row) for row in vendor_rows],
         "actionable_top_vendors": [dict(row) for row in actionable_vendor_rows],
+        "actionable_top_vendor_reasons": [dict(row) for row in actionable_vendor_reason_rows],
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],
