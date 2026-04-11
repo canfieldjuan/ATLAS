@@ -12127,6 +12127,8 @@ def _company_signal_review_event_filters(
     vendor_name: str | None = None,
     scoped_vendors: list[str] | None = None,
     review_action: str | None = None,
+    review_priority_band: str | None = None,
+    review_priority_reason: str | None = None,
 ) -> tuple[list[str], list[Any], int]:
     conditions = ["created_at >= NOW() - make_interval(days => $1)"]
     params: list[Any] = [window_days]
@@ -12146,6 +12148,14 @@ def _company_signal_review_event_filters(
         conditions.append(f"review_action = ${idx}")
         params.append(review_action)
         idx += 1
+    if review_priority_band:
+        conditions.append(f"COALESCE(review_priority_band, 'unknown') = ${idx}")
+        params.append(review_priority_band)
+        idx += 1
+    if review_priority_reason:
+        conditions.append(f"COALESCE(review_priority_reason, 'unknown') = ${idx}")
+        params.append(review_priority_reason)
+        idx += 1
 
     return conditions, params, idx
 
@@ -12157,6 +12167,8 @@ async def read_company_signal_review_impact_summary(
     vendor_name: str | None = None,
     scoped_vendors: list[str] | None = None,
     review_action: str | None = None,
+    review_priority_band: str | None = None,
+    review_priority_reason: str | None = None,
     top_n: int = 10,
 ) -> dict[str, Any]:
     """Summarize downstream impact from company-signal review actions."""
@@ -12165,6 +12177,8 @@ async def read_company_signal_review_impact_summary(
         vendor_name=vendor_name,
         scoped_vendors=scoped_vendors,
         review_action=review_action,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
     )
     if not conditions:
         return {

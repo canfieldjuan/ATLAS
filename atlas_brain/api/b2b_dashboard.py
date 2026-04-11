@@ -2851,6 +2851,8 @@ async def get_company_signal_candidate_group_summary(
 async def get_company_signal_review_impact_summary(
     vendor_name: Optional[str] = Query(None),
     review_action: Optional[str] = Query(None),
+    review_priority_band: Optional[str] = Query(None),
+    review_priority_reason: Optional[str] = Query(None),
     window_days: int = Query(30, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
     user: AuthUser | None = Depends(optional_auth),
@@ -2861,6 +2863,11 @@ async def get_company_signal_review_impact_summary(
             status_code=400,
             detail="review_action must be 'approved' or 'suppressed'",
         )
+    if review_priority_band is not None and review_priority_band not in {"promote_now", "high", "medium", "low"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_priority_band must be 'promote_now', 'high', 'medium', or 'low'",
+        )
 
     pool = _pool_or_503()
     scoped_vendors = await _get_scoped_vendors(pool, user)
@@ -2870,9 +2877,13 @@ async def get_company_signal_review_impact_summary(
         vendor_name=vendor_name,
         scoped_vendors=scoped_vendors,
         review_action=review_action,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
         top_n=top_n,
     )
     summary["review_action"] = review_action
+    summary["review_priority_band"] = review_priority_band
+    summary["review_priority_reason"] = review_priority_reason
     return summary
 
 

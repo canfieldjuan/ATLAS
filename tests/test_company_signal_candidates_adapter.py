@@ -563,6 +563,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         window_days=30,
         scoped_vendors=["Zendesk"],
         review_action="approved",
+        review_priority_band="promote_now",
+        review_priority_reason="canonical_ready",
         top_n=5,
     )
 
@@ -572,6 +574,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     vendors_sql = pool.fetch.call_args_list[2][0][0]
     assert "review_action =" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
+    assert "review_priority_band" in totals_sql
+    assert "review_priority_reason" in totals_sql
     assert "COUNT(DISTINCT review_batch_id)" in totals_sql
     assert "FROM b2b_company_signal_review_events" in totals_sql
     assert "GROUP BY 1" in scopes_sql

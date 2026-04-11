@@ -385,6 +385,8 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
                 result = await b2b_dashboard.get_company_signal_review_impact_summary(
                     vendor_name="Zen",
                     review_action="approved",
+                    review_priority_band="high",
+                    review_priority_reason="has_signal_evidence_and_decision_maker",
                     window_days=14,
                     top_n=5,
                     user=MagicMock(),
@@ -393,6 +395,8 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
     assert result == {
         **returned,
         "review_action": "approved",
+        "review_priority_band": "high",
+        "review_priority_reason": "has_signal_evidence_and_decision_maker",
     }
     scope_mock.assert_awaited_once_with(pool, ANY)
     read_mock.assert_awaited_once_with(
@@ -401,6 +405,8 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         vendor_name="Zen",
         scoped_vendors=["Zendesk"],
         review_action="approved",
+        review_priority_band="high",
+        review_priority_reason="has_signal_evidence_and_decision_maker",
         top_n=5,
     )
 
@@ -419,6 +425,24 @@ async def test_get_company_signal_review_impact_summary_rejects_invalid_action()
 
     assert exc.value.status_code == 400
     assert "review_action" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_review_impact_summary_rejects_invalid_priority_band():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_company_signal_review_impact_summary(
+                vendor_name=None,
+                review_action="approved",
+                review_priority_band="urgent",
+                review_priority_reason=None,
+                window_days=30,
+                top_n=10,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "review_priority_band" in exc.value.detail
 
 
 @pytest.mark.asyncio
