@@ -99,7 +99,7 @@ describe('SubscriptionModal', () => {
         onClose={onClose}
         scopeType="library"
         scopeKey="library"
-        scopeLabel="Full Report Library"
+        scopeLabel="Full Intelligence Library"
       />,
     )
 
@@ -111,7 +111,7 @@ describe('SubscriptionModal', () => {
       expect(screen.getByRole('heading', { name: 'Subscribe to Library' })).toBeInTheDocument()
     })
     expect(screen.getAllByText('Set up recurring delivery for this library.')).not.toHaveLength(0)
-    expect(screen.getByDisplayValue('Full Report Library')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Full Intelligence Library')).toBeInTheDocument()
     expect(screen.getByLabelText('Frequency')).toHaveValue('weekly')
     expect(screen.getByLabelText('Deliverable Focus')).toHaveValue('all')
     expect(screen.getByLabelText('Freshness Policy')).toHaveValue('fresh_or_monitor')
@@ -276,7 +276,7 @@ describe('SubscriptionModal', () => {
         onClose={vi.fn()}
         scopeType="library"
         scopeKey="library"
-        scopeLabel="Full Report Library"
+        scopeLabel="Full Intelligence Library"
       />,
     )
 
@@ -296,7 +296,7 @@ describe('SubscriptionModal', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Report Library')
+      expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Intelligence Library')
     })
 
     if (resolveReport) {
@@ -329,7 +329,7 @@ describe('SubscriptionModal', () => {
     }
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Report Library')
+      expect(screen.getByLabelText('Subscription Label')).toHaveValue('Full Intelligence Library')
     })
     expect(screen.queryByDisplayValue('Stale report subscription')).not.toBeInTheDocument()
   })
@@ -394,7 +394,7 @@ describe('SubscriptionModal', () => {
         onSaved={onSaved}
         scopeType="library"
         scopeKey="library"
-        scopeLabel="Full Report Library"
+        scopeLabel="Full Intelligence Library"
       />,
     )
 

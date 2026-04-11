@@ -389,7 +389,7 @@ export default function Reports() {
     if (qualityFilter) parts.push(titleizeFilterValue(qualityFilter))
     if (freshnessFilter) parts.push(titleizeFilterValue(freshnessFilter))
     if (reviewFilter) parts.push(titleizeFilterValue(reviewFilter))
-    if (parts.length === 0) return 'Full Report Library'
+    if (parts.length === 0) return 'Full Intelligence Library'
     return `${parts.join(' • ')} Library`
   }, [typeFilter, activeVendorFilter, qualityFilter, freshnessFilter, reviewFilter])
 
