@@ -1010,10 +1010,25 @@ describe('Watchlists', () => {
     await user.click(copyButton)
 
     await waitFor(() => {
-      expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor`,
-      )
+      expect(clipboardSpy).toHaveBeenCalled()
     })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/evidence')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
+    expect(copiedUrl.searchParams.get('tab')).toBe('witnesses')
+    expect(copiedUrl.searchParams.get('witness_id')).toBe('witness:zendesk:1')
+    expect(copiedUrl.searchParams.get('source')).toBe('reddit')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(backToUrl.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(backToUrl.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(backToUrl.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(backToUrl.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(backToUrl.searchParams.get('account_track_mode')).toBe('competitor')
     expect(await screen.findByText('Copied witness link for Acme Corp')).toBeInTheDocument()
   })
   it('links vendor movement rows into focused account review when a named account is available', async () => {
@@ -1186,6 +1201,58 @@ describe('Watchlists', () => {
       )
     })
     expect(await screen.findByText('Copied vendor link for Intercom')).toBeInTheDocument()
+  })
+
+  it('opens evidence explorer directly from a tracked vendor row', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit&category=Helpdesk']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const evidenceLink = await screen.findByRole('link', { name: 'Open evidence for Intercom' })
+    const evidenceUrl = new URL(evidenceLink.getAttribute('href')!, window.location.origin)
+    expect(evidenceUrl.pathname).toBe('/evidence')
+    expect(evidenceUrl.searchParams.get('vendor')).toBe('Intercom')
+    expect(evidenceUrl.searchParams.get('tab')).toBe('witnesses')
+    expect(evidenceUrl.searchParams.get('source')).toBe('reddit')
+    const backTo = evidenceUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('category')).toBe('Helpdesk')
+    expect(backToUrl.searchParams.get('source')).toBe('reddit')
+  })
+
+  it('copies a vendor-scoped evidence link from the tracked vendor list', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit&category=Helpdesk']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy evidence link for Intercom' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/evidence')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Intercom')
+    expect(copiedUrl.searchParams.get('tab')).toBe('witnesses')
+    expect(copiedUrl.searchParams.get('source')).toBe('reddit')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('category')).toBe('Helpdesk')
+    expect(backToUrl.searchParams.get('source')).toBe('reddit')
+    expect(await screen.findByText('Copied evidence link for Intercom')).toBeInTheDocument()
   })
 
   it('shows a header evidence explorer shortcut for single-vendor saved views', async () => {

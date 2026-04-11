@@ -1478,6 +1478,19 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyVendorEvidenceLink(vendorName: string, source?: string | null) {
+    try {
+      await navigator.clipboard.writeText(
+        `${window.location.origin}${watchlistEvidenceExplorerPath(searchParams, vendorName, null, source)}`,
+      )
+      setActionError(null)
+      setActionMessage(`Copied evidence link for ${vendorName}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy evidence link')
+    }
+  }
+
   async function handleCopyVendorWitnessLink(
     vendorName: string,
     witnessId: string,
@@ -1958,6 +1971,14 @@ export default function Watchlists() {
             View
           </button>
           <Link
+            to={watchlistEvidenceExplorerPath(searchParams, row.vendor_name, null, selectedSourceFilter)}
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Open evidence for ${row.vendor_name}`}
+            className="rounded-md bg-fuchsia-500/10 px-2.5 py-1 text-xs font-medium text-fuchsia-300 hover:bg-fuchsia-500/20"
+          >
+            Evidence
+          </Link>
+          <Link
             to={watchlistReportsPath(searchParams, row.vendor_name)}
             onClick={(event) => event.stopPropagation()}
             aria-label={`Open reports for ${row.vendor_name}`}
@@ -1973,6 +1994,17 @@ export default function Watchlists() {
           >
             Opportunities
           </Link>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleCopyVendorEvidenceLink(row.vendor_name, selectedSourceFilter)
+            }}
+            aria-label={`Copy evidence link for ${row.vendor_name}`}
+            className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+          >
+            Copy Evidence
+          </button>
           <button
             type="button"
             onClick={(event) => {
