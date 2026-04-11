@@ -3494,6 +3494,26 @@ class B2BChurnConfig(BaseSettings):
         le=1.0,
         description="Minimum unit-confidence for analyst-assist company-signal candidates to be labeled high confidence",
     )
+    company_signal_queue_promote_now_sla_days: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Target queue age in days for promote-now company-signal candidate groups before they count as overdue",
+    )
+    company_signal_queue_high_sla_days: float = Field(
+        default=3.0,
+        ge=0.0,
+        description="Target queue age in days for high-priority company-signal candidate groups before they count as overdue",
+    )
+    company_signal_queue_medium_sla_days: float = Field(
+        default=7.0,
+        ge=0.0,
+        description="Target queue age in days for medium-priority company-signal candidate groups before they count as overdue",
+    )
+    company_signal_queue_low_sla_days: float = Field(
+        default=14.0,
+        ge=0.0,
+        description="Target queue age in days for low-priority company-signal candidate groups before they count as overdue",
+    )
     company_signal_group_per_extra_review_boost: float = Field(
         default=0.1,
         ge=0.0,

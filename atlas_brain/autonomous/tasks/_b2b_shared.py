@@ -619,6 +619,36 @@ def _company_signal_candidate_confidence_tier(value: Any) -> str:
     return "low"
 
 
+def _company_signal_queue_sla_days() -> dict[str, float]:
+    """Return non-decreasing SLA targets for company-signal review priority bands."""
+    def _read(name: str, default: float) -> float:
+        try:
+            value = float(getattr(settings.b2b_churn, name, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(0.0, value)
+
+    promote_now = _read("company_signal_queue_promote_now_sla_days", 1.0)
+    high = max(promote_now, _read("company_signal_queue_high_sla_days", 3.0))
+    medium = max(high, _read("company_signal_queue_medium_sla_days", 7.0))
+    low = max(medium, _read("company_signal_queue_low_sla_days", 14.0))
+    return {
+        "promote_now": round(promote_now, 3),
+        "high": round(high, 3),
+        "medium": round(medium, 3),
+        "low": round(low, 3),
+    }
+
+
+def _company_signal_candidate_group_pending_age_days_sql(alias: str = "") -> str:
+    """Return SQL for grouped candidate queue age in days."""
+    p = f"{alias}." if alias else ""
+    return (
+        f"EXTRACT(EPOCH FROM (NOW() - COALESCE({p}review_status_updated_at, {p}first_seen_at)))"
+        f" / 86400.0"
+    )
+
+
 def _eligible_review_timestamp_expr(*, alias: str = "") -> str:
     """Stable review-occurrence timestamp for intelligence windows."""
     p = f"{alias}." if alias else ""
@@ -11639,6 +11669,19 @@ def _company_signal_candidate_group_priority_order_sql(alias: str = "") -> str:
     )
 
 
+def _company_signal_candidate_group_sla_days_sql(alias: str = "") -> str:
+    """Return SQL for the configured SLA target of a grouped review priority band."""
+    sla_days = _company_signal_queue_sla_days()
+    priority_band_sql = _company_signal_candidate_group_priority_band_sql(alias)
+    return (
+        "CASE "
+        f"WHEN {priority_band_sql} = 'promote_now' THEN {sla_days['promote_now']} "
+        f"WHEN {priority_band_sql} = 'high' THEN {sla_days['high']} "
+        f"WHEN {priority_band_sql} = 'medium' THEN {sla_days['medium']} "
+        f"ELSE {sla_days['low']} END"
+    )
+
+
 def _company_signal_candidate_group_priority_values(row: Mapping[str, Any]) -> tuple[str, str]:
     if row.get("candidate_bucket") == "canonical_ready":
         return "promote_now", "canonical_ready"
@@ -11877,6 +11920,8 @@ async def read_company_signal_candidate_group_summary(
                 "signal_evidence_groups": 0,
                 "avg_pending_age_days": 0.0,
                 "oldest_pending_age_days": 0.0,
+                "overdue_pending_groups": 0,
+                "overdue_pending_reviews": 0,
             },
             "gap_reasons": [],
             "top_vendors": [],
@@ -11884,11 +11929,17 @@ async def read_company_signal_candidate_group_summary(
             "priority_groups": [],
             "pending_priority_bands": [],
             "pending_priority_reasons": [],
+            "pending_sla_bands": [],
+            "pending_sla_reasons": [],
             "oldest_pending_group": None,
         }
 
     where_clause = " AND ".join(conditions)
     top_n_param = idx
+    pending_age_days_sql = _company_signal_candidate_group_pending_age_days_sql()
+    pending_priority_band_sql = _company_signal_candidate_group_priority_band_sql()
+    pending_priority_reason_sql = _company_signal_candidate_group_priority_reason_sql()
+    pending_sla_days_sql = _company_signal_candidate_group_sla_days_sql()
     totals = await pool.fetchrow(
         f"""
         WITH filtered AS (
@@ -11920,10 +11971,21 @@ async def read_company_signal_candidate_group_summary(
                )::float8 AS avg_pending_age_days,
                COALESCE(
                    MAX(
-                       EXTRACT(EPOCH FROM (NOW() - COALESCE(review_status_updated_at, first_seen_at))) / 86400.0
+                       {pending_age_days_sql}
                    ) FILTER (WHERE review_status = 'pending'),
                    0
-               )::float8 AS oldest_pending_age_days
+               )::float8 AS oldest_pending_age_days,
+               COUNT(*) FILTER (
+                   WHERE review_status = 'pending'
+                     AND {pending_age_days_sql} > {pending_sla_days_sql}
+               )::int AS overdue_pending_groups,
+               COALESCE(
+                   SUM(review_count) FILTER (
+                       WHERE review_status = 'pending'
+                         AND {pending_age_days_sql} > {pending_sla_days_sql}
+                   ),
+                   0
+               )::int AS overdue_pending_reviews
         FROM filtered
         """,
         *params,
@@ -12069,6 +12131,83 @@ async def read_company_signal_candidate_group_summary(
         *params,
         top_n,
     )
+    pending_sla_band_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT review_count,
+                   {pending_priority_band_sql} AS review_priority_band,
+                   {pending_age_days_sql}::float8 AS pending_age_days,
+                   {pending_sla_days_sql}::float8 AS sla_days
+            FROM filtered
+            WHERE review_status = 'pending'
+        )
+        SELECT review_priority_band,
+               MAX(sla_days)::float8 AS sla_days,
+               COUNT(*)::int AS pending_group_count,
+               COALESCE(SUM(review_count), 0)::int AS pending_review_count,
+               COUNT(*) FILTER (WHERE pending_age_days > sla_days)::int AS overdue_group_count,
+               COALESCE(SUM(review_count) FILTER (WHERE pending_age_days > sla_days), 0)::int AS overdue_review_count,
+               COALESCE(MAX(pending_age_days), 0)::float8 AS oldest_pending_age_days,
+               COALESCE(MAX(pending_age_days) FILTER (WHERE pending_age_days > sla_days), 0)::float8 AS oldest_overdue_age_days
+        FROM pending
+        GROUP BY 1
+        ORDER BY CASE review_priority_band
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     ELSE 3
+                 END,
+                 pending_group_count DESC,
+                 pending_review_count DESC
+        """
+    )
+    pending_sla_reason_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT review_count,
+                   {pending_priority_band_sql} AS review_priority_band,
+                   {pending_priority_reason_sql} AS review_priority_reason,
+                   {pending_age_days_sql}::float8 AS pending_age_days,
+                   {pending_sla_days_sql}::float8 AS sla_days
+            FROM filtered
+            WHERE review_status = 'pending'
+        )
+        SELECT review_priority_band,
+               review_priority_reason,
+               MAX(sla_days)::float8 AS sla_days,
+               COUNT(*)::int AS pending_group_count,
+               COALESCE(SUM(review_count), 0)::int AS pending_review_count,
+               COUNT(*) FILTER (WHERE pending_age_days > sla_days)::int AS overdue_group_count,
+               COALESCE(SUM(review_count) FILTER (WHERE pending_age_days > sla_days), 0)::int AS overdue_review_count,
+               COALESCE(MAX(pending_age_days), 0)::float8 AS oldest_pending_age_days,
+               COALESCE(MAX(pending_age_days) FILTER (WHERE pending_age_days > sla_days), 0)::float8 AS oldest_overdue_age_days
+        FROM pending
+        GROUP BY 1, 2
+        ORDER BY CASE review_priority_band
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     ELSE 3
+                 END,
+                 overdue_group_count DESC,
+                 pending_group_count DESC,
+                 pending_review_count DESC,
+                 review_priority_reason ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     oldest_pending_rows = await pool.fetch(
         f"""
         WITH filtered AS (
@@ -12083,11 +12222,9 @@ async def read_company_signal_candidate_group_summary(
                review_count,
                canonical_gap_reason,
                candidate_bucket,
-               {_company_signal_candidate_group_priority_band_sql()} AS review_priority_band,
-               {_company_signal_candidate_group_priority_reason_sql()} AS review_priority_reason,
-               (
-                   EXTRACT(EPOCH FROM (NOW() - COALESCE(review_status_updated_at, first_seen_at))) / 86400.0
-               )::float8 AS pending_age_days
+               {pending_priority_band_sql} AS review_priority_band,
+               {pending_priority_reason_sql} AS review_priority_reason,
+               ({pending_age_days_sql})::float8 AS pending_age_days
         FROM filtered
         WHERE review_status = 'pending'
         ORDER BY pending_age_days DESC,
@@ -12147,6 +12284,8 @@ async def read_company_signal_candidate_group_summary(
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],
         "pending_priority_reasons": [dict(row) for row in pending_reason_rows],
+        "pending_sla_bands": [dict(row) for row in pending_sla_band_rows],
+        "pending_sla_reasons": [dict(row) for row in pending_sla_reason_rows],
         "oldest_pending_group": oldest_pending_group,
     }
 

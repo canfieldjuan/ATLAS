@@ -338,6 +338,28 @@ async def test_read_company_signal_candidate_groups_maps_rows_and_support_review
     assert results[0]["supporting_reviews"][0]["quote_excerpt"] == "Renewal risk keeps coming up"
 
 
+def test_company_signal_queue_sla_days_normalizes_misordered_thresholds():
+    with patch.object(shared_mod.settings.b2b_churn, "company_signal_queue_promote_now_sla_days", 3.0), patch.object(
+        shared_mod.settings.b2b_churn,
+        "company_signal_queue_high_sla_days",
+        2.0,
+    ), patch.object(
+        shared_mod.settings.b2b_churn,
+        "company_signal_queue_medium_sla_days",
+        1.0,
+    ), patch.object(
+        shared_mod.settings.b2b_churn,
+        "company_signal_queue_low_sla_days",
+        5.0,
+    ):
+        assert shared_mod._company_signal_queue_sla_days() == {
+            "promote_now": 3.0,
+            "high": 3.0,
+            "medium": 3.0,
+            "low": 5.0,
+        }
+
+
 @pytest.mark.asyncio
 async def test_read_company_signal_candidate_group_summary_aggregates_queue_health():
     pool = type("SummaryPool", (), {})()
@@ -357,6 +379,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             "signal_evidence_groups": 4,
             "avg_pending_age_days": 2.75,
             "oldest_pending_age_days": 5.5,
+            "overdue_pending_groups": 3,
+            "overdue_pending_reviews": 9,
         }
     )
     pool.fetch = AsyncMock(
@@ -435,6 +459,52 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             ],
             [
                 {
+                    "review_priority_band": "promote_now",
+                    "sla_days": 1.0,
+                    "pending_group_count": 2,
+                    "pending_review_count": 5,
+                    "overdue_group_count": 1,
+                    "overdue_review_count": 3,
+                    "oldest_pending_age_days": 5.5,
+                    "oldest_overdue_age_days": 5.5,
+                },
+                {
+                    "review_priority_band": "medium",
+                    "sla_days": 7.0,
+                    "pending_group_count": 4,
+                    "pending_review_count": 12,
+                    "overdue_group_count": 0,
+                    "overdue_review_count": 0,
+                    "oldest_pending_age_days": 4.0,
+                    "oldest_overdue_age_days": 0.0,
+                },
+            ],
+            [
+                {
+                    "review_priority_band": "promote_now",
+                    "review_priority_reason": "canonical_ready",
+                    "sla_days": 1.0,
+                    "pending_group_count": 2,
+                    "pending_review_count": 5,
+                    "overdue_group_count": 1,
+                    "overdue_review_count": 3,
+                    "oldest_pending_age_days": 5.5,
+                    "oldest_overdue_age_days": 5.5,
+                },
+                {
+                    "review_priority_band": "medium",
+                    "review_priority_reason": "cross_source_corroboration",
+                    "sla_days": 7.0,
+                    "pending_group_count": 4,
+                    "pending_review_count": 12,
+                    "overdue_group_count": 0,
+                    "overdue_review_count": 0,
+                    "oldest_pending_age_days": 4.0,
+                    "oldest_overdue_age_days": 0.0,
+                },
+            ],
+            [
+                {
                     "id": uuid4(),
                     "company_name": "acme",
                     "display_company_name": "Acme Corp",
@@ -474,7 +544,9 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     priority_sql = pool.fetch.call_args_list[3][0][0]
     pending_band_sql = pool.fetch.call_args_list[4][0][0]
     pending_reason_sql = pool.fetch.call_args_list[5][0][0]
-    oldest_pending_sql = pool.fetch.call_args_list[6][0][0]
+    pending_sla_band_sql = pool.fetch.call_args_list[6][0][0]
+    pending_sla_reason_sql = pool.fetch.call_args_list[7][0][0]
+    oldest_pending_sql = pool.fetch.call_args_list[8][0][0]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -483,6 +555,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "decision_maker_count > 0" in totals_sql
     assert "avg_pending_age_days" in totals_sql
     assert "oldest_pending_age_days" in totals_sql
+    assert "overdue_pending_groups" in totals_sql
+    assert "overdue_pending_reviews" in totals_sql
     assert "promote_now" in totals_sql
     assert "cross_source_corroboration" in totals_sql
     assert "vendor_name ILIKE" not in totals_sql
@@ -498,10 +572,18 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "GROUP BY 1, 2" in pending_reason_sql
     assert "review_priority_reason" in pending_reason_sql
     assert "WHERE review_status = 'pending'" in pending_reason_sql
+    assert "sla_days" in pending_sla_band_sql
+    assert "overdue_group_count" in pending_sla_band_sql
+    assert "GROUP BY 1" in pending_sla_band_sql
+    assert "sla_days" in pending_sla_reason_sql
+    assert "overdue_group_count" in pending_sla_reason_sql
+    assert "GROUP BY 1, 2" in pending_sla_reason_sql
     assert "pending_age_days" in oldest_pending_sql
     assert "WHERE review_status = 'pending'" in oldest_pending_sql
     assert summary["totals"]["total_groups"] == 12
     assert summary["totals"]["avg_pending_age_days"] == 2.75
+    assert summary["totals"]["overdue_pending_groups"] == 3
+    assert summary["totals"]["overdue_pending_reviews"] == 9
     assert summary["gap_reasons"][0]["gap_reason"] == "low_confidence_low_trust_source"
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
@@ -509,6 +591,10 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"
     assert summary["pending_priority_bands"][0]["review_priority_band"] == "promote_now"
     assert summary["pending_priority_reasons"][0]["review_priority_reason"] == "canonical_ready"
+    assert summary["pending_sla_bands"][0]["sla_days"] == 1.0
+    assert summary["pending_sla_bands"][0]["overdue_group_count"] == 1
+    assert summary["pending_sla_reasons"][0]["review_priority_reason"] == "canonical_ready"
+    assert summary["pending_sla_reasons"][0]["overdue_review_count"] == 3
     assert summary["oldest_pending_group"]["vendor"] == "Zendesk"
     assert summary["oldest_pending_group"]["pending_age_days"] == 5.5
 
