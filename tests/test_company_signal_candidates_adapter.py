@@ -973,6 +973,24 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
                     "rebuild_total_accounts": 9,
                 }
             ],
+            [
+                {
+                    "action_day": "2026-04-10",
+                    "action_count": 2,
+                    "approvals": 1,
+                    "suppressions": 1,
+                    "company_signal_creations": 1,
+                    "company_signal_updates": 0,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 1,
+                    "rebuild_requests": 1,
+                    "rebuild_triggered": 1,
+                    "rebuild_blocked": 0,
+                    "rebuild_persisted_runs": 1,
+                    "rebuild_persisted_reports": 2,
+                    "rebuild_total_accounts": 4,
+                }
+            ],
         ]
     )
 
@@ -1002,6 +1020,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     vendors_sql = pool.fetch.call_args_list[4][0][0]
     vendor_reasons_sql = pool.fetch.call_args_list[5][0][0]
     rebuild_reasons_sql = pool.fetch.call_args_list[6][0][0]
+    daily_trends_sql = pool.fetch.call_args_list[7][0][0]
     assert "review_scope =" in totals_sql
     assert "review_action =" in totals_sql
     assert "company_signal_action =" in totals_sql
@@ -1031,6 +1050,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "vendor_reason_rebuilds" in vendor_reasons_sql
     assert "rebuild_reason" in rebuild_reasons_sql
     assert "FROM rebuild_rows" in rebuild_reasons_sql
+    assert "daily_actions" in daily_trends_sql
+    assert "DATE_TRUNC('day'" in daily_trends_sql
     assert summary["review_scope"] == "bulk_group"
     assert summary["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["rebuild_outcome"] == "triggered"
@@ -1062,3 +1083,6 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["rebuild_reasons"][0]["rebuild_reason"] == "ok"
     assert summary["rebuild_reasons"][0]["rebuild_trigger_rate"] == 2 / 3
     assert summary["rebuild_reasons"][0]["rebuild_block_rate"] == 1 / 3
+    assert summary["daily_trends"][0]["action_day"] == "2026-04-10"
+    assert summary["daily_trends"][0]["company_signal_effect_rate"] == 0.5
+    assert summary["daily_trends"][0]["rebuild_trigger_rate"] == 1.0

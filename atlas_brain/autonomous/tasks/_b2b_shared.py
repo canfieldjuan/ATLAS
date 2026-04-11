@@ -13408,6 +13408,7 @@ async def read_company_signal_review_impact_summary(
             "top_vendors": [],
             "top_vendor_reasons": [],
             "rebuild_reasons": [],
+            "daily_trends": [],
         }
 
     where_clause = " AND ".join(conditions)
@@ -13830,6 +13831,69 @@ async def read_company_signal_review_impact_summary(
         *params,
         top_n,
     )
+    daily_trend_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *,
+                   DATE_TRUNC('day', created_at AT TIME ZONE 'UTC')::date AS action_day
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        daily_actions AS (
+            SELECT action_day,
+                   COUNT(*)::int AS action_count,
+                   COUNT(*) FILTER (WHERE review_action = 'approved')::int AS approvals,
+                   COUNT(*) FILTER (WHERE review_action = 'suppressed')::int AS suppressions,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'created')::int AS company_signal_creations,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'updated')::int AS company_signal_updates,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'deleted')::int AS company_signal_deletions,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'none')::int AS company_signal_noops
+            FROM filtered
+            GROUP BY 1
+        ),
+        rebuild_rows AS (
+            SELECT DISTINCT ON (action_day, review_batch_id, vendor_name)
+                   action_day,
+                   review_batch_id,
+                   vendor_name,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY action_day, review_batch_id, vendor_name, created_at DESC
+        ),
+        daily_rebuilds AS (
+            SELECT action_day,
+                   COUNT(*) FILTER (WHERE rebuild_requested)::int AS rebuild_requests,
+                   COUNT(*) FILTER (WHERE rebuild_triggered)::int AS rebuild_triggered,
+                   COUNT(*) FILTER (WHERE rebuild_requested AND NOT rebuild_triggered)::int AS rebuild_blocked,
+                   COUNT(*) FILTER (WHERE rebuild_triggered AND rebuild_persisted_count > 0)::int AS rebuild_persisted_runs,
+                   COALESCE(SUM(rebuild_persisted_count) FILTER (WHERE rebuild_triggered), 0)::int AS rebuild_persisted_reports,
+                   COALESCE(SUM(rebuild_total_accounts) FILTER (WHERE rebuild_triggered), 0)::int AS rebuild_total_accounts
+            FROM rebuild_rows
+            GROUP BY 1
+        )
+        SELECT da.action_day::text AS action_day,
+               da.action_count,
+               da.approvals,
+               da.suppressions,
+               da.company_signal_creations,
+               da.company_signal_updates,
+               da.company_signal_deletions,
+               da.company_signal_noops,
+               COALESCE(dr.rebuild_requests, 0)::int AS rebuild_requests,
+               COALESCE(dr.rebuild_triggered, 0)::int AS rebuild_triggered,
+               COALESCE(dr.rebuild_blocked, 0)::int AS rebuild_blocked,
+               COALESCE(dr.rebuild_persisted_runs, 0)::int AS rebuild_persisted_runs,
+               COALESCE(dr.rebuild_persisted_reports, 0)::int AS rebuild_persisted_reports,
+               COALESCE(dr.rebuild_total_accounts, 0)::int AS rebuild_total_accounts
+        FROM daily_actions da
+        LEFT JOIN daily_rebuilds dr ON dr.action_day = da.action_day
+        ORDER BY da.action_day DESC
+        """,
+        *params,
+    )
     def _safe_rate(numerator: Any, denominator: Any) -> float:
         try:
             num = float(numerator or 0)
@@ -13901,6 +13965,7 @@ async def read_company_signal_review_impact_summary(
         "top_vendors": [_with_effect_metrics(row) for row in vendor_rows],
         "top_vendor_reasons": [_with_effect_metrics(row) for row in vendor_reason_rows],
         "rebuild_reasons": [_with_rebuild_metrics(row) for row in rebuild_reason_rows],
+        "daily_trends": [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows],
     }
 
 
