@@ -14,6 +14,8 @@ const api = vi.hoisted(() => ({
   createWatchlistView: vi.fn(),
   deleteCompetitiveSet: vi.fn(),
   deleteWatchlistView: vi.fn(),
+  fetchAnnotations: vi.fn(),
+  fetchWitness: vi.fn(),
   fetchCompetitiveSetPlan: vi.fn(),
   fetchAccountsInMotionFeed: vi.fn(),
   fetchSlowBurnWatchlist: vi.fn(),
@@ -25,6 +27,8 @@ const api = vi.hoisted(() => ({
   removeTrackedVendor: vi.fn(),
   runCompetitiveSetNow: vi.fn(),
   searchAvailableVendors: vi.fn(),
+  setAnnotation: vi.fn(),
+  removeAnnotations: vi.fn(),
   updateCompetitiveSet: vi.fn(),
   updateWatchlistView: vi.fn(),
 }))
@@ -118,6 +122,36 @@ describe('Watchlists', () => {
       summary: 'Delivered watchlist alert email to 1 of 1 recipient',
       error: null,
     })
+    api.fetchWitness.mockResolvedValue({
+      witness: {
+        witness_id: 'witness:zendesk:1',
+        excerpt_text: 'We need to move fast before renewal.',
+        source: 'reddit',
+        reviewed_at: '2026-04-03T00:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP Support',
+        pain_category: 'pricing',
+        competitor: 'Freshdesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        review_text: 'We need to move fast before renewal.',
+        evidence_spans: [],
+        all_evidence_span_count: 0,
+      },
+    })
+    api.fetchAnnotations.mockResolvedValue({ annotations: [] })
+    api.setAnnotation.mockResolvedValue({
+      id: 'ann-1',
+      witness_id: 'witness:zendesk:1',
+      vendor_name: 'Zendesk',
+      annotation_type: 'pin',
+      note_text: null,
+      created_at: '2026-04-08T12:00:00Z',
+      updated_at: '2026-04-08T12:00:00Z',
+    })
+    api.removeAnnotations.mockResolvedValue({ removed: 1 })
     api.fetchSlowBurnWatchlist.mockResolvedValue({
       signals: [
         {
@@ -705,6 +739,28 @@ describe('Watchlists', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('account_watch_vendor=Zendesk')
       expect(screen.getByTestId('location-search')).toHaveTextContent('account_category=Helpdesk')
       expect(screen.getByTestId('location-search')).toHaveTextContent('account_track_mode=competitor')
+    })
+  })
+
+  it('adds witness drawer focus to the URL when a witness is opened from account review', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <LocationSearchProbe />
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    await user.click(screen.getByText('Acme Corp'))
+    const drawer = await screen.findByLabelText('Account movement evidence')
+    await user.click(within(drawer).getByRole('button', { name: 'witness:zendesk:1' }))
+    await screen.findByRole('heading', { name: 'Witness Detail' })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search')).toHaveTextContent('witness_id=witness%3Azendesk%3A1')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('witness_vendor=Zendesk')
     })
   })
 

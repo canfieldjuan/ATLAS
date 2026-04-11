@@ -70,6 +70,7 @@ interface WatchlistsData {
   accountStaleThresholdHitCount: number
   vendorsWithAccounts: number
   freshestAccountsReportDate: string | null
+  loadWarnings: string[]
 }
 
 interface CompetitiveSetLastRunOverride {
@@ -84,6 +85,13 @@ const SEARCH_RESULTS_PREVIEW_LIMIT = 8
 const ACCOUNT_URGENCY_FILTER_OPTIONS = [7, 8, 9] as const
 
 type AccountPresentationTier = 'named_high' | 'named_medium' | 'review'
+
+function toLoadWarning(section: string, err: unknown): string {
+  const detail = err instanceof Error && err.message.trim()
+    ? ` ${err.message.trim()}`
+    : ''
+  return `${section} is temporarily unavailable.${detail}`
+}
 
 function isSameAccountMovementRow(
   left: AccountsInMotionFeedItem,
@@ -472,7 +480,7 @@ export default function Watchlists() {
         account_alert_threshold: accountAlertThreshold ? Number(accountAlertThreshold) : undefined,
         stale_days_threshold: staleDaysThreshold ? Number(staleDaysThreshold) : undefined,
       }
-      const [tracked, trackedSets, savedViews, feed, accounts] = await Promise.all([
+      const [tracked, trackedSets, savedViews, feedResult, accountsResult] = await Promise.all([
         listTrackedVendors(),
         listCompetitiveSets(true),
         listWatchlistViews(),
@@ -480,13 +488,49 @@ export default function Watchlists() {
           Object.values(slowBurnParams).some((value) => value !== undefined)
             ? slowBurnParams
             : undefined,
+        ).then(
+          (value) => ({ ok: true as const, value }),
+          (error) => ({ ok: false as const, error }),
         ),
         fetchAccountsInMotionFeed(
           Object.values(accountsParams).some((value) => value !== undefined)
             ? accountsParams
             : undefined,
+        ).then(
+          (value) => ({ ok: true as const, value }),
+          (error) => ({ ok: false as const, error }),
         ),
       ])
+      const loadWarnings: string[] = []
+      const feed = feedResult.ok
+        ? feedResult.value
+        : (
+            loadWarnings.push(toLoadWarning('Vendor movement feed', feedResult.error)),
+            {
+              signals: [],
+              count: 0,
+              vendor_alert_threshold: null,
+              vendor_alert_hit_count: 0,
+              stale_days_threshold: null,
+              stale_threshold_hit_count: 0,
+            }
+          )
+      const accounts = accountsResult.ok
+        ? accountsResult.value
+        : (
+            loadWarnings.push(toLoadWarning('Accounts in motion', accountsResult.error)),
+            {
+              accounts: [],
+              count: 0,
+              tracked_vendor_count: 0,
+              vendors_with_accounts: 0,
+              min_urgency: 7,
+              per_vendor_limit: 10,
+              freshest_report_date: null,
+              account_alert_hit_count: 0,
+              stale_threshold_hit_count: 0,
+            }
+          )
       return {
         vendors: tracked.vendors,
         watchlistViews: savedViews.views,
@@ -500,6 +544,7 @@ export default function Watchlists() {
         accountStaleThresholdHitCount: accounts.stale_threshold_hit_count ?? 0,
         vendorsWithAccounts: accounts.vendors_with_accounts,
         freshestAccountsReportDate: accounts.freshest_report_date,
+        loadWarnings,
       }
     },
     [
@@ -761,6 +806,9 @@ export default function Watchlists() {
       : null),
     [hasRequestedAccountFocus, requestedAccountFocus, visibleAccounts],
   )
+  const requestedWitnessId = searchParams.get('witness_id')?.trim() || ''
+  const requestedWitnessVendor = searchParams.get('witness_vendor')?.trim() || ''
+  const hasRequestedWitnessFocus = Boolean(requestedWitnessId && requestedWitnessVendor)
   const hasActiveAlertPolicy = (
     activeVendorAlertThreshold != null
     || activeAccountAlertThreshold != null
@@ -796,6 +844,27 @@ export default function Watchlists() {
     if (selectedAccount && isSameAccountMovementRow(selectedAccount, requestedAccount)) return
     setSelectedAccount(requestedAccount)
   }, [hasRequestedAccountFocus, requestedAccount, selectedAccount])
+
+  useEffect(() => {
+    if (!hasRequestedWitnessFocus) return
+    if (
+      evidenceDrawerOpen
+      && evidenceDrawerWitnessId === requestedWitnessId
+      && evidenceDrawerVendor === requestedWitnessVendor
+    ) {
+      return
+    }
+    setEvidenceDrawerWitnessId(requestedWitnessId)
+    setEvidenceDrawerVendor(requestedWitnessVendor)
+    setEvidenceDrawerOpen(true)
+  }, [
+    evidenceDrawerOpen,
+    evidenceDrawerVendor,
+    evidenceDrawerWitnessId,
+    hasRequestedWitnessFocus,
+    requestedWitnessId,
+    requestedWitnessVendor,
+  ])
 
   useEffect(() => {
     if (loading) return
@@ -846,6 +915,30 @@ export default function Watchlists() {
     requestedAccount,
     searchParams,
     selectedAccount,
+    setSearchParams,
+  ])
+
+  useEffect(() => {
+    const currentWitnessId = searchParams.get('witness_id')?.trim() || ''
+    const currentWitnessVendor = searchParams.get('witness_vendor')?.trim() || ''
+    const nextWitnessId = evidenceDrawerOpen ? (evidenceDrawerWitnessId || '') : ''
+    const nextWitnessVendor = evidenceDrawerOpen ? evidenceDrawerVendor.trim() : ''
+    if (currentWitnessId === nextWitnessId && currentWitnessVendor === nextWitnessVendor) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('witness_id')
+      next.delete('witness_vendor')
+      if (nextWitnessId && nextWitnessVendor) {
+        next.set('witness_id', nextWitnessId)
+        next.set('witness_vendor', nextWitnessVendor)
+      }
+      return next
+    }, { replace: true })
+  }, [
+    evidenceDrawerOpen,
+    evidenceDrawerVendor,
+    evidenceDrawerWitnessId,
+    searchParams,
     setSearchParams,
   ])
 
@@ -957,6 +1050,17 @@ export default function Watchlists() {
       return next
     }, { replace: true })
     setSelectedAccount(null)
+  }
+
+  function handleCloseWitnessDrawer() {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('witness_id')
+      next.delete('witness_vendor')
+      return next
+    }, { replace: true })
+    setEvidenceDrawerOpen(false)
+    setEvidenceDrawerWitnessId(null)
   }
 
   async function handleSaveWatchlistView() {
@@ -2126,25 +2230,37 @@ export default function Watchlists() {
         </div>
       </div>
 
-      {(actionMessage || actionError) && (
-        <div
-          className={clsx(
-            'flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm',
-            actionError
-              ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+      {(data?.loadWarnings?.length || actionMessage || actionError) && (
+        <div className="space-y-3">
+          {data?.loadWarnings?.map((warning) => (
+            <div
+              key={warning}
+              className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+            >
+              {warning}
+            </div>
+          ))}
+          {(actionMessage || actionError) && (
+            <div
+              className={clsx(
+                'flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm',
+                actionError
+                  ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+              )}
+            >
+              <span>{actionError || actionMessage}</span>
+              <button
+                onClick={() => {
+                  setActionError(null)
+                  setActionMessage(null)
+                }}
+                className="text-current/70 hover:text-current"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           )}
-        >
-          <span>{actionError || actionMessage}</span>
-          <button
-            onClick={() => {
-              setActionError(null)
-              setActionMessage(null)
-            }}
-            className="text-current/70 hover:text-current"
-          >
-            <X className="h-4 w-4" />
-          </button>
         </div>
       )}
 
@@ -2834,10 +2950,7 @@ export default function Watchlists() {
         vendorName={evidenceDrawerVendor}
         witnessId={evidenceDrawerWitnessId}
         open={evidenceDrawerOpen}
-        onClose={() => {
-          setEvidenceDrawerOpen(false)
-          setEvidenceDrawerWitnessId(null)
-        }}
+        onClose={handleCloseWitnessDrawer}
       />
     </div>
   )
