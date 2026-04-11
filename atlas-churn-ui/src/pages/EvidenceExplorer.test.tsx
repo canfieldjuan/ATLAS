@@ -480,6 +480,24 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('copies the active vendor workspace shortcut link', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const vendorLink = await screen.findByRole('link', { name: 'Vendor workspace' })
+    await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${vendorLink.getAttribute('href')}`)
+    })
+  })
+
   it('copies the active watchlists shortcut link', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)

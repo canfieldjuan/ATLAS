@@ -241,6 +241,7 @@ export default function EvidenceExplorer() {
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWatchlistsState, setCopiedWatchlistsState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [copiedVendorWorkspaceState, setCopiedVendorWorkspaceState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
@@ -555,6 +556,15 @@ export default function EvidenceExplorer() {
     }
   }
 
+  async function handleCopyVendorWorkspaceLink(path: string) {
+    try {
+      await copyText(`${window.location.origin}${path}`)
+      setCopiedVendorWorkspaceState('copied')
+    } catch {
+      setCopiedVendorWorkspaceState('error')
+    }
+  }
+
   async function handleCopyWitnessLink(witnessId: string) {
     try {
       await copyText(`${window.location.origin}${evidenceWitnessPath(searchParams, witnessId)}`)
@@ -628,12 +638,22 @@ export default function EvidenceExplorer() {
                   </button>
                 </span>
               ) : null}
-              <Link
-                to={evidenceVendorPath(searchParams, activeVendor)}
-                className="text-cyan-400 hover:text-cyan-300 transition-colors"
-              >
-                Vendor workspace
-              </Link>
+              <span className="inline-flex items-center gap-2">
+                <Link
+                  to={evidenceVendorPath(searchParams, activeVendor)}
+                  className="text-cyan-400 hover:text-cyan-300 transition-colors"
+                >
+                  Vendor workspace
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyVendorWorkspaceLink(evidenceVendorPath(searchParams, activeVendor))}
+                  className="text-slate-400 hover:text-white transition-colors"
+                  aria-label="Copy vendor workspace link"
+                >
+                  {copiedVendorWorkspaceState === 'copied' ? 'Copied' : copiedVendorWorkspaceState === 'error' ? 'Copy Failed' : 'Copy Link'}
+                </button>
+              </span>
               <Link
                 to={evidenceOpportunitiesPath(searchParams, activeVendor)}
                 className="text-emerald-300 hover:text-emerald-200 transition-colors"
