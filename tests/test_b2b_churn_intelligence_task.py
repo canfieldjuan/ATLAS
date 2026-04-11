@@ -311,3 +311,62 @@ async def test_upsert_company_signal_candidate_groups_persists_materialization_r
     assert "materialization_run_id" in query
     assert rows[0][-1] == "run-789"
     assert rows[0][-2] == "canonical_ready"
+
+
+@pytest.mark.asyncio
+async def test_rebuild_company_signal_candidate_materializations_returns_counts(monkeypatch):
+    pool = CapturePool()
+    fetch_mock = AsyncMock(
+        return_value=[
+            {
+                "review_id": str(uuid4()),
+                "company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "candidate_bucket": "canonical_ready",
+            },
+            {
+                "review_id": str(uuid4()),
+                "company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "candidate_bucket": "analyst_review",
+            },
+        ]
+    )
+    upsert_candidates_mock = AsyncMock(return_value=2)
+    upsert_groups_mock = AsyncMock(return_value=1)
+    sync_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(mod, "_fetch_company_signal_review_candidates", fetch_mock)
+    monkeypatch.setattr(
+        mod,
+        "_build_company_signal_candidate_groups",
+        lambda candidates: [
+            {
+                "company_name": "acme",
+                "vendor_name": "Zendesk",
+                "candidate_bucket": "canonical_ready",
+            },
+        ],
+    )
+    monkeypatch.setattr(mod, "_upsert_company_signal_candidates", upsert_candidates_mock)
+    monkeypatch.setattr(mod, "_upsert_company_signal_candidate_groups", upsert_groups_mock)
+    monkeypatch.setattr(mod, "_sync_company_signal_candidate_member_status_from_groups", sync_mock)
+
+    result = await mod.rebuild_company_signal_candidate_materializations(
+        pool,
+        window_days=90,
+        vendors=["Zendesk"],
+        materialization_run_id="run-backfill",
+    )
+
+    assert result == {
+        "company_signal_candidates": 2,
+        "canonical_ready_company_signal_candidates": 1,
+        "company_signal_candidates_persisted": 2,
+        "company_signal_candidate_groups": 1,
+        "canonical_ready_company_signal_candidate_groups": 1,
+        "company_signal_candidate_groups_persisted": 1,
+    }
+    fetch_mock.assert_awaited_once()
+    upsert_candidates_mock.assert_awaited_once()
+    upsert_groups_mock.assert_awaited_once()
+    sync_mock.assert_awaited_once_with(pool, materialization_run_id="run-backfill")

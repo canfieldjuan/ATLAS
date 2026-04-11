@@ -2696,20 +2696,10 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     upsert_failures = 0
     company_signals_persisted = 0
     company_signal_candidates_persisted = 0
-    canonical_ready_company_signal_candidates = sum(
-        1
-        for item in (company_signal_candidates or [])
-        if item.get("candidate_bucket") == "canonical_ready"
-    )
-    company_signal_candidate_groups = _build_company_signal_candidate_groups(
-        company_signal_candidates or [],
-    )
+    canonical_ready_company_signal_candidates = 0
+    company_signal_candidate_groups_count = 0
     company_signal_candidate_groups_persisted = 0
-    canonical_ready_company_signal_candidate_groups = sum(
-        1
-        for item in company_signal_candidate_groups
-        if item.get("candidate_bucket") == "canonical_ready"
-    )
+    canonical_ready_company_signal_candidate_groups = 0
     pain_points_persisted = 0
     use_cases_persisted = 0
     integrations_persisted = 0
@@ -2961,30 +2951,23 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     await _update_persist_progress()
 
     try:
-        company_signal_candidates_persisted = await _upsert_company_signal_candidates(
+        company_signal_candidate_stats = await rebuild_company_signal_candidate_materializations(
             pool,
-            company_signal_candidates,
+            window_days=window_days,
+            vendors=selected_vendors or None,
+            urgency_threshold=getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0),
             materialization_run_id=materialization_run_id,
         )
+        company_signal_candidates_persisted = company_signal_candidate_stats["company_signal_candidates_persisted"]
+        canonical_ready_company_signal_candidates = company_signal_candidate_stats["canonical_ready_company_signal_candidates"]
+        company_signal_candidate_groups_count = company_signal_candidate_stats["company_signal_candidate_groups"]
+        company_signal_candidate_groups_persisted = company_signal_candidate_stats["company_signal_candidate_groups_persisted"]
+        canonical_ready_company_signal_candidate_groups = company_signal_candidate_stats["canonical_ready_company_signal_candidate_groups"]
     except Exception:
         company_signal_candidates_persisted = 0
-        logger.exception("Failed to persist company signal candidates")
-    persistence_progress += 1
-    await _update_persist_progress()
-
-    try:
-        company_signal_candidate_groups_persisted = await _upsert_company_signal_candidate_groups(
-            pool,
-            company_signal_candidate_groups,
-            materialization_run_id=materialization_run_id,
-        )
-        await _sync_company_signal_candidate_member_status_from_groups(
-            pool,
-            materialization_run_id=materialization_run_id,
-        )
-    except Exception:
+        company_signal_candidate_groups_count = 0
         company_signal_candidate_groups_persisted = 0
-        logger.exception("Failed to persist company signal candidate groups")
+        logger.exception("Failed to persist company signal candidate materializations")
     persistence_progress += 1
     await _update_persist_progress()
 
@@ -3289,7 +3272,7 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "company_signal_candidates": len(company_signal_candidates),
         "canonical_ready_company_signal_candidates": canonical_ready_company_signal_candidates,
         "company_signal_candidates_persisted": company_signal_candidates_persisted,
-        "company_signal_candidate_groups": len(company_signal_candidate_groups),
+        "company_signal_candidate_groups": company_signal_candidate_groups_count,
         "canonical_ready_company_signal_candidate_groups": canonical_ready_company_signal_candidate_groups,
         "company_signal_candidate_groups_persisted": company_signal_candidate_groups_persisted,
         "pain_points_persisted": pain_points_persisted,
@@ -4079,6 +4062,59 @@ async def _sync_company_signal_candidate_member_status_from_groups(
           )
         """
     )
+
+
+async def rebuild_company_signal_candidate_materializations(
+    pool,
+    *,
+    window_days: int,
+    vendors: list[str] | None = None,
+    urgency_threshold: float | None = None,
+    limit: int | None = None,
+    materialization_run_id: str | None = None,
+) -> dict[str, int]:
+    """Refresh review-level and grouped company-signal candidate materializations."""
+    canonical_vendors = [
+        canonical
+        for canonical in (_canonicalize_vendor(vendor) for vendor in (vendors or []))
+        if canonical
+    ] or None
+    candidates = await _fetch_company_signal_review_candidates(
+        pool,
+        window_days=window_days,
+        urgency_threshold=urgency_threshold,
+        scoped_vendors=canonical_vendors,
+        limit=limit,
+    )
+    groups = _build_company_signal_candidate_groups(candidates)
+    candidate_rows_persisted = await _upsert_company_signal_candidates(
+        pool,
+        candidates,
+        materialization_run_id=materialization_run_id,
+    )
+    group_rows_persisted = await _upsert_company_signal_candidate_groups(
+        pool,
+        groups,
+        materialization_run_id=materialization_run_id,
+    )
+    await _sync_company_signal_candidate_member_status_from_groups(
+        pool,
+        materialization_run_id=materialization_run_id,
+    )
+    canonical_ready_candidates = sum(
+        1 for item in candidates if item.get("candidate_bucket") == "canonical_ready"
+    )
+    canonical_ready_groups = sum(
+        1 for item in groups if item.get("candidate_bucket") == "canonical_ready"
+    )
+    return {
+        "company_signal_candidates": len(candidates),
+        "canonical_ready_company_signal_candidates": canonical_ready_candidates,
+        "company_signal_candidates_persisted": candidate_rows_persisted,
+        "company_signal_candidate_groups": len(groups),
+        "canonical_ready_company_signal_candidate_groups": canonical_ready_groups,
+        "company_signal_candidate_groups_persisted": group_rows_persisted,
+    }
 
 
 # ------------------------------------------------------------------
