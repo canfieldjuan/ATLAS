@@ -142,6 +142,18 @@ function ProbabilityGauge({ value, confidence }: { value: number; confidence: st
   )
 }
 
+function ProbabilityGaugeUnavailable({ confidence }: { confidence: string }) {
+  return (
+    <div className="flex flex-col items-center">
+      <div className="w-[160px] h-[160px] rounded-full bg-slate-700/30 flex items-center justify-center">
+        <ShieldAlert className="w-10 h-10 text-amber-400" />
+      </div>
+      <p className="text-sm text-amber-300/80 mt-3 text-center">Probability unavailable</p>
+      <p className="text-xs text-slate-500 mt-1 uppercase tracking-wider">{confidence} confidence</p>
+    </div>
+  )
+}
+
 // -- Factor bar --------------------------------------------------------------
 
 function FactorBar({ factor }: { factor: WinLossFactor }) {
@@ -384,7 +396,7 @@ export default function WinLossPredictor() {
     const pct = p.win_probability != null ? Math.round(p.win_probability * 100) : null
     const lines: string[] = [
       `Win/Loss Prediction: ${p.vendor_name}`,
-      `Win Probability: ${pct}% (${p.confidence} confidence)`,
+      `Win Probability: ${pct != null ? `${pct}%` : 'Unavailable'} (${p.confidence} confidence)`,
       `Verdict: ${p.verdict}`,
       '',
     ]
@@ -586,9 +598,9 @@ export default function WinLossPredictor() {
               const pct = rp.win_probability != null ? Math.round(rp.win_probability * 100) : null
               let dotColor = 'bg-red-500'
               if (rp.is_gated) dotColor = 'bg-slate-500'
-              else if (pct >= 70) dotColor = 'bg-green-500'
-              else if (pct >= 50) dotColor = 'bg-amber-500'
-              else if (pct >= 30) dotColor = 'bg-orange-500'
+              else if (pct != null && pct >= 70) dotColor = 'bg-green-500'
+              else if (pct != null && pct >= 50) dotColor = 'bg-amber-500'
+              else if (pct != null && pct >= 30) dotColor = 'bg-orange-500'
               const ago = _timeAgo(rp.created_at)
               return (
                 <button
@@ -655,7 +667,11 @@ export default function WinLossPredictor() {
                   </div>
                 ) : (
                   <div className="flex flex-col items-center">
-                    <ProbabilityGauge value={pred.win_probability} confidence={pred.confidence} />
+                    {pred.win_probability != null ? (
+                      <ProbabilityGauge value={pred.win_probability} confidence={pred.confidence} />
+                    ) : (
+                      <ProbabilityGaugeUnavailable confidence={pred.confidence} />
+                    )}
                     <p className="text-xs text-slate-500 mt-2">
                       {pred.weights_source === 'calibrated'
                         ? `Calibrated (v${pred.calibration_version ?? '?'})`
@@ -848,7 +864,11 @@ export default function WinLossPredictor() {
           {/* Top: Gauge + Factors */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="bg-slate-800/60 rounded-xl border border-slate-700/50 p-6 flex flex-col items-center justify-center relative">
-              <ProbabilityGauge value={prediction.win_probability} confidence={prediction.confidence} />
+              {prediction.win_probability != null ? (
+                <ProbabilityGauge value={prediction.win_probability} confidence={prediction.confidence} />
+              ) : (
+                <ProbabilityGaugeUnavailable confidence={prediction.confidence} />
+              )}
               <p className="text-center text-slate-300 mt-4 text-sm max-w-xs">{prediction.verdict}</p>
               <div className="flex flex-wrap justify-center gap-3 mt-3 text-xs text-slate-500">
                 {Object.entries(prediction.data_coverage).map(([k, v]) => (
