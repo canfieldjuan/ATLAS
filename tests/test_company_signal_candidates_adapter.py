@@ -167,15 +167,27 @@ async def test_read_company_signal_candidates_maps_rows_and_filters_in_sql():
     results = await read_company_signal_candidates(
         pool,
         window_days=90,
+        company_name="Acme",
         scoped_vendors=["Zendesk"],
         candidate_bucket="analyst_review",
+        canonical_gap_reason="low_confidence_low_trust_source",
+        min_urgency=6.0,
+        min_confidence=0.2,
+        decision_makers_only=True,
+        signal_evidence_present=False,
         limit=25,
     )
 
     sql = pool.fetch.call_args[0][0]
     assert "candidate_bucket =" in sql
+    assert "company_name ILIKE" in sql
+    assert "canonical_gap_reason =" in sql
+    assert "urgency_score" in sql
+    assert "confidence_score" in sql
+    assert "decision_maker = true" in sql
+    assert "signal_evidence_present =" in sql
     assert "ANY(" in sql
-    assert "LIMIT $4" in sql
+    assert "LIMIT $9" in sql
     assert len(results) == 1
     assert results[0]["company"] == "Acme Corp"
     assert results[0]["candidate_bucket"] == "analyst_review"

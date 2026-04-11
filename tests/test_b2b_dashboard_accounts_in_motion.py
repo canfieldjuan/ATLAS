@@ -122,6 +122,127 @@ async def test_list_accounts_in_motion_live_uses_raw_review_path():
 
 
 @pytest.mark.asyncio
+async def test_list_company_signal_candidates_uses_analyst_review_bucket_by_default():
+    pool = MagicMock()
+    returned = [{"company": "Acme Corp", "candidate_bucket": "analyst_review"}]
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ) as scope_mock:
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidates",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.list_company_signal_candidates(
+                    vendor_name=None,
+                    company_name=None,
+                    candidate_bucket="analyst_review",
+                    canonical_gap_reason=None,
+                    min_urgency=0,
+                    min_confidence=None,
+                    decision_makers_only=False,
+                    signal_evidence_present=None,
+                    window_days=90,
+                    limit=50,
+                    user=None,
+                )
+
+    assert result == {
+        "candidates": returned,
+        "count": 1,
+        "candidate_bucket": "analyst_review",
+    }
+    scope_mock.assert_awaited_once_with(pool, None)
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name=None,
+        company_name=None,
+        scoped_vendors=None,
+        candidate_bucket="analyst_review",
+        canonical_gap_reason=None,
+        min_urgency=0,
+        min_confidence=None,
+        decision_makers_only=False,
+        signal_evidence_present=None,
+        limit=50,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_company_signal_candidates_passes_scope_and_filters():
+    pool = MagicMock()
+    user = MagicMock()
+    scoped = ["Zendesk", "Freshdesk"]
+    returned = [{"company": "Acme Corp", "candidate_bucket": "canonical_ready"}]
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=scoped),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidates",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.list_company_signal_candidates(
+                    vendor_name="Zendesk",
+                    company_name="Acme",
+                    candidate_bucket="canonical_ready",
+                    canonical_gap_reason="below_high_intent_threshold",
+                    min_urgency=6.5,
+                    min_confidence=0.4,
+                    decision_makers_only=True,
+                    signal_evidence_present=False,
+                    window_days=30,
+                    limit=25,
+                    user=user,
+                )
+
+    assert result["count"] == 1
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=30,
+        vendor_name="Zendesk",
+        company_name="Acme",
+        scoped_vendors=scoped,
+        candidate_bucket="canonical_ready",
+        canonical_gap_reason="below_high_intent_threshold",
+        min_urgency=6.5,
+        min_confidence=0.4,
+        decision_makers_only=True,
+        signal_evidence_present=False,
+        limit=25,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_company_signal_candidates_rejects_invalid_bucket():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.list_company_signal_candidates(
+                vendor_name=None,
+                company_name=None,
+                candidate_bucket="invalid",
+                canonical_gap_reason=None,
+                min_urgency=0,
+                min_confidence=None,
+                decision_makers_only=False,
+                signal_evidence_present=None,
+                window_days=90,
+                limit=50,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "candidate_bucket" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_get_report_handles_null_battle_card_quality():
     pool = MagicMock()
     pool.fetchrow = AsyncMock(

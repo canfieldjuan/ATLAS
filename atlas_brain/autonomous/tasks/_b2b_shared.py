@@ -11301,8 +11301,14 @@ async def read_company_signal_candidates(
     *,
     window_days: int = 90,
     vendor_name: str | None = None,
+    company_name: str | None = None,
     scoped_vendors: list[str] | None = None,
     candidate_bucket: str | None = None,
+    canonical_gap_reason: str | None = None,
+    min_urgency: float = 0.0,
+    min_confidence: float | None = None,
+    decision_makers_only: bool = False,
+    signal_evidence_present: bool | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """Shared adapter for persisted analyst-assist company-signal candidates."""
@@ -11320,9 +11326,31 @@ async def read_company_signal_candidates(
         conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
         params.append(vendor_name)
         idx += 1
+    if company_name:
+        conditions.append(f"company_name ILIKE '%' || ${idx} || '%'")
+        params.append(company_name)
+        idx += 1
     if candidate_bucket:
         conditions.append(f"candidate_bucket = ${idx}")
         params.append(candidate_bucket)
+        idx += 1
+    if canonical_gap_reason:
+        conditions.append(f"canonical_gap_reason = ${idx}")
+        params.append(canonical_gap_reason)
+        idx += 1
+    if min_urgency > 0:
+        conditions.append(f"COALESCE(urgency_score, 0) >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+    if min_confidence is not None:
+        conditions.append(f"COALESCE(confidence_score, 0) >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+    if decision_makers_only:
+        conditions.append("decision_maker = true")
+    if signal_evidence_present is not None:
+        conditions.append(f"signal_evidence_present = ${idx}")
+        params.append(signal_evidence_present)
         idx += 1
 
     limit_param = idx

@@ -37,6 +37,7 @@ from ..services.scraping.capabilities import get_capability
 from ..services.scraping.sources import ALL_SOURCES, ReviewSource, display_name as source_display_name
 from ..autonomous.tasks._b2b_shared import (
     has_complete_core_run_marker,
+    read_company_signal_candidates,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
     read_vendor_signal_detail,
@@ -2188,6 +2189,50 @@ async def list_company_signals(
         })
 
     return {"signals": signals, "count": len(signals)}
+
+
+@router.get("/company-signal-candidates")
+async def list_company_signal_candidates(
+    vendor_name: Optional[str] = Query(None),
+    company_name: Optional[str] = Query(None),
+    candidate_bucket: str = Query("analyst_review"),
+    canonical_gap_reason: Optional[str] = Query(None),
+    min_urgency: float = Query(0, ge=0, le=10),
+    min_confidence: Optional[float] = Query(None, ge=0, le=1),
+    decision_makers_only: bool = Query(False),
+    signal_evidence_present: Optional[bool] = Query(None),
+    window_days: int = Query(90, ge=1, le=3650),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """List analyst-assist company-signal candidates without mixing them into canonical signals."""
+    if candidate_bucket not in {"analyst_review", "canonical_ready"}:
+        raise HTTPException(
+            status_code=400,
+            detail="candidate_bucket must be 'analyst_review' or 'canonical_ready'",
+        )
+
+    pool = _pool_or_503()
+    scoped_vendors = await _get_scoped_vendors(pool, user)
+    candidates = await read_company_signal_candidates(
+        pool,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        company_name=company_name,
+        scoped_vendors=scoped_vendors,
+        candidate_bucket=candidate_bucket,
+        canonical_gap_reason=canonical_gap_reason,
+        min_urgency=min_urgency,
+        min_confidence=min_confidence,
+        decision_makers_only=decision_makers_only,
+        signal_evidence_present=signal_evidence_present,
+        limit=limit,
+    )
+    return {
+        "candidates": candidates,
+        "count": len(candidates),
+        "candidate_bucket": candidate_bucket,
+    }
 
 
 # ---------------------------------------------------------------------------
