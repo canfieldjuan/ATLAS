@@ -1478,6 +1478,23 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyVendorWitnessLink(
+    vendorName: string,
+    witnessId: string,
+    source?: string | null,
+  ) {
+    try {
+      await navigator.clipboard.writeText(
+        `${window.location.origin}${watchlistEvidenceExplorerPath(searchParams, vendorName, witnessId, source)}`,
+      )
+      setActionError(null)
+      setActionMessage(`Copied witness link for ${vendorName}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy witness link')
+    }
+  }
+
   async function handleCopySelectedReviewLink(reviewId: string) {
     if (!selectedAccount) return
     try {
@@ -2032,6 +2049,19 @@ export default function Watchlists() {
                 Witness
               </Link>
             ) : null}
+            {primaryWitnessId ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyVendorWitnessLink(row.vendor_name, primaryWitnessId, selectedSourceFilter)
+                }}
+                aria-label={`Copy vendor witness link for ${row.vendor_name}`}
+                className="text-slate-300 hover:text-slate-200"
+              >
+                Copy witness
+              </button>
+            ) : null}
             {matchedAccountReview ? (
               <Link
                 to={watchlistPath(accountFocusParams(searchParams, matchedAccountReview))}
@@ -2275,7 +2305,7 @@ export default function Watchlists() {
                   event.stopPropagation()
                   void handleCopyAccountRowWitnessLink(row, primaryWitnessId, primaryWitnessSource)
                 }}
-                aria-label={`Copy witness link for ${row.vendor}`}
+                aria-label={`Copy account witness link for ${row.vendor}`}
                 className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
                 title="Copy witness link"
               >
