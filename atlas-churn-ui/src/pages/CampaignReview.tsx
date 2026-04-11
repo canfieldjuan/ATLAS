@@ -36,10 +36,56 @@ import {
 } from '../api/client'
 
 type StatusTab = 'draft' | 'approved' | 'sent' | 'all'
+const DEFAULT_STATUS_TAB: StatusTab = 'draft'
 
 interface CompanyGroup {
   company: string
   drafts: ReviewQueueDraft[]
+}
+
+function parseStatusTab(value: string | null): StatusTab {
+  return value === 'approved' || value === 'sent' || value === 'all' ? value : DEFAULT_STATUS_TAB
+}
+
+function buildCampaignReviewSearchParams(statusTab: StatusTab, companyFilter: string) {
+  const params = new URLSearchParams()
+  if (statusTab !== DEFAULT_STATUS_TAB) params.set('status', statusTab)
+  if (companyFilter.trim()) params.set('company', companyFilter.trim())
+  return params
+}
+
+function campaignReviewPath(statusTab: StatusTab, companyFilter: string) {
+  const params = buildCampaignReviewSearchParams(statusTab, companyFilter)
+  const query = params.toString()
+  return query ? `/campaign-review?${query}` : '/campaign-review'
+}
+
+function campaignVendorWorkspacePath(statusTab: StatusTab, companyFilter: string, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', campaignReviewPath(statusTab, companyFilter))
+  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
+}
+
+function campaignEvidencePath(statusTab: StatusTab, companyFilter: string, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  params.set('back_to', campaignReviewPath(statusTab, companyFilter))
+  return `/evidence?${params.toString()}`
+}
+
+function campaignReportsPath(statusTab: StatusTab, companyFilter: string, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', campaignReviewPath(statusTab, companyFilter))
+  return `/reports?${params.toString()}`
+}
+
+function campaignOpportunitiesPath(statusTab: StatusTab, companyFilter: string, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', campaignReviewPath(statusTab, companyFilter))
+  return `/opportunities?${params.toString()}`
 }
 
 function PersonaBadge({ persona }: { persona: string | null }) {
@@ -148,8 +194,7 @@ function AuditTimeline({ campaignId }: { campaignId: string }) {
 export default function CampaignReview() {
   const [searchParams, setSearchParams] = useSearchParams()
   const companyFilter = searchParams.get('company') || ''
-
-  const [statusTab, setStatusTab] = useState<StatusTab>('draft')
+  const statusTab = parseStatusTab(searchParams.get('status'))
   const [expandedCompany, setExpandedCompany] = useState<string | null>(null)
   const [selectedCampaign, setSelectedCampaign] = useState<string | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -473,7 +518,12 @@ export default function CampaignReview() {
           {(['draft', 'approved', 'sent', 'all'] as const).map((tab) => (
             <button
               key={tab}
-              onClick={() => { setStatusTab(tab); setExpandedCompany(null); setSelectedIds(new Set()); cancelEditing() }}
+              onClick={() => {
+                setSearchParams(buildCampaignReviewSearchParams(tab, companyFilter))
+                setExpandedCompany(null)
+                setSelectedIds(new Set())
+                cancelEditing()
+              }}
               className={clsx(
                 'px-4 py-2 text-sm font-medium transition-colors border-b-2 capitalize',
                 statusTab === tab
@@ -630,12 +680,32 @@ export default function CampaignReview() {
                                 </>
                               )}
                               {draft.vendor_name && (
-                                <Link
-                                  to={`/opportunities?vendor=${encodeURIComponent(draft.vendor_name)}`}
-                                  className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 ml-auto"
-                                >
-                                  Source opportunity <ExternalLink className="h-3 w-3" />
-                                </Link>
+                                <div className="ml-auto flex flex-wrap items-center gap-2">
+                                  <Link
+                                    to={campaignVendorWorkspacePath(statusTab, companyFilter, draft.vendor_name)}
+                                    className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                  >
+                                    Vendor workspace <ExternalLink className="h-3 w-3" />
+                                  </Link>
+                                  <Link
+                                    to={campaignEvidencePath(statusTab, companyFilter, draft.vendor_name)}
+                                    className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                  >
+                                    Evidence <ExternalLink className="h-3 w-3" />
+                                  </Link>
+                                  <Link
+                                    to={campaignReportsPath(statusTab, companyFilter, draft.vendor_name)}
+                                    className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                  >
+                                    Reports <ExternalLink className="h-3 w-3" />
+                                  </Link>
+                                  <Link
+                                    to={campaignOpportunitiesPath(statusTab, companyFilter, draft.vendor_name)}
+                                    className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                  >
+                                    Opportunities <ExternalLink className="h-3 w-3" />
+                                  </Link>
+                                </div>
                               )}
                             </div>
 

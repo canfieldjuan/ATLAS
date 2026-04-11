@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CampaignReview from './CampaignReview'
 
 const api = vi.hoisted(() => ({
@@ -17,6 +17,10 @@ const api = vi.hoisted(() => ({
 vi.mock('../api/client', () => api)
 
 describe('CampaignReview', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     api.fetchReviewQueueSummary.mockResolvedValue({
@@ -106,5 +110,39 @@ describe('CampaignReview', () => {
         cta: '',
       })
     })
+  })
+
+  it('preserves status and company context in vendor workflow links', async () => {
+    render(
+      <MemoryRouter initialEntries={['/campaign-review?status=sent&company=Acme%20Corp']}>
+        <CampaignReview />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(api.fetchReviewQueue).toHaveBeenCalledWith({
+        status: 'sent',
+        include_prospects: true,
+        limit: 100,
+      })
+    })
+
+    expect(await screen.findByText('Initial subject')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Vendor workspace/i })).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk?back_to=%2Fcampaign-review%3Fstatus%3Dsent%26company%3DAcme%2BCorp',
+    )
+    expect(screen.getByRole('link', { name: /^Evidence$/i })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fcampaign-review%3Fstatus%3Dsent%26company%3DAcme%2BCorp',
+    )
+    expect(screen.getByRole('link', { name: /^Reports$/i })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fcampaign-review%3Fstatus%3Dsent%26company%3DAcme%2BCorp',
+    )
+    expect(screen.getByRole('link', { name: /^Opportunities$/i })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Zendesk&back_to=%2Fcampaign-review%3Fstatus%3Dsent%26company%3DAcme%2BCorp',
+    )
   })
 })
