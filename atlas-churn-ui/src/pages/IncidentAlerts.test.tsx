@@ -54,6 +54,10 @@ describe('IncidentAlerts', () => {
           updated_at: '2026-04-10T03:00:00Z',
           recent_deliveries_7d: 12,
           recent_success_rate_7d: 0.917,
+          latest_failure_event_type: 'signal_update',
+          latest_failure_status_code: 500,
+          latest_failure_error: 'downstream timeout',
+          latest_failure_at: '2026-04-10T02:55:00Z',
         },
       ],
       count: 1,
@@ -120,6 +124,8 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('18')).toBeInTheDocument()
     expect(screen.getByText('89%')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send Test' })).toBeInTheDocument()
+    expect(screen.getByText('Latest failure · signal_update · 500')).toBeInTheDocument()
+    expect(screen.getByText(/downstream timeout/)).toBeInTheDocument()
   })
 
   it('shows delivery activity drillthrough for a webhook', async () => {

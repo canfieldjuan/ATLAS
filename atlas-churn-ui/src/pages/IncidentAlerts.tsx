@@ -314,6 +314,15 @@ function formatDurationMs(value: number | null | undefined) {
   return `${Math.round(value)} ms`
 }
 
+function formatFailureSummary(webhook: {
+  latest_failure_status_code?: number | null
+  latest_failure_error?: string | null
+}) {
+  if (webhook.latest_failure_error?.trim()) return webhook.latest_failure_error.trim()
+  if (webhook.latest_failure_status_code != null) return `HTTP ${webhook.latest_failure_status_code}`
+  return 'Delivery failed'
+}
+
 function generateWebhookSecret() {
   return `atlas_${Math.random().toString(36).slice(2, 14)}${Math.random().toString(36).slice(2, 14)}`
 }
@@ -725,6 +734,17 @@ export default function IncidentAlerts() {
                           </span>
                         ))}
                       </div>
+                      {webhook.latest_failure_at ? (
+                        <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                          <div className="font-medium text-rose-100">
+                            Latest failure{webhook.latest_failure_event_type ? ` · ${webhook.latest_failure_event_type}` : ''}
+                            {webhook.latest_failure_status_code != null ? ` · ${webhook.latest_failure_status_code}` : ''}
+                          </div>
+                          <div className="mt-1">
+                            {formatFailureSummary(webhook)} · {formatTs(webhook.latest_failure_at)}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-xs text-slate-400 lg:min-w-[220px]">

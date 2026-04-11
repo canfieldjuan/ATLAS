@@ -225,16 +225,55 @@ async def test_list_reports_exposes_normalized_trust_fields():
     assert report["has_pdf_export"] is True
     assert report["artifact_state"] == "ready"
     assert report["artifact_label"] == "Ready"
-    assert report["freshness_state"] == "fresh"
+    assert report["freshness_state"] == "monitor"
     assert report["review_state"] == "warnings"
     assert report["trust"] == {
         "artifact_state": "ready",
         "artifact_label": "Ready",
-        "freshness_state": "fresh",
-        "freshness_label": "Fresh",
+        "freshness_state": "monitor",
+        "freshness_label": "Monitor",
         "review_state": "warnings",
         "review_label": "Warnings",
     }
+
+
+@pytest.mark.asyncio
+async def test_list_webhooks_exposes_latest_failure_summary():
+    created_at = datetime.now(timezone.utc) - timedelta(days=1)
+    failed_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    pool = MagicMock()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                "id": "2ea3fd03-7fd9-4b72-8f24-117667f723e9",
+                "url": "https://hooks.example.com/churn",
+                "event_types": ["churn_alert", "signal_update"],
+                "channel": "generic",
+                "enabled": True,
+                "description": "PagerDuty bridge",
+                "created_at": created_at,
+                "updated_at": created_at,
+                "recent_deliveries": 12,
+                "recent_successes": 11,
+                "latest_failure_event_type": "signal_update",
+                "latest_failure_status_code": 500,
+                "latest_failure_error": "downstream timeout",
+                "latest_failure_at": failed_at,
+            }
+        ]
+    )
+    user = MagicMock(account_id="account-1")
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.list_webhooks(user=user)
+
+    assert result["count"] == 1
+    webhook = result["webhooks"][0]
+    assert webhook["recent_success_rate_7d"] == 0.917
+    assert webhook["latest_failure_event_type"] == "signal_update"
+    assert webhook["latest_failure_status_code"] == 500
+    assert webhook["latest_failure_error"] == "downstream timeout"
+    assert webhook["latest_failure_at"] == failed_at.isoformat()
 
 
 def test_validate_accounts_in_motion_window_rejects_custom_window():

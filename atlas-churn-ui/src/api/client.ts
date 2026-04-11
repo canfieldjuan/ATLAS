@@ -490,6 +490,10 @@ export interface WebhookSubscription {
   updated_at?: string
   recent_deliveries_7d?: number
   recent_success_rate_7d?: number | null
+  latest_failure_event_type?: string | null
+  latest_failure_status_code?: number | null
+  latest_failure_error?: string | null
+  latest_failure_at?: string | null
 }
 
 export interface WebhookDeliverySummary {
