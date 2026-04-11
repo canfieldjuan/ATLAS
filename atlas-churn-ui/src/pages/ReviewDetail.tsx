@@ -46,9 +46,15 @@ function evidencePath(vendorName: string, backTo: string, upstreamEvidencePath?:
       const upstreamTab = url.searchParams.get('tab')?.trim()
       const witnessId = url.searchParams.get('witness_id')?.trim()
       const source = url.searchParams.get('source')?.trim()
+      const painCategory = url.searchParams.get('pain_category')?.trim()
+      const witnessType = url.searchParams.get('witness_type')?.trim()
+      const offset = url.searchParams.get('offset')?.trim()
       if (upstreamTab) next.set('tab', upstreamTab)
       if (witnessId) next.set('witness_id', witnessId)
       if (source) next.set('source', source)
+      if (painCategory) next.set('pain_category', painCategory)
+      if (witnessType) next.set('witness_type', witnessType)
+      if (offset) next.set('offset', offset)
     } catch {
       // Fall through to the generic evidence path.
     }

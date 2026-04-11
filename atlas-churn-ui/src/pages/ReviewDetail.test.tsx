@@ -144,7 +144,7 @@ describe('ReviewDetail', () => {
 
   it('preserves witness drilldown state on the evidence shortcut when entered from evidence explorer', async () => {
     render(
-      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26witness_id%3Dwitness%253Azendesk%253A1%26source%3Dreddit']}>
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26offset%3D30%26witness_id%3Dwitness%253Azendesk%253A1']}>
         <Routes>
           <Route path="/reviews/:id" element={<ReviewDetail />} />
         </Routes>
@@ -154,7 +154,7 @@ describe('ReviewDetail', () => {
     expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fevidence%253Fvendor%253DZendesk%2526tab%253Dwitnesses%2526witness_id%253Dwitness%25253Azendesk%25253A1%2526source%253Dreddit',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&pain_category=pricing&witness_type=pricing&offset=30&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fevidence%253Fvendor%253DZendesk%2526tab%253Dwitnesses%2526pain_category%253Dpricing%2526source%253Dreddit%2526witness_type%253Dpricing%2526offset%253D30%2526witness_id%253Dwitness%25253Azendesk%25253A1',
     )
   })
 
