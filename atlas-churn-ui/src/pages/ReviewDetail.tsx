@@ -125,7 +125,7 @@ export default function ReviewDetail() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
   const [copied, setCopied] = useState(false)
-  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'account' | 'evidence' | 'vendor'; status: 'copied' | 'error' } | null>(null)
+  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'account' | 'evidence' | 'vendor' | 'reports'; status: 'copied' | 'error' } | null>(null)
 
   const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
     () => {
@@ -304,12 +304,25 @@ export default function ReviewDetail() {
             >
               Opportunities
             </Link>
-            <Link
-              to={reportsPath(review.vendor_name, reviewDetailBackPath)}
-              className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
-            >
-              Reports
-            </Link>
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={reportsPath(review.vendor_name, reviewDetailBackPath)}
+                className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+              >
+                Reports
+              </Link>
+              <button
+                type="button"
+                onClick={() => handleCopyShortcutLink('reports', reportsPath(review.vendor_name, reviewDetailBackPath))}
+                className="text-slate-400 hover:text-white transition-colors"
+                aria-label="Copy reports link"
+                title="Copy reports link"
+              >
+                {copiedShortcutState?.key === 'reports' && copiedShortcutState.status === 'copied'
+                  ? <Check className="h-3.5 w-3.5 text-green-400" />
+                  : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </span>
           </div>
           <p className="text-sm text-slate-400 mt-1">
             {review.reviewer_company ?? 'Unknown company'}
