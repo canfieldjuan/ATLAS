@@ -89,6 +89,7 @@ interface EvidenceDrawerProps {
   windowDays?: number
   open: boolean
   onClose: () => void
+  explorerUrl?: string | null
 }
 
 export default function EvidenceDrawer({
@@ -98,6 +99,7 @@ export default function EvidenceDrawer({
   windowDays,
   open,
   onClose,
+  explorerUrl,
 }: EvidenceDrawerProps) {
   const [witness, setWitness] = useState<EvidenceWitnessDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -205,6 +207,15 @@ export default function EvidenceDrawer({
           </div>
           {witness && (
             <div className="mt-3 flex items-center gap-2">
+              {explorerUrl && (
+                <Link
+                  to={explorerUrl}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-colors"
+                >
+                  <Fingerprint className="h-3 w-3" />
+                  Open in Evidence Explorer
+                </Link>
+              )}
               {annotation ? (
                 <button
                   onClick={handleRemoveAnnotation}

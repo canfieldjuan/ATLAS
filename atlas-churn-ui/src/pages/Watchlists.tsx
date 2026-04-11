@@ -328,6 +328,14 @@ function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotio
   return `${window.location.origin}/watchlists?${next.toString()}`
 }
 
+function watchlistWitnessExplorerUrl(vendorName: string, witnessId: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  params.set('witness_id', witnessId)
+  return `${window.location.origin}/evidence?${params.toString()}`
+}
+
 function accountFocusFromRow(row: AccountsInMotionFeedItem) {
   return {
     vendor: row.vendor || '',
@@ -2951,6 +2959,11 @@ export default function Watchlists() {
         witnessId={evidenceDrawerWitnessId}
         open={evidenceDrawerOpen}
         onClose={handleCloseWitnessDrawer}
+        explorerUrl={
+          evidenceDrawerWitnessId && evidenceDrawerVendor
+            ? watchlistWitnessExplorerUrl(evidenceDrawerVendor, evidenceDrawerWitnessId)
+            : null
+        }
       />
     </div>
   )

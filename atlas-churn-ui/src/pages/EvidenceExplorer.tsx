@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import {
   Search, Fingerprint, Loader2, Database, GitBranch,
@@ -33,21 +33,33 @@ const WITNESS_TYPE_COLORS: Record<string, string> = {
 
 type Tab = 'witnesses' | 'vault' | 'trace'
 
+function parseTab(value: string | null): Tab {
+  if (value === 'vault' || value === 'trace' || value === 'witnesses') return value
+  return 'witnesses'
+}
+
 
 // -- Main component -----------------------------------------------------------
 
 export default function EvidenceExplorer() {
   const windowDays = 30
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedVendor = searchParams.get('vendor')?.trim() || ''
+  const requestedTab = parseTab(searchParams.get('tab'))
+  const requestedPain = searchParams.get('pain_category')?.trim() || ''
+  const requestedSource = searchParams.get('source')?.trim() || ''
+  const requestedWitnessType = searchParams.get('witness_type')?.trim() || ''
+  const requestedWitnessId = searchParams.get('witness_id')?.trim() || ''
 
   // Search state
-  const [vendorInput, setVendorInput] = useState('')
-  const [activeVendor, setActiveVendor] = useState('')
+  const [vendorInput, setVendorInput] = useState(requestedVendor)
+  const [activeVendor, setActiveVendor] = useState(requestedVendor)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<Tab>('witnesses')
+  const [activeTab, setActiveTab] = useState<Tab>(requestedTab)
 
   // Witnesses state
   const [witnesses, setWitnesses] = useState<EvidenceWitness[]>([])
@@ -59,9 +71,9 @@ export default function EvidenceExplorer() {
   const limit = 30
 
   // Filters
-  const [filterPain, setFilterPain] = useState('')
-  const [filterSource, setFilterSource] = useState('')
-  const [filterType, setFilterType] = useState('')
+  const [filterPain, setFilterPain] = useState(requestedPain)
+  const [filterSource, setFilterSource] = useState(requestedSource)
+  const [filterType, setFilterType] = useState(requestedWitnessType)
   const [showFilters, setShowFilters] = useState(true)
 
   // Vault state
@@ -73,8 +85,8 @@ export default function EvidenceExplorer() {
   const [traceLoading, setTraceLoading] = useState(false)
 
   // Drawer state
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(Boolean(requestedVendor && requestedWitnessId))
+  const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
 
   // -- Search handler ---------------------------------------------------------
 
@@ -113,6 +125,8 @@ export default function EvidenceExplorer() {
     setShowSuggestions(false)
     setOffset(0)
     setActiveTab('witnesses')
+    setDrawerOpen(false)
+    setDrawerWitnessId(null)
   }, [])
 
   const loadWitnesses = useCallback(async () => {
@@ -195,6 +209,51 @@ export default function EvidenceExplorer() {
     setTrace(null)
     setWitnessSnapshotDate(null)
   }, [activeVendor])
+
+  useEffect(() => {
+    const currentVendor = searchParams.get('vendor')?.trim() || ''
+    const currentTab = parseTab(searchParams.get('tab'))
+    const currentPain = searchParams.get('pain_category')?.trim() || ''
+    const currentSource = searchParams.get('source')?.trim() || ''
+    const currentWitnessType = searchParams.get('witness_type')?.trim() || ''
+    const currentWitnessId = searchParams.get('witness_id')?.trim() || ''
+    const nextWitnessId = drawerOpen ? (drawerWitnessId || '') : ''
+    if (
+      currentVendor === activeVendor
+      && currentTab === activeTab
+      && currentPain === filterPain
+      && currentSource === filterSource
+      && currentWitnessType === filterType
+      && currentWitnessId === nextWitnessId
+    ) {
+      return
+    }
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (activeVendor) next.set('vendor', activeVendor)
+      else next.delete('vendor')
+      next.set('tab', activeTab)
+      if (filterPain) next.set('pain_category', filterPain)
+      else next.delete('pain_category')
+      if (filterSource) next.set('source', filterSource)
+      else next.delete('source')
+      if (filterType) next.set('witness_type', filterType)
+      else next.delete('witness_type')
+      if (nextWitnessId) next.set('witness_id', nextWitnessId)
+      else next.delete('witness_id')
+      return next
+    }, { replace: true })
+  }, [
+    activeTab,
+    activeVendor,
+    drawerOpen,
+    drawerWitnessId,
+    filterPain,
+    filterSource,
+    filterType,
+    searchParams,
+    setSearchParams,
+  ])
 
   const clearFilters = () => {
     setFilterPain('')
@@ -783,7 +842,10 @@ export default function EvidenceExplorer() {
         asOfDate={witnessSnapshotDate}
         windowDays={windowDays}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={() => {
+          setDrawerOpen(false)
+          setDrawerWitnessId(null)
+        }}
       />
     </div>
   )

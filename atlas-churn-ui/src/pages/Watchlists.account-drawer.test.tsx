@@ -403,6 +403,10 @@ describe('Watchlists account drawer', () => {
         window_days: undefined,
       })
     })
+    expect(screen.getByRole('link', { name: 'Open in Evidence Explorer' })).toHaveAttribute(
+      'href',
+      'http://localhost:3000/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1',
+    )
   })
 
   it('copies a share link for the selected account review', async () => {
