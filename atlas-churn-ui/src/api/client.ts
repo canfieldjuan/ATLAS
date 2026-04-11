@@ -496,6 +496,10 @@ export interface WebhookSubscription {
   latest_failure_status_code?: number | null
   latest_failure_error?: string | null
   latest_failure_at?: string | null
+  latest_test_success?: boolean | null
+  latest_test_status_code?: number | null
+  latest_test_error?: string | null
+  latest_test_at?: string | null
 }
 
 export interface WebhookDeliverySummary {

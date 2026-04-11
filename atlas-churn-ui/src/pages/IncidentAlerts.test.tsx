@@ -58,6 +58,10 @@ describe('IncidentAlerts', () => {
           latest_failure_status_code: 500,
           latest_failure_error: 'downstream timeout',
           latest_failure_at: '2026-04-10T02:55:00Z',
+          latest_test_success: false,
+          latest_test_status_code: 504,
+          latest_test_error: 'test timeout',
+          latest_test_at: '2026-04-10T02:40:00Z',
         },
       ],
       count: 1,
@@ -126,6 +130,18 @@ describe('IncidentAlerts', () => {
     expect(screen.getByRole('button', { name: 'Re-test Endpoint' })).toBeInTheDocument()
     expect(screen.getByText('Latest failure · signal_update · 500')).toBeInTheDocument()
     expect(screen.getByText(/downstream timeout/)).toBeInTheDocument()
+  })
+
+
+  it('renders the latest persisted manual test result from the webhook list', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Latest manual test failed')).toBeInTheDocument()
+    expect(screen.getByText(/test timeout/)).toBeInTheDocument()
   })
 
   it('shows the latest manual test result on the webhook card', async () => {

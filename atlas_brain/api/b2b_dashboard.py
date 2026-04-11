@@ -5360,7 +5360,31 @@ async def list_webhooks(
                 WHERE dl6.subscription_id = ws.id
                   AND NOT dl6.success
                 ORDER BY dl6.delivered_at DESC
-                LIMIT 1) AS latest_failure_at
+                LIMIT 1) AS latest_failure_at,
+               (SELECT dl7.success
+                FROM b2b_webhook_delivery_log dl7
+                WHERE dl7.subscription_id = ws.id
+                  AND dl7.event_type = 'test'
+                ORDER BY dl7.delivered_at DESC
+                LIMIT 1) AS latest_test_success,
+               (SELECT dl8.status_code
+                FROM b2b_webhook_delivery_log dl8
+                WHERE dl8.subscription_id = ws.id
+                  AND dl8.event_type = 'test'
+                ORDER BY dl8.delivered_at DESC
+                LIMIT 1) AS latest_test_status_code,
+               (SELECT dl9.error
+                FROM b2b_webhook_delivery_log dl9
+                WHERE dl9.subscription_id = ws.id
+                  AND dl9.event_type = 'test'
+                ORDER BY dl9.delivered_at DESC
+                LIMIT 1) AS latest_test_error,
+               (SELECT dl10.delivered_at
+                FROM b2b_webhook_delivery_log dl10
+                WHERE dl10.subscription_id = ws.id
+                  AND dl10.event_type = 'test'
+                ORDER BY dl10.delivered_at DESC
+                LIMIT 1) AS latest_test_at
         FROM b2b_webhook_subscriptions ws
         WHERE ws.account_id = $1::uuid
         ORDER BY ws.created_at DESC
@@ -5386,6 +5410,10 @@ async def list_webhooks(
             "latest_failure_status_code": r["latest_failure_status_code"],
             "latest_failure_error": r["latest_failure_error"],
             "latest_failure_at": r["latest_failure_at"].isoformat() if r["latest_failure_at"] else None,
+            "latest_test_success": r["latest_test_success"],
+            "latest_test_status_code": r["latest_test_status_code"],
+            "latest_test_error": r["latest_test_error"],
+            "latest_test_at": r["latest_test_at"].isoformat() if r["latest_test_at"] else None,
         })
 
     return {"webhooks": webhooks, "count": len(webhooks)}

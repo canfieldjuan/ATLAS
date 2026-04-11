@@ -324,6 +324,20 @@ function formatFailureSummary(webhook: {
   return 'Delivery failed'
 }
 
+type ManualTestResult = {
+  success: boolean
+  testedAt: string
+  statusCode?: number | null
+  error?: string | null
+}
+
+function formatManualTestSummary(result: ManualTestResult) {
+  if (result.success) return null
+  if (result.error?.trim()) return result.error.trim()
+  if (result.statusCode != null) return `HTTP ${result.statusCode}`
+  return 'Manual test failed'
+}
+
 function generateWebhookSecret() {
   return `atlas_${Math.random().toString(36).slice(2, 14)}${Math.random().toString(36).slice(2, 14)}`
 }
@@ -404,7 +418,7 @@ export default function IncidentAlerts() {
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'all' | 'success' | 'failed'>(requestedDeliveryStatus)
   const [deliveryEventFilter, setDeliveryEventFilter] = useState<'all' | WebhookEventType>(requestedDeliveryEvent as 'all' | WebhookEventType)
   const [crmStatusFilter, setCrmStatusFilter] = useState<'all' | 'success' | 'failed'>(requestedCrmStatus)
-  const [manualTestResults, setManualTestResults] = useState<Record<string, { success: boolean; testedAt: string }>>({})
+  const [manualTestResults, setManualTestResults] = useState<Record<string, ManualTestResult>>({})
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -832,9 +846,17 @@ export default function IncidentAlerts() {
               </div>
             ) : webhooks.map((webhook) => {
               const isBusy = busyWebhookId === webhook.id
-              const latestManualTest = manualTestResults[webhook.id]
+              const persistedManualTest = webhook.latest_test_at
+                ? {
+                    success: Boolean(webhook.latest_test_success),
+                    testedAt: webhook.latest_test_at,
+                    statusCode: webhook.latest_test_status_code,
+                    error: webhook.latest_test_error,
+                  }
+                : null
+              const latestManualTest = manualTestResults[webhook.id] ?? persistedManualTest
               const hasLatestFailure = Boolean(webhook.latest_failure_at)
-              const testButtonLabel = hasLatestFailure ? 'Re-test Endpoint' : 'Send Test'
+              const testButtonLabel = hasLatestFailure || Boolean(latestManualTest) ? 'Re-test Endpoint' : 'Send Test'
               return (
                 <article key={webhook.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -882,7 +904,12 @@ export default function IncidentAlerts() {
                             Latest manual test {latestManualTest.success ? 'passed' : 'failed'}
                           </div>
                           <div className="mt-1">
-                            {formatTs(latestManualTest.testedAt)}
+                            {(() => {
+                              const summary = formatManualTestSummary(latestManualTest)
+                              return summary
+                                ? `${summary} · ${formatTs(latestManualTest.testedAt)}`
+                                : formatTs(latestManualTest.testedAt)
+                            })()}
                           </div>
                         </div>
                       ) : null}
