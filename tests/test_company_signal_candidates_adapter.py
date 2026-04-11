@@ -990,6 +990,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         review_unlock_reason="close_low_trust_confidence",
         candidate_source="reddit",
         rebuild_outcome="triggered",
+        rebuild_reason="ok",
         top_n=5,
     )
 
@@ -1012,6 +1013,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "review_unlock_path" in totals_sql
     assert "review_unlock_reason" in totals_sql
     assert "candidate_source" in totals_sql
+    assert "COALESCE(rebuild_reason, 'unknown')" in totals_sql
     assert "COUNT(DISTINCT review_batch_id)" in totals_sql
     assert "FROM b2b_company_signal_review_events" in totals_sql
     assert "GROUP BY 1" in scopes_sql
@@ -1032,6 +1034,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["review_scope"] == "bulk_group"
     assert summary["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["rebuild_outcome"] == "triggered"
+    assert summary["rebuild_reason"] == "ok"
     assert summary["totals"]["total_actions"] == 6
     assert summary["totals"]["company_signal_effect_rate"] == 1.0
     assert summary["totals"]["company_signal_creation_rate"] == 0.5

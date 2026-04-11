@@ -13258,6 +13258,7 @@ def _company_signal_review_event_filters(
     review_unlock_reason: str | None = None,
     candidate_source: str | None = None,
     rebuild_outcome: str | None = None,
+    rebuild_reason: str | None = None,
 ) -> tuple[list[str], list[Any], int]:
     conditions = ["created_at >= NOW() - make_interval(days => $1)"]
     params: list[Any] = [window_days]
@@ -13309,6 +13310,10 @@ def _company_signal_review_event_filters(
         conditions.append(f"COALESCE(candidate_source, 'unknown') = ${idx}")
         params.append(candidate_source)
         idx += 1
+    if rebuild_reason:
+        conditions.append(f"COALESCE(rebuild_reason, 'unknown') = ${idx}")
+        params.append(rebuild_reason)
+        idx += 1
     if rebuild_outcome == "requested":
         conditions.append(f"COALESCE(rebuild_requested, FALSE) = ${idx}")
         params.append(True)
@@ -13348,6 +13353,7 @@ async def read_company_signal_review_impact_summary(
     review_unlock_reason: str | None = None,
     candidate_source: str | None = None,
     rebuild_outcome: str | None = None,
+    rebuild_reason: str | None = None,
     top_n: int = 10,
 ) -> dict[str, Any]:
     """Summarize downstream impact from company-signal review actions."""
@@ -13365,6 +13371,7 @@ async def read_company_signal_review_impact_summary(
         review_unlock_reason=review_unlock_reason,
         candidate_source=candidate_source,
         rebuild_outcome=rebuild_outcome,
+        rebuild_reason=rebuild_reason,
     )
     if not conditions:
         return {
@@ -13394,6 +13401,7 @@ async def read_company_signal_review_impact_summary(
             "review_scope": review_scope,
             "canonical_gap_reason": canonical_gap_reason,
             "rebuild_outcome": rebuild_outcome,
+            "rebuild_reason": rebuild_reason,
             "unlock_paths": [],
             "priority_bands": [],
             "priority_reasons": [],
@@ -13885,6 +13893,7 @@ async def read_company_signal_review_impact_summary(
         "review_scope": review_scope,
         "canonical_gap_reason": canonical_gap_reason,
         "rebuild_outcome": rebuild_outcome,
+        "rebuild_reason": rebuild_reason,
         "scopes": [dict(row) for row in scope_rows],
         "unlock_paths": [_with_effect_metrics(row) for row in unlock_path_rows],
         "priority_bands": [_with_effect_metrics(row) for row in priority_rows],

@@ -2909,6 +2909,7 @@ async def get_company_signal_review_impact_summary(
     review_unlock_reason: Optional[str] = Query(None),
     candidate_source: Optional[str] = Query(None),
     rebuild_outcome: Optional[str] = Query(None),
+    rebuild_reason: Optional[str] = Query(None),
     window_days: int = Query(30, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
     user: AuthUser | None = Depends(optional_auth),
@@ -2925,6 +2926,7 @@ async def get_company_signal_review_impact_summary(
     review_unlock_reason = _optional_query_text(review_unlock_reason)
     candidate_source = _optional_query_text(candidate_source)
     rebuild_outcome = _optional_query_text(rebuild_outcome)
+    rebuild_reason = _optional_query_text(rebuild_reason)
 
     if review_scope is not None and review_scope not in {"candidate", "group", "bulk_group"}:
         raise HTTPException(
@@ -2969,6 +2971,7 @@ async def get_company_signal_review_impact_summary(
         review_unlock_reason=review_unlock_reason,
         candidate_source=candidate_source,
         rebuild_outcome=rebuild_outcome,
+        rebuild_reason=rebuild_reason,
         top_n=top_n,
     )
     summary["review_scope"] = review_scope
@@ -2981,6 +2984,7 @@ async def get_company_signal_review_impact_summary(
     summary["review_unlock_reason"] = review_unlock_reason
     summary["candidate_source"] = candidate_source
     summary["rebuild_outcome"] = rebuild_outcome
+    summary["rebuild_reason"] = rebuild_reason
     return summary
 
 

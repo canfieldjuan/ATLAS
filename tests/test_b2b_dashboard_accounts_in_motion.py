@@ -404,6 +404,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
                     review_unlock_reason="close_low_trust_confidence",
                     candidate_source="reddit",
                     rebuild_outcome="triggered",
+                    rebuild_reason="ok",
                     window_days=14,
                     top_n=5,
                     user=MagicMock(),
@@ -421,6 +422,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "review_unlock_reason": "close_low_trust_confidence",
         "candidate_source": "reddit",
         "rebuild_outcome": "triggered",
+        "rebuild_reason": "ok",
     }
     scope_mock.assert_awaited_once_with(pool, ANY)
     read_mock.assert_awaited_once_with(
@@ -438,6 +440,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         review_unlock_reason="close_low_trust_confidence",
         candidate_source="reddit",
         rebuild_outcome="triggered",
+        rebuild_reason="ok",
         top_n=5,
     )
 
