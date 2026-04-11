@@ -111,6 +111,7 @@ export default function AccountMovementDrawer({
   const confidence = formatConfidenceLabel(item.confidence)
   const witnessIds = item.reasoning_reference_ids?.witness_ids ?? []
   const metricIds = item.reasoning_reference_ids?.metric_ids ?? []
+  const primaryReviewId = item.source_reviews[0]?.id || ''
   const accountName = item.company || 'Anonymous signal cluster'
   const evidencePreview = item.evidence.slice(0, Math.max(item.evidence.length, 1))
 
@@ -231,6 +232,26 @@ export default function AccountMovementDrawer({
                   </button>
                 )}
               </>
+            )}
+            {primaryReviewId && onViewReview && (
+              <button
+                aria-label="Open primary review detail"
+                className="inline-flex items-center gap-1 rounded-md bg-sky-500/10 px-2.5 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/20"
+                onClick={() => onViewReview(primaryReviewId)}
+              >
+                Review
+                <ExternalLink className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {primaryReviewId && onCopyReviewLink && (
+              <button
+                aria-label="Copy primary review link"
+                className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={() => onCopyReviewLink(primaryReviewId)}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy review
+              </button>
             )}
             {onViewOpportunity && (
               <button

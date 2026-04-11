@@ -435,6 +435,180 @@ describe('Watchlists account drawer', () => {
 
 
 
+
+  it('opens the primary review from the account drawer header with saved view context', async () => {
+    const user = userEvent.setup()
+
+    api.fetchAccountsInMotionFeed.mockResolvedValue({
+      accounts: [{
+        company: 'Acme Corp',
+        vendor: 'Zendesk',
+        watch_vendor: 'Zendesk',
+        track_mode: 'competitor',
+        watchlist_label: 'Support',
+        category: 'Helpdesk',
+        urgency: 8.8,
+        role_type: 'executive',
+        buying_stage: 'evaluation',
+        budget_authority: true,
+        pain_categories: [{ category: 'pricing', severity: 'high' }],
+        evidence: ['Renewal warning from URL hydration.'],
+        alternatives_considering: [{ name: 'Freshdesk', reason: 'pricing' }],
+        contract_signal: 'Q3 2026',
+        reviewer_title: 'VP Support',
+        company_size_raw: '500',
+        quality_flags: [],
+        opportunity_score: 84,
+        quote_match_type: 'company_match',
+        confidence: 7.5,
+        reasoning_reference_ids: { witness_ids: ['witness:zendesk:1'] },
+        source_distribution: { reddit: 2 },
+        source_review_ids: ['review-1'],
+        source_reviews: [{
+          id: 'review-1',
+          source: 'reddit',
+          source_url: 'https://reddit.example/review-1',
+          vendor_name: 'Zendesk',
+          rating: 2,
+          summary: 'Support is slipping',
+          review_excerpt: 'Renewal warning.',
+          reviewer_name: 'Taylor',
+          reviewer_title: 'VP Support',
+          reviewer_company: 'Acme Corp',
+          reviewed_at: '2026-04-03T00:00:00Z',
+        }],
+        evidence_count: 1,
+        enriched_at: '2026-04-06T10:00:00Z',
+        employee_count: 500,
+        industry: 'SaaS',
+        annual_revenue: '$10M-$50M',
+        domain: 'acme.com',
+        contacts: [],
+        contact_count: 0,
+        report_date: '2026-04-05',
+        stale_days: 2,
+        is_stale: true,
+        data_source: 'persisted_report',
+      }],
+      count: 1,
+      tracked_vendor_count: 1,
+      vendors_with_accounts: 1,
+      min_urgency: 7,
+      per_vendor_limit: 10,
+      freshest_report_date: '2026-04-05',
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme%20Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const drawer = await screen.findByLabelText('Account movement evidence')
+    await user.click(within(drawer).getByRole('button', { name: 'Open primary review detail' }))
+
+    const reviewPath = mockNavigate.mock.calls[mockNavigate.mock.calls.length - 1]?.[0] as string
+    const reviewUrl = new URL(reviewPath, window.location.origin)
+    expect(reviewUrl.pathname).toBe('/reviews/review-1')
+    const reviewBackTo = new URL(reviewUrl.searchParams.get('back_to')!, window.location.origin)
+    expect(reviewBackTo.pathname).toBe('/watchlists')
+    expect(reviewBackTo.searchParams.get('view')).toBe('view-1')
+    expect(reviewBackTo.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(reviewBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(reviewBackTo.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(reviewBackTo.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(reviewBackTo.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(reviewBackTo.searchParams.get('account_track_mode')).toBe('competitor')
+  })
+
+  it('copies the primary review link from the account drawer header with saved view context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    api.fetchAccountsInMotionFeed.mockResolvedValue({
+      accounts: [{
+        company: 'Acme Corp',
+        vendor: 'Zendesk',
+        watch_vendor: 'Zendesk',
+        track_mode: 'competitor',
+        watchlist_label: 'Support',
+        category: 'Helpdesk',
+        urgency: 8.8,
+        role_type: 'executive',
+        buying_stage: 'evaluation',
+        budget_authority: true,
+        pain_categories: [{ category: 'pricing', severity: 'high' }],
+        evidence: ['Renewal warning from URL hydration.'],
+        alternatives_considering: [{ name: 'Freshdesk', reason: 'pricing' }],
+        contract_signal: 'Q3 2026',
+        reviewer_title: 'VP Support',
+        company_size_raw: '500',
+        quality_flags: [],
+        opportunity_score: 84,
+        quote_match_type: 'company_match',
+        confidence: 7.5,
+        reasoning_reference_ids: { witness_ids: ['witness:zendesk:1'] },
+        source_distribution: { reddit: 2 },
+        source_review_ids: ['review-1'],
+        source_reviews: [{
+          id: 'review-1',
+          source: 'reddit',
+          source_url: 'https://reddit.example/review-1',
+          vendor_name: 'Zendesk',
+          rating: 2,
+          summary: 'Support is slipping',
+          review_excerpt: 'Renewal warning.',
+          reviewer_name: 'Taylor',
+          reviewer_title: 'VP Support',
+          reviewer_company: 'Acme Corp',
+          reviewed_at: '2026-04-03T00:00:00Z',
+        }],
+        evidence_count: 1,
+        enriched_at: '2026-04-06T10:00:00Z',
+        employee_count: 500,
+        industry: 'SaaS',
+        annual_revenue: '$10M-$50M',
+        domain: 'acme.com',
+        contacts: [],
+        contact_count: 0,
+        report_date: '2026-04-05',
+        stale_days: 2,
+        is_stale: true,
+        data_source: 'persisted_report',
+      }],
+      count: 1,
+      tracked_vendor_count: 1,
+      vendors_with_accounts: 1,
+      min_urgency: 7,
+      per_vendor_limit: 10,
+      freshest_report_date: '2026-04-05',
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme%20Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const drawer = await screen.findByLabelText('Account movement evidence')
+    await user.click(within(drawer).getByRole('button', { name: 'Copy primary review link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedReviewUrl = new URL(clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string)
+    expect(copiedReviewUrl.pathname).toBe('/reviews/review-1')
+    const copiedReviewBackTo = new URL(copiedReviewUrl.searchParams.get('back_to')!, window.location.origin)
+    expect(copiedReviewBackTo.pathname).toBe('/watchlists')
+    expect(copiedReviewBackTo.searchParams.get('view')).toBe('view-1')
+    expect(copiedReviewBackTo.searchParams.get('account_vendor')).toBe('Zendesk')
+    expect(copiedReviewBackTo.searchParams.get('account_company')).toBe('Acme Corp')
+    expect(copiedReviewBackTo.searchParams.get('account_report_date')).toBe('2026-04-05')
+    expect(copiedReviewBackTo.searchParams.get('account_watch_vendor')).toBe('Zendesk')
+    expect(copiedReviewBackTo.searchParams.get('account_category')).toBe('Helpdesk')
+    expect(copiedReviewBackTo.searchParams.get('account_track_mode')).toBe('competitor')
+  })
+
   it('copies the vendor workspace link from the account drawer with saved view context', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
