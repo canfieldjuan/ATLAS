@@ -159,6 +159,34 @@ describe('AccountMovementDrawer', () => {
     expect(onOpenWitness).toHaveBeenCalledWith('witness:zendesk:1', 'Zendesk')
   })
 
+  it('fires the report actions and shows the persisted report badge', async () => {
+    const user = userEvent.setup()
+    const onViewReport = vi.fn()
+    const onCopyReportLink = vi.fn()
+
+    render(
+      <MemoryRouter>
+        <AccountMovementDrawer
+          item={{ ...baseItem, is_stale: false }}
+          open
+          onClose={() => {}}
+          onViewVendor={() => {}}
+          onViewReport={onViewReport}
+          onCopyReportLink={onCopyReportLink}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('persisted report')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'View reports' }))
+    await user.click(screen.getByRole('button', { name: 'Copy reports' }))
+
+    expect(onViewReport).toHaveBeenCalledWith(expect.objectContaining({ vendor: 'Zendesk' }))
+    expect(onCopyReportLink).toHaveBeenCalledWith(expect.objectContaining({ vendor: 'Zendesk' }))
+  })
+
+
   it('shows the generating state on the campaign action', () => {
     render(
       <MemoryRouter>
