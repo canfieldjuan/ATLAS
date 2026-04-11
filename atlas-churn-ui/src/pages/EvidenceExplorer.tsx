@@ -240,6 +240,7 @@ export default function EvidenceExplorer() {
   const [drawerOpen, setDrawerOpen] = useState(Boolean(requestedVendor && requestedWitnessId))
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [copiedWatchlistsState, setCopiedWatchlistsState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
@@ -545,6 +546,15 @@ export default function EvidenceExplorer() {
     }
   }
 
+  async function handleCopyWatchlistsLink(path: string) {
+    try {
+      await copyText(`${window.location.origin}${path}`)
+      setCopiedWatchlistsState('copied')
+    } catch {
+      setCopiedWatchlistsState('error')
+    }
+  }
+
   async function handleCopyWitnessLink(witnessId: string) {
     try {
       await copyText(`${window.location.origin}${evidenceWitnessPath(searchParams, witnessId)}`)
@@ -601,12 +611,22 @@ export default function EvidenceExplorer() {
                 Focused on <span className="text-slate-300">{activeVendor}</span>
               </span>
               {hasWatchlistsShortcut ? (
-                <Link
-                  to={evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId)}
-                  className="text-violet-300 hover:text-violet-200 transition-colors"
-                >
-                  Watchlists
-                </Link>
+                <span className="inline-flex items-center gap-2">
+                  <Link
+                    to={evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId)}
+                    className="text-violet-300 hover:text-violet-200 transition-colors"
+                  >
+                    Watchlists
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyWatchlistsLink(evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId))}
+                    className="text-slate-400 hover:text-white transition-colors"
+                    aria-label="Copy watchlists link"
+                  >
+                    {copiedWatchlistsState === 'copied' ? 'Copied' : copiedWatchlistsState == 'error' ? 'Copy Failed' : 'Copy Link'}
+                  </button>
+                </span>
               ) : null}
               <Link
                 to={evidenceVendorPath(searchParams, activeVendor)}

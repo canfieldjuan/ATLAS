@@ -480,6 +480,24 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('copies the active watchlists shortcut link', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const watchlistsLink = await screen.findByRole('link', { name: 'Watchlists' })
+    await user.click(screen.getByRole('button', { name: 'Copy watchlists link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${watchlistsLink.getAttribute('href')}`)
+    })
+  })
+
   it('keeps the watchlists shortcut when a saved view exists even without tracked-vendor membership', async () => {
     api.listTrackedVendors.mockResolvedValueOnce({
       vendors: [],
