@@ -907,6 +907,9 @@ describe('Reports', () => {
 
     expect(await screen.findByText('Battle Card • Zendesk • Sales Ready Library')).toBeInTheDocument()
     expect(screen.getByText('library_view')).toBeInTheDocument()
+    expect(screen.getByText('Type: Battle Card')).toBeInTheDocument()
+    expect(screen.getByText('Vendor: Zendesk')).toBeInTheDocument()
+    expect(screen.getByText('Quality: Sales Ready')).toBeInTheDocument()
 
     await waitFor(() => {
       expect(modalState.lastProps?.open).toBe(true)

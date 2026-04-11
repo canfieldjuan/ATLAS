@@ -122,6 +122,23 @@ function reportSubscriptionActionPresentation(reportSubscription: NonNullable<Re
   }
 }
 
+function describeSubscriptionFilters(filterPayload?: ReportLibraryViewFilters | null) {
+  const normalized = {
+    report_type: (filterPayload?.report_type || '').trim(),
+    vendor_filter: (filterPayload?.vendor_filter || '').trim(),
+    quality_status: (filterPayload?.quality_status || '').trim(),
+    freshness_state: (filterPayload?.freshness_state || '').trim(),
+    review_state: (filterPayload?.review_state || '').trim(),
+  }
+  const lines: string[] = []
+  if (normalized.report_type) lines.push(`Type: ${titleizeFilterValue(normalized.report_type)}`)
+  if (normalized.vendor_filter) lines.push(`Vendor: ${normalized.vendor_filter}`)
+  if (normalized.quality_status) lines.push(`Quality: ${titleizeFilterValue(normalized.quality_status)}`)
+  if (normalized.freshness_state) lines.push(`Freshness: ${titleizeFilterValue(normalized.freshness_state)}`)
+  if (normalized.review_state) lines.push(`Review: ${titleizeFilterValue(normalized.review_state)}`)
+  return lines
+}
+
 function reportDetailLocation(reportId: string, backTo: string) {
   const next = new URLSearchParams()
   if (backTo !== '/reports') {
@@ -778,7 +795,11 @@ export default function Reports() {
               </div>
             ) : (
               <div className="space-y-2">
-                {subscriptions.map((sub) => (
+                {subscriptions.map((sub) => {
+                  const filterSummary = sub.scope_type === 'library_view'
+                    ? describeSubscriptionFilters(sub.filter_payload)
+                    : []
+                  return (
                   <div key={sub.id} className="bg-slate-800/50 border border-slate-700/30 rounded-lg p-4 flex items-center justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -799,6 +820,18 @@ export default function Reports() {
                           </span>
                         )}
                       </div>
+                      {sub.scope_type === 'library_view' && filterSummary.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {filterSummary.map((line) => (
+                            <span
+                              key={line}
+                              className="rounded-full border border-cyan-700/30 bg-cyan-950/20 px-2.5 py-1 text-[11px] text-cyan-100"
+                            >
+                              {line}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       {sub.recipient_emails.length > 0 && (
                         <div className="mt-1 text-xs text-slate-500">To: {sub.recipient_emails.join(', ')}</div>
                       )}
@@ -830,7 +863,8 @@ export default function Reports() {
                       </button>
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
