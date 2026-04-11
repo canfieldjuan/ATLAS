@@ -434,6 +434,10 @@ function watchlistOpportunitiesUrl(searchParams: URLSearchParams, vendorName: st
   return `${window.location.origin}${watchlistOpportunitiesPath(searchParams, vendorName)}`
 }
 
+function watchlistReportsUrl(searchParams: URLSearchParams, vendorName: string) {
+  return `${window.location.origin}${watchlistReportsPath(searchParams, vendorName)}`
+}
+
 function watchlistEvidenceExplorerPath(
   searchParams: URLSearchParams,
   vendorName: string,
@@ -1517,6 +1521,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyVendorReportsLink(vendorName: string) {
+    try {
+      await navigator.clipboard.writeText(watchlistReportsUrl(searchParams, vendorName))
+      setActionError(null)
+      setActionMessage(`Copied reports link for ${vendorName}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy reports link')
+    }
+  }
+
   async function handleCopyVendorWitnessLink(
     vendorName: string,
     witnessId: string,
@@ -2012,6 +2027,17 @@ export default function Watchlists() {
           >
             Reports
           </Link>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleCopyVendorReportsLink(row.vendor_name)
+            }}
+            aria-label={`Copy reports link for ${row.vendor_name}`}
+            className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+          >
+            Copy Reports
+          </button>
           <Link
             to={watchlistOpportunitiesPath(searchParams, row.vendor_name)}
             onClick={(event) => event.stopPropagation()}
@@ -2186,6 +2212,17 @@ export default function Watchlists() {
             >
               Reports
             </Link>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopyVendorReportsLink(row.vendor_name)
+              }}
+              aria-label={`Copy vendor reports link for ${row.vendor_name}`}
+              className="text-slate-300 hover:text-slate-200"
+            >
+              Copy reports
+            </button>
             <Link
               to={watchlistOpportunitiesPath(searchParams, row.vendor_name)}
               onClick={(event) => event.stopPropagation()}
