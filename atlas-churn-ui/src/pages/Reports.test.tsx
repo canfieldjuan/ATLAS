@@ -925,6 +925,52 @@ describe('Reports', () => {
     )
   })
 
+  it('copies a manage link for a saved subscription from the subscriptions tab', async () => {
+    api.listReportSubscriptions.mockResolvedValueOnce({
+      subscriptions: [
+        {
+          id: 'sub-1',
+          scope_type: 'library_view',
+          scope_key: 'library-view::battle_card::Zendesk::sales_ready',
+          scope_label: 'Battle Card • Zendesk • Sales Ready Library',
+          filter_payload: {
+            report_type: 'battle_card',
+            vendor_filter: 'Zendesk',
+            quality_status: 'sales_ready',
+          },
+          delivery_frequency: 'weekly',
+          deliverable_focus: 'all',
+          freshness_policy: 'any',
+          recipient_emails: ['ops@example.com'],
+          delivery_note: null,
+          enabled: true,
+          next_delivery_at: '2026-04-17T00:00:00Z',
+          last_delivery_status: 'sent',
+          last_delivery_report_count: 2,
+        },
+      ],
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      {
+        initialEntries: ['/reports?tab=subscriptions'],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    const subscriptionRow = await screen.findByText('Battle Card • Zendesk • Sales Ready Library')
+    fireEvent.click(within(subscriptionRow.closest('div[class*="rounded-lg"]') as HTMLElement).getByRole('button', { name: 'Copy Link' }))
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/reports?tab=subscriptions&subscription_id=sub-1`,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    })
+  })
+
   it('hydrates battle-card composer drafts from the URL and keeps them shareable', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports', element: <Reports /> }],

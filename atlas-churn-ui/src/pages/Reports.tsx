@@ -175,6 +175,13 @@ function buildReportSubscriptionLocation(searchParams: URLSearchParams, report: 
   return qs ? `/reports?${qs}` : '/reports'
 }
 
+function buildSubscriptionManageLocation(subscriptionId: string) {
+  const next = new URLSearchParams()
+  next.set('tab', 'subscriptions')
+  next.set('subscription_id', subscriptionId)
+  return `/reports?${next.toString()}`
+}
+
 type ReportComposer =
   | 'vendor_comparison'
   | 'account_deep_dive'
@@ -225,6 +232,7 @@ export default function Reports() {
   const [savedReportSubscriptions, setSavedReportSubscriptions] = useState<Record<string, NonNullable<Report['report_subscription']>>>({})
   const [requestedReportFallback, setRequestedReportFallback] = useState<Report | null>(null)
   const [copiedReportLinkId, setCopiedReportLinkId] = useState<string | null>(null)
+  const [copiedSubscriptionLinkId, setCopiedSubscriptionLinkId] = useState<string | null>(null)
   const activeVendorFilter = debouncedVendor.trim()
   const requestedReportSubscriptionId = searchParams.get('report_subscription') ?? ''
   const requestedReportFocusType = searchParams.get('report_focus_type') ?? ''
@@ -534,6 +542,16 @@ export default function Reports() {
     })
   }, [resolveReportSubscription, searchParams])
 
+  const handleCopySubscriptionLink = useCallback((subscription: ReportSubscription) => {
+    const location = buildSubscriptionManageLocation(subscription.id)
+    void navigator.clipboard.writeText(`${window.location.origin}${location}`).then(() => {
+      setCopiedSubscriptionLinkId(subscription.id)
+      window.setTimeout(() => {
+        setCopiedSubscriptionLinkId((current) => (current === subscription.id ? null : current))
+      }, 2000)
+    })
+  }, [])
+
   function clearFilters() {
     setTypeFilter('')
     setQualityFilter('')
@@ -785,13 +803,32 @@ export default function Reports() {
                         <div className="mt-1 text-xs text-slate-500">To: {sub.recipient_emails.join(', ')}</div>
                       )}
                     </div>
-                    <button
-                      onClick={() => handleEditSubscription(sub)}
-                      className="ml-4 p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-700/50 rounded-lg transition-colors"
-                      title="Edit subscription"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
+                    <div className="ml-4 flex items-center gap-2">
+                      <button
+                        onClick={() => handleCopySubscriptionLink(sub)}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 text-xs text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-colors"
+                        title="Copy subscription link"
+                      >
+                        {copiedSubscriptionLinkId === sub.id ? (
+                          <>
+                            <Check className="h-3.5 w-3.5" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5" />
+                            Copy Link
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleEditSubscription(sub)}
+                        className="p-2 text-slate-400 hover:text-cyan-400 hover:bg-slate-700/50 rounded-lg transition-colors"
+                        title="Edit subscription"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
