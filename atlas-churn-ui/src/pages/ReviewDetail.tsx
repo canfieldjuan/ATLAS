@@ -125,6 +125,7 @@ export default function ReviewDetail() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
   const [copied, setCopied] = useState(false)
+  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'account' | 'evidence'; status: 'copied' | 'error' } | null>(null)
 
   const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
     () => {
@@ -172,11 +173,22 @@ export default function ReviewDetail() {
     const qs = next.toString()
     return qs ? `/reviews/${review.id}?${qs}` : `/reviews/${review.id}`
   })()
+  const reviewEvidencePath = evidencePath(review.vendor_name, reviewDetailBackPath, upstreamEvidencePath)
   const handleCopyLink = () => {
     const url = `${window.location.origin}${reviewDetailBackPath}`
     navigator.clipboard.writeText(url).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
+    })
+  }
+  const handleCopyShortcutLink = (key: 'account' | 'evidence', path: string) => {
+    navigator.clipboard.writeText(`${window.location.origin}${path}`).then(() => {
+      setCopiedShortcutState({ key, status: 'copied' })
+      setTimeout(() => setCopiedShortcutState((current) => (
+        current?.key == key ? null : current
+      )), 2000)
+    }).catch(() => {
+      setCopiedShortcutState({ key, status: 'error' })
     })
   }
 
@@ -228,12 +240,25 @@ export default function ReviewDetail() {
           <h1 className="text-2xl font-bold text-white">{review.vendor_name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
             {directAccountReviewPath ? (
-              <Link
-                to={directAccountReviewPath}
-                className="text-amber-300 hover:text-amber-200 transition-colors"
-              >
-                Account Review
-              </Link>
+              <span className="inline-flex items-center gap-1.5">
+                <Link
+                  to={directAccountReviewPath}
+                  className="text-amber-300 hover:text-amber-200 transition-colors"
+                >
+                  Account Review
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => handleCopyShortcutLink('account', directAccountReviewPath)}
+                  className="text-slate-400 hover:text-white transition-colors"
+                  aria-label="Copy account review link"
+                  title="Copy account review link"
+                >
+                  {copiedShortcutState?.key === 'account' && copiedShortcutState.status === 'copied'
+                    ? <Check className="h-3.5 w-3.5 text-green-400" />
+                    : <Copy className="h-3.5 w-3.5" />}
+                </button>
+              </span>
             ) : null}
             <Link
               to={vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
@@ -241,12 +266,25 @@ export default function ReviewDetail() {
             >
               Vendor workspace
             </Link>
-            <Link
-              to={evidencePath(review.vendor_name, reviewDetailBackPath, upstreamEvidencePath)}
-              className="text-violet-300 hover:text-violet-200 transition-colors"
-            >
-              Evidence
-            </Link>
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={reviewEvidencePath}
+                className="text-violet-300 hover:text-violet-200 transition-colors"
+              >
+                Evidence
+              </Link>
+              <button
+                type="button"
+                onClick={() => handleCopyShortcutLink('evidence', reviewEvidencePath)}
+                className="text-slate-400 hover:text-white transition-colors"
+                aria-label="Copy evidence link"
+                title="Copy evidence link"
+              >
+                {copiedShortcutState?.key === 'evidence' && copiedShortcutState.status === 'copied'
+                  ? <Check className="h-3.5 w-3.5 text-green-400" />
+                  : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </span>
             <Link
               to={opportunitiesPath(review.vendor_name, reviewDetailBackPath)}
               className="text-emerald-300 hover:text-emerald-200 transition-colors"
