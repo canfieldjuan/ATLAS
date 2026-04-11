@@ -208,13 +208,13 @@ export default function EvidenceDrawer({
           {witness && (
             <div className="mt-3 flex items-center gap-2">
               {explorerUrl && (
-                <Link
-                  to={explorerUrl}
+                <a
+                  href={explorerUrl}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-colors"
                 >
                   <Fingerprint className="h-3 w-3" />
                   Open in Evidence Explorer
-                </Link>
+                </a>
               )}
               {annotation ? (
                 <button
