@@ -1405,6 +1405,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyAccountRowLink(row: AccountsInMotionFeedItem) {
+    try {
+      await navigator.clipboard.writeText(watchlistAccountUrl(searchParams, row))
+      setActionError(null)
+      setActionMessage(`Copied account link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy account link')
+    }
+  }
+
   function handleCloseSelectedAccount() {
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
@@ -2182,6 +2193,20 @@ export default function Watchlists() {
               >
                 Review
               </Link>
+            )}
+            {row.company && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyAccountRowLink(row)
+                }}
+                aria-label={`Copy account link for ${row.company || row.vendor}`}
+                className="rounded-md bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20"
+                title="Copy account link"
+              >
+                Copy Link
+              </button>
             )}
             {row.company && (
               <Link

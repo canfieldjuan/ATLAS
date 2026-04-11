@@ -1144,6 +1144,28 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Copied link for Fresh named Intercom')).toBeInTheDocument()
   })
 
+
+  it('copies a deep link for an account row directly from the feed', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy account link for Acme Corp' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor`,
+      )
+    })
+    expect(await screen.findByText('Copied account link for Acme Corp')).toBeInTheDocument()
+  })
+
   it('evaluates persisted alert events for the active saved view', async () => {
     const user = userEvent.setup()
     api.listWatchlistViews.mockResolvedValue({
