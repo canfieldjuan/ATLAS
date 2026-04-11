@@ -588,6 +588,15 @@ def _company_signal_low_trust_sources() -> set[str]:
     }
 
 
+def _company_signal_low_trust_source_membership_sql(expr: str) -> str:
+    """Return SQL that checks whether a source expression is in the configured low-trust set."""
+    sources = sorted(_company_signal_low_trust_sources())
+    if not sources:
+        return "FALSE"
+    literals = ", ".join("'" + source.replace("'", "''") + "'" for source in sources)
+    return f"LOWER({expr}) IN ({literals})"
+
+
 def _normalize_company_signal_confidence(value: Any) -> float | None:
     """Normalize confidence values to a 0-1 unit interval."""
     if value is None:
@@ -11979,6 +11988,8 @@ async def read_company_signal_candidate_group_summary(
             "blocked_top_vendor_reasons": [],
             "blocked_source_mix": [],
             "blocked_source_vendor_gaps": [],
+            "trusted_blocked_source_mix": [],
+            "trusted_blocked_source_vendor_gaps": [],
             "near_threshold_top_vendors": [],
             "near_threshold_gap_reasons": [],
             "near_threshold_groups": [],
@@ -11999,6 +12010,7 @@ async def read_company_signal_candidate_group_summary(
     pending_priority_reason_sql = _company_signal_candidate_group_priority_reason_sql()
     pending_sla_days_sql = _company_signal_candidate_group_sla_days_sql()
     near_threshold_sql = _company_signal_candidate_group_near_threshold_sql()
+    low_trust_source_sql = _company_signal_low_trust_source_membership_sql("source")
     low_trust_confidence_min = _normalize_company_signal_confidence(
         getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
     )
@@ -12505,6 +12517,142 @@ async def read_company_signal_candidate_group_summary(
         *params,
         top_n,
     )
+    trusted_blocked_source_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT id,
+                   review_count,
+                   representative_source,
+                   COALESCE(source_distribution, '{{}}'::jsonb) AS source_distribution
+            FROM filtered
+            WHERE review_status = 'pending'
+              AND {pending_priority_band_sql} = 'low'
+        ),
+        expanded AS (
+            SELECT p.id,
+                   COALESCE(
+                       NULLIF(LOWER(TRIM(src.source)), ''),
+                       NULLIF(LOWER(TRIM(p.representative_source)), ''),
+                       'unknown'
+                   ) AS source,
+                   COALESCE(src.source_review_count, p.review_count, 0)::int AS source_review_count
+            FROM pending p
+            LEFT JOIN LATERAL (
+                SELECT key AS source,
+                       CASE
+                           WHEN value ~ '^[0-9]+$' THEN value::int
+                           ELSE NULL
+                       END AS source_review_count
+                FROM jsonb_each_text(p.source_distribution)
+            ) src ON TRUE
+        )
+        SELECT source,
+               COUNT(DISTINCT id)::int AS group_count,
+               COALESCE(SUM(source_review_count), 0)::int AS review_count
+        FROM expanded
+        WHERE NOT ({low_trust_source_sql})
+        GROUP BY 1
+        ORDER BY group_count DESC,
+                 review_count DESC,
+                 source ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    trusted_blocked_source_vendor_gap_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT id,
+                   vendor_name,
+                   review_count,
+                   representative_source,
+                   COALESCE(source_distribution, '{{}}'::jsonb) AS source_distribution,
+                   COALESCE(canonical_gap_reason, 'low_signal') AS canonical_gap_reason,
+                   COALESCE(corroborated_confidence_score, 0)::float8 AS corroborated_confidence_score,
+                   COALESCE(max_urgency_score, 0)::float8 AS max_urgency_score
+            FROM filtered
+            WHERE review_status = 'pending'
+              AND {pending_priority_band_sql} = 'low'
+        ),
+        expanded AS (
+            SELECT p.id,
+                   p.vendor_name,
+                   p.canonical_gap_reason,
+                   p.corroborated_confidence_score,
+                   p.max_urgency_score,
+                   COALESCE(
+                       NULLIF(LOWER(TRIM(src.source)), ''),
+                       NULLIF(LOWER(TRIM(p.representative_source)), ''),
+                       'unknown'
+                   ) AS source,
+                   COALESCE(src.source_review_count, p.review_count, 0)::int AS source_review_count
+            FROM pending p
+            LEFT JOIN LATERAL (
+                SELECT key AS source,
+                       CASE
+                           WHEN value ~ '^[0-9]+$' THEN value::int
+                           ELSE NULL
+                       END AS source_review_count
+                FROM jsonb_each_text(p.source_distribution)
+            ) src ON TRUE
+        )
+        SELECT source,
+               vendor_name,
+               COUNT(DISTINCT id)::int AS blocked_group_count,
+               COALESCE(SUM(source_review_count), 0)::int AS blocked_review_count,
+               COUNT(DISTINCT id) FILTER (
+                   WHERE canonical_gap_reason = 'low_confidence_low_trust_source'
+               )::int AS low_confidence_group_count,
+               COUNT(DISTINCT id) FILTER (
+                   WHERE canonical_gap_reason = 'below_high_intent_threshold'
+               )::int AS below_threshold_group_count,
+               MIN(GREATEST(0, {low_trust_confidence_min} - corroborated_confidence_score))
+                   FILTER (WHERE canonical_gap_reason = 'low_confidence_low_trust_source')::float8
+                   AS min_confidence_gap_to_canonical,
+               AVG(GREATEST(0, {low_trust_confidence_min} - corroborated_confidence_score))
+                   FILTER (WHERE canonical_gap_reason = 'low_confidence_low_trust_source')::float8
+                   AS avg_confidence_gap_to_canonical,
+               MIN(GREATEST(0, {high_intent_urgency_threshold} - max_urgency_score))
+                   FILTER (WHERE canonical_gap_reason = 'below_high_intent_threshold')::float8
+                   AS min_urgency_gap_to_high_intent,
+               AVG(GREATEST(0, {high_intent_urgency_threshold} - max_urgency_score))
+                   FILTER (WHERE canonical_gap_reason = 'below_high_intent_threshold')::float8
+                   AS avg_urgency_gap_to_high_intent
+        FROM expanded
+        WHERE NOT ({low_trust_source_sql})
+        GROUP BY 1, 2
+        ORDER BY LEAST(
+                     COALESCE(
+                         MIN(GREATEST(0, {low_trust_confidence_min} - corroborated_confidence_score))
+                             FILTER (WHERE canonical_gap_reason = 'low_confidence_low_trust_source'),
+                         999::float8
+                     ),
+                     COALESCE(
+                         MIN(GREATEST(0, {high_intent_urgency_threshold} - max_urgency_score))
+                             FILTER (WHERE canonical_gap_reason = 'below_high_intent_threshold'),
+                         999::float8
+                     )
+                 ) ASC,
+                 blocked_group_count DESC,
+                 blocked_review_count DESC,
+                 source ASC,
+                 vendor_name ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     near_threshold_source_rows = await pool.fetch(
         f"""
         WITH filtered AS (
@@ -12846,6 +12994,8 @@ async def read_company_signal_candidate_group_summary(
         "blocked_top_vendor_reasons": [dict(row) for row in blocked_vendor_reason_rows],
         "blocked_source_mix": [dict(row) for row in blocked_source_rows],
         "blocked_source_vendor_gaps": [dict(row) for row in blocked_source_vendor_gap_rows],
+        "trusted_blocked_source_mix": [dict(row) for row in trusted_blocked_source_rows],
+        "trusted_blocked_source_vendor_gaps": [dict(row) for row in trusted_blocked_source_vendor_gap_rows],
         "near_threshold_top_vendors": [dict(row) for row in near_threshold_vendor_rows],
         "near_threshold_gap_reasons": [dict(row) for row in near_threshold_reason_rows],
         "near_threshold_groups": near_threshold_groups,
