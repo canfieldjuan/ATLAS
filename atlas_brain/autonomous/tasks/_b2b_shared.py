@@ -13409,6 +13409,79 @@ async def read_company_signal_review_impact_summary(
             "top_vendor_reasons": [],
             "rebuild_reasons": [],
             "daily_trends": [],
+            "trend_comparison": {
+                "comparison_window_days": 7,
+                "anchor_day": None,
+                "recent_start_day": None,
+                "recent_end_day": None,
+                "recent_days_present": 0,
+                "prior_start_day": None,
+                "prior_end_day": None,
+                "prior_days_present": 0,
+                "recent": {
+                    "action_count": 0,
+                    "approvals": 0,
+                    "suppressions": 0,
+                    "company_signal_creations": 0,
+                    "company_signal_updates": 0,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 0,
+                    "rebuild_requests": 0,
+                    "rebuild_triggered": 0,
+                    "rebuild_blocked": 0,
+                    "rebuild_persisted_runs": 0,
+                    "rebuild_persisted_reports": 0,
+                    "rebuild_total_accounts": 0,
+                    "company_signal_effect_rate": 0.0,
+                    "company_signal_creation_rate": 0.0,
+                    "rebuild_trigger_rate": 0.0,
+                    "rebuild_block_rate": 0.0,
+                    "avg_rebuild_reports_per_triggered": 0.0,
+                    "avg_rebuild_accounts_per_triggered": 0.0,
+                },
+                "prior": {
+                    "action_count": 0,
+                    "approvals": 0,
+                    "suppressions": 0,
+                    "company_signal_creations": 0,
+                    "company_signal_updates": 0,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 0,
+                    "rebuild_requests": 0,
+                    "rebuild_triggered": 0,
+                    "rebuild_blocked": 0,
+                    "rebuild_persisted_runs": 0,
+                    "rebuild_persisted_reports": 0,
+                    "rebuild_total_accounts": 0,
+                    "company_signal_effect_rate": 0.0,
+                    "company_signal_creation_rate": 0.0,
+                    "rebuild_trigger_rate": 0.0,
+                    "rebuild_block_rate": 0.0,
+                    "avg_rebuild_reports_per_triggered": 0.0,
+                    "avg_rebuild_accounts_per_triggered": 0.0,
+                },
+                "deltas": {
+                    "action_count": 0,
+                    "approvals": 0,
+                    "suppressions": 0,
+                    "company_signal_creations": 0,
+                    "company_signal_updates": 0,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 0,
+                    "rebuild_requests": 0,
+                    "rebuild_triggered": 0,
+                    "rebuild_blocked": 0,
+                    "rebuild_persisted_runs": 0,
+                    "rebuild_persisted_reports": 0,
+                    "rebuild_total_accounts": 0,
+                    "company_signal_effect_rate": 0.0,
+                    "company_signal_creation_rate": 0.0,
+                    "rebuild_trigger_rate": 0.0,
+                    "rebuild_block_rate": 0.0,
+                    "avg_rebuild_reports_per_triggered": 0.0,
+                    "avg_rebuild_accounts_per_triggered": 0.0,
+                },
+            },
         }
 
     where_clause = " AND ".join(conditions)
@@ -13951,7 +14024,112 @@ async def read_company_signal_review_impact_summary(
         )
         return payload
 
+    def _build_empty_trend_window() -> dict[str, Any]:
+        return {
+            "action_count": 0,
+            "approvals": 0,
+            "suppressions": 0,
+            "company_signal_creations": 0,
+            "company_signal_updates": 0,
+            "company_signal_deletions": 0,
+            "company_signal_noops": 0,
+            "rebuild_requests": 0,
+            "rebuild_triggered": 0,
+            "rebuild_blocked": 0,
+            "rebuild_persisted_runs": 0,
+            "rebuild_persisted_reports": 0,
+            "rebuild_total_accounts": 0,
+            "company_signal_effect_rate": 0.0,
+            "company_signal_creation_rate": 0.0,
+            "rebuild_trigger_rate": 0.0,
+            "rebuild_block_rate": 0.0,
+            "avg_rebuild_reports_per_triggered": 0.0,
+            "avg_rebuild_accounts_per_triggered": 0.0,
+        }
+
+    def _summarize_trend_window(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+        if not rows:
+            return _build_empty_trend_window()
+        aggregate = {
+            "action_count": 0,
+            "approvals": 0,
+            "suppressions": 0,
+            "company_signal_creations": 0,
+            "company_signal_updates": 0,
+            "company_signal_deletions": 0,
+            "company_signal_noops": 0,
+            "rebuild_requests": 0,
+            "rebuild_triggered": 0,
+            "rebuild_blocked": 0,
+            "rebuild_persisted_runs": 0,
+            "rebuild_persisted_reports": 0,
+            "rebuild_total_accounts": 0,
+        }
+        for row in rows:
+            for key in aggregate:
+                aggregate[key] += int(row.get(key) or 0)
+        return _with_rebuild_metrics(_with_effect_metrics(aggregate))
+
+    def _build_trend_comparison(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+        window_days = 7
+        empty_window = _build_empty_trend_window()
+        empty_deltas = dict(empty_window)
+        parsed: list[tuple[date, Mapping[str, Any]]] = []
+        for row in rows:
+            action_day = row.get("action_day")
+            if not action_day:
+                continue
+            try:
+                parsed.append((date.fromisoformat(str(action_day)), row))
+            except (TypeError, ValueError):
+                continue
+        if not parsed:
+            return {
+                "comparison_window_days": window_days,
+                "anchor_day": None,
+                "recent_start_day": None,
+                "recent_end_day": None,
+                "recent_days_present": 0,
+                "prior_start_day": None,
+                "prior_end_day": None,
+                "prior_days_present": 0,
+                "recent": dict(empty_window),
+                "prior": dict(empty_window),
+                "deltas": empty_deltas,
+            }
+        anchor_day = max(day for day, _ in parsed)
+        recent_end = anchor_day
+        recent_start = recent_end - timedelta(days=window_days - 1)
+        prior_end = recent_start - timedelta(days=1)
+        prior_start = prior_end - timedelta(days=window_days - 1)
+        recent_rows = [row for day, row in parsed if recent_start <= day <= recent_end]
+        prior_rows = [row for day, row in parsed if prior_start <= day <= prior_end]
+        recent_summary = _summarize_trend_window(recent_rows)
+        prior_summary = _summarize_trend_window(prior_rows)
+        deltas: dict[str, Any] = {}
+        for key, value in recent_summary.items():
+            prior_value = prior_summary.get(key, 0)
+            if isinstance(value, float) or isinstance(prior_value, float):
+                deltas[key] = float(value or 0.0) - float(prior_value or 0.0)
+            else:
+                deltas[key] = int(value or 0) - int(prior_value or 0)
+        return {
+            "comparison_window_days": window_days,
+            "anchor_day": anchor_day.isoformat(),
+            "recent_start_day": recent_start.isoformat(),
+            "recent_end_day": recent_end.isoformat(),
+            "recent_days_present": len(recent_rows),
+            "prior_start_day": prior_start.isoformat(),
+            "prior_end_day": prior_end.isoformat(),
+            "prior_days_present": len(prior_rows),
+            "recent": recent_summary,
+            "prior": prior_summary,
+            "deltas": deltas,
+        }
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
+    daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
+    trend_comparison = _build_trend_comparison(daily_trends)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -13965,7 +14143,8 @@ async def read_company_signal_review_impact_summary(
         "top_vendors": [_with_effect_metrics(row) for row in vendor_rows],
         "top_vendor_reasons": [_with_effect_metrics(row) for row in vendor_reason_rows],
         "rebuild_reasons": [_with_rebuild_metrics(row) for row in rebuild_reason_rows],
-        "daily_trends": [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows],
+        "daily_trends": daily_trends,
+        "trend_comparison": trend_comparison,
     }
 
 

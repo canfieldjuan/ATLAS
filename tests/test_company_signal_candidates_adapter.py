@@ -989,6 +989,22 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
                     "rebuild_persisted_runs": 1,
                     "rebuild_persisted_reports": 2,
                     "rebuild_total_accounts": 4,
+                },
+                {
+                    "action_day": "2026-04-03",
+                    "action_count": 1,
+                    "approvals": 0,
+                    "suppressions": 1,
+                    "company_signal_creations": 0,
+                    "company_signal_updates": 0,
+                    "company_signal_deletions": 1,
+                    "company_signal_noops": 0,
+                    "rebuild_requests": 1,
+                    "rebuild_triggered": 0,
+                    "rebuild_blocked": 1,
+                    "rebuild_persisted_runs": 0,
+                    "rebuild_persisted_reports": 0,
+                    "rebuild_total_accounts": 0,
                 }
             ],
         ]
@@ -1086,3 +1102,13 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["daily_trends"][0]["action_day"] == "2026-04-10"
     assert summary["daily_trends"][0]["company_signal_effect_rate"] == 0.5
     assert summary["daily_trends"][0]["rebuild_trigger_rate"] == 1.0
+    assert summary["trend_comparison"]["anchor_day"] == "2026-04-10"
+    assert summary["trend_comparison"]["recent_start_day"] == "2026-04-04"
+    assert summary["trend_comparison"]["prior_end_day"] == "2026-04-03"
+    assert summary["trend_comparison"]["recent_days_present"] == 1
+    assert summary["trend_comparison"]["prior_days_present"] == 1
+    assert summary["trend_comparison"]["recent"]["action_count"] == 2
+    assert summary["trend_comparison"]["prior"]["action_count"] == 1
+    assert summary["trend_comparison"]["deltas"]["action_count"] == 1
+    assert summary["trend_comparison"]["deltas"]["approvals"] == 1
+    assert summary["trend_comparison"]["deltas"]["rebuild_trigger_rate"] == 1.0

@@ -381,6 +381,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "top_vendors": [{"vendor_name": "Zendesk", "action_count": 4}],
         "rebuild_reasons": [{"rebuild_reason": "ok", "rebuild_rows": 1}],
         "daily_trends": [{"action_day": "2026-04-10", "action_count": 2}],
+        "trend_comparison": {"comparison_window_days": 7, "anchor_day": "2026-04-10"},
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(
