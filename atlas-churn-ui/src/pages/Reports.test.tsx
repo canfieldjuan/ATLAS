@@ -127,7 +127,7 @@ describe('Reports', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Intelligence Reports')
+    await screen.findByText('Intelligence Library')
 
     fireEvent.change(screen.getByPlaceholderText('Filter by vendor...'), {
       target: { value: 'Zendesk' },
@@ -755,7 +755,7 @@ describe('Reports', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Intelligence Reports')
+    await screen.findByText('Intelligence Library')
 
     fireEvent.change(screen.getByPlaceholderText('Example: Zendesk'), {
       target: { value: 'Asana' },
@@ -831,7 +831,7 @@ describe('Reports', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Intelligence Reports')
+    await screen.findByText('Intelligence Library')
 
     await waitFor(() => {
       expect(api.fetchReports).toHaveBeenLastCalledWith({
@@ -986,7 +986,7 @@ describe('Reports', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Intelligence Reports')
+    await screen.findByText('Intelligence Library')
 
     const input = screen.getByDisplayValue('Zendesk')
     expect(input).toBeInTheDocument()

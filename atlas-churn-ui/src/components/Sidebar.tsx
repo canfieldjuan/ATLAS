@@ -38,7 +38,7 @@ const links: SidebarLink[] = [
   { to: '/overview', icon: LayoutDashboard, label: 'Overview' },
   { to: '/vendors', icon: Building2, label: 'Vendors' },
   { to: '/reviews', icon: MessageSquareText, label: 'Reviews' },
-  { to: '/reports', icon: FileBarChart, label: 'Reports', gate: 'reports' },
+  { to: '/reports', icon: FileBarChart, label: 'Library', gate: 'reports' },
   { to: '/opportunities', icon: Telescope, label: 'Opportunities' },
   { to: '/vendor-targets', icon: Shield, label: 'Targets' },
   { to: '/challengers', icon: Swords, label: 'Challengers' },

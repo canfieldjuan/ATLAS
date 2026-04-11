@@ -723,7 +723,7 @@ export default function Reports() {
 
   if (!canAccessReports) {
     return (
-      <UpgradeGate allowed={false} feature="Intelligence Reports" requiredPlan="Starter">
+      <UpgradeGate allowed={false} feature="Intelligence Library" requiredPlan="Starter">
         <div />
       </UpgradeGate>
     )
@@ -735,7 +735,7 @@ export default function Reports() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-white">Intelligence Reports</h1>
+          <h1 className="text-2xl font-bold text-white">Intelligence Library</h1>
           <div className="flex items-center gap-2">
             <Link
               to="/briefing-review"
