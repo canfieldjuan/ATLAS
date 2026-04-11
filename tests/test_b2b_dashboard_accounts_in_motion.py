@@ -394,6 +394,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
                 result = await b2b_dashboard.get_company_signal_review_impact_summary(
                     vendor_name="Zen",
                     review_action="approved",
+                    company_signal_action="created",
                     review_priority_band="high",
                     review_priority_reason="has_signal_evidence_and_decision_maker",
                     review_unlock_path="low_trust_near_threshold_group",
@@ -407,6 +408,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
     assert result == {
         **returned,
         "review_action": "approved",
+        "company_signal_action": "created",
         "review_priority_band": "high",
         "review_priority_reason": "has_signal_evidence_and_decision_maker",
         "review_unlock_path": "low_trust_near_threshold_group",
@@ -420,6 +422,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         vendor_name="Zen",
         scoped_vendors=["Zendesk"],
         review_action="approved",
+        company_signal_action="created",
         review_priority_band="high",
         review_priority_reason="has_signal_evidence_and_decision_maker",
         review_unlock_path="low_trust_near_threshold_group",
@@ -443,6 +446,23 @@ async def test_get_company_signal_review_impact_summary_rejects_invalid_action()
 
     assert exc.value.status_code == 400
     assert "review_action" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_review_impact_summary_rejects_invalid_company_signal_action():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_company_signal_review_impact_summary(
+                vendor_name=None,
+                review_action="approved",
+                company_signal_action="merge",
+                window_days=30,
+                top_n=10,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "company_signal_action" in exc.value.detail
 
 
 @pytest.mark.asyncio

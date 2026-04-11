@@ -632,6 +632,10 @@ def _company_signal_review_priority_snapshot(
     return _company_signal_group_review_priority_values(row)
 
 
+def _optional_query_text(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _company_signal_review_unlock_snapshot(
     row: Mapping[str, Any] | None,
     *,
@@ -2896,6 +2900,7 @@ async def get_company_signal_candidate_group_summary(
 async def get_company_signal_review_impact_summary(
     vendor_name: Optional[str] = Query(None),
     review_action: Optional[str] = Query(None),
+    company_signal_action: Optional[str] = Query(None),
     review_priority_band: Optional[str] = Query(None),
     review_priority_reason: Optional[str] = Query(None),
     review_unlock_path: Optional[str] = Query(None),
@@ -2906,10 +2911,24 @@ async def get_company_signal_review_impact_summary(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Summarize downstream yield from company-signal review actions."""
+    vendor_name = _optional_query_text(vendor_name)
+    review_action = _optional_query_text(review_action)
+    company_signal_action = _optional_query_text(company_signal_action)
+    review_priority_band = _optional_query_text(review_priority_band)
+    review_priority_reason = _optional_query_text(review_priority_reason)
+    review_unlock_path = _optional_query_text(review_unlock_path)
+    review_unlock_reason = _optional_query_text(review_unlock_reason)
+    candidate_source = _optional_query_text(candidate_source)
+
     if review_action is not None and review_action not in {"approved", "suppressed"}:
         raise HTTPException(
             status_code=400,
             detail="review_action must be 'approved' or 'suppressed'",
+        )
+    if company_signal_action is not None and company_signal_action not in {"created", "updated", "deleted", "none"}:
+        raise HTTPException(
+            status_code=400,
+            detail="company_signal_action must be 'created', 'updated', 'deleted', or 'none'",
         )
     if review_priority_band is not None and review_priority_band not in {"promote_now", "high", "medium", "low"}:
         raise HTTPException(
@@ -2925,6 +2944,7 @@ async def get_company_signal_review_impact_summary(
         vendor_name=vendor_name,
         scoped_vendors=scoped_vendors,
         review_action=review_action,
+        company_signal_action=company_signal_action,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
         review_unlock_path=review_unlock_path,
@@ -2933,6 +2953,7 @@ async def get_company_signal_review_impact_summary(
         top_n=top_n,
     )
     summary["review_action"] = review_action
+    summary["company_signal_action"] = company_signal_action
     summary["review_priority_band"] = review_priority_band
     summary["review_priority_reason"] = review_priority_reason
     summary["review_unlock_path"] = review_unlock_path
