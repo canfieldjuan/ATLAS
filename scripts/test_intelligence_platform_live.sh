@@ -61,7 +61,7 @@ check() {
         FAIL=$((FAIL + 1))
         echo -e "  ${RED}FAIL${NC} [${code}] ${label} (expected ${expect_code})"
         # Show first 200 chars of body on failure
-        head -c 200 /tmp/atlas_test_body 2>/dev/null | sed 's/^/       /'
+        { head -c 200 /tmp/atlas_test_body 2>/dev/null || true; } | sed 's/^/       /'
         echo
     fi
 }
@@ -91,7 +91,7 @@ check_contains() {
     else
         FAIL=$((FAIL + 1))
         echo -e "  ${RED}FAIL${NC} [${code}] ${label} (expected 200 + '${needle}')"
-        head -c 200 /tmp/atlas_test_body 2>/dev/null | sed 's/^/       /'
+        { head -c 200 /tmp/atlas_test_body 2>/dev/null || true; } | sed 's/^/       /'
         echo
     fi
 }
@@ -99,7 +99,7 @@ check_contains() {
 discover_json_path() {
     local url="$1"
     local path="$2"
-    curl -s "${CURL_AUTH_ARGS[@]}" "${BASE}${url}" 2>/dev/null | python3 - "$path" <<'PY'
+    { curl -s "${CURL_AUTH_ARGS[@]}" "${BASE}${url}" 2>/dev/null || true; } | python3 - "$path" <<'PY'
 import json
 import sys
 
