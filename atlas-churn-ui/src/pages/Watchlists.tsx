@@ -342,11 +342,13 @@ function watchlistEvidenceExplorerPath(
   searchParams: URLSearchParams,
   vendorName: string,
   witnessId?: string | null,
+  source?: string | null,
 ) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
   params.set('tab', 'witnesses')
   if (witnessId) params.set('witness_id', witnessId)
+  if (source) params.set('source', source)
   params.set('back_to', watchlistPath(searchParams))
   return `/evidence?${params.toString()}`
 }
@@ -355,8 +357,9 @@ function watchlistAccountEvidenceExplorerPath(
   searchParams: URLSearchParams,
   row: AccountsInMotionFeedItem,
   witnessId?: string | null,
+  source?: string | null,
 ) {
-  return watchlistEvidenceExplorerPath(accountFocusParams(searchParams, row), row.vendor, witnessId)
+  return watchlistEvidenceExplorerPath(accountFocusParams(searchParams, row), row.vendor, witnessId, source)
 }
 
 function accountFocusFromRow(row: AccountsInMotionFeedItem) {
@@ -1559,7 +1562,7 @@ export default function Watchlists() {
             <div className="mt-1 text-[11px] text-cyan-300">{row.synthesis_wedge_label}</div>
           )}
           <Link
-            to={watchlistEvidenceExplorerPath(searchParams, row.vendor_name)}
+            to={watchlistEvidenceExplorerPath(searchParams, row.vendor_name, null, selectedSourceFilter)}
             onClick={(event) => event.stopPropagation()}
             aria-label={`Open vendor evidence for ${row.vendor_name}`}
             className="mt-2 inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200"
@@ -1753,7 +1756,7 @@ export default function Watchlists() {
             </button>
             {row.company && (
               <Link
-                to={watchlistAccountEvidenceExplorerPath(searchParams, row)}
+                to={watchlistAccountEvidenceExplorerPath(searchParams, row, null, selectedSourceFilter)}
                 onClick={(event) => event.stopPropagation()}
                 aria-label={`Open account evidence for ${row.vendor}`}
                 className="rounded-md bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-300 hover:bg-violet-500/20"
@@ -1805,7 +1808,7 @@ export default function Watchlists() {
         <div className="flex items-center gap-2">
           {currentEvidenceVendor && (
             <Link
-              to={watchlistEvidenceExplorerPath(searchParams, currentEvidenceVendor)}
+              to={watchlistEvidenceExplorerPath(searchParams, currentEvidenceVendor, null, selectedSourceFilter)}
               className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-violet-300 transition-colors hover:bg-violet-500/10 hover:text-violet-200"
             >
               <Fingerprint className="h-4 w-4" />
@@ -3006,7 +3009,9 @@ export default function Watchlists() {
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
         onCopyLink={() => void handleCopySelectedAccountLink()}
-        evidenceExplorerUrl={selectedAccount ? watchlistAccountEvidenceExplorerPath(searchParams, selectedAccount) : null}
+        evidenceExplorerUrl={selectedAccount
+          ? watchlistAccountEvidenceExplorerPath(searchParams, selectedAccount, null, selectedSourceFilter)
+          : null}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
         onViewOpportunity={(item) => navigate(`/opportunities?vendor=${encodeURIComponent(item.vendor)}`)}
@@ -3020,7 +3025,7 @@ export default function Watchlists() {
         onClose={handleCloseWitnessDrawer}
         explorerUrl={
           evidenceDrawerWitnessId && evidenceDrawerVendor
-            ? watchlistEvidenceExplorerPath(searchParams, evidenceDrawerVendor, evidenceDrawerWitnessId)
+            ? watchlistEvidenceExplorerPath(searchParams, evidenceDrawerVendor, evidenceDrawerWitnessId, selectedSourceFilter)
             : null
         }
       />

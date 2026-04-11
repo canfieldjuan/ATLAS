@@ -821,7 +821,7 @@ describe('Watchlists', () => {
 
     expect(await screen.findByRole('link', { name: 'Open Current View in Evidence Explorer' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Intercom&tab=witnesses&back_to=%2Fwatchlists%3Fview%3Dview-1',
+      '/evidence?vendor=Intercom&tab=witnesses&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1',
     )
   })
 
