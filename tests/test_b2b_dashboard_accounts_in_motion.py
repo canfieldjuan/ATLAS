@@ -402,6 +402,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
                     review_unlock_path="low_trust_near_threshold_group",
                     review_unlock_reason="close_low_trust_confidence",
                     candidate_source="reddit",
+                    rebuild_outcome="triggered",
                     window_days=14,
                     top_n=5,
                     user=MagicMock(),
@@ -418,6 +419,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "review_unlock_path": "low_trust_near_threshold_group",
         "review_unlock_reason": "close_low_trust_confidence",
         "candidate_source": "reddit",
+        "rebuild_outcome": "triggered",
     }
     scope_mock.assert_awaited_once_with(pool, ANY)
     read_mock.assert_awaited_once_with(
@@ -434,6 +436,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         review_unlock_path="low_trust_near_threshold_group",
         review_unlock_reason="close_low_trust_confidence",
         candidate_source="reddit",
+        rebuild_outcome="triggered",
         top_n=5,
     )
 
@@ -485,6 +488,22 @@ async def test_get_company_signal_review_impact_summary_rejects_invalid_company_
 
     assert exc.value.status_code == 400
     assert "company_signal_action" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_get_company_signal_review_impact_summary_rejects_invalid_rebuild_outcome():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.get_company_signal_review_impact_summary(
+                vendor_name=None,
+                rebuild_outcome="partial",
+                window_days=30,
+                top_n=10,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "rebuild_outcome" in exc.value.detail
 
 
 @pytest.mark.asyncio

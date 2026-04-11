@@ -977,6 +977,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         review_unlock_path="low_trust_near_threshold_group",
         review_unlock_reason="close_low_trust_confidence",
         candidate_source="reddit",
+        rebuild_outcome="triggered",
         top_n=5,
     )
 
@@ -991,6 +992,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "review_action =" in totals_sql
     assert "company_signal_action =" in totals_sql
     assert "canonical_gap_reason" in totals_sql
+    assert "rebuild_triggered" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
     assert "review_priority_band" in totals_sql
     assert "review_priority_reason" in totals_sql
@@ -1014,6 +1016,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "vendor_reason_rebuilds" in vendor_reasons_sql
     assert summary["review_scope"] == "bulk_group"
     assert summary["canonical_gap_reason"] == "low_confidence_low_trust_source"
+    assert summary["rebuild_outcome"] == "triggered"
     assert summary["totals"]["total_actions"] == 6
     assert summary["totals"]["company_signal_effect_rate"] == 1.0
     assert summary["totals"]["company_signal_creation_rate"] == 0.5

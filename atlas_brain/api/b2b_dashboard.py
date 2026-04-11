@@ -2908,6 +2908,7 @@ async def get_company_signal_review_impact_summary(
     review_unlock_path: Optional[str] = Query(None),
     review_unlock_reason: Optional[str] = Query(None),
     candidate_source: Optional[str] = Query(None),
+    rebuild_outcome: Optional[str] = Query(None),
     window_days: int = Query(30, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
     user: AuthUser | None = Depends(optional_auth),
@@ -2923,6 +2924,7 @@ async def get_company_signal_review_impact_summary(
     review_unlock_path = _optional_query_text(review_unlock_path)
     review_unlock_reason = _optional_query_text(review_unlock_reason)
     candidate_source = _optional_query_text(candidate_source)
+    rebuild_outcome = _optional_query_text(rebuild_outcome)
 
     if review_scope is not None and review_scope not in {"candidate", "group", "bulk_group"}:
         raise HTTPException(
@@ -2938,6 +2940,11 @@ async def get_company_signal_review_impact_summary(
         raise HTTPException(
             status_code=400,
             detail="company_signal_action must be 'created', 'updated', 'deleted', or 'none'",
+        )
+    if rebuild_outcome is not None and rebuild_outcome not in {"requested", "triggered", "blocked", "not_requested"}:
+        raise HTTPException(
+            status_code=400,
+            detail="rebuild_outcome must be 'requested', 'triggered', 'blocked', or 'not_requested'",
         )
     if review_priority_band is not None and review_priority_band not in {"promote_now", "high", "medium", "low"}:
         raise HTTPException(
@@ -2961,6 +2968,7 @@ async def get_company_signal_review_impact_summary(
         review_unlock_path=review_unlock_path,
         review_unlock_reason=review_unlock_reason,
         candidate_source=candidate_source,
+        rebuild_outcome=rebuild_outcome,
         top_n=top_n,
     )
     summary["review_scope"] = review_scope
@@ -2972,6 +2980,7 @@ async def get_company_signal_review_impact_summary(
     summary["review_unlock_path"] = review_unlock_path
     summary["review_unlock_reason"] = review_unlock_reason
     summary["candidate_source"] = candidate_source
+    summary["rebuild_outcome"] = rebuild_outcome
     return summary
 
 
