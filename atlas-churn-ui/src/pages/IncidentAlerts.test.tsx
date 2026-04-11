@@ -21,6 +21,12 @@ describe('IncidentAlerts', () => {
   beforeEach(() => {
     cleanup()
     vi.clearAllMocks()
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: vi.fn().mockResolvedValue(undefined),
+      },
+    })
     api.fetchWebhookDeliverySummary.mockResolvedValue({
       window_days: 7,
       active_subscriptions: 2,
@@ -193,6 +199,29 @@ describe('IncidentAlerts', () => {
 
     await user.selectOptions(screen.getByLabelText('Preview Event'), 'report_generated')
     expect(screen.getByText(/"hs_note_body": "Atlas Intelligence: report_generated for Acme Rival/)).toBeInTheDocument()
+  })
+
+  it('copies sample JSON and cURL from the preview panel', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+
+    await user.type(screen.getByLabelText('Endpoint URL'), 'https://hooks.example.com/atlas')
+    await user.click(screen.getByRole('button', { name: 'Copy Sample JSON' }))
+
+    expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('"event": "churn_alert"'))
+    expect(await screen.findByText('Copied sample JSON')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy cURL' }))
+    expect(window.navigator.clipboard.writeText).toHaveBeenLastCalledWith(expect.stringContaining("curl -X POST 'https://hooks.example.com/atlas'"))
+    expect(window.navigator.clipboard.writeText).toHaveBeenLastCalledWith(expect.stringContaining("X-Atlas-Event: churn_alert"))
+    expect(await screen.findByText('Copied sample cURL')).toBeInTheDocument()
   })
 
   it('creates a webhook from the form', async () => {

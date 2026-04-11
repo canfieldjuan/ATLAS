@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { BellRing, CheckCircle2, ChevronDown, ChevronRight, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
+import { BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
@@ -288,6 +288,15 @@ function validateWebhookForm(form: WebhookCreateBody) {
   return issues
 }
 
+function buildPreviewCurl(url: string, headers: Record<string, string>, payload: unknown) {
+  const endpoint = url.trim() || 'https://hooks.example.com/atlas'
+  const headerFlags = Object.entries(headers)
+    .map(([key, value]) => `  -H '${key}: ${value.replaceAll("'", "'\\''")}'`)
+    .join(' \\\n')
+  const body = JSON.stringify(payload, null, 2).replaceAll("'", "'\\''")
+  return `curl -X POST '${endpoint}' \\\n${headerFlags} \\\n  --data-raw '${body}'`
+}
+
 function formatTs(value: string | null | undefined) {
   if (!value) return '--'
   const date = new Date(value)
@@ -415,6 +424,11 @@ export default function IncidentAlerts() {
     'X-Atlas-Signature': 'sha256=<computed-hmac>',
     ...(form.auth_header?.trim() ? { Authorization: form.auth_header.trim() } : {}),
   }), [form.auth_header, previewEventType])
+  const previewBodyText = useMemo(() => JSON.stringify(previewPayload, null, 2), [previewPayload])
+  const previewCurl = useMemo(
+    () => buildPreviewCurl(form.url, previewHeaders, previewPayload),
+    [form.url, previewHeaders, previewPayload],
+  )
   const activityLoading = deliveryLoading || crmPushLoading
   const activityRefreshing = deliveryRefreshing || crmPushRefreshing
   const channelGuidance = CHANNEL_GUIDANCE[form.channel]
@@ -425,6 +439,18 @@ export default function IncidentAlerts() {
     if (selectedWebhookId) {
       refreshDeliveries()
       refreshCrmPushLog()
+    }
+  }
+
+  async function copyPreview(text: string, label: string) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
+      await navigator.clipboard.writeText(text)
+      setActionError(null)
+      setMessage(`Copied ${label}`)
+    } catch (err) {
+      setMessage(null)
+      setActionError(err instanceof Error ? err.message : `Failed to copy ${label}`)
     }
   }
 
@@ -1024,6 +1050,24 @@ export default function IncidentAlerts() {
                     </span>
                   </div>
                 </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void copyPreview(previewBodyText, 'sample JSON')}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy Sample JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void copyPreview(previewCurl, 'sample cURL')}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 transition-colors hover:bg-slate-800"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy cURL
+                  </button>
+                </div>
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                   <div>
                     <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Headers Sent</div>
@@ -1031,7 +1075,7 @@ export default function IncidentAlerts() {
                   </div>
                   <div>
                     <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Request Body</div>
-                    <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-xs text-slate-300">{JSON.stringify(previewPayload, null, 2)}</pre>
+                    <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-xs text-slate-300">{previewBodyText}</pre>
                   </div>
                 </div>
               </div>
