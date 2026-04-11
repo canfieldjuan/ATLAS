@@ -1385,6 +1385,31 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Copied evidence link for Intercom')).toBeInTheDocument()
   })
 
+  it('copies the current live watchlists view from the header', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?source=reddit&category=Helpdesk&min_urgency=8&fresh_only=true']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    await user.click(await screen.findByRole('button', { name: 'Copy current view link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/watchlists')
+    expect(copiedUrl.searchParams.get('source')).toBe('reddit')
+    expect(copiedUrl.searchParams.get('category')).toBe('Helpdesk')
+    expect(copiedUrl.searchParams.get('min_urgency')).toBe('8')
+    expect(copiedUrl.searchParams.get('fresh_only')).toBe('true')
+    expect(await screen.findByText('Copied current view link')).toBeInTheDocument()
+  })
+
   it('copies a deep link for a saved view', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)

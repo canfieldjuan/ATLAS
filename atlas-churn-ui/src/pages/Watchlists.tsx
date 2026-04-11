@@ -1405,6 +1405,17 @@ export default function Watchlists() {
     staleDaysThreshold,
   ])
 
+  async function handleCopyCurrentViewLink() {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${watchlistPath(searchParams)}`)
+      setActionError(null)
+      setActionMessage('Copied current view link')
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy current view link')
+    }
+  }
+
   async function handleCopyWatchlistViewLink(view: WatchlistView) {
     try {
       await navigator.clipboard.writeText(watchlistViewUrl(view.id))
@@ -2501,6 +2512,14 @@ export default function Watchlists() {
               </button>
             </div>
           )}
+          <button
+            type="button"
+            onClick={() => void handleCopyCurrentViewLink()}
+            aria-label="Copy current view link"
+            className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"
+          >
+            Copy View
+          </button>
           <button
             onClick={() => downloadCsv('/export/signals')}
             className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"
