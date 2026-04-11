@@ -1160,10 +1160,31 @@ describe('Watchlists', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor`,
+        `${window.location.origin}/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor`,
       )
     })
     expect(await screen.findByText('Copied account link for Acme Corp')).toBeInTheDocument()
+  })
+
+  it('copies a vendor-focused link from the vendor movement feed without transient drawer state', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit&category=Helpdesk&account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&witness_id=witness%3Azendesk%3A1&witness_vendor=Zendesk']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy vendor link for Zendesk' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/watchlists?source=reddit&category=Helpdesk&vendor_name=Zendesk`,
+      )
+    })
+    expect(await screen.findByText('Copied vendor link for Zendesk')).toBeInTheDocument()
   })
 
   it('evaluates persisted alert events for the active saved view', async () => {

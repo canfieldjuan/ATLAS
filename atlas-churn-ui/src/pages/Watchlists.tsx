@@ -403,8 +403,27 @@ function accountFocusParams(searchParams: URLSearchParams, row: AccountsInMotion
   return next
 }
 
+function vendorFocusParams(searchParams: URLSearchParams, vendorName: string) {
+  const next = new URLSearchParams(searchParams)
+  next.delete('view')
+  next.delete('account_vendor')
+  next.delete('account_company')
+  next.delete('account_report_date')
+  next.delete('account_watch_vendor')
+  next.delete('account_category')
+  next.delete('account_track_mode')
+  next.delete('witness_id')
+  next.delete('witness_vendor')
+  next.set('vendor_name', vendorName)
+  return next
+}
+
 function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
   return `${window.location.origin}${watchlistPath(accountFocusParams(searchParams, row))}`
+}
+
+function watchlistVendorUrl(searchParams: URLSearchParams, vendorName: string) {
+  return `${window.location.origin}${watchlistPath(vendorFocusParams(searchParams, vendorName))}`
 }
 
 function watchlistEvidenceExplorerPath(
@@ -1416,6 +1435,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyVendorRowLink(row: ChurnSignal) {
+    try {
+      await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, row.vendor_name))
+      setActionError(null)
+      setActionMessage(`Copied vendor link for ${row.vendor_name}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy vendor link')
+    }
+  }
+
   function handleCloseSelectedAccount() {
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
@@ -1973,6 +2003,17 @@ export default function Watchlists() {
             >
               Opportunities
             </Link>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopyVendorRowLink(row)
+              }}
+              aria-label={`Copy vendor link for ${row.vendor_name}`}
+              className="text-slate-300 hover:text-slate-200"
+            >
+              Copy Link
+            </button>
           </div>
         </div>
       )},
