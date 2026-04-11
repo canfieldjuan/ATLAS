@@ -3,7 +3,7 @@ import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
 import {
   Search, Fingerprint, Loader2, Database, GitBranch,
   ShieldCheck, ShieldAlert, ChevronDown, ChevronRight,
-  ArrowRight, FileText, Layers, Filter, ExternalLink,
+  ArrowRight, FileText, Layers, Filter, ExternalLink, Copy,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import EvidenceDrawer, { SourceBadge, SIGNAL_COLORS } from '../components/EvidenceDrawer'
@@ -36,6 +36,36 @@ type Tab = 'witnesses' | 'vault' | 'trace'
 function parseTab(value: string | null): Tab {
   if (value === 'vault' || value === 'trace' || value === 'witnesses') return value
   return 'witnesses'
+}
+
+function evidenceExplorerUrl(searchParams: URLSearchParams) {
+  const query = searchParams.toString()
+  return `${window.location.origin}/evidence${query ? `?${query}` : ''}`
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // Fall through to the document-copy path for environments where
+      // navigator.clipboard exists but is not writable.
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'absolute'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  if (!copied) {
+    throw new Error('Copy failed')
+  }
 }
 
 
@@ -87,6 +117,7 @@ export default function EvidenceExplorer() {
   // Drawer state
   const [drawerOpen, setDrawerOpen] = useState(Boolean(requestedVendor && requestedWitnessId))
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
 
   // -- Search handler ---------------------------------------------------------
 
@@ -269,19 +300,37 @@ export default function EvidenceExplorer() {
     setDrawerOpen(true)
   }
 
+  async function handleCopyLink() {
+    try {
+      await copyText(evidenceExplorerUrl(new URLSearchParams(searchParams.toString())))
+      setCopyState('copied')
+    } catch {
+      setCopyState('error')
+    }
+  }
+
   // -- Render -----------------------------------------------------------------
 
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white flex items-center gap-2.5">
-          <Fingerprint className="w-7 h-7 text-cyan-400" />
-          Evidence Explorer
-        </h1>
-        <p className="text-slate-400 mt-1">
-          Drill down from claims to review text. Every signal has a witness, every witness has a source.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2.5">
+            <Fingerprint className="w-7 h-7 text-cyan-400" />
+            Evidence Explorer
+          </h1>
+          <p className="text-slate-400 mt-1">
+            Drill down from claims to review text. Every signal has a witness, every witness has a source.
+          </p>
+        </div>
+        <button
+          onClick={() => void handleCopyLink()}
+          className="inline-flex items-center gap-2 rounded-md border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+        >
+          <Copy className="h-4 w-4" />
+          {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy Failed' : 'Copy Link'}
+        </button>
       </div>
 
       {/* Search bar */}

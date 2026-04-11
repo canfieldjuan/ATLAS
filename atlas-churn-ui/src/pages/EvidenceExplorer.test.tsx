@@ -179,4 +179,19 @@ describe('EvidenceExplorer', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('witness_id=witness%3Azendesk%3A1')
     })
   })
+
+  it('copies the current explorer URL', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&witness_id=witness%3Azendesk%3A1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy Link' }))
+
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+  })
 })
