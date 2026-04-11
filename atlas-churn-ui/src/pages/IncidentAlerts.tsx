@@ -99,6 +99,13 @@ const CHANNEL_GUIDANCE: Record<WebhookChannel, { title: string; detail: string }
 }
 
 const SUMMARY_WINDOWS = [7, 30, 90] as const
+
+function parseSummaryWindow(value: string | null) {
+  const parsed = Number(value)
+  return SUMMARY_WINDOWS.includes(parsed as (typeof SUMMARY_WINDOWS)[number])
+    ? parsed as (typeof SUMMARY_WINDOWS)[number]
+    : 7
+}
 const MIN_SECRET_LENGTH = 16
 
 const SAMPLE_EVENT_PAYLOADS: Record<WebhookEventType, Record<string, string | number>> = {
@@ -359,22 +366,23 @@ function buildActivitySearchParams({
   deliveryStatus,
   deliveryEvent,
   crmStatus,
+  summaryWindow,
 }: {
-  webhookId: string
+  webhookId: string | null
   deliveryStatus: 'all' | 'success' | 'failed'
   deliveryEvent: 'all' | WebhookEventType
   crmStatus: 'all' | 'success' | 'failed'
+  summaryWindow: (typeof SUMMARY_WINDOWS)[number]
 }) {
   const next = new URLSearchParams()
-  next.set('webhook', webhookId)
-  if (deliveryStatus !== 'all') next.set('delivery_status', deliveryStatus)
-  if (deliveryEvent !== 'all') next.set('delivery_event', deliveryEvent)
-  if (crmStatus !== 'all') next.set('crm_status', crmStatus)
+  if (summaryWindow !== 7) next.set('days', String(summaryWindow))
+  if (webhookId) {
+    next.set('webhook', webhookId)
+    if (deliveryStatus !== 'all') next.set('delivery_status', deliveryStatus)
+    if (deliveryEvent !== 'all') next.set('delivery_event', deliveryEvent)
+    if (crmStatus !== 'all') next.set('crm_status', crmStatus)
+  }
   return next
-}
-
-function buildBackToPath(pathname: string, search: string) {
-  return search ? `${pathname}${search}` : pathname
 }
 
 function buildVendorWorkspacePath(vendorName: string, backTo: string) {
@@ -401,7 +409,8 @@ export default function IncidentAlerts() {
   const requestedCrmStatus = searchParams.get('crm_status') === 'success' || searchParams.get('crm_status') === 'failed'
     ? (searchParams.get('crm_status') as 'success' | 'failed')
     : 'all'
-  const [summaryWindow, setSummaryWindow] = useState<(typeof SUMMARY_WINDOWS)[number]>(7)
+  const requestedSummaryWindow = parseSummaryWindow(searchParams.get('days'))
+  const [summaryWindow, setSummaryWindow] = useState<(typeof SUMMARY_WINDOWS)[number]>(requestedSummaryWindow)
   const [form, setForm] = useState<WebhookCreateBody>({
     url: '',
     secret: generateWebhookSecret(),
@@ -528,14 +537,12 @@ export default function IncidentAlerts() {
     return Array.from(values)
   }, [deliveryData?.deliveries])
   const activityBackTo = useMemo(() => {
-    if (!selectedWebhookId) {
-      return buildBackToPath(location.pathname, location.search)
-    }
     const next = buildActivitySearchParams({
       webhookId: selectedWebhookId,
       deliveryStatus: deliveryStatusFilter,
       deliveryEvent: deliveryEventFilter,
       crmStatus: crmStatusFilter,
+      summaryWindow,
     })
     const query = next.toString()
     return query ? `${location.pathname}?${query}` : location.pathname
@@ -544,9 +551,13 @@ export default function IncidentAlerts() {
     deliveryEventFilter,
     deliveryStatusFilter,
     location.pathname,
-    location.search,
     selectedWebhookId,
+    summaryWindow,
   ])
+
+  useEffect(() => {
+    setSummaryWindow((current) => (current === requestedSummaryWindow ? current : requestedSummaryWindow))
+  }, [requestedSummaryWindow])
 
   useEffect(() => {
     if (!requestedWebhookId) return
@@ -555,26 +566,12 @@ export default function IncidentAlerts() {
   }, [requestedWebhookId, webhooks])
 
   useEffect(() => {
-    if (!selectedWebhookId) {
-      if (!searchParams.has('webhook') && !searchParams.has('delivery_status') && !searchParams.has('delivery_event') && !searchParams.has('crm_status')) {
-        return
-      }
-      setSearchParams((current) => {
-        const next = new URLSearchParams(current)
-        next.delete('webhook')
-        next.delete('delivery_status')
-        next.delete('delivery_event')
-        next.delete('crm_status')
-        return next
-      }, { replace: true })
-      return
-    }
-
     const next = buildActivitySearchParams({
       webhookId: selectedWebhookId,
       deliveryStatus: deliveryStatusFilter,
       deliveryEvent: deliveryEventFilter,
       crmStatus: crmStatusFilter,
+      summaryWindow,
     })
     if (next.toString() === searchParams.toString()) return
     setSearchParams(next, { replace: true })
@@ -585,6 +582,7 @@ export default function IncidentAlerts() {
     searchParams,
     selectedWebhookId,
     setSearchParams,
+    summaryWindow,
   ])
 
   async function refreshAll() {
@@ -616,6 +614,7 @@ export default function IncidentAlerts() {
         deliveryStatus: selectedWebhookId === webhookId ? deliveryStatusFilter : 'all',
         deliveryEvent: selectedWebhookId === webhookId ? deliveryEventFilter : 'all',
         crmStatus: selectedWebhookId === webhookId ? crmStatusFilter : 'all',
+        summaryWindow,
       })
       const path = `${window.location.origin}${window.location.pathname}?${next.toString()}`
       await navigator.clipboard.writeText(path)

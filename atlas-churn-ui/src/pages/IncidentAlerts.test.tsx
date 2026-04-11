@@ -198,6 +198,23 @@ describe('IncidentAlerts', () => {
     expect(screen.queryByText(/Latest failure/)).not.toBeInTheDocument()
   })
 
+
+  it('hydrates the summary window from the URL and preserves it in copied activity links', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?days=30&webhook=wh-1&delivery_status=failed']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('30-day window')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy Activity Link' }))
+
+    expect(await screen.findByText('Copied activity link')).toBeInTheDocument()
+    expect(screen.getByLabelText('Window')).toHaveValue('30')
+  })
+
   it('shows delivery activity drillthrough for a webhook', async () => {
     const user = userEvent.setup()
 
