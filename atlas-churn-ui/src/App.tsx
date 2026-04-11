@@ -89,7 +89,8 @@ export default function App() {
       <Layout>
         <ErrorBoundary key={location.pathname}>
           <Routes>
-            <Route path="/" element={renderLazyRoute(Dashboard)} />
+            <Route path="/" element={<Navigate to="/watchlists" replace />} />
+            <Route path="/overview" element={renderLazyRoute(Dashboard)} />
             <Route path="/watchlists" element={renderLazyRoute(Watchlists)} />
             <Route path="/vendors" element={renderLazyRoute(Vendors)} />
             <Route path="/vendors/:name" element={renderLazyRoute(VendorDetail)} />
@@ -112,7 +113,7 @@ export default function App() {
             <Route path="/predictor" element={renderLazyRoute(WinLossPredictor)} />
             <Route path="/evidence" element={renderLazyRoute(EvidenceExplorer)} />
             <Route path="/account" element={renderLazyRoute(Account)} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/watchlists" replace />} />
           </Routes>
         </ErrorBoundary>
       </Layout>

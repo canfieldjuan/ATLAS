@@ -34,8 +34,8 @@ interface SidebarLink {
 }
 
 const links: SidebarLink[] = [
-  { to: '/', icon: LayoutDashboard, label: 'Overview' },
   { to: '/watchlists', icon: Eye, label: 'Watchlists' },
+  { to: '/overview', icon: LayoutDashboard, label: 'Overview' },
   { to: '/vendors', icon: Building2, label: 'Vendors' },
   { to: '/reviews', icon: MessageSquareText, label: 'Reviews' },
   { to: '/reports', icon: FileBarChart, label: 'Reports', gate: 'reports' },
@@ -109,7 +109,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
               <NavLink
                 key={to}
                 to={to}
-                end={to === '/'}
+                end={to === '/overview'}
                 onClick={onClose}
                 className={({ isActive }) =>
                   clsx(
