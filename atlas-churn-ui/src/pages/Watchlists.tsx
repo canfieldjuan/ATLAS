@@ -1882,6 +1882,7 @@ export default function Watchlists() {
       render: (row) => {
         const genKey = `${row.company}::${row.vendor}`
         const isGenerating = generatingCampaignFor === genKey
+        const primaryReviewId = row.source_reviews[0]?.id || ''
         return (
           <div className="flex items-center gap-1">
             <button
@@ -1902,6 +1903,17 @@ export default function Watchlists() {
                 title="Open in Evidence Explorer"
               >
                 <Fingerprint className="inline h-3 w-3" />
+              </Link>
+            )}
+            {primaryReviewId && (
+              <Link
+                to={watchlistReviewDetailPath(searchParams, row, primaryReviewId)}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={`Open review detail for ${row.vendor}`}
+                className="rounded-md bg-sky-500/10 px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-500/20"
+                title="Open review detail"
+              >
+                Review
               </Link>
             )}
             {row.company && (

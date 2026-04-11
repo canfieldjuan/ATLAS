@@ -363,6 +363,20 @@ describe('Watchlists', () => {
     expect(screen.getByText('low confidence')).toBeInTheDocument()
   })
 
+  it('preserves focused account context when opening review detail from an account row', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open review detail for Zendesk' })).toHaveAttribute(
+      'href',
+      '/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
+  })
+
   it('preserves watchlist context when opening opportunities from an account row', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
