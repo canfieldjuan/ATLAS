@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Handshake,
   Target,
@@ -79,13 +80,58 @@ const EMPTY_PARTNER = {
 
 const COMMISSION_TYPES = ['cpa', 'recurring', 'rev_share', 'flat', 'unknown']
 
+function affiliatesPath(
+  vendor: string,
+  minUrgency: number,
+  minScore: number,
+  dmOnly: boolean,
+) {
+  const next = new URLSearchParams()
+  if (vendor.trim()) next.set('vendor', vendor.trim())
+  if (minUrgency !== 5) next.set('min_urgency', String(minUrgency))
+  if (minScore !== 0) next.set('min_score', String(minScore))
+  if (dmOnly) next.set('dm_only', 'true')
+  const qs = next.toString()
+  return qs ? `/affiliates?${qs}` : '/affiliates'
+}
+
+function vendorDetailPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/vendors/${encodeURIComponent(vendorName)}?${next.toString()}`
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
+
 export default function Affiliates() {
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   // Filters
-  const [vendorSearch, setVendorSearch] = useState('')
-  const [debouncedVendor, setDebouncedVendor] = useState('')
-  const [minUrgency, setMinUrgency] = useState(5)
-  const [minScore, setMinScore] = useState(0)
-  const [dmOnly, setDmOnly] = useState(false)
+  const [vendorSearch, setVendorSearch] = useState(() => searchParams.get('vendor') ?? '')
+  const [debouncedVendor, setDebouncedVendor] = useState(() => searchParams.get('vendor') ?? '')
+  const [minUrgency, setMinUrgency] = useState(() => Number(searchParams.get('min_urgency') ?? '5') || 5)
+  const [minScore, setMinScore] = useState(() => Number(searchParams.get('min_score') ?? '0') || 0)
+  const [dmOnly, setDmOnly] = useState(() => searchParams.get('dm_only') === 'true')
 
   // Partner management
   const [showPartners, setShowPartners] = useState(false)
@@ -99,6 +145,20 @@ export default function Affiliates() {
     const t = setTimeout(() => setDebouncedVendor(vendorSearch), 300)
     return () => clearTimeout(t)
   }, [vendorSearch])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (debouncedVendor.trim()) next.set('vendor', debouncedVendor.trim())
+    else next.delete('vendor')
+    if (minUrgency !== 5) next.set('min_urgency', String(minUrgency))
+    else next.delete('min_urgency')
+    if (minScore !== 0) next.set('min_score', String(minScore))
+    else next.delete('min_score')
+    if (dmOnly) next.set('dm_only', 'true')
+    else next.delete('dm_only')
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [debouncedVendor, dmOnly, minScore, minUrgency, searchParams, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData<AffiliatesData>(
     async () => {
@@ -132,6 +192,10 @@ export default function Affiliates() {
     opportunities.length > 0
       ? Math.round(opportunities.reduce((s, o) => s + o.opportunity_score, 0) / opportunities.length)
       : 0
+  const currentListPath = useMemo(
+    () => affiliatesPath(debouncedVendor, minUrgency, minScore, dmOnly),
+    [debouncedVendor, dmOnly, minScore, minUrgency],
+  )
 
   // -- Click handler --
   async function handleLinkClick(opp: AffiliateOpportunity) {
@@ -311,19 +375,49 @@ export default function Affiliates() {
     },
     {
       key: 'link',
-      header: '',
+      header: 'Actions',
       render: (r) => (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            handleLinkClick(r)
-          }}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-cyan-400 hover:bg-cyan-500/10 transition-colors"
-          title={r.affiliate_url}
-        >
-          <ExternalLink className="h-3 w-3" />
-          Link
-        </button>
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <Link
+            to={vendorDetailPath(r.vendor_name, currentListPath)}
+            onClick={(e) => e.stopPropagation()}
+            className="text-cyan-400 hover:text-cyan-300 transition-colors"
+          >
+            Vendor
+          </Link>
+          <Link
+            to={evidencePath(r.vendor_name, currentListPath)}
+            onClick={(e) => e.stopPropagation()}
+            className="text-violet-300 hover:text-violet-200 transition-colors"
+          >
+            Evidence
+          </Link>
+          <Link
+            to={reportsPath(r.vendor_name, currentListPath)}
+            onClick={(e) => e.stopPropagation()}
+            className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+          >
+            Reports
+          </Link>
+          <Link
+            to={opportunitiesPath(r.vendor_name, currentListPath)}
+            onClick={(e) => e.stopPropagation()}
+            className="text-emerald-300 hover:text-emerald-200 transition-colors"
+          >
+            Opportunities
+          </Link>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              handleLinkClick(r)
+            }}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-cyan-400 hover:bg-cyan-500/10 transition-colors"
+            title={r.affiliate_url}
+          >
+            <ExternalLink className="h-3 w-3" />
+            Link
+          </button>
+        </div>
       ),
     },
   ]
@@ -504,6 +598,7 @@ export default function Affiliates() {
           <DataTable
             columns={columns}
             data={opportunities}
+            onRowClick={(row) => navigate(vendorDetailPath(row.vendor_name, currentListPath))}
             emptyMessage="No affiliate opportunities found"
             emptyAction={{
               label: 'Add Partners',
