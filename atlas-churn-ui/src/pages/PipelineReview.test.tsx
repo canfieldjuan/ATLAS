@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import PipelineReview from './PipelineReview'
 
 const api = vi.hoisted(() => ({
@@ -35,6 +35,10 @@ const api = vi.hoisted(() => ({
 vi.mock('../api/client', () => api)
 
 describe('PipelineReview watchlist delivery ops', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     api.fetchVisibilitySummary.mockResolvedValue({
@@ -476,6 +480,17 @@ describe('PipelineReview watchlist delivery ops', () => {
     expect(screen.getByRole('button', { name: 'Hide No-Op Runs' })).toBeInTheDocument()
   })
 
+  it('hydrates the active tab from the URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/pipeline-review?tab=costs']}>
+        <PipelineReview />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('B2B Tokens By Pass')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Costs' })).toHaveClass('text-cyan-400')
+  })
+
   it('opens the saved-view drawer and runs per-view delivery actions', async () => {
     const user = userEvent.setup()
 
@@ -503,6 +518,22 @@ describe('PipelineReview watchlist delivery ops', () => {
 
     expect(await screen.findByText('Current Alert Events')).toBeInTheDocument()
     expect(screen.getByText('Salesforce urgency breached the saved view threshold.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Salesforce?back_to=%2Fpipeline-review',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Salesforce&tab=witnesses&back_to=%2Fpipeline-review',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Salesforce&back_to=%2Fpipeline-review',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Salesforce&back_to=%2Fpipeline-review',
+    )
 
     await user.click(screen.getByRole('button', { name: 'Deliver Now' }))
     await waitFor(() => {

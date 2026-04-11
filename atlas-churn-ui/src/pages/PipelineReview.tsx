@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Shield,
   AlertTriangle,
@@ -98,6 +99,53 @@ import {
 } from '../api/client'
 
 type TabKey = 'queue' | 'failures' | 'quality' | 'audit' | 'costs'
+const DEFAULT_PIPELINE_TAB: TabKey = 'queue'
+
+function parsePipelineTab(value: string | null): TabKey {
+  return value === 'failures' || value === 'quality' || value === 'audit' || value === 'costs'
+    ? value
+    : DEFAULT_PIPELINE_TAB
+}
+
+function buildPipelineReviewSearchParams(activeTab: TabKey) {
+  const params = new URLSearchParams()
+  if (activeTab !== DEFAULT_PIPELINE_TAB) params.set('tab', activeTab)
+  return params
+}
+
+function pipelineReviewPath(activeTab: TabKey) {
+  const params = buildPipelineReviewSearchParams(activeTab)
+  const query = params.toString()
+  return query ? `/pipeline-review?${query}` : '/pipeline-review'
+}
+
+function pipelineVendorWorkspacePath(activeTab: TabKey, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', pipelineReviewPath(activeTab))
+  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
+}
+
+function pipelineEvidencePath(activeTab: TabKey, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  params.set('back_to', pipelineReviewPath(activeTab))
+  return `/evidence?${params.toString()}`
+}
+
+function pipelineReportsPath(activeTab: TabKey, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', pipelineReviewPath(activeTab))
+  return `/reports?${params.toString()}`
+}
+
+function pipelineOpportunitiesPath(activeTab: TabKey, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', pipelineReviewPath(activeTab))
+  return `/opportunities?${params.toString()}`
+}
 
 const EXTRACTION_HEALTH_TOP_N = 12
 const COST_VENDOR_LIMIT = 100
@@ -391,6 +439,7 @@ function WatchlistDeliveryDetailDrawer({
   actionLoading,
   actionMessage,
   actionError,
+  backToTab,
   onClose,
   onRunNow,
   onDisableEmail,
@@ -400,6 +449,7 @@ function WatchlistDeliveryDetailDrawer({
   actionLoading: boolean
   actionMessage: string | null
   actionError: string | null
+  backToTab: TabKey
   onClose: () => void
   onRunNow: () => void
   onDisableEmail: () => void
@@ -441,6 +491,35 @@ function WatchlistDeliveryDetailDrawer({
             {view.named_accounts_only ? <span className="rounded bg-cyan-500/10 px-2 py-1 text-xs text-cyan-300">Named only</span> : null}
             {view.changed_wedges_only ? <span className="rounded bg-cyan-500/10 px-2 py-1 text-xs text-cyan-300">Changed wedges</span> : null}
           </div>
+
+          {view.vendor_name ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Link
+                to={pipelineVendorWorkspacePath(backToTab, view.vendor_name)}
+                className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+              >
+                Vendor workspace
+              </Link>
+              <Link
+                to={pipelineEvidencePath(backToTab, view.vendor_name)}
+                className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+              >
+                Evidence
+              </Link>
+              <Link
+                to={pipelineReportsPath(backToTab, view.vendor_name)}
+                className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+              >
+                Reports
+              </Link>
+              <Link
+                to={pipelineOpportunitiesPath(backToTab, view.vendor_name)}
+                className="rounded border border-slate-700/60 bg-slate-900/50 px-2.5 py-1.5 text-slate-200 transition hover:border-cyan-500/60 hover:text-white"
+              >
+                Opportunities
+              </Link>
+            </div>
+          ) : null}
 
           <div className="grid gap-3 md:grid-cols-3">
             <div className="rounded border border-slate-700/50 bg-slate-900/50 p-3">
@@ -555,7 +634,7 @@ function WatchlistDeliveryDetailDrawer({
 // Tab: Queue
 // ---------------------------------------------------------------------------
 
-function QueueTab({ onRefresh }: { onRefresh: () => void }) {
+function QueueTab({ onRefresh, backToTab }: { onRefresh: () => void; backToTab: TabKey }) {
   const [stageFilter, setStageFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
   const [viewStatusFilter, setViewStatusFilter] = useState('')
@@ -1095,6 +1174,7 @@ function QueueTab({ onRefresh }: { onRefresh: () => void }) {
               actionLoading={viewActionLoading}
               actionMessage={viewActionMessage}
               actionError={viewActionError}
+              backToTab={backToTab}
               onClose={() => {
                 setSelectedWatchlistViewId(null)
                 setViewActionMessage(null)
@@ -5317,7 +5397,8 @@ function CostsTab() {
 // ---------------------------------------------------------------------------
 
 export default function PipelineReview() {
-  const [activeTab, setActiveTab] = useState<TabKey>('queue')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = parsePipelineTab(searchParams.get('tab'))
 
   const {
     data: summary,
@@ -5400,7 +5481,7 @@ export default function PipelineReview() {
         {tabs.map(({ key, label }) => (
           <button
             key={key}
-            onClick={() => setActiveTab(key)}
+            onClick={() => setSearchParams(buildPipelineReviewSearchParams(key))}
             className={clsx(
               'px-4 py-2 text-sm font-medium transition-colors border-b-2',
               activeTab === key
@@ -5414,7 +5495,7 @@ export default function PipelineReview() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'queue' && <QueueTab onRefresh={refreshSummary} />}
+      {activeTab === 'queue' && <QueueTab onRefresh={refreshSummary} backToTab={activeTab} />}
       {activeTab === 'failures' && <FailuresTab />}
       {activeTab === 'quality' && <QualityTab />}
       {activeTab === 'audit' && <AuditTab />}
