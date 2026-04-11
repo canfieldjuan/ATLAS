@@ -357,6 +357,7 @@ export default function IncidentAlerts() {
   const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'all' | 'success' | 'failed'>('all')
   const [deliveryEventFilter, setDeliveryEventFilter] = useState<'all' | WebhookEventType>('all')
   const [crmStatusFilter, setCrmStatusFilter] = useState<'all' | 'success' | 'failed'>('all')
+  const [manualTestResults, setManualTestResults] = useState<Record<string, { success: boolean; testedAt: string }>>({})
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -584,6 +585,10 @@ export default function IncidentAlerts() {
     setMessage(null)
     try {
       const result = await testWebhookSubscription(webhookId)
+      setManualTestResults((current) => ({
+        ...current,
+        [webhookId]: { success: result.success, testedAt: new Date().toISOString() },
+      }))
       setMessage(result.success ? 'Test webhook delivered' : 'Test webhook failed')
       await refreshAll()
     } catch (err) {
@@ -708,6 +713,9 @@ export default function IncidentAlerts() {
               </div>
             ) : webhooks.map((webhook) => {
               const isBusy = busyWebhookId === webhook.id
+              const latestManualTest = manualTestResults[webhook.id]
+              const hasLatestFailure = Boolean(webhook.latest_failure_at)
+              const testButtonLabel = hasLatestFailure ? 'Re-test Endpoint' : 'Send Test'
               return (
                 <article key={webhook.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -745,6 +753,20 @@ export default function IncidentAlerts() {
                           </div>
                         </div>
                       ) : null}
+                      {latestManualTest ? (
+                        <div className={`rounded-lg border px-3 py-2 text-xs ${
+                          latestManualTest.success
+                            ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200'
+                            : 'border-amber-500/20 bg-amber-500/10 text-amber-200'
+                        }`}>
+                          <div className="font-medium text-current">
+                            Latest manual test {latestManualTest.success ? 'passed' : 'failed'}
+                          </div>
+                          <div className="mt-1">
+                            {formatTs(latestManualTest.testedAt)}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-xs text-slate-400 lg:min-w-[220px]">
@@ -775,7 +797,7 @@ export default function IncidentAlerts() {
                       className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-200 transition-colors hover:bg-violet-500/20 disabled:opacity-50"
                     >
                       <FlaskConical className="h-4 w-4" />
-                      Send Test
+                      {testButtonLabel}
                     </button>
                     <button
                       type="button"

@@ -123,9 +123,25 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('PagerDuty bridge')).toBeInTheDocument()
     expect(screen.getByText('18')).toBeInTheDocument()
     expect(screen.getByText('89%')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Send Test' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Re-test Endpoint' })).toBeInTheDocument()
     expect(screen.getByText('Latest failure · signal_update · 500')).toBeInTheDocument()
     expect(screen.getByText(/downstream timeout/)).toBeInTheDocument()
+  })
+
+  it('shows the latest manual test result on the webhook card', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+    await user.click(screen.getByRole('button', { name: 'Re-test Endpoint' }))
+
+    expect(await screen.findByText('Latest manual test passed')).toBeInTheDocument()
+    expect(await screen.findByText('Test webhook delivered')).toBeInTheDocument()
   })
 
   it('shows delivery activity drillthrough for a webhook', async () => {
