@@ -203,6 +203,20 @@ describe('EvidenceExplorer', () => {
   })
 
 
+
+  it('preserves review detail back navigation from the URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Back to Review' })).toHaveAttribute(
+      'href',
+      '/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
   it('hydrates pagination offset from the URL and preserves it in downstream report links', async () => {
     api.fetchWitnesses.mockResolvedValueOnce({
       vendor_name: 'Zendesk',
