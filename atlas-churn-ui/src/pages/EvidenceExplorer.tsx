@@ -48,10 +48,6 @@ function evidenceExplorerPath(searchParams: URLSearchParams) {
   return `/evidence${query ? `?${query}` : ''}`
 }
 
-function vendorDetailPath(vendorName: string) {
-  return `/vendors/${encodeURIComponent(vendorName)}`
-}
-
 function evidenceOpportunitiesPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -64,6 +60,12 @@ function evidenceReportsPath(searchParams: URLSearchParams, vendorName: string) 
   params.set('vendor_filter', vendorName)
   params.set('back_to', evidenceExplorerPath(searchParams))
   return `/reports?${params.toString()}`
+}
+
+function evidenceVendorPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', evidenceExplorerPath(searchParams))
+  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
 }
 
 function parseBackTo(value: string | null) {
@@ -422,7 +424,7 @@ export default function EvidenceExplorer() {
                 Focused on <span className="text-slate-300">{activeVendor}</span>
               </span>
               <Link
-                to={vendorDetailPath(activeVendor)}
+                to={evidenceVendorPath(searchParams, activeVendor)}
                 className="text-cyan-400 hover:text-cyan-300 transition-colors"
               >
                 Vendor workspace
