@@ -10,6 +10,7 @@ data return is_gated=True with clear messaging instead of fake probabilities.
 
 import csv
 import io
+import asyncio
 import json
 import logging
 import uuid as _uuid
@@ -271,7 +272,7 @@ async def _load_calibrated_weights(pool) -> tuple[dict[str, float], str, Optiona
         # Blend: static * (1 + (avg_lift - 1.0) * alpha)
         # lift=1.0 means neutral, >1 means outperforms, <1 underperforms
         delta = (avg_lift - 1.0) * CALIBRATION_BLEND_ALPHA
-        adjusted[factor_key] = WEIGHTS[factor_key] * (1.0 + delta)
+        adjusted[factor_key] = max(0.0, WEIGHTS[factor_key] * (1.0 + delta))
 
     # Re-normalize to sum to 1.0
     total = sum(adjusted.values())
@@ -899,7 +900,8 @@ async def _compute_prediction(
         except _CacheHit:
             pass
         else:
-            raw = call_llm_with_skill(
+            raw = await asyncio.to_thread(
+                call_llm_with_skill,
                 "digest/win_loss_strategy",
                 strategy_payload,
                 workload="openrouter",
@@ -912,18 +914,19 @@ async def _compute_prediction(
 
             if raw:
                 parsed = parse_json_response(raw, recover_truncated=True)
-                recommended_approach = parsed.get("recommended_approach")
-                lead_with = parsed.get("lead_with") or []
-                talking_points = parsed.get("talking_points") or []
-                timing_advice = parsed.get("timing_advice")
-                risk_factors = parsed.get("risk_factors") or []
+                if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                    recommended_approach = parsed.get("recommended_approach")
+                    lead_with = parsed.get("lead_with") or []
+                    talking_points = parsed.get("talking_points") or []
+                    timing_advice = parsed.get("timing_advice")
+                    risk_factors = parsed.get("risk_factors") or []
 
-                if cache_request is not None:
-                    await store_b2b_exact_stage_text(
-                        cache_request,
-                        response_text=clean_llm_output(raw),
-                        metadata={"model": win_loss_model},
-                    )
+                    if cache_request is not None:
+                        await store_b2b_exact_stage_text(
+                            cache_request,
+                            response_text=clean_llm_output(raw),
+                            metadata={"model": win_loss_model},
+                        )
     except _CacheHit:
         pass
     except Exception as e:
@@ -1133,17 +1136,38 @@ async def get_prediction(
     if not row:
         raise HTTPException(status_code=404, detail="Prediction not found")
 
+    try:
+        data_gates = [DataGate(**g) for g in (_safe_json(row["data_gates"]) or [])]
+    except Exception:
+        data_gates = []
+    try:
+        factors = [Factor(**f) for f in (_safe_json(row["factors"]) or [])]
+    except Exception:
+        factors = []
+    try:
+        switching_triggers = [SwitchingTrigger(**t) for t in (_safe_json(row["switching_triggers"]) or [])]
+    except Exception:
+        switching_triggers = []
+    try:
+        proof_quotes = [ProofQuote(**q) for q in (_safe_json(row["proof_quotes"]) or [])]
+    except Exception:
+        proof_quotes = []
+    try:
+        objections = [Objection(**o) for o in (_safe_json(row["objections"]) or [])]
+    except Exception:
+        objections = []
+
     return WinLossResponse(
         vendor_name=row["vendor_name"],
         win_probability=float(row["win_probability"]),
         confidence=row["confidence"],
         verdict=row["verdict"] or "",
         is_gated=row["is_gated"],
-        data_gates=[DataGate(**g) for g in (_safe_json(row["data_gates"]) or [])],
-        factors=[Factor(**f) for f in (_safe_json(row["factors"]) or [])],
-        switching_triggers=[SwitchingTrigger(**t) for t in (_safe_json(row["switching_triggers"]) or [])],
-        proof_quotes=[ProofQuote(**q) for q in (_safe_json(row["proof_quotes"]) or [])],
-        objections=[Objection(**o) for o in (_safe_json(row["objections"]) or [])],
+        data_gates=data_gates,
+        factors=factors,
+        switching_triggers=switching_triggers,
+        proof_quotes=proof_quotes,
+        objections=objections,
         displacement_targets=_safe_json(row["displacement_targets"]) or [],
         segment_match=_safe_json(row["segment_match"]),
         data_coverage=_safe_json(row["data_coverage"]) or {},
