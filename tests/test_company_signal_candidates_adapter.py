@@ -303,6 +303,7 @@ async def test_read_company_signal_candidate_groups_maps_rows_and_support_review
         pool,
         window_days=90,
         company_name="Acme",
+        source_name="reddit",
         scoped_vendors=["Zendesk"],
         candidate_bucket="canonical_ready",
         review_status="pending",
@@ -322,6 +323,7 @@ async def test_read_company_signal_candidate_groups_maps_rows_and_support_review
     assert "review_status =" in primary_sql
     assert "review_count >=" in primary_sql
     assert "corroborated_confidence_score" in primary_sql
+    assert "jsonb_each_text" in primary_sql
     assert "signal_evidence_count > 0" in primary_sql
     assert "decision_maker_count > 0" in primary_sql
     assert "promote_now" in primary_sql
@@ -650,6 +652,7 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
         pool,
         window_days=90,
         company_name="Acme",
+        source_name="reddit",
         scoped_vendors=["Zendesk"],
         candidate_bucket="analyst_review",
         review_status="pending",
@@ -704,6 +707,7 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "cross_source_corroboration" in totals_sql
     assert "vendor_name ILIKE" not in totals_sql
     assert "ANY(" in totals_sql
+    assert "jsonb_each_text" in totals_sql
     assert "GROUP BY 1" in gap_sql
     assert "GROUP BY 1" in vendor_sql
     assert "actionable_group_count" in actionable_vendor_sql
@@ -809,10 +813,27 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["unlock_focus"]["primary_vendor"] == "Copper"
     assert summary["unlock_focus"]["primary_source"] == "reddit"
     assert summary["unlock_focus"]["primary_confidence_gap_to_canonical"] == 0.19
+    assert summary["unlock_focus"]["primary_queue_filters"] == {
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "review_priority_band": "low",
+        "vendor_name": "Copper",
+        "company_name": "coppercorp",
+        "source_name": "reddit",
+        "canonical_gap_reason": "low_confidence_low_trust_source",
+    }
     assert summary["unlock_focus"]["alternate_unlock_candidate_type"] == "trusted_source_urgency_gap"
     assert summary["unlock_focus"]["alternate_vendor"] == "Close"
     assert summary["unlock_focus"]["alternate_source"] == "g2"
     assert summary["unlock_focus"]["alternate_urgency_gap_to_high_intent"] == 4.0
+    assert summary["unlock_focus"]["alternate_queue_filters"] == {
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "review_priority_band": "low",
+        "vendor_name": "Close",
+        "source_name": "g2",
+        "canonical_gap_reason": "below_high_intent_threshold",
+    }
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"

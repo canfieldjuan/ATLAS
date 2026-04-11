@@ -2724,6 +2724,7 @@ async def list_company_signals(
 async def list_company_signal_candidate_groups(
     vendor_name: Optional[str] = Query(None),
     company_name: Optional[str] = Query(None),
+    source_name: Optional[str] = Query(None),
     candidate_bucket: str = Query("analyst_review"),
     review_status: str = Query("pending"),
     canonical_gap_reason: Optional[str] = Query(None),
@@ -2762,6 +2763,7 @@ async def list_company_signal_candidate_groups(
         window_days=window_days,
         vendor_name=vendor_name,
         company_name=company_name,
+        source_name=source_name,
         scoped_vendors=scoped_vendors,
         candidate_bucket=candidate_bucket,
         review_status=review_status,
@@ -2782,6 +2784,7 @@ async def list_company_signal_candidate_groups(
         "review_status": review_status,
         "review_priority_band": review_priority_band,
         "review_priority_reason": review_priority_reason,
+        "source_name": source_name,
     }
 
 
@@ -2789,6 +2792,7 @@ async def list_company_signal_candidate_groups(
 async def get_company_signal_candidate_group_summary(
     vendor_name: Optional[str] = Query(None),
     company_name: Optional[str] = Query(None),
+    source_name: Optional[str] = Query(None),
     candidate_bucket: Optional[str] = Query(None),
     review_status: Optional[str] = Query(None),
     canonical_gap_reason: Optional[str] = Query(None),
@@ -2827,6 +2831,7 @@ async def get_company_signal_candidate_group_summary(
         window_days=window_days,
         vendor_name=vendor_name,
         company_name=company_name,
+        source_name=source_name,
         scoped_vendors=scoped_vendors,
         candidate_bucket=candidate_bucket,
         review_status=review_status,
@@ -2844,6 +2849,7 @@ async def get_company_signal_candidate_group_summary(
     summary["review_status"] = review_status
     summary["review_priority_band"] = review_priority_band
     summary["review_priority_reason"] = review_priority_reason
+    summary["source_name"] = source_name
     return summary
 
 

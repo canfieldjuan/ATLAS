@@ -11561,6 +11561,7 @@ def _company_signal_candidate_group_filters(
     window_days: int = 90,
     vendor_name: str | None = None,
     company_name: str | None = None,
+    source_name: str | None = None,
     scoped_vendors: list[str] | None = None,
     candidate_bucket: str | None = None,
     review_status: str | None = None,
@@ -11592,6 +11593,16 @@ def _company_signal_candidate_group_filters(
             f"(company_name ILIKE '%' || ${idx} || '%' OR display_company_name ILIKE '%' || ${idx} || '%')"
         )
         params.append(company_name)
+        idx += 1
+    if source_name:
+        conditions.append(
+            "EXISTS ("
+            "SELECT 1 "
+            "FROM jsonb_each_text(COALESCE(source_distribution, '{}'::jsonb)) AS source_entry(key, value) "
+            f"WHERE LOWER(source_entry.key) = LOWER(${idx})"
+            ")"
+        )
+        params.append(source_name)
         idx += 1
     if candidate_bucket:
         conditions.append(f"candidate_bucket = ${idx}")
@@ -11755,6 +11766,7 @@ async def read_company_signal_candidate_groups(
     window_days: int = 90,
     vendor_name: str | None = None,
     company_name: str | None = None,
+    source_name: str | None = None,
     scoped_vendors: list[str] | None = None,
     candidate_bucket: str | None = None,
     review_status: str | None = None,
@@ -11773,6 +11785,7 @@ async def read_company_signal_candidate_groups(
         window_days=window_days,
         vendor_name=vendor_name,
         company_name=company_name,
+        source_name=source_name,
         scoped_vendors=scoped_vendors,
         candidate_bucket=candidate_bucket,
         review_status=review_status,
@@ -11924,6 +11937,7 @@ async def read_company_signal_candidate_group_summary(
     window_days: int = 90,
     vendor_name: str | None = None,
     company_name: str | None = None,
+    source_name: str | None = None,
     scoped_vendors: list[str] | None = None,
     candidate_bucket: str | None = None,
     review_status: str | None = None,
@@ -11942,6 +11956,7 @@ async def read_company_signal_candidate_group_summary(
         window_days=window_days,
         vendor_name=vendor_name,
         company_name=company_name,
+        source_name=source_name,
         scoped_vendors=scoped_vendors,
         candidate_bucket=candidate_bucket,
         review_status=review_status,
@@ -13097,6 +13112,26 @@ async def read_company_signal_candidate_group_summary(
                 else None
             ),
         })
+
+    def _unlock_queue_filters(item: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if item is None:
+            return None
+        filters: dict[str, Any] = {
+            "candidate_bucket": "analyst_review",
+            "review_status": "pending",
+            "review_priority_band": "low",
+        }
+        if item.get("vendor"):
+            filters["vendor_name"] = item.get("vendor")
+        if item.get("company"):
+            filters["company_name"] = item.get("company")
+        if item.get("source"):
+            filters["source_name"] = item.get("source")
+        canonical_gap_reason = item.get("canonical_gap_reason")
+        if canonical_gap_reason and canonical_gap_reason != "mixed":
+            filters["canonical_gap_reason"] = canonical_gap_reason
+        return filters
+
     unlock_focus = None
     if unlock_candidates:
         primary_unlock_candidate = unlock_candidates[0]
@@ -13131,6 +13166,7 @@ async def read_company_signal_candidate_group_summary(
             "primary_review_count": primary_unlock_candidate.get("review_count"),
             "primary_confidence_gap_to_canonical": primary_unlock_candidate.get("confidence_gap_to_canonical"),
             "primary_urgency_gap_to_high_intent": primary_unlock_candidate.get("urgency_gap_to_high_intent"),
+            "primary_queue_filters": _unlock_queue_filters(primary_unlock_candidate),
             "alternate_unlock_candidate_type": (
                 alternate_unlock_candidate.get("unlock_candidate_type")
                 if alternate_unlock_candidate is not None
@@ -13176,6 +13212,7 @@ async def read_company_signal_candidate_group_summary(
                 if alternate_unlock_candidate is not None
                 else None
             ),
+            "alternate_queue_filters": _unlock_queue_filters(alternate_unlock_candidate),
         }
     return {
         "totals": dict(totals or {}),

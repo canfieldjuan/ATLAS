@@ -202,6 +202,7 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
                 result = await b2b_dashboard.list_company_signal_candidate_groups(
                     vendor_name=None,
                     company_name=None,
+                    source_name="reddit",
                     candidate_bucket="analyst_review",
                     review_status="pending",
                     canonical_gap_reason=None,
@@ -224,6 +225,7 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
         "review_status": "pending",
         "review_priority_band": "medium",
         "review_priority_reason": "cross_source_corroboration",
+        "source_name": "reddit",
     }
     scope_mock.assert_awaited_once_with(pool, None)
     read_mock.assert_awaited_once_with(
@@ -231,6 +233,7 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
         window_days=90,
         vendor_name=None,
         company_name=None,
+        source_name="reddit",
         scoped_vendors=None,
         candidate_bucket="analyst_review",
         review_status="pending",
@@ -270,6 +273,7 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
                 result = await b2b_dashboard.get_company_signal_candidate_group_summary(
                     vendor_name=None,
                     company_name=None,
+                    source_name="reddit",
                     candidate_bucket=None,
                     review_status=None,
                     canonical_gap_reason=None,
@@ -291,6 +295,7 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
         "review_status": None,
         "review_priority_band": "medium",
         "review_priority_reason": "cross_source_corroboration",
+        "source_name": "reddit",
     }
     scope_mock.assert_awaited_once_with(pool, None)
     read_mock.assert_awaited_once_with(
@@ -298,6 +303,7 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
         window_days=90,
         vendor_name=None,
         company_name=None,
+        source_name="reddit",
         scoped_vendors=None,
         candidate_bucket=None,
         review_status=None,
