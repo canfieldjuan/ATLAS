@@ -422,6 +422,10 @@ function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotio
   return `${window.location.origin}${watchlistPath(accountFocusParams(searchParams, row))}`
 }
 
+function watchlistReviewUrl(searchParams: URLSearchParams, row: AccountsInMotionFeedItem, reviewId: string) {
+  return `${window.location.origin}${watchlistReviewDetailPath(searchParams, row, reviewId)}`
+}
+
 function watchlistVendorUrl(searchParams: URLSearchParams, vendorName: string) {
   return `${window.location.origin}${watchlistPath(vendorFocusParams(searchParams, vendorName))}`
 }
@@ -1443,6 +1447,18 @@ export default function Watchlists() {
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy vendor link')
+    }
+  }
+
+  async function handleCopySelectedReviewLink(reviewId: string) {
+    if (!selectedAccount) return
+    try {
+      await navigator.clipboard.writeText(watchlistReviewUrl(searchParams, selectedAccount, reviewId))
+      setActionError(null)
+      setActionMessage(`Copied review link for ${selectedAccount.company || selectedAccount.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy review link')
     }
   }
 
@@ -3523,6 +3539,7 @@ export default function Watchlists() {
         onViewReview={(reviewId) => selectedAccount
           ? navigate(watchlistReviewDetailPath(searchParams, selectedAccount, reviewId))
           : null}
+        onCopyReviewLink={(reviewId) => void handleCopySelectedReviewLink(reviewId)}
         generating={selectedAccount ? generatingCampaignFor === `${selectedAccount.company}::${selectedAccount.vendor}` : false}
       />
 

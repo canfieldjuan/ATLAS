@@ -33,6 +33,7 @@ interface AccountMovementDrawerProps {
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
   onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
   onViewReview?: (reviewId: string) => void
+  onCopyReviewLink?: (reviewId: string) => void
   onCopyLink?: () => void
   evidenceExplorerUrl?: string | null
   generating?: boolean
@@ -83,6 +84,7 @@ export default function AccountMovementDrawer({
   onGenerateCampaign,
   onViewOpportunity,
   onViewReview,
+  onCopyReviewLink,
   onCopyLink,
   evidenceExplorerUrl,
   generating,
@@ -360,6 +362,17 @@ export default function AccountMovementDrawer({
                           >
                             Open review detail
                             <ExternalLink className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                        {review.id && onCopyReviewLink ? (
+                          <button
+                            type="button"
+                            aria-label={`Copy review link for ${review.id}`}
+                            className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                            onClick={() => onCopyReviewLink(review.id)}
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            Copy review link
                           </button>
                         ) : null}
                         {review.source_url && (
