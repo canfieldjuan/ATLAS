@@ -3890,6 +3890,7 @@ export default function Watchlists() {
           : null}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
+        onViewReport={(item) => navigate(watchlistReportsPath(searchParams, item.vendor))}
         onViewOpportunity={(item) => navigate(watchlistOpportunitiesPath(searchParams, item.vendor))}
         onViewReview={(reviewId) => selectedAccount
           ? navigate(watchlistReviewDetailPath(searchParams, selectedAccount, reviewId))

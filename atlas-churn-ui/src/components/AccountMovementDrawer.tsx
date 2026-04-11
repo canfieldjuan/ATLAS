@@ -31,6 +31,7 @@ interface AccountMovementDrawerProps {
   onViewVendor: (vendorName: string) => void
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
+  onViewReport?: (item: AccountsInMotionFeedItem) => void
   onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
   onViewReview?: (reviewId: string) => void
   onCopyReviewLink?: (reviewId: string) => void
@@ -82,6 +83,7 @@ export default function AccountMovementDrawer({
   onViewVendor,
   onOpenWitness,
   onGenerateCampaign,
+  onViewReport,
   onViewOpportunity,
   onViewReview,
   onCopyReviewLink,
@@ -187,6 +189,14 @@ export default function AccountMovementDrawer({
               View vendor
               <ArrowUpRight className="h-3.5 w-3.5" />
             </button>
+            {onViewReport && (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-fuchsia-500/10 px-2.5 py-1.5 text-xs font-medium text-fuchsia-300 hover:bg-fuchsia-500/20"
+                onClick={() => onViewReport(item)}
+              >
+                View reports
+              </button>
+            )}
             {onViewOpportunity && (
               <button
                 className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
