@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -66,7 +67,17 @@ def _check(label: str, result: dict, checks: list) -> list[str]:
     return failures
 
 
-def test_high_intent(base: str, token: str | None) -> list[str]:
+def _discover_vendor(base: str, token: str) -> str | None:
+    data = _get(f"{base}/api/v1/b2b/tenant/signals?limit=1", token=token)
+    signals = data.get("signals")
+    if isinstance(signals, list) and signals:
+        vendor_name = signals[0].get("vendor_name")
+        if isinstance(vendor_name, str) and vendor_name.strip():
+            return vendor_name.strip()
+    return None
+
+
+def test_high_intent(base: str, token: str | None, vendor: str) -> list[str]:
     """Phase 1: list_high_intent via tenant API."""
     print("\n--- Phase 1: High Intent Companies ---")
     url = f"{base}/api/v1/b2b/tenant/high-intent?min_urgency=7&window_days=90&limit=10"
@@ -92,18 +103,19 @@ def test_high_intent(base: str, token: str | None) -> list[str]:
     ])
 
 
-def test_high_intent_vendor_scoped(base: str, token: str | None) -> list[str]:
+def test_high_intent_vendor_scoped(base: str, token: str | None, vendor: str) -> list[str]:
     """Phase 1: vendor-scoped high intent."""
-    print("\n--- Phase 1: High Intent (vendor=HubSpot) ---")
-    url = f"{base}/api/v1/b2b/tenant/high-intent?vendor_name=HubSpot&min_urgency=5&window_days=90&limit=5"
+    print(f"\n--- Phase 1: High Intent (vendor={vendor}) ---")
+    vendor_query = quote(vendor, safe="")
+    url = f"{base}/api/v1/b2b/tenant/high-intent?vendor_name={vendor_query}&min_urgency=5&window_days=90&limit=5"
     data = _get(url, token=token)
     checks = [
         ("response has companies", "companies" in data),
     ]
     if data.get("companies"):
         checks.append((
-            "all results are HubSpot",
-            all("hubspot" in (c.get("vendor") or "").lower() for c in data["companies"]),
+            f"all results are {vendor}",
+            all((c.get("vendor") or "").strip().lower() == vendor.lower() for c in data["companies"]),
         ))
     return _check("high_intent_vendor", data, checks)
 
@@ -162,10 +174,10 @@ def test_search_reviews_churn_intent(base: str, token: str | None) -> list[str]:
     return _check("search_reviews_churn", data, checks)
 
 
-def test_vendor_profile(base: str, token: str | None) -> list[str]:
+def test_vendor_profile(base: str, token: str | None, vendor: str) -> list[str]:
     """Phase 1: get_vendor_profile high-intent sub-query."""
-    print("\n--- Phase 1: Vendor Profile (HubSpot) ---")
-    url = f"{base}/api/v1/b2b/tenant/signals/HubSpot"
+    print(f"\n--- Phase 1: Vendor Profile ({vendor}) ---")
+    url = f"{base}/api/v1/b2b/tenant/signals/{quote(vendor, safe='')}"
     data = _get(url, token=token)
     checks = [
         ("response has vendor_name", "vendor_name" in data or "profile" in data),
@@ -229,15 +241,29 @@ def main():
         default=os.environ.get("ATLAS_TOKEN", "").strip() or None,
         help="Bearer token for tenant routes. Defaults to ATLAS_TOKEN if set.",
     )
+    parser.add_argument(
+        "--vendor",
+        default=os.environ.get("ATLAS_VENDOR", "").strip() or None,
+        help="Vendor name to use for vendor-scoped checks. Defaults to ATLAS_VENDOR or the first tracked tenant signal.",
+    )
     args = parser.parse_args()
     base = args.base_url.rstrip("/")
     token = args.token.strip() if isinstance(args.token, str) and args.token.strip() else None
+    vendor = args.vendor.strip() if isinstance(args.vendor, str) and args.vendor.strip() else None
 
     print(f"Testing against: {base}")
     if token:
         print("Using bearer token authentication")
     else:
-        print("No bearer token provided; tenant routes will likely return 401")
+        print("ATLAS_TOKEN or --token is required for tenant route validation")
+        return 2
+
+    if not vendor:
+        vendor = _discover_vendor(base, token)
+    if not vendor:
+        print("Unable to discover a tracked vendor. Provide --vendor or set ATLAS_VENDOR.")
+        return 2
+    print(f"Using vendor: {vendor}")
 
     # Check server is up
     health = _get(f"{base}/api/v1/ping")
@@ -249,9 +275,9 @@ def main():
         return 1
 
     all_failures = []
-    all_failures.extend(test_high_intent(base, token))
-    all_failures.extend(test_high_intent_vendor_scoped(base, token))
-    all_failures.extend(test_vendor_profile(base, token))
+    all_failures.extend(test_high_intent(base, token, vendor))
+    all_failures.extend(test_high_intent_vendor_scoped(base, token, vendor))
+    all_failures.extend(test_vendor_profile(base, token, vendor))
     all_failures.extend(test_search_reviews(base, token))
     all_failures.extend(test_search_reviews_filtered(base, token))
     all_failures.extend(test_search_reviews_churn_intent(base, token))

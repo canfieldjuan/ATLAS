@@ -17,19 +17,17 @@ if [ -n "$TOKEN" ]; then
     AUTH_REQUIRED_CODE="200"
     CRM_PUSH_LOG_EXPECT_CODE="404"
 else
-    CURL_AUTH_ARGS=()
-    AUTH_REQUIRED_CODE="401"
-    CRM_PUSH_LOG_EXPECT_CODE="401"
+    echo "ATLAS_TOKEN or a second positional bearer token argument is required for tenant route validation."
+    exit 2
 fi
 
-# Sample IDs from the database
-REVIEW_ID="74bb10c7-42f8-4cd4-a6c7-0282b1db5828"
-SEQUENCE_ID="2531e161-73dd-4fb4-81e5-cfdd3f5948b5"
-REPORT_ID="62d8c300-de78-4567-ace4-fef95a01f6c2"
-SIGNAL_ID="296b7b54-8f74-454d-939e-606eb73eb950"
-CORRECTION_ID="d2fd86e9-fc30-4274-b899-81c82a54dbc6"
-CRM_EVENT_ID="03dab025-1ddd-4eb9-94d6-92c2bcb46384"
-VENDOR="Freshdesk"
+# Sample IDs / names can be overridden per environment.
+REVIEW_ID="${ATLAS_REVIEW_ID:-}"
+SEQUENCE_ID="${ATLAS_SEQUENCE_ID:-}"
+REPORT_ID="${ATLAS_REPORT_ID:-}"
+CORRECTION_ID="${ATLAS_CORRECTION_ID:-}"
+VENDOR="${ATLAS_VENDOR:-}"
+COMPARISON_VENDOR="${ATLAS_COMPARISON_VENDOR:-}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -98,6 +96,67 @@ check_contains() {
     fi
 }
 
+discover_json_path() {
+    local url="$1"
+    local path="$2"
+    curl -s "${CURL_AUTH_ARGS[@]}" "${BASE}${url}" 2>/dev/null | python3 - "$path" <<'PY'
+import json
+import sys
+
+path = [part for part in sys.argv[1].split(".") if part]
+
+try:
+    value = json.load(sys.stdin)
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+for part in path:
+    if isinstance(value, dict):
+        value = value.get(part, "")
+    elif isinstance(value, list):
+        try:
+            idx = int(part)
+        except ValueError:
+            value = ""
+            break
+        if idx < 0 or idx >= len(value):
+            value = ""
+            break
+        value = value[idx]
+    else:
+        value = ""
+        break
+
+if value is None:
+    print("")
+elif isinstance(value, str):
+    print(value.strip())
+else:
+    print(value)
+PY
+}
+
+urlencode() {
+    python3 - "$1" <<'PY'
+import sys
+from urllib.parse import quote
+
+print(quote(sys.argv[1], safe=""))
+PY
+}
+
+require_value() {
+    local label="$1"
+    local value="$2"
+    local env_name="$3"
+    if [ -n "$value" ]; then
+        return 0
+    fi
+    echo "Unable to discover ${label}. Set ${env_name} and rerun."
+    exit 2
+}
+
 echo ""
 echo -e "${CYAN}===============================================${NC}"
 echo -e "${CYAN} Atlas Intelligence Platform -- Live Test Suite${NC}"
@@ -113,6 +172,54 @@ echo ""
 # ── Sanity ──────────────────────────────────────────────────
 echo -e "${YELLOW}[Sanity]${NC}"
 check "Health check" GET "/api/v1/health"
+
+if [ -z "$VENDOR" ]; then
+    VENDOR=$(discover_json_path "/api/v1/b2b/tenant/signals?limit=1" "signals.0.vendor_name")
+fi
+if [ -z "$COMPARISON_VENDOR" ]; then
+    COMPARISON_VENDOR=$(discover_json_path "/api/v1/b2b/tenant/signals?limit=2" "signals.1.vendor_name")
+fi
+
+if [ -z "$VENDOR" ]; then
+    echo "Unable to discover a tracked vendor. Set ATLAS_VENDOR and rerun."
+    exit 2
+fi
+
+VENDOR_URL=$(urlencode "$VENDOR")
+COMPARISON_VENDOR_URL=""
+if [ -n "$COMPARISON_VENDOR" ]; then
+    COMPARISON_VENDOR_URL=$(urlencode "$COMPARISON_VENDOR")
+fi
+if [ -z "$REVIEW_ID" ]; then
+    REVIEW_ID=$(discover_json_path "/api/v1/b2b/tenant/reviews?limit=1" "reviews.0.id")
+fi
+if [ -z "$SEQUENCE_ID" ]; then
+    SEQUENCE_ID=$(discover_json_path "/api/v1/b2b/campaigns/sequences?limit=1" "sequences.0.id")
+fi
+if [ -z "$REPORT_ID" ]; then
+    REPORT_ID=$(discover_json_path "/api/v1/b2b/tenant/reports?limit=1" "reports.0.id")
+fi
+if [ -z "$CORRECTION_ID" ]; then
+    CORRECTION_ID=$(discover_json_path "/api/v1/b2b/tenant/corrections?limit=1" "corrections.0.id")
+fi
+
+require_value "review ID" "$REVIEW_ID" "ATLAS_REVIEW_ID"
+require_value "sequence ID" "$SEQUENCE_ID" "ATLAS_SEQUENCE_ID"
+require_value "report ID" "$REPORT_ID" "ATLAS_REPORT_ID"
+echo -e "${CYAN} Using vendor: ${VENDOR}${NC}"
+echo -e "${CYAN} Using review: ${REVIEW_ID}${NC}"
+echo -e "${CYAN} Using sequence: ${SEQUENCE_ID}${NC}"
+echo -e "${CYAN} Using report: ${REPORT_ID}${NC}"
+if [ -n "$CORRECTION_ID" ]; then
+    echo -e "${CYAN} Using correction: ${CORRECTION_ID}${NC}"
+else
+    echo -e "${CYAN} No existing correction found; correction detail lookup will be skipped${NC}"
+fi
+if [ -n "$COMPARISON_VENDOR" ]; then
+    echo -e "${CYAN} Using comparison vendor: ${COMPARISON_VENDOR}${NC}"
+else
+    echo -e "${CYAN} No second tracked vendor found; cross-vendor checks will be skipped${NC}"
+fi
 
 # ════════════════════════════════════════════════════════════
 # PHASE 0: Current-State Hardening
@@ -144,13 +251,17 @@ check "Operational overview" GET "/api/v1/b2b/tenant/operational-overview"
 echo ""
 echo -e "${YELLOW}[Phase 2] Entity Tables / Confidence Scoring${NC}"
 
-check "Vendor pain points" GET "/api/v1/b2b/tenant/vendor-pain-points?vendor_name=${VENDOR}"
-check "Vendor pain points (min_confidence)" GET "/api/v1/b2b/tenant/vendor-pain-points?vendor_name=${VENDOR}&min_confidence=0.5"
-check "Vendor use cases" GET "/api/v1/b2b/tenant/vendor-use-cases?vendor_name=${VENDOR}"
-check "Vendor integrations" GET "/api/v1/b2b/tenant/vendor-integrations?vendor_name=${VENDOR}"
-check "Vendor buyer profiles" GET "/api/v1/b2b/tenant/vendor-buyer-profiles?vendor_name=${VENDOR}"
+check "Vendor pain points" GET "/api/v1/b2b/tenant/vendor-pain-points?vendor_name=${VENDOR_URL}"
+check "Vendor pain points (min_confidence)" GET "/api/v1/b2b/tenant/vendor-pain-points?vendor_name=${VENDOR_URL}&min_confidence=0.5"
+check "Vendor use cases" GET "/api/v1/b2b/tenant/vendor-use-cases?vendor_name=${VENDOR_URL}"
+check "Vendor integrations" GET "/api/v1/b2b/tenant/vendor-integrations?vendor_name=${VENDOR_URL}"
+check "Vendor buyer profiles" GET "/api/v1/b2b/tenant/vendor-buyer-profiles?vendor_name=${VENDOR_URL}"
 check "Vendor buyer profiles (min_confidence)" GET "/api/v1/b2b/tenant/vendor-buyer-profiles?min_confidence=0.3"
-check "Displacement history" GET "/api/v1/b2b/tenant/displacement-history?from_vendor=${VENDOR}&to_vendor=Zendesk"
+if [ -n "$COMPARISON_VENDOR" ]; then
+    check "Displacement history" GET "/api/v1/b2b/tenant/displacement-history?from_vendor=${VENDOR_URL}&to_vendor=${COMPARISON_VENDOR_URL}"
+else
+    echo -e "  ${YELLOW}SKIP${NC} Displacement history (no second tracked vendor found)"
+fi
 
 # ════════════════════════════════════════════════════════════
 # PHASE 3: Historical Memory
@@ -158,15 +269,20 @@ check "Displacement history" GET "/api/v1/b2b/tenant/displacement-history?from_v
 echo ""
 echo -e "${YELLOW}[Phase 3] Snapshots / Change Events / Correlation${NC}"
 
-check "Vendor history" GET "/api/v1/b2b/tenant/vendor-history?vendor_name=${VENDOR}"
+check "Vendor history" GET "/api/v1/b2b/tenant/vendor-history?vendor_name=${VENDOR_URL}"
 check "Change events" GET "/api/v1/b2b/tenant/change-events"
 check "Change events (type filter)" GET "/api/v1/b2b/tenant/change-events?event_type=urgency_spike"
 check "Change events summary" GET "/api/v1/b2b/tenant/change-events/summary"
 check "Concurrent events" GET "/api/v1/b2b/tenant/concurrent-events?days=90&min_vendors=2"
-check "Vendor correlation" GET "/api/v1/b2b/tenant/vendor-correlation?vendor_a=Freshdesk&vendor_b=Zendesk&metric=churn_density"
-check "Vendor correlation (bad metric)" GET "/api/v1/b2b/tenant/vendor-correlation?vendor_a=Freshdesk&vendor_b=Zendesk&metric=invalid" "400"
-check "Product profile" GET "/api/v1/b2b/tenant/product-profile?vendor_name=${VENDOR}"
-check "Product profile history" GET "/api/v1/b2b/tenant/product-profile-history?vendor_name=${VENDOR}"
+if [ -n "$COMPARISON_VENDOR" ]; then
+    check "Vendor correlation" GET "/api/v1/b2b/tenant/vendor-correlation?vendor_a=${VENDOR_URL}&vendor_b=${COMPARISON_VENDOR_URL}&metric=churn_density"
+    check "Vendor correlation (bad metric)" GET "/api/v1/b2b/tenant/vendor-correlation?vendor_a=${VENDOR_URL}&vendor_b=${COMPARISON_VENDOR_URL}&metric=invalid" "400"
+else
+    echo -e "  ${YELLOW}SKIP${NC} Vendor correlation (no second tracked vendor found)"
+    echo -e "  ${YELLOW}SKIP${NC} Vendor correlation (bad metric) (no second tracked vendor found)"
+fi
+check "Product profile" GET "/api/v1/b2b/tenant/product-profile?vendor_name=${VENDOR_URL}"
+check "Product profile history" GET "/api/v1/b2b/tenant/product-profile-history?vendor_name=${VENDOR_URL}"
 
 # ════════════════════════════════════════════════════════════
 # PHASE 4: Action Feedback Loop
@@ -191,7 +307,7 @@ check "Signal effectiveness (bad group)" GET "/api/v1/b2b/tenant/signal-effectiv
 
 # Outcome distribution
 check "Outcome distribution" GET "/api/v1/b2b/tenant/outcome-distribution"
-check "Outcome distribution (vendor)" GET "/api/v1/b2b/tenant/outcome-distribution?vendor_name=${VENDOR}"
+check "Outcome distribution (vendor)" GET "/api/v1/b2b/tenant/outcome-distribution?vendor_name=${VENDOR_URL}"
 
 # Signal-to-outcome attribution
 check "Signal-to-outcome" GET "/api/v1/b2b/tenant/signal-to-outcome?group_by=buying_stage"
@@ -250,7 +366,11 @@ check "List corrections (corrected_by)" GET "/api/v1/b2b/tenant/corrections?corr
 check "List corrections (date range)" GET "/api/v1/b2b/tenant/corrections?start_date=2026-01-01&end_date=2026-12-31"
 check "Correction stats" GET "/api/v1/b2b/tenant/corrections/stats"
 check "Correction stats (7d)" GET "/api/v1/b2b/tenant/corrections/stats?days=7"
-check "Get correction" GET "/api/v1/b2b/tenant/corrections/${CORRECTION_ID}"
+if [ -n "$CORRECTION_ID" ]; then
+    check "Get correction" GET "/api/v1/b2b/tenant/corrections/${CORRECTION_ID}"
+else
+    echo -e "  ${YELLOW}SKIP${NC} Get correction (no existing correction found)"
+fi
 check "Get correction (bad UUID)" GET "/api/v1/b2b/tenant/corrections/not-a-uuid" "400"
 
 # Source correction impact
@@ -344,7 +464,7 @@ check "Reviews list" GET "/api/v1/b2b/tenant/reviews?limit=5"
 check "Review detail" GET "/api/v1/b2b/tenant/reviews/${REVIEW_ID}"
 check "Signals list" GET "/api/v1/b2b/tenant/signals"
 check "High-intent companies" GET "/api/v1/b2b/tenant/high-intent"
-check "Vendor detail" GET "/api/v1/b2b/tenant/signals/${VENDOR}"
+check "Vendor detail" GET "/api/v1/b2b/tenant/signals/${VENDOR_URL}"
 
 # ════════════════════════════════════════════════════════════
 # VALIDATION: Bad inputs return proper errors
