@@ -1112,3 +1112,9 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_comparison"]["deltas"]["action_count"] == 1
     assert summary["trend_comparison"]["deltas"]["approvals"] == 1
     assert summary["trend_comparison"]["deltas"]["rebuild_trigger_rate"] == 1.0
+    assert summary["trend_focus"]["status"] == "watch"
+    assert summary["trend_focus"]["focus"] == "effect_rate_down"
+    assert summary["trend_focus"]["metric"] == "company_signal_effect_rate"
+    assert summary["trend_focus"]["direction"] == "down"
+    assert summary["trend_focus"]["recent_value"] == 0.5
+    assert summary["trend_focus"]["prior_value"] == 1.0

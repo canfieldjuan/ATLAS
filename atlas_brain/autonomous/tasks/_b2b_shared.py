@@ -13482,6 +13482,16 @@ async def read_company_signal_review_impact_summary(
                     "avg_rebuild_accounts_per_triggered": 0.0,
                 },
             },
+            "trend_focus": {
+                "status": "no_data",
+                "focus": None,
+                "metric": None,
+                "direction": None,
+                "delta": 0.0,
+                "recent_value": 0.0,
+                "prior_value": 0.0,
+                "rationale": None,
+            },
         }
 
     where_clause = " AND ".join(conditions)
@@ -14127,9 +14137,95 @@ async def read_company_signal_review_impact_summary(
             "deltas": deltas,
         }
 
+    def _build_trend_focus(comparison: Mapping[str, Any]) -> dict[str, Any]:
+        default = {
+            "status": "no_data",
+            "focus": None,
+            "metric": None,
+            "direction": None,
+            "delta": 0.0,
+            "recent_value": 0.0,
+            "prior_value": 0.0,
+            "rationale": None,
+        }
+        recent = comparison.get("recent") if isinstance(comparison, Mapping) else None
+        prior = comparison.get("prior") if isinstance(comparison, Mapping) else None
+        deltas = comparison.get("deltas") if isinstance(comparison, Mapping) else None
+        if not isinstance(recent, Mapping) or not isinstance(prior, Mapping) or not isinstance(deltas, Mapping):
+            return default
+        if not comparison.get("anchor_day"):
+            return default
+
+        def _focus(*, status: str, focus: str, metric: str, direction: str, rationale: str) -> dict[str, Any]:
+            return {
+                "status": status,
+                "focus": focus,
+                "metric": metric,
+                "direction": direction,
+                "delta": float(deltas.get(metric) or 0.0),
+                "recent_value": float(recent.get(metric) or 0.0),
+                "prior_value": float(prior.get(metric) or 0.0),
+                "rationale": rationale,
+            }
+
+        if float(deltas.get("rebuild_blocked") or 0.0) > 0 and float(recent.get("rebuild_requests") or 0.0) > 0:
+            return _focus(
+                status="watch",
+                focus="rebuild_blocks_up",
+                metric="rebuild_blocked",
+                direction="up",
+                rationale="More requested rebuilds are blocking in the recent window than in the prior window.",
+            )
+        if float(deltas.get("rebuild_trigger_rate") or 0.0) < 0 and float(recent.get("rebuild_requests") or 0.0) > 0:
+            return _focus(
+                status="watch",
+                focus="rebuild_trigger_rate_down",
+                metric="rebuild_trigger_rate",
+                direction="down",
+                rationale="Requested rebuilds are converting to triggered rebuilds less often in the recent window.",
+            )
+        if float(deltas.get("company_signal_effect_rate") or 0.0) < 0 and float(recent.get("action_count") or 0.0) > 0:
+            return _focus(
+                status="watch",
+                focus="effect_rate_down",
+                metric="company_signal_effect_rate",
+                direction="down",
+                rationale="Review actions are producing fewer downstream company-signal effects per action than in the prior window.",
+            )
+        if float(deltas.get("approvals") or 0.0) < 0:
+            return _focus(
+                status="watch",
+                focus="approval_volume_down",
+                metric="approvals",
+                direction="down",
+                rationale="Fewer approvals landed in the recent window than in the prior window.",
+            )
+        if float(deltas.get("company_signal_effect_rate") or 0.0) > 0 and float(recent.get("action_count") or 0.0) > 0:
+            return _focus(
+                status="improving",
+                focus="effect_rate_up",
+                metric="company_signal_effect_rate",
+                direction="up",
+                rationale="Review actions are converting into downstream company-signal effects more efficiently than in the prior window.",
+            )
+        if float(deltas.get("approvals") or 0.0) > 0:
+            return _focus(
+                status="improving",
+                focus="approval_volume_up",
+                metric="approvals",
+                direction="up",
+                rationale="More approvals landed in the recent window than in the prior window.",
+            )
+        return {
+            **default,
+            "status": "stable",
+            "rationale": "Recent review impact is broadly flat relative to the prior window.",
+        }
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     daily_trends = [_with_rebuild_metrics(_with_effect_metrics(row)) for row in daily_trend_rows]
     trend_comparison = _build_trend_comparison(daily_trends)
+    trend_focus = _build_trend_focus(trend_comparison)
     return {
         "totals": totals_payload,
         "review_scope": review_scope,
@@ -14145,6 +14241,7 @@ async def read_company_signal_review_impact_summary(
         "rebuild_reasons": [_with_rebuild_metrics(row) for row in rebuild_reason_rows],
         "daily_trends": daily_trends,
         "trend_comparison": trend_comparison,
+        "trend_focus": trend_focus,
     }
 
 
