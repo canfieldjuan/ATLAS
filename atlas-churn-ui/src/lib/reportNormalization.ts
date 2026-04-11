@@ -99,6 +99,9 @@ export function normalizeUnknown(value: unknown, key = ''): unknown {
   }
 
   if (Array.isArray(value)) {
+    if (LIST_STRING_KEYS.has(key) && value.every((item) => typeof item === 'string')) {
+      return uniqueStrings(value.map((item) => String(item)))
+    }
     const normalized = value.map((item) => normalizeUnknown(item, key))
     if (key === 'key_insights') return normalizeInsights(normalized)
     return normalized
