@@ -12164,7 +12164,8 @@ async def read_company_signal_candidate_group_summary(
                  END,
                  pending_group_count DESC,
                  pending_review_count DESC
-        """
+        """,
+        *params,
     )
     pending_sla_reason_rows = await pool.fetch(
         f"""

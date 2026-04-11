@@ -547,6 +547,9 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     pending_sla_band_sql = pool.fetch.call_args_list[6][0][0]
     pending_sla_reason_sql = pool.fetch.call_args_list[7][0][0]
     oldest_pending_sql = pool.fetch.call_args_list[8][0][0]
+    pending_sla_band_args = pool.fetch.call_args_list[6][0][1:]
+    pending_sla_reason_args = pool.fetch.call_args_list[7][0][1:]
+    oldest_pending_args = pool.fetch.call_args_list[8][0][1:]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -578,6 +581,10 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "sla_days" in pending_sla_reason_sql
     assert "overdue_group_count" in pending_sla_reason_sql
     assert "GROUP BY 1, 2" in pending_sla_reason_sql
+    assert pending_sla_band_args
+    assert pending_sla_band_args == oldest_pending_args
+    assert pending_sla_reason_args[:-1] == pending_sla_band_args
+    assert pending_sla_reason_args[-1] == 5
     assert "pending_age_days" in oldest_pending_sql
     assert "WHERE review_status = 'pending'" in oldest_pending_sql
     assert summary["totals"]["total_groups"] == 12
