@@ -44,6 +44,14 @@ export function buildLoginRedirectPath(target?: string | null, product?: string 
   return `/login?${params.toString()}`
 }
 
+export function buildSignupRedirectPath(target?: string | null, product?: string | null): string {
+  const redirectTarget = normalizeRedirectTarget(target)
+  const params = new URLSearchParams()
+  params.set('redirect_to', redirectTarget)
+  params.set('product', product?.trim() || inferRedirectProduct(redirectTarget))
+  return `/signup?${params.toString()}`
+}
+
 export function buildCurrentRedirectTarget(locationLike: Pick<Location, 'pathname' | 'search' | 'hash'>): string {
   return normalizeRedirectTarget(`${locationLike.pathname}${locationLike.search}${locationLike.hash}`)
 }

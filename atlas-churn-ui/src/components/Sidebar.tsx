@@ -93,6 +93,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       {/* Backdrop (mobile) */}
       {open && (
         <div
+          data-testid="sidebar-backdrop"
           className="fixed inset-0 bg-black/50 z-20 lg:hidden"
           onClick={onClose}
         />
@@ -113,6 +114,7 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
           </div>
           <button
             onClick={onClose}
+            aria-label="Close navigation"
             className="lg:hidden text-slate-400 hover:text-white"
           >
             <X className="h-5 w-5" />

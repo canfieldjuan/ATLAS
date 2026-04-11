@@ -1,19 +1,14 @@
 import { Link, useLocation } from 'react-router-dom'
 import AtlasRobotLogo from './AtlasRobotLogo'
+import { buildLoginRedirectPath, buildSignupRedirectPath } from '../auth/redirects'
 
 const NAV_LINKS = [
   { label: 'Blog', to: '/blog' },
   { label: 'Methodology', to: '/methodology' },
 ]
 
-const DEFAULT_LOGIN_TO = `/login?${new URLSearchParams({
-  redirect_to: '/watchlists',
-  product: 'b2b_retention',
-}).toString()}`
-const DEFAULT_SIGNUP_TO = `/signup?${new URLSearchParams({
-  product: 'b2b_retention',
-  redirect_to: '/watchlists',
-}).toString()}`
+const DEFAULT_LOGIN_TO = buildLoginRedirectPath('/watchlists', 'b2b_retention')
+const DEFAULT_SIGNUP_TO = buildSignupRedirectPath('/watchlists', 'b2b_retention')
 
 type Props = {
   children: React.ReactNode

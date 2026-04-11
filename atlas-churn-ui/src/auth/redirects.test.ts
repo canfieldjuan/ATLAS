@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildCurrentRedirectTarget,
   buildLoginRedirectPath,
+  buildSignupRedirectPath,
   inferRedirectProduct,
   normalizeRedirectTarget,
 } from './redirects'
@@ -29,6 +30,9 @@ describe('auth redirects', () => {
   it('builds a login path with encoded redirect_to', () => {
     expect(buildLoginRedirectPath('/reports?vendor=Zendesk')).toBe(
       '/login?redirect_to=%2Freports%3Fvendor%3DZendesk&product=b2b_retention',
+    )
+    expect(buildSignupRedirectPath('/reports?vendor=Zendesk')).toBe(
+      '/signup?redirect_to=%2Freports%3Fvendor%3DZendesk&product=b2b_retention',
     )
   })
 
