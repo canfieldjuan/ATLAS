@@ -68,6 +68,12 @@ function evidenceVendorPath(searchParams: URLSearchParams, vendorName: string) {
   return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
 }
 
+function reviewDetailPath(searchParams: URLSearchParams, reviewId: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', evidenceExplorerPath(searchParams))
+  return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
+}
+
 function evidenceWatchlistsPath(searchParams: URLSearchParams, vendorName: string, viewId?: string | null) {
   const params = new URLSearchParams()
   if (viewId) params.set('view', viewId)
@@ -712,57 +718,72 @@ export default function EvidenceExplorer() {
                   <>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                       {witnesses.map(w => (
-                        <button
+                        <div
                           key={`${w.witness_id}-${w.as_of_date}`}
-                          onClick={() => openDrawer(w)}
                           className={clsx(
-                            'text-left bg-slate-800/50 rounded-lg p-4 border border-slate-700/40',
+                            'bg-slate-800/50 rounded-lg border border-slate-700/40',
                             'hover:border-cyan-500/40 hover:bg-slate-800/70 transition-colors',
                             'border-l-2',
                             WITNESS_TYPE_COLORS[w.witness_type || ''] || 'border-l-slate-600',
                           )}
                         >
-                          <p className="text-sm text-slate-200 line-clamp-3 italic mb-3">
-                            &ldquo;{w.excerpt_text}&rdquo;
-                          </p>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <SourceBadge source={w.source || 'unknown'} />
-                            {w.reviewer_company && (
-                              <span className="text-xs text-slate-400 truncate max-w-[120px]">{w.reviewer_company}</span>
-                            )}
-                            {w.pain_category && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-300">{w.pain_category}</span>
-                            )}
-                          </div>
-                          {w.salience_score != null && (
-                            <div className="mt-2.5 flex items-center gap-2">
-                              <div className="flex-1 bg-slate-700/50 rounded-full h-1">
-                                <div
-                                  className="h-1 rounded-full bg-cyan-500/70"
-                                  style={{ width: `${Math.min(w.salience_score * 10, 100)}%` }}
-                                />
-                              </div>
-                              <span className="text-xs text-slate-500 font-mono w-8 text-right">
-                                {w.salience_score.toFixed(1)}
-                              </span>
-                            </div>
-                          )}
-                          {w.signal_tags && Array.isArray(w.signal_tags) && w.signal_tags.length > 0 && (
-                            <div className="flex gap-1 mt-2 flex-wrap">
-                              {(Array.isArray(w.signal_tags) ? w.signal_tags : []).slice(0, 3).map((tag, i) => (
-                                <span key={i} className={clsx(
-                                  'text-xs px-1.5 py-0.5 rounded',
-                                  SIGNAL_COLORS[tag] || 'bg-slate-700/50 text-slate-400',
-                                )}>
-                                  {tag.replace(/_/g, ' ')}
-                                </span>
-                              ))}
-                              {(Array.isArray(w.signal_tags) ? w.signal_tags : []).length > 3 && (
-                                <span className="text-xs text-slate-500">+{(Array.isArray(w.signal_tags) ? w.signal_tags : []).length - 3}</span>
+                          <button
+                            onClick={() => openDrawer(w)}
+                            className="w-full text-left p-4"
+                          >
+                            <p className="text-sm text-slate-200 line-clamp-3 italic mb-3">
+                              &ldquo;{w.excerpt_text}&rdquo;
+                            </p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <SourceBadge source={w.source || 'unknown'} />
+                              {w.reviewer_company && (
+                                <span className="text-xs text-slate-400 truncate max-w-[120px]">{w.reviewer_company}</span>
+                              )}
+                              {w.pain_category && (
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-300">{w.pain_category}</span>
                               )}
                             </div>
-                          )}
-                        </button>
+                            {w.salience_score != null && (
+                              <div className="mt-2.5 flex items-center gap-2">
+                                <div className="flex-1 bg-slate-700/50 rounded-full h-1">
+                                  <div
+                                    className="h-1 rounded-full bg-cyan-500/70"
+                                    style={{ width: `${Math.min(w.salience_score * 10, 100)}%` }}
+                                  />
+                                </div>
+                                <span className="text-xs text-slate-500 font-mono w-8 text-right">
+                                  {w.salience_score.toFixed(1)}
+                                </span>
+                              </div>
+                            )}
+                            {w.signal_tags && Array.isArray(w.signal_tags) && w.signal_tags.length > 0 && (
+                              <div className="flex gap-1 mt-2 flex-wrap">
+                                {(Array.isArray(w.signal_tags) ? w.signal_tags : []).slice(0, 3).map((tag, i) => (
+                                  <span key={i} className={clsx(
+                                    'text-xs px-1.5 py-0.5 rounded',
+                                    SIGNAL_COLORS[tag] || 'bg-slate-700/50 text-slate-400',
+                                  )}>
+                                    {tag.replace(/_/g, ' ')}
+                                  </span>
+                                ))}
+                                {(Array.isArray(w.signal_tags) ? w.signal_tags : []).length > 3 && (
+                                  <span className="text-xs text-slate-500">+{(Array.isArray(w.signal_tags) ? w.signal_tags : []).length - 3}</span>
+                                )}
+                              </div>
+                            )}
+                          </button>
+                          {w.review_id ? (
+                            <div className="border-t border-slate-700/30 px-4 py-2">
+                              <Link
+                                to={reviewDetailPath(searchParams, w.review_id)}
+                                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                              >
+                                Open review detail
+                                <ExternalLink className="h-3 w-3" />
+                              </Link>
+                            </div>
+                          ) : null}
+                        </div>
                       ))}
                     </div>
 

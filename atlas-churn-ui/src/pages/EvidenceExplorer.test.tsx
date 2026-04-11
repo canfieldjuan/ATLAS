@@ -321,6 +321,20 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('shows a direct review detail shortcut on witness cards', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open review detail' })).toHaveAttribute(
+      'href',
+      '/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit',
+    )
+  })
+
   it('opens review detail from witness drilldown with evidence back_to preserved', async () => {
     const user = userEvent.setup()
 
@@ -334,7 +348,8 @@ describe('EvidenceExplorer', () => {
     await user.click(witnessCard)
 
     expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open review detail' })).toHaveAttribute(
+    const reviewLinks = screen.getAllByRole('link', { name: 'Open review detail' })
+    expect(reviewLinks.at(-1)).toHaveAttribute(
       'href',
       '/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
