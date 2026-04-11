@@ -232,6 +232,30 @@ describe('VendorDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp')
   })
 
+  it('copies a vendor detail link with preserved evidence back_to context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26back_to%3D%252Fwatchlists%253Fview%253Dview-1']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26back_to%3D%252Fwatchlists%253Fview%253Dview-1`,
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+  })
+
+
   it('surfaces the upstream watchlist path when entered from evidence explorer', async () => {
     const user = userEvent.setup()
 

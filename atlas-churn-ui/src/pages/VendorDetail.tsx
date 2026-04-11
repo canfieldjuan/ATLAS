@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Check, Copy, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   BarChart,
@@ -142,6 +142,14 @@ function emptyVendorComparison(vendorName: string): VendorPeriodComparisonRespon
 
 function vendorDetailPath(vendorName: string): string {
   return `/vendors/${encodeURIComponent(vendorName)}`
+}
+
+function vendorDetailSharePath(vendorName: string, backTo: string | null): string {
+  const path = vendorDetailPath(vendorName)
+  if (!backTo || backTo === '/vendors') return path
+  const params = new URLSearchParams()
+  params.set('back_to', backTo)
+  return `${path}?${params.toString()}`
 }
 
 function normalizeBackTo(value: string | null | undefined): string | null {
@@ -291,6 +299,7 @@ export default function VendorDetail() {
   const [selectedSlowBurnMetric, setSelectedSlowBurnMetric] = useState<
     'support_sentiment' | 'legacy_support_score' | 'new_feature_velocity' | 'employee_growth_rate'
   >('support_sentiment')
+  const [copied, setCopied] = useState(false)
 
   const { data, loading, error, refresh, refreshing } = useApiData<VendorData>(
     async () => {
@@ -340,12 +349,19 @@ export default function VendorDetail() {
     : null
   const queryBackTo = normalizeBackTo(searchParams.get('back_to'))
   const backTo = stateBackTo ?? queryBackTo ?? '/vendors'
+  const vendorSharePath = vendorDetailSharePath(profile.vendor_name, backTo)
   const backLabel = backToLabel(backTo)
   const watchlistsReturnPath = upstreamWatchlistsPath(backTo)
   const watchlistsReturnLabel = upstreamWatchlistsLabel(watchlistsReturnPath)
   const evidenceExplorerPath = upstreamEvidencePath(backTo, profile.vendor_name) ?? vendorEvidenceExplorerPath(profile.vendor_name)
   const reportsPath = vendorReportsPath(profile.vendor_name)
   const opportunitiesPath = vendorOpportunitiesPath(profile.vendor_name)
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(`${window.location.origin}${vendorSharePath}`).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
   const recentReports = data?.recentReports ?? []
   const recentReportsCard = (
     <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
@@ -704,6 +720,14 @@ export default function VendorDetail() {
               <p className="text-3xl font-bold text-white">{signal.avg_urgency_score.toFixed(1)}</p>
             </div>
           )}
+          <button
+            onClick={handleCopyLink}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+            title="Copy link"
+          >
+            {copied ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
+            {copied ? 'Copied' : 'Link'}
+          </button>
           <button
             onClick={refresh}
             disabled={refreshing}
