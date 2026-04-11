@@ -665,6 +665,11 @@ export default function Watchlists() {
     ].filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [accounts, selectedSourceFilter],
   )
+  const currentEvidenceVendor = useMemo(() => {
+    if (selectedVendorFilters.length === 1) return selectedVendorFilters[0]
+    if (selectedVendorFilter) return selectedVendorFilter
+    return ''
+  }, [selectedVendorFilter, selectedVendorFilters])
   const currentViewFilters = useMemo(
     () => ({
       vendor_name: selectedVendorFilter,
@@ -683,6 +688,7 @@ export default function Watchlists() {
     }),
     [
       selectedVendorFilter,
+      selectedVendorFilters,
       selectedCategoryFilter,
       selectedSourceFilter,
       selectedMinUrgency,
@@ -1797,6 +1803,15 @@ export default function Watchlists() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {currentEvidenceVendor && (
+            <Link
+              to={watchlistEvidenceExplorerPath(searchParams, currentEvidenceVendor)}
+              className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-violet-300 transition-colors hover:bg-violet-500/10 hover:text-violet-200"
+            >
+              <Fingerprint className="h-4 w-4" />
+              Open Current View in Evidence Explorer
+            </Link>
+          )}
           <button
             onClick={() => downloadCsv('/export/signals')}
             className="inline-flex items-center gap-2 self-start rounded-lg px-3 py-1.5 text-sm text-slate-400 transition-colors hover:bg-slate-800/50 hover:text-white"

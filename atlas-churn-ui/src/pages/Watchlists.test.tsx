@@ -783,6 +783,48 @@ describe('Watchlists', () => {
     )
   })
 
+  it('shows a header evidence explorer shortcut for single-vendor saved views', async () => {
+    api.listWatchlistViews.mockResolvedValue({
+      views: [
+        {
+          id: 'view-1',
+          name: 'Fresh named Intercom',
+          vendor_names: ['Intercom'],
+          vendor_name: 'Intercom',
+          category: 'Helpdesk',
+          source: 'reddit',
+          min_urgency: 8,
+          include_stale: false,
+          named_accounts_only: true,
+          changed_wedges_only: true,
+          vendor_alert_threshold: 7.5,
+          account_alert_threshold: 8.5,
+          stale_days_threshold: 1,
+          alert_email_enabled: true,
+          alert_delivery_frequency: 'daily',
+          next_alert_delivery_at: null,
+          last_alert_delivery_at: null,
+          last_alert_delivery_status: null,
+          last_alert_delivery_summary: null,
+          created_at: null,
+          updated_at: null,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: 'Open Current View in Evidence Explorer' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Intercom&tab=witnesses&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
   it('copies a deep link for a saved view', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
