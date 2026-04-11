@@ -80,15 +80,6 @@ def _row_to_dict(row) -> dict:
             d[k] = v.isoformat()
         elif isinstance(v, _uuid.UUID):
             d[k] = str(v)
-    # Ensure JSONB array fields are always lists
-    for field in ("signal_tags",):
-        val = d.get(field)
-        if val is not None and not isinstance(val, list):
-            try:
-                parsed = json.loads(val) if isinstance(val, str) else []
-                d[field] = parsed if isinstance(parsed, list) else []
-            except Exception:
-                d[field] = []
     return d
 
 

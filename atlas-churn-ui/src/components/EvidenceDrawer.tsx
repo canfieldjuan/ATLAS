@@ -400,7 +400,7 @@ export default function EvidenceDrawer({
             </div>
 
             {/* Signal tags */}
-            {witness.signal_tags && witness.signal_tags.length > 0 && (
+            {Array.isArray(witness.signal_tags) && witness.signal_tags.length > 0 && (
               <div>
                 <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                   <Tag className="w-3 h-3" /> Signal Tags
