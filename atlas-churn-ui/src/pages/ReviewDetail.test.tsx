@@ -142,6 +142,22 @@ describe('ReviewDetail', () => {
     })
   })
 
+  it('preserves witness drilldown state on the evidence shortcut when entered from evidence explorer', async () => {
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26witness_id%3Dwitness%253Azendesk%253A1%26source%3Dreddit']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fevidence%253Fvendor%253DZendesk%2526tab%253Dwitnesses%2526witness_id%253Dwitness%25253Azendesk%25253A1%2526source%253Dreddit',
+    )
+  })
+
   it('shows vendor workspace, evidence, opportunities, and reports shortcuts for the review vendor', async () => {
     render(
       <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1']}>

@@ -35,10 +35,25 @@ function vendorDetailPath(vendorName: string, backTo?: string) {
   return `${base}?${next.toString()}`
 }
 
-function evidencePath(vendorName: string, backTo: string) {
+function evidencePath(vendorName: string, backTo: string, upstreamEvidencePath?: string | null) {
   const next = new URLSearchParams()
   next.set('vendor', vendorName)
   next.set('tab', 'witnesses')
+
+  if (upstreamEvidencePath?.startsWith('/evidence')) {
+    try {
+      const url = new URL(upstreamEvidencePath, window.location.origin)
+      const upstreamTab = url.searchParams.get('tab')?.trim()
+      const witnessId = url.searchParams.get('witness_id')?.trim()
+      const source = url.searchParams.get('source')?.trim()
+      if (upstreamTab) next.set('tab', upstreamTab)
+      if (witnessId) next.set('witness_id', witnessId)
+      if (source) next.set('source', source)
+    } catch {
+      // Fall through to the generic evidence path.
+    }
+  }
+
   next.set('back_to', backTo)
   return `/evidence?${next.toString()}`
 }
@@ -117,6 +132,7 @@ export default function ReviewDetail() {
     ) ? value : null
   })()
   const backToReviews = stateBackTo ?? queryBackTo ?? '/reviews'
+  const upstreamEvidencePath = backToReviews.startsWith('/evidence') ? backToReviews : null
   const reviewDetailBackPath = (() => {
     const next = new URLSearchParams()
     if (backToReviews !== '/reviews') {
@@ -187,7 +203,7 @@ export default function ReviewDetail() {
               Vendor workspace
             </Link>
             <Link
-              to={evidencePath(review.vendor_name, reviewDetailBackPath)}
+              to={evidencePath(review.vendor_name, reviewDetailBackPath, upstreamEvidencePath)}
               className="text-violet-300 hover:text-violet-200 transition-colors"
             >
               Evidence
