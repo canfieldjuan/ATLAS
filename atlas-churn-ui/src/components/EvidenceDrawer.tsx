@@ -4,7 +4,6 @@ import {
   Star, Tag, Fingerprint, FileText, ChevronRight, Loader2,
   Pin, Flag, EyeOff, RotateCcw,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { fetchWitness, fetchAnnotations, setAnnotation, removeAnnotations } from '../api/client'
 import type { EvidenceWitnessDetail, EvidenceAnnotation } from '../api/client'
@@ -388,12 +387,12 @@ export default function EvidenceDrawer({
                 <h3 className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
                   <FileText className="w-3 h-3" /> Source Review
                   {vendorName && (
-                    <Link
-                      to={`/reports?vendor_filter=${encodeURIComponent(vendorName)}`}
+                    <a
+                      href={`/reports?vendor_filter=${encodeURIComponent(vendorName)}`}
                       className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
                     >
                       View reports <ExternalLink className="h-3 w-3" />
-                    </Link>
+                    </a>
                   )}
                   {witness.source_url && (
                     <a href={witness.source_url} target="_blank" rel="noopener noreferrer"
