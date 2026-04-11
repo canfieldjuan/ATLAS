@@ -743,6 +743,7 @@ describe('Reports', () => {
 
     const router = createMemoryRouter(
       [
+        { path: '/vendors/:name', element: <div data-testid="vendor-route">Vendor route</div> },
         { path: '/reports', element: <Reports /> },
         { path: '/reports/:id', element: <ReportDetailRouteProbe /> },
       ],
@@ -816,6 +817,47 @@ describe('Reports', () => {
     )
     expect(screen.getByTestId('report-detail-route')).toHaveTextContent(
       '"backTo":"/reports?report_type=battle_card&vendor_filter=Zendesk"',
+    )
+  })
+
+  it('preserves vendor back_to when opening report detail from a vendor-scoped library view', async () => {
+    function ReportDetailRouteProbe() {
+      const location = useLocation()
+      return (
+        <div data-testid="report-detail-route">
+          {JSON.stringify(location.state)}
+        </div>
+      )
+    }
+
+    const router = createMemoryRouter(
+      [
+        { path: '/reports', element: <Reports /> },
+        { path: '/reports/:id', element: <ReportDetailRouteProbe /> },
+      ],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Fvendors%2FZendesk',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    expect(screen.getByRole('button', { name: 'Back to Vendor' })).toBeInTheDocument()
+
+    const card = await screen.findByTestId('report-card-report-1')
+    fireEvent.click(within(card).getByRole('button', { name: /summary/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('report-detail-route')).toBeInTheDocument()
+    })
+
+    expect(router.state.location.pathname).toBe('/reports/report-1')
+    expect(router.state.location.search).toBe('?back_to=%2Fvendors%2FZendesk')
+    expect(screen.getByTestId('report-detail-route')).toHaveTextContent(
+      '"backTo":"/vendors/Zendesk"',
     )
   })
 

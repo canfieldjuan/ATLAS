@@ -97,14 +97,27 @@ export default function ReportDetail() {
     ?? `${report.report_type.replace(/_/g, ' ')} - ${report.vendor_filter ?? 'all'}`
   const stateBackTo = typeof location.state === 'object' && location.state && 'backTo' in location.state
     && typeof (location.state as { backTo?: unknown }).backTo === 'string'
-    && (location.state as { backTo: string }).backTo.startsWith('/reports')
+    && (
+      (location.state as { backTo: string }).backTo.startsWith('/reports')
+      || (location.state as { backTo: string }).backTo.startsWith('/vendors/')
+      || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
+    )
     ? (location.state as { backTo: string }).backTo
     : null
   const queryBackTo = (() => {
     const value = searchParams.get('back_to')
-    return value && value.startsWith('/reports') ? value : null
+    return value && (
+      value.startsWith('/reports')
+      || value.startsWith('/vendors/')
+      || value.startsWith('/watchlists')
+    ) ? value : null
   })()
   const backToReports = stateBackTo ?? queryBackTo ?? '/reports'
+  const backButtonLabel = backToReports.startsWith('/vendors/')
+    ? 'Back to Vendor'
+    : backToReports.startsWith('/watchlists')
+      ? 'Back to Watchlists'
+      : 'Back to Reports'
   const detailShareUrl = (() => {
     const next = new URLSearchParams()
     if (subModalOpen) {
@@ -148,7 +161,7 @@ export default function ReportDetail() {
           className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to Library
+          {backButtonLabel}
         </button>
         <div className="flex items-center gap-2">
           <ReportActionBar

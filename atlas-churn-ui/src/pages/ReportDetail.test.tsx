@@ -305,6 +305,30 @@ describe('ReportDetail', () => {
     expect(router.state.location.search).toBe('?report_type=battle_card&vendor_filter=Zendesk&freshness_state=stale')
   })
 
+  it('returns to the vendor workspace when back_to targets a vendor detail page', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/vendors/:name', element: <div data-testid="vendor-route">Vendor route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Fvendors%2FZendesk',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Zendesk')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Vendor' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('vendor-route')).toBeInTheDocument()
+    })
+    expect(router.state.location.pathname).toBe('/vendors/Zendesk')
+  })
+
   it('passes a normalized share URL to the detail action bar', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports/:id', element: <ReportDetail /> }],

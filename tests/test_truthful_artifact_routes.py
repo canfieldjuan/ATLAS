@@ -240,6 +240,9 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
                 assert args == ("Salesforce", 30, date.today())
                 return {"as_of_date": date(2026, 4, 1)}
             if "COUNT(*) AS total FROM b2b_vendor_witnesses" in query:
+                assert "FROM b2b_vendor_witnesses w" in query
+                assert "WHERE w.vendor_name = $1" in query
+                assert "WHERE vendor_name = $1" not in query
                 assert args == (
                     "Salesforce",
                     30,
@@ -251,6 +254,9 @@ def test_b2b_evidence_router_uses_b2b_trial_gate(monkeypatch):
 
         async def fetch(self, query, *args):
             if "LIMIT $5 OFFSET $6" in query:
+                assert "FROM b2b_vendor_witnesses w" in query
+                assert "WHERE w.vendor_name = $1" in query
+                assert "WHERE vendor_name = $1" not in query
                 assert args == (
                     "Salesforce",
                     30,
@@ -1559,8 +1565,14 @@ def test_tenant_report_routes_return_truth_fields(monkeypatch):
         "blocker_count": 1,
         "warning_count": 0,
         "unresolved_issue_count": 2,
+        "data_stale": False,
         "quality_status": None,
         "quality_score": None,
+        "report_subscription_id": None,
+        "report_subscription_scope_type": None,
+        "report_subscription_scope_key": None,
+        "report_subscription_scope_label": None,
+        "report_subscription_enabled": None,
     }
     detail_row = {
         "id": report_id,

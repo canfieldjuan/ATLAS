@@ -151,6 +151,13 @@ function reportDetailLocation(reportId: string, backTo: string) {
   }
 }
 
+function reportExternalBackTarget(searchParams: URLSearchParams) {
+  const value = searchParams.get('back_to')
+  if (!value) return null
+  if (value.startsWith('/vendors/') || value.startsWith('/watchlists')) return value
+  return null
+}
+
 const REPORT_BACK_TARGET_KEYS = [
   'report_type',
   'vendor_filter',
@@ -169,6 +176,9 @@ const REPORT_BACK_TARGET_KEYS = [
 ] as const
 
 function buildReportsBackTarget(searchParams: URLSearchParams) {
+  const externalBackTarget = reportExternalBackTarget(searchParams)
+  if (externalBackTarget) return externalBackTarget
+
   const next = new URLSearchParams()
   for (const key of REPORT_BACK_TARGET_KEYS) {
     const value = searchParams.get(key)
@@ -183,6 +193,9 @@ function buildReportSubscriptionLocation(searchParams: URLSearchParams, report: 
   const next = new URLSearchParams(
     backTarget.startsWith('/reports?') ? backTarget.slice('/reports?'.length) : '',
   )
+  if (!backTarget.startsWith('/reports')) {
+    next.set('back_to', backTarget)
+  }
   next.set('report_subscription', report.id)
   next.set('report_focus_type', report.report_type)
   if (report.vendor_filter) next.set('report_focus_vendor', report.vendor_filter)
@@ -258,6 +271,11 @@ export default function Reports() {
   const effectiveTypeFilter = typeFilter || (requestedReportSubscriptionId ? requestedReportFocusType : '')
   const effectiveVendorFilter = activeVendorFilter || (requestedReportSubscriptionId ? requestedReportFocusVendor : '')
   const reportsBackTarget = useMemo(() => buildReportsBackTarget(searchParams), [searchParams])
+  const backButtonLabel = reportsBackTarget.startsWith('/vendors/')
+    ? 'Back to Vendor'
+    : reportsBackTarget.startsWith('/watchlists')
+      ? 'Back to Watchlists'
+      : 'Back to Library'
 
   useEffect(() => {
     const composer = searchParams.get('composer')
@@ -735,7 +753,18 @@ export default function Reports() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-white">Intelligence Library</h1>
+          <div className="flex items-center gap-3">
+            {reportsBackTarget !== '/reports' && (
+              <button
+                onClick={() => navigate(reportsBackTarget)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                {backButtonLabel}
+              </button>
+            )}
+            <h1 className="text-2xl font-bold text-white">Intelligence Library</h1>
+          </div>
           <div className="flex items-center gap-2">
             <Link
               to="/briefing-review"

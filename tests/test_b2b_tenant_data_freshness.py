@@ -2081,3 +2081,71 @@ async def test_accounts_in_motion_feed_filters_by_vendor_category_source_and_sta
     assert result["accounts"][0]["company"] == "Acme Corp"
     assert result["accounts"][0]["watch_vendor"] == "Zendesk"
     assert helper.await_count > 0
+
+
+@pytest.mark.asyncio
+async def test_get_vendor_detail_interpolates_canonical_review_predicate(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import _b2b_shared as shared
+
+    account_id = uuid4()
+    captured_fetchrow_queries: list[str] = []
+    captured_fetch_queries: list[str] = []
+
+    async def fetchval(query, *args):
+        assert "SELECT 1 FROM tracked_vendors" in query
+        assert args == (account_id, "Salesforce")
+        return 1
+
+    async def fetchrow(query, *args):
+        captured_fetchrow_queries.append(query)
+        if "COUNT(*) AS total_reviews" in query:
+            return {"total_reviews": 12, "enriched": 9}
+        return None
+
+    async def fetch(query, *args):
+        captured_fetch_queries.append(query)
+        if "GROUP BY enrichment->>'pain_category'" in query:
+            return [{"pain": "support", "cnt": 4}]
+        return []
+
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchval=AsyncMock(side_effect=fetchval),
+        fetchrow=AsyncMock(side_effect=fetchrow),
+        fetch=AsyncMock(side_effect=fetch),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention", role="member", is_admin=False)
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(shared, "read_vendor_signal_detail", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        shared,
+        "read_high_intent_companies",
+        AsyncMock(
+            return_value=[
+                {
+                    "company": "Acme Corp",
+                    "urgency": 8.7,
+                    "pain": "support",
+                    "title": "VP IT",
+                    "company_size": "201-500",
+                    "industry": "SaaS",
+                }
+            ]
+        ),
+    )
+
+    result = await mod.get_vendor_detail("Salesforce", user=user)
+
+    assert result["vendor_name"] == "Salesforce"
+    assert result["churn_signal"] is None
+    assert result["review_counts"] == {"total": 12, "enriched": 9}
+    assert result["pain_distribution"] == [{"pain_category": "support", "count": 4}]
+    assert result["high_intent_companies"][0]["company"] == "Acme Corp"
+
+    counts_query = next(query for query in captured_fetchrow_queries if "COUNT(*) AS total_reviews" in query)
+    pain_query = next(query for query in captured_fetch_queries if "GROUP BY enrichment->>'pain_category'" in query)
+    assert "{" not in counts_query and "}" not in counts_query
+    assert "{" not in pain_query and "}" not in pain_query

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Activity,
+  ArrowLeft,
   Telescope,
   Target,
   TrendingUp,
@@ -94,6 +95,53 @@ const WINDOW_OPTIONS = [
 const DISPOSITION_TABS = ['active', 'saved', 'snoozed', 'dismissed', 'all'] as const
 type DispositionTab = (typeof DISPOSITION_TABS)[number]
 
+function resolveBackTarget(rawValue: string | null): string | null {
+  const value = rawValue?.trim() || ''
+  if (!value) return null
+  if (value.startsWith('/vendors/') || value.startsWith('/watchlists')) return value
+  return null
+}
+
+function backButtonLabel(target: string | null): string {
+  if (!target) return 'Back'
+  if (target.startsWith('/vendors/')) return 'Back to Vendor'
+  if (target.startsWith('/watchlists')) return 'Back to Watchlists'
+  return 'Back'
+}
+
+function opportunitiesPath(vendorName: string, backTarget: string | null): string {
+  const params = new URLSearchParams()
+  if (vendorName) params.set('vendor', vendorName)
+  if (backTarget) params.set('back_to', backTarget)
+  const query = params.toString()
+  return query ? `/opportunities?${query}` : '/opportunities'
+}
+
+function evidencePath(vendorName: string, returnPath: string): string {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  params.set('back_to', returnPath)
+  return `/evidence?${params.toString()}`
+}
+
+function reportsPath(vendorName: string, returnPath: string): string {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', returnPath)
+  return `/reports?${params.toString()}`
+}
+
+function reviewDetailPath(reviewId: string, returnPath: string): string {
+  const params = new URLSearchParams()
+  params.set('back_to', returnPath)
+  return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
+}
+
+function vendorDetailPath(vendorName: string): string {
+  return `/vendors/${encodeURIComponent(vendorName)}`
+}
+
 function CollapsibleSection({ title, defaultOpen = false, children }: {
   title: string; defaultOpen?: boolean; children: React.ReactNode
 }) {
@@ -115,6 +163,7 @@ function CollapsibleSection({ title, defaultOpen = false, children }: {
 export default function Opportunities() {
   const [searchParams] = useSearchParams()
   const initialVendor = searchParams.get('vendor') || ''
+  const backTarget = resolveBackTarget(searchParams.get('back_to'))
 
   const { canAccessCampaigns } = usePlanGate()
 
@@ -669,11 +718,25 @@ export default function Opportunities() {
     () => filtered.find((r) => rowKey(r) === expandedId) ?? null,
     [filtered, expandedId],
   )
+  const currentPagePath = useMemo(
+    () => opportunitiesPath(debouncedVendor, backTarget),
+    [debouncedVendor, backTarget],
+  )
 
   if (error) return <PageError error={error} onRetry={refresh} />
 
   return (
     <div className="space-y-6">
+      {backTarget && (
+        <Link
+          to={backTarget}
+          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {backButtonLabel(backTarget)}
+        </Link>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -938,6 +1001,7 @@ export default function Opportunities() {
       {expandedRow && (
         <EvidencePanel
           row={expandedRow}
+          currentPagePath={currentPagePath}
           disposition={dispositionMap.get(rowKey(expandedRow)) ?? null}
           canAccessCampaigns={canAccessCampaigns}
           onClose={() => setExpandedId(null)}
@@ -1204,6 +1268,7 @@ function CampaignQueue({ company, vendor, refreshKey, onAction }: { company: str
 
 function EvidencePanel({
   row,
+  currentPagePath,
   disposition,
   canAccessCampaigns,
   onClose,
@@ -1215,6 +1280,7 @@ function EvidencePanel({
   onCampaignAction,
 }: {
   row: HighIntentCompany
+  currentPagePath: string
   disposition: OpportunityDisposition | null
   canAccessCampaigns: boolean
   onClose: () => void
@@ -1232,6 +1298,10 @@ function EvidencePanel({
   const quotes = Array.isArray(row.quotes)
     ? row.quotes.filter((q) => typeof q === 'string' && q.trim())
     : []
+  const vendorPath = vendorDetailPath(row.vendor)
+  const vendorEvidencePath = evidencePath(row.vendor, currentPagePath)
+  const vendorReportsLibraryPath = reportsPath(row.vendor, currentPagePath)
+  const reviewPath = row.review_id ? reviewDetailPath(row.review_id, currentPagePath) : null
 
   return (
     <div className="bg-slate-900/60 border border-slate-700/50 rounded-xl p-5 space-y-5">
@@ -1271,14 +1341,34 @@ function EvidencePanel({
               {row.source}
             </span>
           )}
-          {row.review_id && (
+          <div className="flex flex-wrap gap-3 pt-1">
             <Link
-              to={`/reviews/${row.review_id}`}
+              to={vendorPath}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
-              View full review <ExternalLink className="h-3 w-3" />
+              View vendor <ExternalLink className="h-3 w-3" />
             </Link>
-          )}
+            <Link
+              to={vendorEvidencePath}
+              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              Validate evidence <ExternalLink className="h-3 w-3" />
+            </Link>
+            <Link
+              to={vendorReportsLibraryPath}
+              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+            >
+              View reports <ExternalLink className="h-3 w-3" />
+            </Link>
+            {reviewPath && (
+              <Link
+                to={reviewPath}
+                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                View full review <ExternalLink className="h-3 w-3" />
+              </Link>
+            )}
+          </div>
         </div>
 
         {/* Column 2: Intent + Competitors */}
@@ -1471,12 +1561,14 @@ function EvidencePanel({
             Restore
           </button>
         )}
-        <Link
-          to="/reviews"
-          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
-        >
-          Browse reviews <ChevronRight className="h-3.5 w-3.5" />
-        </Link>
+        {!reviewPath && (
+          <Link
+            to="/reviews"
+            className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
+          >
+            Browse reviews <ChevronRight className="h-3.5 w-3.5" />
+          </Link>
+        )}
       </div>
     </div>
   )

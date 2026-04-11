@@ -198,4 +198,30 @@ describe('EvidenceExplorer', () => {
 
     expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
   })
+
+  it('keeps the page usable when witness loading fails', async () => {
+    api.fetchWitnesses.mockRejectedValue(new Error('API 500: witness search unavailable'))
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(await screen.findByText('No witnesses found')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Witnesses/i })).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchWitnesses).toHaveBeenCalledWith({
+        vendor_name: 'Zendesk',
+        window_days: 30,
+        pain_category: undefined,
+        source: undefined,
+        witness_type: undefined,
+        limit: 30,
+        offset: 0,
+      })
+    })
+  })
 })

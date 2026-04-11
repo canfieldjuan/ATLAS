@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import UrgencyBadge from '../components/UrgencyBadge'
@@ -29,6 +29,8 @@ function DetailSkeleton() {
 export default function ReviewDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
 
   const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
     () => {
@@ -41,6 +43,20 @@ export default function ReviewDetail() {
   if (error) return <PageError error={error} onRetry={refresh} />
   if (loading) return <DetailSkeleton />
   if (!review) return <PageError error={new Error('Review not found')} />
+
+  const stateBackTo = typeof location.state === 'object' && location.state && 'backTo' in location.state
+    && typeof (location.state as { backTo?: unknown }).backTo === 'string'
+    && (
+      (location.state as { backTo: string }).backTo.startsWith('/reviews')
+      || (location.state as { backTo: string }).backTo.startsWith('/vendors/')
+    )
+    ? (location.state as { backTo: string }).backTo
+    : null
+  const queryBackTo = (() => {
+    const value = searchParams.get('back_to')
+    return value && (value.startsWith('/reviews') || value.startsWith('/vendors/')) ? value : null
+  })()
+  const backToReviews = stateBackTo ?? queryBackTo ?? '/reviews'
 
   const enrichment = review.enrichment as Record<string, unknown> | null
   const urgency = enrichment?.urgency_score as number | undefined
@@ -60,11 +76,11 @@ export default function ReviewDetail() {
     <div className="space-y-6 max-w-4xl">
       <div className="flex items-center justify-between">
         <button
-          onClick={() => navigate('/reviews')}
+          onClick={() => navigate(backToReviews)}
           className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          Back to Reviews
+          {backToReviews.startsWith('/vendors/') ? 'Back to Vendor' : 'Back to Reviews'}
         </button>
         <button
           onClick={refresh}

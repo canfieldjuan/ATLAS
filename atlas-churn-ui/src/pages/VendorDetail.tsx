@@ -20,11 +20,13 @@ import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
 import {
   compareVendorPeriods,
+  fetchReports,
   fetchVendorHistory,
   fetchVendorProfile,
   fetchReviews,
 } from '../api/client'
 import type {
+  Report,
   VendorHistoryResponse,
   VendorPeriodComparisonResponse,
   VendorProfile,
@@ -34,8 +36,10 @@ import type {
 interface VendorData {
   profile: VendorProfile
   reviews: ReviewSummary[]
+  recentReports: Report[]
   history: VendorHistoryResponse
   comparison: VendorPeriodComparisonResponse
+  loadWarnings: string[]
 }
 
 function DetailSkeleton() {
@@ -112,6 +116,94 @@ function humanizeToken(value: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
+function toLoadWarning(section: string, err: unknown): string {
+  const detail = err instanceof Error && err.message.trim()
+    ? ` ${err.message.trim()}`
+    : ''
+  return `${section} is temporarily unavailable.${detail}`
+}
+
+function emptyVendorHistory(vendorName: string): VendorHistoryResponse {
+  return {
+    vendor_name: vendorName,
+    snapshots: [],
+    count: 0,
+  }
+}
+
+function emptyVendorComparison(vendorName: string): VendorPeriodComparisonResponse {
+  return {
+    vendor_name: vendorName,
+    period_a: null,
+    period_b: null,
+    deltas: {},
+  }
+}
+
+function vendorDetailPath(vendorName: string): string {
+  return `/vendors/${encodeURIComponent(vendorName)}`
+}
+
+function vendorEvidenceExplorerPath(vendorName: string): string {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  params.set('back_to', vendorDetailPath(vendorName))
+  return `/evidence?${params.toString()}`
+}
+
+function vendorReportsPath(vendorName: string): string {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', vendorDetailPath(vendorName))
+  return `/reports?${params.toString()}`
+}
+
+function vendorOpportunitiesPath(vendorName: string): string {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', vendorDetailPath(vendorName))
+  return `/opportunities?${params.toString()}`
+}
+
+function vendorReviewDetailPath(reviewId: string, vendorName: string): string {
+  const params = new URLSearchParams()
+  params.set('back_to', vendorDetailPath(vendorName))
+  return `/reviews/${reviewId}?${params.toString()}`
+}
+
+function vendorReportDetailPath(reportId: string, vendorName: string): string {
+  const params = new URLSearchParams()
+  params.set('back_to', vendorDetailPath(vendorName))
+  return `/reports/${encodeURIComponent(reportId)}?${params.toString()}`
+}
+
+function reportTypeLabel(reportType: string): string {
+  return reportType.replace(/_/g, ' ')
+}
+
+function reportStatusLabel(report: Report): string {
+  return report.quality_status
+    || report.freshness_state
+    || report.review_state
+    || report.artifact_state
+    || report.status
+    || 'unknown'
+}
+
+function formatReportTimestamp(report: Report): string {
+  const raw = report.report_date || report.created_at
+  if (!raw) return 'No report date yet'
+  const parsed = new Date(raw)
+  return Number.isNaN(parsed.getTime())
+    ? raw
+    : parsed.toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+}
+
 export default function VendorDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
@@ -123,13 +215,37 @@ export default function VendorDetail() {
   const { data, loading, error, refresh, refreshing } = useApiData<VendorData>(
     async () => {
       if (!name) throw new Error('Missing vendor name')
-      const [profile, revRes, history, comparison] = await Promise.all([
-        fetchVendorProfile(name),
-        fetchReviews({ vendor_name: name, limit: 50, window_days: 365 }),
-        fetchVendorHistory(name, { days: 90, limit: 24 }),
-        compareVendorPeriods(name, { period_a_days_ago: 30, period_b_days_ago: 0 }),
+      const profile = await fetchVendorProfile(name)
+      const [reviewsResult, historyResult, comparisonResult, reportsResult] = await Promise.all([
+        fetchReviews({ vendor_name: name, limit: 50, window_days: 365 })
+          .then((result) => ({ ok: true as const, data: result.reviews }))
+          .catch((err: unknown) => ({ ok: false as const, error: err })),
+        fetchVendorHistory(name, { days: 90, limit: 24 })
+          .then((result) => ({ ok: true as const, data: result }))
+          .catch((err: unknown) => ({ ok: false as const, error: err })),
+        compareVendorPeriods(name, { period_a_days_ago: 30, period_b_days_ago: 0 })
+          .then((result) => ({ ok: true as const, data: result }))
+          .catch((err: unknown) => ({ ok: false as const, error: err })),
+        fetchReports({ vendor_filter: name, limit: 3, include_stale: true })
+          .then((result) => ({ ok: true as const, data: result.reports }))
+          .catch((err: unknown) => ({ ok: false as const, error: err })),
       ])
-      return { profile, reviews: revRes.reviews, history, comparison }
+
+      const loadWarnings: string[] = []
+      const reviews = reviewsResult.ok
+        ? reviewsResult.data
+        : (loadWarnings.push(toLoadWarning('Enriched reviews', reviewsResult.error)), [])
+      const history = historyResult.ok
+        ? historyResult.data
+        : (loadWarnings.push(toLoadWarning('Trend history', historyResult.error)), emptyVendorHistory(name))
+      const comparison = comparisonResult.ok
+        ? comparisonResult.data
+        : (loadWarnings.push(toLoadWarning('Period comparison', comparisonResult.error)), emptyVendorComparison(name))
+      const recentReports = reportsResult.ok
+        ? reportsResult.data
+        : (loadWarnings.push(toLoadWarning('Recent reports', reportsResult.error)), [])
+
+      return { profile, reviews, recentReports, history, comparison, loadWarnings }
     },
     [name],
   )
@@ -139,6 +255,64 @@ export default function VendorDetail() {
 
   const profile = data?.profile
   if (!profile) return <PageError error={new Error('Vendor not found')} />
+  const evidenceExplorerPath = vendorEvidenceExplorerPath(profile.vendor_name)
+  const reportsPath = vendorReportsPath(profile.vendor_name)
+  const opportunitiesPath = vendorOpportunitiesPath(profile.vendor_name)
+  const recentReports = data?.recentReports ?? []
+  const recentReportsCard = (
+    <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 className="text-sm font-medium text-slate-300">Recent Reports</h3>
+          <p className="text-xs text-slate-500 mt-1">
+            Vendor-scoped reports without leaving this workspace.
+          </p>
+        </div>
+        <button
+          onClick={() => navigate(reportsPath)}
+          className="text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+        >
+          View all
+        </button>
+      </div>
+      {recentReports.length > 0 ? (
+        <div className="space-y-2">
+          {recentReports.map((report) => (
+            <button
+              key={report.id}
+              onClick={() => navigate(vendorReportDetailPath(report.id, profile.vendor_name))}
+              className="w-full rounded-lg border border-slate-700/50 bg-slate-800/40 px-3 py-3 text-left hover:border-cyan-500/30 hover:bg-slate-800/70 transition-colors"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm text-white">{reportTypeLabel(report.report_type)}</p>
+                  <p className="mt-1 text-xs text-slate-500">{formatReportTimestamp(report)}</p>
+                </div>
+                <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
+                  {reportStatusLabel(report)}
+                </span>
+              </div>
+              {report.executive_summary && (
+                <p className="mt-2 line-clamp-2 text-xs text-slate-400">
+                  {report.executive_summary}
+                </p>
+              )}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-slate-700/60 px-3 py-4">
+          <p className="text-sm text-slate-400">No recent reports for this vendor yet.</p>
+          <button
+            onClick={() => navigate(reportsPath)}
+            className="mt-2 text-xs text-cyan-300 hover:text-cyan-200 transition-colors"
+          >
+            Open report library
+          </button>
+        </div>
+      )}
+    </div>
+  )
 
   const signal = profile.churn_signal
   const reasoningScope = asRecord(signal?.reasoning_scope_manifest)
@@ -408,6 +582,26 @@ export default function VendorDetail() {
           </p>
         </div>
         <div className="flex items-center gap-4">
+          <div className="hidden sm:flex items-center gap-2">
+            <button
+              onClick={() => navigate(opportunitiesPath)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+            >
+              View Opportunities
+            </button>
+            <button
+              onClick={() => navigate(evidenceExplorerPath)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+            >
+              Validate Evidence
+            </button>
+            <button
+              onClick={() => navigate(reportsPath)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+            >
+              View Reports
+            </button>
+          </div>
           {signal && (
             <div className="text-right">
               <p className="text-xs text-slate-400">Urgency Score</p>
@@ -422,6 +616,27 @@ export default function VendorDetail() {
             <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
           </button>
         </div>
+      </div>
+
+      <div className="flex sm:hidden flex-wrap gap-2">
+        <button
+          onClick={() => navigate(opportunitiesPath)}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+        >
+          View Opportunities
+        </button>
+        <button
+          onClick={() => navigate(evidenceExplorerPath)}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+        >
+          Validate Evidence
+        </button>
+        <button
+          onClick={() => navigate(reportsPath)}
+          className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
+        >
+          View Reports
+        </button>
       </div>
 
       <div className="flex gap-1 border-b border-slate-700/50">
@@ -439,6 +654,17 @@ export default function VendorDetail() {
           </button>
         ))}
       </div>
+
+      {data?.loadWarnings?.length ? (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-sm font-medium text-amber-200">Some vendor data is temporarily unavailable.</p>
+          <ul className="mt-2 space-y-1 text-xs text-amber-100/90">
+            {data.loadWarnings.map((warning, index) => (
+              <li key={`${warning}-${index}`}>{warning}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {tab === 'overview' && signal && (
         <div className="space-y-6">
@@ -760,6 +986,7 @@ export default function VendorDetail() {
                   </div>
                 </div>
               )}
+              {recentReportsCard}
               {(theses.length > 0 || timingWindows.length > 0 || reasoningDeltaItems.length > 0 || coverageLimits.length > 0 || counterevidence.length > 0 || reasoningContractGaps.length > 0) && (
                 <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5">
                   <h3 className="text-sm font-medium text-slate-300 mb-3">Reasoning Highlights</h3>
@@ -1040,12 +1267,14 @@ export default function VendorDetail() {
         </div>
       )}
 
+      {tab === 'overview' && !signal && recentReportsCard}
+
       {tab === 'reviews' && (
         <div className="bg-slate-900/50 border border-slate-700/50 backdrop-blur rounded-xl overflow-hidden">
           <DataTable
             columns={reviewColumns}
             data={data?.reviews ?? []}
-            onRowClick={(r) => navigate(`/reviews/${r.id}`)}
+            onRowClick={(r) => navigate(vendorReviewDetailPath(r.id, profile.vendor_name))}
             emptyMessage="No enriched reviews for this vendor"
           />
         </div>

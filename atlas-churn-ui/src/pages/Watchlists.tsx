@@ -322,6 +322,26 @@ function watchlistPath(searchParams: URLSearchParams) {
   return `/watchlists${query ? `?${query}` : ''}`
 }
 
+function watchlistVendorPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', watchlistPath(searchParams))
+  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
+}
+
+function watchlistOpportunitiesPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', watchlistPath(searchParams))
+  return `/opportunities?${params.toString()}`
+}
+
+function watchlistReportsPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', watchlistPath(searchParams))
+  return `/reports?${params.toString()}`
+}
+
 function accountFocusParams(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
   const next = new URLSearchParams(searchParams)
   const focus = accountFocusFromRow(row)
@@ -1511,12 +1531,28 @@ export default function Watchlists() {
           <button
             onClick={(event) => {
               event.stopPropagation()
-              navigate(`/vendors/${encodeURIComponent(row.vendor_name)}`)
+              navigate(watchlistVendorPath(searchParams, row.vendor_name))
             }}
             className="rounded-md bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
           >
             View
           </button>
+          <Link
+            to={watchlistReportsPath(searchParams, row.vendor_name)}
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Open reports for ${row.vendor_name}`}
+            className="rounded-md bg-violet-500/10 px-2.5 py-1 text-xs font-medium text-violet-300 hover:bg-violet-500/20"
+          >
+            Reports
+          </Link>
+          <Link
+            to={watchlistOpportunitiesPath(searchParams, row.vendor_name)}
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Open opportunities for ${row.vendor_name}`}
+            className="rounded-md bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
+          >
+            Opportunities
+          </Link>
           <button
             onClick={(event) => {
               event.stopPropagation()
@@ -1570,6 +1606,24 @@ export default function Watchlists() {
             <Fingerprint className="h-3 w-3" />
             Evidence Explorer
           </Link>
+          <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
+            <Link
+              to={watchlistReportsPath(searchParams, row.vendor_name)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Open vendor reports for ${row.vendor_name}`}
+              className="text-fuchsia-300 hover:text-fuchsia-200"
+            >
+              Reports
+            </Link>
+            <Link
+              to={watchlistOpportunitiesPath(searchParams, row.vendor_name)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Open vendor opportunities for ${row.vendor_name}`}
+              className="text-amber-300 hover:text-amber-200"
+            >
+              Opportunities
+            </Link>
+          </div>
         </div>
       ),
       sortable: true,
@@ -1749,7 +1803,7 @@ export default function Watchlists() {
               className="rounded-md bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
               onClick={(event) => {
                 event.stopPropagation()
-                navigate(`/vendors/${encodeURIComponent(row.vendor)}`)
+                navigate(watchlistVendorPath(searchParams, row.vendor))
               }}
             >
               View vendor
@@ -1767,8 +1821,9 @@ export default function Watchlists() {
             )}
             {row.company && (
               <Link
-                to={`/opportunities?vendor=${encodeURIComponent(row.vendor)}`}
+                to={watchlistOpportunitiesPath(searchParams, row.vendor)}
                 onClick={(e) => e.stopPropagation()}
+                aria-label={`View opportunities for ${row.vendor}`}
                 className="rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
                 title="View opportunities"
               >
@@ -2345,7 +2400,7 @@ export default function Watchlists() {
             <DataTable
               columns={feedColumns}
               data={filteredFeed}
-              onRowClick={(row) => navigate(`/vendors/${encodeURIComponent(row.vendor_name)}`)}
+              onRowClick={(row) => navigate(watchlistVendorPath(searchParams, row.vendor_name))}
               emptyMessage={hasActiveFeedFilters
                 ? 'No vendor movement matches the current filters.'
                 : 'No watchlist movement yet. Add tracked vendors to start monitoring.'}
@@ -2363,7 +2418,7 @@ export default function Watchlists() {
             <DataTable
               columns={trackedColumns}
               data={trackedVendors}
-              onRowClick={(row) => navigate(`/vendors/${encodeURIComponent(row.vendor_name)}`)}
+              onRowClick={(row) => navigate(watchlistVendorPath(searchParams, row.vendor_name))}
               emptyMessage="No tracked vendors yet."
               emptyAction={{ label: 'Add your first vendor', onClick: () => document.getElementById('watchlist-search')?.focus() }}
               skeletonRows={loading ? 5 : undefined}
@@ -3007,14 +3062,14 @@ export default function Watchlists() {
         item={selectedAccount}
         open={selectedAccount != null}
         onClose={handleCloseSelectedAccount}
-        onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
+        onViewVendor={(vendorName) => navigate(watchlistVendorPath(searchParams, vendorName))}
         onCopyLink={() => void handleCopySelectedAccountLink()}
         evidenceExplorerUrl={selectedAccount
           ? watchlistAccountEvidenceExplorerPath(searchParams, selectedAccount, null, selectedSourceFilter)
           : null}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
-        onViewOpportunity={(item) => navigate(`/opportunities?vendor=${encodeURIComponent(item.vendor)}`)}
+        onViewOpportunity={(item) => navigate(watchlistOpportunitiesPath(searchParams, item.vendor))}
         generating={selectedAccount ? generatingCampaignFor === `${selectedAccount.company}::${selectedAccount.vendor}` : false}
       />
 

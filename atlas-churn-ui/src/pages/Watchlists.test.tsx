@@ -340,7 +340,7 @@ describe('Watchlists', () => {
     expect(screen.queryByText('Anonymous signal cluster')).not.toBeInTheDocument()
 
     await user.click(screen.getByText('Messaging'))
-    expect(mockNavigate).toHaveBeenCalledWith('/vendors/Intercom')
+    expect(mockNavigate).toHaveBeenCalledWith('/vendors/Intercom?back_to=%2Fwatchlists')
 
     mockNavigate.mockClear()
     await user.click(screen.getByText('Acme Corp'))
@@ -353,12 +353,28 @@ describe('Watchlists', () => {
     )
 
     await user.click(screen.getAllByRole('button', { name: 'View vendor' })[0])
-    expect(mockNavigate).toHaveBeenCalledWith('/vendors/Zendesk')
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/vendors/Zendesk?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
 
     mockNavigate.mockClear()
     await user.click(screen.getByRole('button', { name: 'Show 1 cluster' }))
     expect(await screen.findByText('Anonymous signal cluster')).toBeInTheDocument()
     expect(screen.getByText('low confidence')).toBeInTheDocument()
+  })
+
+  it('preserves watchlist context when opening opportunities from an account row', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View opportunities for Zendesk' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
   })
 
   it('renders empty states when no tracked vendors or persisted accounts exist', async () => {
@@ -777,9 +793,36 @@ describe('Watchlists', () => {
       'href',
       '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists',
     )
+    expect(screen.getByRole('link', { name: 'Open vendor reports for Zendesk' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists',
+    )
+    expect(screen.getByRole('link', { name: 'Open vendor opportunities for Zendesk' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Zendesk&back_to=%2Fwatchlists',
+    )
     expect(screen.getByRole('link', { name: 'Open account evidence for Zendesk' })).toHaveAttribute(
       'href',
       '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
+  })
+
+  it('shows direct report and opportunity links for tracked vendors', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Messaging')).toBeInTheDocument()
+
+    expect(screen.getByRole('link', { name: 'Open reports for Intercom' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Intercom&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Open opportunities for Intercom' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Intercom&back_to=%2Fwatchlists%3Fview%3Dview-1',
     )
   })
 
