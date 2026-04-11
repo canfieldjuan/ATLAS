@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Users,
   RefreshCw,
@@ -175,6 +175,51 @@ function ErrorDetailCell({ detail }: { detail: string | null }) {
 // ---------------------------------------------------------------------------
 
 type ProspectsTab = 'prospects' | 'manual_queue' | 'company_overrides'
+
+function prospectsPath(
+  activeTab: ProspectsTab,
+  company: string,
+  status: string,
+  seniority: string,
+) {
+  const next = new URLSearchParams()
+  if (activeTab !== 'prospects') next.set('tab', activeTab)
+  if (company.trim()) next.set('company', company.trim())
+  if (status.trim()) next.set('status', status.trim())
+  if (seniority.trim()) next.set('seniority', seniority.trim())
+  const qs = next.toString()
+  return qs ? `/prospects?${qs}` : '/prospects'
+}
+
+function vendorDetailPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  const qs = next.toString()
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  return `${base}?${qs}`
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
 
 // ---------------------------------------------------------------------------
 // Prospect Detail Drawer
@@ -381,16 +426,20 @@ function ProspectDetailDrawer({
 // ---------------------------------------------------------------------------
 
 export default function ProspectsPage() {
-  const [activeTab, setActiveTab] = useState<ProspectsTab>('prospects')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState<ProspectsTab>(() => {
+    const tab = searchParams.get('tab')
+    return tab === 'manual_queue' || tab === 'company_overrides' ? tab : 'prospects'
+  })
   const [actionResult, setActionResult] = useState<string | null>(null)
   const [isActionError, setIsActionError] = useState(false)
   const [viewingProspect, setViewingProspect] = useState<Prospect | null>(null)
 
   // ---- Prospects tab state ----
-  const [companySearch, setCompanySearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
-  const [seniorityFilter, setSeniorityFilter] = useState('')
+  const [companySearch, setCompanySearch] = useState(() => searchParams.get('company') ?? '')
+  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('company') ?? '')
+  const [statusFilter, setStatusFilter] = useState(() => searchParams.get('status') ?? '')
+  const [seniorityFilter, setSeniorityFilter] = useState(() => searchParams.get('seniority') ?? '')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [enrolling, setEnrolling] = useState<string | null>(null)
 
@@ -407,6 +456,20 @@ export default function ProspectsPage() {
     const t = setTimeout(() => setDebouncedSearch(companySearch), 300)
     return () => clearTimeout(t)
   }, [companySearch])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (activeTab !== 'prospects') next.set('tab', activeTab)
+    else next.delete('tab')
+    if (companySearch.trim()) next.set('company', companySearch.trim())
+    else next.delete('company')
+    if (statusFilter.trim()) next.set('status', statusFilter.trim())
+    else next.delete('status')
+    if (seniorityFilter.trim()) next.set('seniority', seniorityFilter.trim())
+    else next.delete('seniority')
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [activeTab, companySearch, searchParams, seniorityFilter, setSearchParams, statusFilter])
 
   // ---- Manual Queue tab state ----
   const [mqSearch, setMqSearch] = useState('')
@@ -465,6 +528,10 @@ export default function ProspectsPage() {
   const prospects = data?.prospects ?? []
   const queueEntries = mqData?.queue ?? []
   const overrides = coData?.overrides ?? []
+  const currentProspectsPath = useMemo(
+    () => prospectsPath(activeTab, debouncedSearch, statusFilter, seniorityFilter),
+    [activeTab, debouncedSearch, seniorityFilter, statusFilter],
+  )
 
   // Clear selection when data changes
   useEffect(() => {
@@ -830,47 +897,89 @@ export default function ProspectsPage() {
     },
     {
       key: 'actions',
-      header: '',
+      header: 'Actions',
       render: (r) => {
         const isProcessing = enrolling === r.id
+        const vendor = r.churning_from
+        const shortcuts = vendor ? (
+          <div className="flex items-center gap-3 text-xs">
+            <Link
+              to={vendorDetailPath(vendor, currentProspectsPath)}
+              onClick={(e) => e.stopPropagation()}
+              className="text-cyan-400 hover:text-cyan-300"
+            >
+              Vendor
+            </Link>
+            <Link
+              to={evidencePath(vendor, currentProspectsPath)}
+              onClick={(e) => e.stopPropagation()}
+              className="text-violet-300 hover:text-violet-200"
+            >
+              Evidence
+            </Link>
+            <Link
+              to={reportsPath(vendor, currentProspectsPath)}
+              onClick={(e) => e.stopPropagation()}
+              className="text-fuchsia-300 hover:text-fuchsia-200"
+            >
+              Reports
+            </Link>
+            <Link
+              to={opportunitiesPath(vendor, currentProspectsPath)}
+              onClick={(e) => e.stopPropagation()}
+              className="text-emerald-300 hover:text-emerald-200"
+            >
+              Opportunities
+            </Link>
+          </div>
+        ) : null
         if (r.related_sequence_id && r.email && !r.related_sequence_status) {
           return (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleEnroll(r) }}
-              disabled={isProcessing}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-300 hover:bg-green-500/20 disabled:opacity-50"
-              title="Assign as sequence recipient"
-            >
-              {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-              Enroll
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              {shortcuts}
+              <button
+                onClick={(e) => { e.stopPropagation(); handleEnroll(r) }}
+                disabled={isProcessing}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-green-500/10 text-green-300 hover:bg-green-500/20 disabled:opacity-50"
+                title="Assign as sequence recipient"
+              >
+                {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                Enroll
+              </button>
+            </div>
           )
         }
         if (r.related_sequence_id && r.related_sequence_status) {
           return (
-            <Link
-              to={`/campaign-review?company=${encodeURIComponent(r.company_name || '')}`}
-              onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              Review <ExternalLink className="h-3 w-3" />
-            </Link>
+            <div className="flex flex-wrap items-center gap-3">
+              {shortcuts}
+              <Link
+                to={`/campaign-review?company=${encodeURIComponent(r.company_name || '')}`}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                Review <ExternalLink className="h-3 w-3" />
+              </Link>
+            </div>
           )
         }
         if (r.company_name && r.churning_from) {
           return (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleGenerateCampaign(r) }}
-              disabled={isProcessing}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
-              title="Generate campaign for this company"
-            >
-              {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
-              Generate
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              {shortcuts}
+              <button
+                onClick={(e) => { e.stopPropagation(); handleGenerateCampaign(r) }}
+                disabled={isProcessing}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+                title="Generate campaign for this company"
+              >
+                {isProcessing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                Generate
+              </button>
+            </div>
           )
         }
-        return null
+        return shortcuts
       },
     },
   ]

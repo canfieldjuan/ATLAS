@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Building2, AlertTriangle, MessageSquareText, Zap, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import StatCard from '../components/StatCard'
@@ -50,8 +50,39 @@ function maxIso(values: (string | null | undefined)[]): string | null {
   return isoValues.sort((a, b) => b.localeCompare(a))[0]
 }
 
+function vendorDetailPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  const qs = next.toString()
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  return qs ? `${base}?${qs}` : base
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
+  const dashboardPath = '/dashboard'
 
   const { data, loading, error, refresh, refreshing } = useApiData<DashboardData>(
     async () => {
@@ -167,6 +198,42 @@ export default function Dashboard() {
           <span className="text-slate-500 text-xs">No</span>
         ),
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (r) => (
+        <div className="flex items-center gap-3 text-xs">
+          <Link
+            to={vendorDetailPath(r.vendor, dashboardPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-cyan-400 hover:text-cyan-300 transition-colors"
+          >
+            Vendor
+          </Link>
+          <Link
+            to={evidencePath(r.vendor, dashboardPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-violet-300 hover:text-violet-200 transition-colors"
+          >
+            Evidence
+          </Link>
+          <Link
+            to={reportsPath(r.vendor, dashboardPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+          >
+            Reports
+          </Link>
+          <Link
+            to={opportunitiesPath(r.vendor, dashboardPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-emerald-300 hover:text-emerald-200 transition-colors"
+          >
+            Opportunities
+          </Link>
+        </div>
+      ),
+    },
   ]
 
   if (error) return <PageError error={error} onRetry={refresh} />
@@ -175,14 +242,34 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-white">Churn Signals Overview</h1>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/watchlists"
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-violet-300 hover:text-white hover:bg-violet-500/10 transition-colors"
+          >
+            Watchlists
+          </Link>
+          <Link
+            to="/vendors"
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-cyan-300 hover:text-white hover:bg-cyan-500/10 transition-colors"
+          >
+            Vendors
+          </Link>
+          <Link
+            to="/opportunities"
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-emerald-300 hover:text-white hover:bg-emerald-500/10 transition-colors"
+          >
+            Opportunities
+          </Link>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
       <div className="text-xs">
         {freshnessAnchor ? (
@@ -302,7 +389,7 @@ export default function Dashboard() {
               <button
                 key={signal.vendor_name}
                 type="button"
-                onClick={() => navigate(`/vendors/${encodeURIComponent(signal.vendor_name)}`)}
+                onClick={() => navigate(vendorDetailPath(signal.vendor_name, dashboardPath))}
                 className="w-full rounded-xl border border-slate-700/50 bg-slate-950/40 px-4 py-3 text-left transition-colors hover:border-cyan-500/40 hover:bg-slate-900/70"
               >
                 <div className="flex items-start justify-between gap-4">
@@ -317,6 +404,29 @@ export default function Dashboard() {
                   <div><div className="text-slate-500">Legacy</div><div className="text-slate-200">{formatSignalValue(signal.legacy_support_score)}</div></div>
                   <div><div className="text-slate-500">Feature</div><div className="text-slate-200">{formatSignalValue(signal.new_feature_velocity)}</div></div>
                   <div><div className="text-slate-500">Growth</div><div className="text-slate-200">{formatGrowthRate(signal.employee_growth_rate)}</div></div>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                  <Link
+                    to={evidencePath(signal.vendor_name, dashboardPath)}
+                    onClick={(event) => event.stopPropagation()}
+                    className="text-violet-300 hover:text-violet-200 transition-colors"
+                  >
+                    Evidence
+                  </Link>
+                  <Link
+                    to={reportsPath(signal.vendor_name, dashboardPath)}
+                    onClick={(event) => event.stopPropagation()}
+                    className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+                  >
+                    Reports
+                  </Link>
+                  <Link
+                    to={opportunitiesPath(signal.vendor_name, dashboardPath)}
+                    onClick={(event) => event.stopPropagation()}
+                    className="text-emerald-300 hover:text-emerald-200 transition-colors"
+                  >
+                    Opportunities
+                  </Link>
                 </div>
               </button>
             ))}
@@ -334,7 +444,7 @@ export default function Dashboard() {
           <DataTable
             columns={companyColumns}
             data={companies}
-            onRowClick={(r) => navigate(`/vendors/${encodeURIComponent(r.vendor)}`)}
+            onRowClick={(r) => navigate(vendorDetailPath(r.vendor, dashboardPath))}
             emptyMessage="No high-intent companies detected"
             emptyAction={{ label: 'Check Pipeline Status', onClick: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }}
           />
