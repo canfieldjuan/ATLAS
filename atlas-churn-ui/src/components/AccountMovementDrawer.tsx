@@ -29,6 +29,7 @@ interface AccountMovementDrawerProps {
   open: boolean
   onClose: () => void
   onViewVendor: (vendorName: string) => void
+  onCopyVendorLink?: () => void
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
   onViewReport?: (item: AccountsInMotionFeedItem) => void
@@ -83,6 +84,7 @@ export default function AccountMovementDrawer({
   open,
   onClose,
   onViewVendor,
+  onCopyVendorLink,
   onOpenWitness,
   onGenerateCampaign,
   onViewReport,
@@ -202,6 +204,15 @@ export default function AccountMovementDrawer({
               View vendor
               <ArrowUpRight className="h-3.5 w-3.5" />
             </button>
+            {onCopyVendorLink && (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={onCopyVendorLink}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy vendor
+              </button>
+            )}
             {onViewReport && (
               <>
                 <button

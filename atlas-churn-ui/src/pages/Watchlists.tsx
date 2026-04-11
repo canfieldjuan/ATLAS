@@ -1564,6 +1564,18 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopySelectedVendorLink() {
+    if (!selectedAccount) return
+    try {
+      await navigator.clipboard.writeText(watchlistVendorWorkspaceUrl(selectedAccountSearchParams, selectedAccount.vendor))
+      setActionError(null)
+      setActionMessage(`Copied vendor link for ${selectedAccount.company || selectedAccount.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy vendor link')
+    }
+  }
+
   async function handleCopyVendorRowLink(vendorName: string) {
     try {
       await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, vendorName))
@@ -3916,6 +3928,7 @@ export default function Watchlists() {
         open={selectedAccount != null}
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(watchlistVendorPath(selectedAccountSearchParams, vendorName))}
+        onCopyVendorLink={() => void handleCopySelectedVendorLink()}
         onCopyLink={() => void handleCopySelectedAccountLink()}
         onCopyEvidenceLink={() => void handleCopySelectedEvidenceLink()}
         evidenceExplorerUrl={selectedAccount
