@@ -2898,6 +2898,9 @@ async def get_company_signal_review_impact_summary(
     review_action: Optional[str] = Query(None),
     review_priority_band: Optional[str] = Query(None),
     review_priority_reason: Optional[str] = Query(None),
+    review_unlock_path: Optional[str] = Query(None),
+    review_unlock_reason: Optional[str] = Query(None),
+    candidate_source: Optional[str] = Query(None),
     window_days: int = Query(30, ge=1, le=3650),
     top_n: int = Query(10, ge=1, le=25),
     user: AuthUser | None = Depends(optional_auth),
@@ -2924,11 +2927,17 @@ async def get_company_signal_review_impact_summary(
         review_action=review_action,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
+        review_unlock_path=review_unlock_path,
+        review_unlock_reason=review_unlock_reason,
+        candidate_source=candidate_source,
         top_n=top_n,
     )
     summary["review_action"] = review_action
     summary["review_priority_band"] = review_priority_band
     summary["review_priority_reason"] = review_priority_reason
+    summary["review_unlock_path"] = review_unlock_path
+    summary["review_unlock_reason"] = review_unlock_reason
+    summary["candidate_source"] = candidate_source
     return summary
 
 

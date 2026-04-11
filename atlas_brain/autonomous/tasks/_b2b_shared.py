@@ -13251,6 +13251,9 @@ def _company_signal_review_event_filters(
     review_action: str | None = None,
     review_priority_band: str | None = None,
     review_priority_reason: str | None = None,
+    review_unlock_path: str | None = None,
+    review_unlock_reason: str | None = None,
+    candidate_source: str | None = None,
 ) -> tuple[list[str], list[Any], int]:
     conditions = ["created_at >= NOW() - make_interval(days => $1)"]
     params: list[Any] = [window_days]
@@ -13278,6 +13281,18 @@ def _company_signal_review_event_filters(
         conditions.append(f"COALESCE(review_priority_reason, 'unknown') = ${idx}")
         params.append(review_priority_reason)
         idx += 1
+    if review_unlock_path:
+        conditions.append(f"COALESCE(review_unlock_path, 'unknown') = ${idx}")
+        params.append(review_unlock_path)
+        idx += 1
+    if review_unlock_reason:
+        conditions.append(f"COALESCE(review_unlock_reason, 'unknown') = ${idx}")
+        params.append(review_unlock_reason)
+        idx += 1
+    if candidate_source:
+        conditions.append(f"COALESCE(candidate_source, 'unknown') = ${idx}")
+        params.append(candidate_source)
+        idx += 1
 
     return conditions, params, idx
 
@@ -13291,6 +13306,9 @@ async def read_company_signal_review_impact_summary(
     review_action: str | None = None,
     review_priority_band: str | None = None,
     review_priority_reason: str | None = None,
+    review_unlock_path: str | None = None,
+    review_unlock_reason: str | None = None,
+    candidate_source: str | None = None,
     top_n: int = 10,
 ) -> dict[str, Any]:
     """Summarize downstream impact from company-signal review actions."""
@@ -13301,6 +13319,9 @@ async def read_company_signal_review_impact_summary(
         review_action=review_action,
         review_priority_band=review_priority_band,
         review_priority_reason=review_priority_reason,
+        review_unlock_path=review_unlock_path,
+        review_unlock_reason=review_unlock_reason,
+        candidate_source=candidate_source,
     )
     if not conditions:
         return {

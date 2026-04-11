@@ -971,6 +971,9 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
         review_action="approved",
         review_priority_band="promote_now",
         review_priority_reason="canonical_ready",
+        review_unlock_path="low_trust_near_threshold_group",
+        review_unlock_reason="close_low_trust_confidence",
+        candidate_source="reddit",
         top_n=5,
     )
 
@@ -985,6 +988,9 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "vendor_name = ANY(" in totals_sql
     assert "review_priority_band" in totals_sql
     assert "review_priority_reason" in totals_sql
+    assert "review_unlock_path" in totals_sql
+    assert "review_unlock_reason" in totals_sql
+    assert "candidate_source" in totals_sql
     assert "COUNT(DISTINCT review_batch_id)" in totals_sql
     assert "FROM b2b_company_signal_review_events" in totals_sql
     assert "GROUP BY 1" in scopes_sql

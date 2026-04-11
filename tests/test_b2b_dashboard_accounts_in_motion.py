@@ -375,6 +375,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
     returned = {
         "totals": {"total_actions": 4, "approvals": 3},
         "scopes": [{"review_scope": "group", "action_count": 4}],
+        "unlock_paths": [{"review_unlock_path": "low_trust_near_threshold_group", "action_count": 2}],
         "priority_bands": [{"review_priority_band": "high", "action_count": 3}],
         "priority_reasons": [{"review_priority_band": "high", "review_priority_reason": "has_signal_evidence_and_decision_maker", "action_count": 3}],
         "top_vendors": [{"vendor_name": "Zendesk", "action_count": 4}],
@@ -395,6 +396,9 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
                     review_action="approved",
                     review_priority_band="high",
                     review_priority_reason="has_signal_evidence_and_decision_maker",
+                    review_unlock_path="low_trust_near_threshold_group",
+                    review_unlock_reason="close_low_trust_confidence",
+                    candidate_source="reddit",
                     window_days=14,
                     top_n=5,
                     user=MagicMock(),
@@ -405,6 +409,9 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "review_action": "approved",
         "review_priority_band": "high",
         "review_priority_reason": "has_signal_evidence_and_decision_maker",
+        "review_unlock_path": "low_trust_near_threshold_group",
+        "review_unlock_reason": "close_low_trust_confidence",
+        "candidate_source": "reddit",
     }
     scope_mock.assert_awaited_once_with(pool, ANY)
     read_mock.assert_awaited_once_with(
@@ -415,6 +422,9 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         review_action="approved",
         review_priority_band="high",
         review_priority_reason="has_signal_evidence_and_decision_maker",
+        review_unlock_path="low_trust_near_threshold_group",
+        review_unlock_reason="close_low_trust_confidence",
+        candidate_source="reddit",
         top_n=5,
     )
 
