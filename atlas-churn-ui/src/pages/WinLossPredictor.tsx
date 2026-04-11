@@ -381,7 +381,7 @@ export default function WinLossPredictor() {
   const [copied, setCopied] = useState(false)
 
   const copyPredictionSummary = useCallback((p: WinLossPrediction) => {
-    const pct = Math.round(p.win_probability * 100)
+    const pct = p.win_probability != null ? Math.round(p.win_probability * 100) : null
     const lines: string[] = [
       `Win/Loss Prediction: ${p.vendor_name}`,
       `Win Probability: ${pct}% (${p.confidence} confidence)`,
@@ -583,7 +583,7 @@ export default function WinLossPredictor() {
           <h3 className="text-sm font-medium text-slate-400 mb-3">Recent Predictions</h3>
           <div className="flex flex-wrap gap-2">
             {recentPredictions.map(rp => {
-              const pct = Math.round(rp.win_probability * 100)
+              const pct = rp.win_probability != null ? Math.round(rp.win_probability * 100) : null
               let dotColor = 'bg-red-500'
               if (rp.is_gated) dotColor = 'bg-slate-500'
               else if (pct >= 70) dotColor = 'bg-green-500'

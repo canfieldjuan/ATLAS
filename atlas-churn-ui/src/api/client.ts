@@ -1811,7 +1811,7 @@ export interface WinLossObjection {
 
 export interface WinLossPrediction {
   vendor_name: string
-  win_probability: number
+  win_probability: number | null
   confidence: string
   verdict: string
   is_gated: boolean
@@ -1836,7 +1836,7 @@ export interface WinLossPrediction {
 export interface RecentPrediction {
   prediction_id: string
   vendor_name: string
-  win_probability: number
+  win_probability: number | null
   confidence: string
   is_gated: boolean
   created_at: string

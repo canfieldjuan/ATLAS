@@ -136,7 +136,7 @@ class RecentPrediction(BaseModel):
 
 class WinLossResponse(BaseModel):
     vendor_name: str
-    win_probability: float = Field(..., ge=0, le=1)
+    win_probability: float | None = Field(None, ge=0, le=1)
     confidence: str
     verdict: str
     is_gated: bool = Field(False, description="True if insufficient data for prediction")
@@ -415,7 +415,7 @@ async def _compute_prediction(
     if is_gated:
         gated_resp = WinLossResponse(
             vendor_name=vendor,
-            win_probability=0,
+            win_probability=None,
             confidence="insufficient",
             verdict=(
                 f"Insufficient data to predict win probability against {vendor}. "
