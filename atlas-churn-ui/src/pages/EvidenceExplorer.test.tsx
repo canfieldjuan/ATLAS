@@ -198,6 +198,66 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+
+  it('hydrates pagination offset from the URL and preserves it in downstream report links', async () => {
+    api.fetchWitnesses.mockResolvedValueOnce({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-09',
+      analysis_window_days: 30,
+      total: 61,
+      limit: 30,
+      offset: 30,
+      facets: {
+        pain_categories: ['pricing'],
+        sources: ['reddit'],
+        witness_types: ['pricing'],
+      },
+      witnesses: [{
+        witness_id: 'witness:zendesk:31',
+        review_id: 'review-31',
+        witness_type: 'pricing',
+        excerpt_text: 'The renewal window is now urgent.',
+        source: 'reddit',
+        reviewed_at: '2026-04-03T00:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP Support',
+        pain_category: 'pricing',
+        competitor: 'Freshdesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        as_of_date: '2026-04-09',
+      }],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&offset=30']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(api.fetchWitnesses).toHaveBeenLastCalledWith({
+        vendor_name: 'Zendesk',
+        window_days: 30,
+        pain_category: undefined,
+        source: 'reddit',
+        witness_type: undefined,
+        limit: 30,
+        offset: 30,
+      })
+    })
+
+    expect(screen.getByText('Showing 31-60 of 61')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View library for Zendesk' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26offset%3D30',
+    )
+  })
+
   it('accepts vendor back_to and renders a vendor return link', async () => {
     render(
       <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fvendors%2FZendesk']}>
@@ -244,6 +304,56 @@ describe('EvidenceExplorer', () => {
       expect(screen.getByTestId('location-search')).toHaveTextContent('vendor=Zendesk')
       expect(screen.getByTestId('location-search')).toHaveTextContent('tab=witnesses')
       expect(screen.getByTestId('location-search')).toHaveTextContent('witness_id=witness%3Azendesk%3A1')
+    })
+  })
+
+
+  it('writes pagination offset back into the URL when paging witnesses', async () => {
+    const user = userEvent.setup()
+    api.fetchWitnesses.mockResolvedValue({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-09',
+      analysis_window_days: 30,
+      total: 61,
+      limit: 30,
+      offset: 0,
+      facets: {
+        pain_categories: ['pricing'],
+        sources: ['reddit'],
+        witness_types: ['pricing'],
+      },
+      witnesses: [{
+        witness_id: 'witness:zendesk:1',
+        review_id: 'review-1',
+        witness_type: 'pricing',
+        excerpt_text: 'We need to move fast before renewal.',
+        source: 'reddit',
+        reviewed_at: '2026-04-03T00:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP Support',
+        pain_category: 'pricing',
+        competitor: 'Freshdesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        as_of_date: '2026-04-09',
+      }],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk']}>
+        <LocationSearchProbe />
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Showing 1-30 of 61')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search')).toHaveTextContent('vendor=Zendesk')
+      expect(screen.getByTestId('location-search')).toHaveTextContent('offset=30')
     })
   })
 

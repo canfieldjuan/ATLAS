@@ -38,6 +38,12 @@ function parseTab(value: string | null): Tab {
   return 'witnesses'
 }
 
+function parseOffset(value: string | null) {
+  if (!value) return 0
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0
+}
+
 function evidenceExplorerUrl(searchParams: URLSearchParams) {
   const query = searchParams.toString()
   return `${window.location.origin}/evidence${query ? `?${query}` : ''}`
@@ -168,6 +174,7 @@ export default function EvidenceExplorer() {
   const requestedSource = searchParams.get('source')?.trim() || ''
   const requestedWitnessType = searchParams.get('witness_type')?.trim() || ''
   const requestedWitnessId = searchParams.get('witness_id')?.trim() || ''
+  const requestedOffset = parseOffset(searchParams.get('offset'))
   const requestedBackTo = parseBackTo(searchParams.get('back_to'))
 
   // Search state
@@ -188,7 +195,7 @@ export default function EvidenceExplorer() {
   const [total, setTotal] = useState(0)
   const [witnessSnapshotDate, setWitnessSnapshotDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [offset, setOffset] = useState(0)
+  const [offset, setOffset] = useState(requestedOffset)
   const limit = 30
 
   // Filters
@@ -403,6 +410,7 @@ export default function EvidenceExplorer() {
     const currentSource = searchParams.get('source')?.trim() || ''
     const currentWitnessType = searchParams.get('witness_type')?.trim() || ''
     const currentWitnessId = searchParams.get('witness_id')?.trim() || ''
+    const currentOffset = parseOffset(searchParams.get('offset'))
     const nextWitnessId = drawerOpen ? (drawerWitnessId || '') : ''
     if (
       currentVendor === activeVendor
@@ -411,6 +419,7 @@ export default function EvidenceExplorer() {
       && currentSource === filterSource
       && currentWitnessType === filterType
       && currentWitnessId === nextWitnessId
+      && currentOffset === offset
     ) {
       return
     }
@@ -427,6 +436,8 @@ export default function EvidenceExplorer() {
       else next.delete('witness_type')
       if (nextWitnessId) next.set('witness_id', nextWitnessId)
       else next.delete('witness_id')
+      if (offset > 0) next.set('offset', String(offset))
+      else next.delete('offset')
       return next
     }, { replace: true })
   }, [
@@ -437,6 +448,7 @@ export default function EvidenceExplorer() {
     filterPain,
     filterSource,
     filterType,
+    offset,
     searchParams,
     setSearchParams,
   ])
