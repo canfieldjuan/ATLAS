@@ -356,6 +356,7 @@ async def _compute_prediction(
     company_size: Optional[str] = None,
     industry: Optional[str] = None,
 ) -> WinLossResponse:
+
     """Run the full prediction pipeline for a single vendor. Returns WinLossResponse."""
     from ..autonomous.tasks._b2b_shared import read_vendor_signal_detail_exact
 
@@ -429,6 +430,7 @@ async def _compute_prediction(
                 "pain_points": int(counts["pain_points"]),
                 "buyer_profiles": int(counts["buyer_profiles"]),
                 "outcomes": int(counts["outcome_sequences"]),
+                "product_profiles": int(counts["product_profiles"]),
             },
         )
         return gated_resp
@@ -447,6 +449,7 @@ async def _compute_prediction(
         "pain_points": int(counts["pain_points"]),
         "buyer_profiles": int(counts["buyer_profiles"]),
         "outcomes": int(counts["outcome_sequences"]),
+        "product_profiles": int(counts["product_profiles"]),
     }
 
     # -- Load weights (calibrated if available, static fallback) ----------------
@@ -1028,8 +1031,10 @@ async def compare_win_loss(
         raise HTTPException(status_code=400, detail="Cannot compare a vendor against itself")
 
     # Run both predictions
-    resp_a = await _compute_prediction(pool, vendor_a, req.company_size, req.industry)
-    resp_b = await _compute_prediction(pool, vendor_b, req.company_size, req.industry)
+    resp_a, resp_b = await asyncio.gather(
+        _compute_prediction(pool, vendor_a, req.company_size, req.industry),
+        _compute_prediction(pool, vendor_b, req.company_size, req.industry),
+    )
 
     # Persist both
     dummy_req_a = WinLossRequest(vendor_name=vendor_a, company_size=req.company_size, industry=req.industry)
