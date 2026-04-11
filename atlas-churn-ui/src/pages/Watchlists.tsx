@@ -128,6 +128,12 @@ function parseOptionalNumber(value: string) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function parseBooleanSearchParam(value: string | null | undefined) {
+  if (!value) return false
+  const normalized = value.trim().toLowerCase()
+  return normalized === 'true' || normalized === '1'
+}
+
 function ageInDays(value: string | null | undefined) {
   const ts = toTimestamp(value)
   if (ts == null) return null
@@ -491,8 +497,8 @@ export default function Watchlists() {
   }, [])
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState(searchParams.get('category')?.trim() || '')
   const [selectedSourceFilter, setSelectedSourceFilter] = useState(searchParams.get('source')?.trim() || '')
-  const [selectedMinUrgency, setSelectedMinUrgency] = useState('')
-  const [freshOnly, setFreshOnly] = useState(false)
+  const [selectedMinUrgency, setSelectedMinUrgency] = useState(searchParams.get('min_urgency')?.trim() || '')
+  const [freshOnly, setFreshOnly] = useState(() => parseBooleanSearchParam(searchParams.get('fresh_only')))
   const [namedAccountsOnly, setNamedAccountsOnly] = useState(false)
   const [changedWedgesOnly, setChangedWedgesOnly] = useState(false)
   const [vendorAlertThreshold, setVendorAlertThreshold] = useState('')
@@ -1205,6 +1211,54 @@ export default function Watchlists() {
     requestedWatchlistView,
     searchParams,
     selectedCategoryFilter,
+    setSearchParams,
+  ])
+
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentMinUrgency = searchParams.get('min_urgency')?.trim() || ''
+    const nextMinUrgency = selectedMinUrgency.trim()
+    if (currentMinUrgency === nextMinUrgency) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextMinUrgency) {
+        next.set('min_urgency', nextMinUrgency)
+      } else {
+        next.delete('min_urgency')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    loading,
+    requestedWatchlistView,
+    searchParams,
+    selectedMinUrgency,
+    setSearchParams,
+  ])
+
+  useEffect(() => {
+    if (loading) return
+    if (requestedWatchlistView && requestedWatchlistView.id !== activeWatchlistView?.id) return
+    const currentFreshOnly = parseBooleanSearchParam(searchParams.get('fresh_only'))
+    if (currentFreshOnly === freshOnly) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (freshOnly) {
+        next.set('fresh_only', 'true')
+      } else {
+        next.delete('fresh_only')
+      }
+      return next
+    }, { replace: true })
+  }, [
+    activeWatchlistView?.id,
+    freshOnly,
+    loading,
+    requestedWatchlistView,
+    searchParams,
     setSearchParams,
   ])
 

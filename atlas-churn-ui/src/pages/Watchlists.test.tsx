@@ -781,6 +781,39 @@ describe('Watchlists', () => {
     })
   })
 
+
+  it('hydrates min urgency and fresh-only from the URL and preserves them in vendor evidence links', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&min_urgency=8&fresh_only=true']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('8+')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Fresh only' })).toBeChecked()
+    expect(screen.getByRole('link', { name: 'Open vendor evidence for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26min_urgency%3D8%26fresh_only%3Dtrue',
+    )
+    expect(screen.getByRole('link', { name: 'Open vendor witness for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Avendor%3Azendesk%3A1&back_to=%2Fwatchlists%3Fvendor_name%3DZendesk%26min_urgency%3D8%26fresh_only%3Dtrue',
+    )
+
+    await waitFor(() => {
+      expect(api.fetchAccountsInMotionFeed).toHaveBeenLastCalledWith({
+        vendor_names: ['Zendesk'],
+        category: undefined,
+        source: undefined,
+        min_urgency: 8,
+        include_stale: false,
+        account_alert_threshold: undefined,
+        stale_days_threshold: undefined,
+      })
+    })
+  })
+
   it('hydrates a vendor-focused watchlist URL and renders an evidence return link', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?vendor_name=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit']}>
