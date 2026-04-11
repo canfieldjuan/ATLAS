@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -144,6 +144,30 @@ function vendorDetailPath(vendorName: string): string {
   return `/vendors/${encodeURIComponent(vendorName)}`
 }
 
+function normalizeBackTo(value: string | null | undefined): string | null {
+  if (!value) return null
+  const allowedPrefixes = ['/vendors', '/watchlists', '/evidence', '/reports', '/opportunities']
+  const isAllowedPath = (candidate: string) => allowedPrefixes.some((prefix) => candidate.startsWith(prefix))
+  if (isAllowedPath(value)) return value
+  try {
+    const url = new URL(value, window.location.origin)
+    if (url.origin === window.location.origin && isAllowedPath(url.pathname)) {
+      return `${url.pathname}${url.search}`
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function backToLabel(backTo: string): string {
+  if (backTo.startsWith('/watchlists')) return 'Back to Watchlists'
+  if (backTo.startsWith('/evidence')) return 'Back to Evidence'
+  if (backTo.startsWith('/reports')) return 'Back to Reports'
+  if (backTo.startsWith('/opportunities')) return 'Back to Opportunities'
+  return 'Back to Vendors'
+}
+
 function vendorEvidenceExplorerPath(vendorName: string): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -207,6 +231,8 @@ function formatReportTimestamp(report: Report): string {
 export default function VendorDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
   const [tab, setTab] = useState<'overview' | 'reviews' | 'companies'>('overview')
   const [selectedSlowBurnMetric, setSelectedSlowBurnMetric] = useState<
     'support_sentiment' | 'legacy_support_score' | 'new_feature_velocity' | 'employee_growth_rate'
@@ -255,6 +281,12 @@ export default function VendorDetail() {
 
   const profile = data?.profile
   if (!profile) return <PageError error={new Error('Vendor not found')} />
+  const stateBackTo = typeof location.state === 'object' && location.state && 'backTo' in location.state
+    ? normalizeBackTo((location.state as { backTo?: string | null }).backTo)
+    : null
+  const queryBackTo = normalizeBackTo(searchParams.get('back_to'))
+  const backTo = stateBackTo ?? queryBackTo ?? '/vendors'
+  const backLabel = backToLabel(backTo)
   const evidenceExplorerPath = vendorEvidenceExplorerPath(profile.vendor_name)
   const reportsPath = vendorReportsPath(profile.vendor_name)
   const opportunitiesPath = vendorOpportunitiesPath(profile.vendor_name)
@@ -557,11 +589,11 @@ export default function VendorDetail() {
   return (
     <div className="space-y-6">
       <button
-        onClick={() => navigate('/vendors')}
+        onClick={() => navigate(backTo)}
         className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
-        Back to Vendors
+        {backLabel}
       </button>
 
       <div className="flex items-center justify-between">

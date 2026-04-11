@@ -197,4 +197,21 @@ describe('VendorDetail', () => {
     await user.click(screen.getByRole('button', { name: /battle card/i }))
     expect(mockNavigate).toHaveBeenCalledWith('/reports/report-1?back_to=%2Fvendors%2FZendesk')
   })
+
+  it('returns to the originating watchlist workspace when back_to is present', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to Watchlists' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/watchlists?view=view-1&account_vendor=Zendesk')
+  })
 })
