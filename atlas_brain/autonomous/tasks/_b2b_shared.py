@@ -11995,6 +11995,7 @@ async def read_company_signal_candidate_group_summary(
             "near_threshold_groups": [],
             "near_threshold_source_mix": [],
             "unlock_candidates": [],
+            "unlock_path_summary": [],
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -13033,6 +13034,68 @@ async def read_company_signal_candidate_group_summary(
         )
     )
     unlock_candidates = unlock_candidates[:top_n]
+    unlock_path_order = [
+        "low_trust_near_threshold_group",
+        "trusted_source_urgency_gap",
+    ]
+    unlock_path_summary: list[dict[str, Any]] = []
+    for unlock_candidate_type in unlock_path_order:
+        shortlisted = [
+            item
+            for item in unlock_candidates
+            if item.get("unlock_candidate_type") == unlock_candidate_type
+        ]
+        if not shortlisted:
+            continue
+        confidence_gaps = [
+            float(item["confidence_gap_to_canonical"])
+            for item in shortlisted
+            if item.get("confidence_gap_to_canonical") is not None
+        ]
+        urgency_gaps = [
+            float(item["urgency_gap_to_high_intent"])
+            for item in shortlisted
+            if item.get("urgency_gap_to_high_intent") is not None
+        ]
+        lead_vendor = max(
+            shortlisted,
+            key=lambda item: (
+                int(item.get("review_count") or 0),
+                int(item.get("group_count") or 0),
+                str(item.get("vendor") or ""),
+                str(item.get("source") or ""),
+            ),
+        )
+        lead_source = max(
+            shortlisted,
+            key=lambda item: (
+                int(item.get("review_count") or 0),
+                int(item.get("group_count") or 0),
+                str(item.get("source") or ""),
+                str(item.get("vendor") or ""),
+            ),
+        )
+        unlock_path_summary.append({
+            "unlock_candidate_type": unlock_candidate_type,
+            "unlock_reason": shortlisted[0].get("unlock_reason"),
+            "shortlist_entries": len(shortlisted),
+            "shortlist_groups": sum(int(item.get("group_count") or 0) for item in shortlisted),
+            "shortlist_reviews": sum(int(item.get("review_count") or 0) for item in shortlisted),
+            "lead_vendor": lead_vendor.get("vendor"),
+            "lead_source": lead_source.get("source"),
+            "min_confidence_gap_to_canonical": min(confidence_gaps) if confidence_gaps else None,
+            "avg_confidence_gap_to_canonical": (
+                round(sum(confidence_gaps) / len(confidence_gaps), 3)
+                if confidence_gaps
+                else None
+            ),
+            "min_urgency_gap_to_high_intent": min(urgency_gaps) if urgency_gaps else None,
+            "avg_urgency_gap_to_high_intent": (
+                round(sum(urgency_gaps) / len(urgency_gaps), 2)
+                if urgency_gaps
+                else None
+            ),
+        })
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
@@ -13050,6 +13113,7 @@ async def read_company_signal_candidate_group_summary(
         "near_threshold_groups": near_threshold_groups,
         "near_threshold_source_mix": [dict(row) for row in near_threshold_source_rows],
         "unlock_candidates": unlock_candidates,
+        "unlock_path_summary": unlock_path_summary,
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],
