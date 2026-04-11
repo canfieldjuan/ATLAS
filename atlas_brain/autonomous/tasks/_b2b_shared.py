@@ -11979,6 +11979,7 @@ async def read_company_signal_candidate_group_summary(
             "blocked_top_vendor_reasons": [],
             "near_threshold_top_vendors": [],
             "near_threshold_gap_reasons": [],
+            "near_threshold_groups": [],
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -12326,6 +12327,38 @@ async def read_company_signal_candidate_group_summary(
         *params,
         top_n,
     )
+    near_threshold_group_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT id,
+               company_name,
+               display_company_name,
+               vendor_name,
+               review_count,
+               canonical_gap_reason,
+               candidate_bucket,
+               distinct_source_count,
+               max_urgency_score,
+               corroborated_confidence_score,
+               representative_source
+        FROM filtered
+        WHERE review_status = 'pending'
+          AND {pending_priority_band_sql} = 'low'
+          AND {near_threshold_sql}
+        ORDER BY COALESCE(corroborated_confidence_score, 0) DESC,
+                 COALESCE(max_urgency_score, 0) DESC,
+                 review_count DESC,
+                 vendor_name ASC,
+                 company_name ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     confidence_rows = await pool.fetch(
         f"""
         WITH filtered AS (
@@ -12575,6 +12608,49 @@ async def read_company_signal_candidate_group_summary(
             "review_priority_reason": priority_reason,
             "pending_age_days": float(row["pending_age_days"]) if row.get("pending_age_days") is not None else 0.0,
         }
+    low_trust_confidence_min = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
+    )
+    if low_trust_confidence_min is None:
+        low_trust_confidence_min = 0.6
+    try:
+        high_intent_urgency_threshold = float(getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0))
+    except (TypeError, ValueError):
+        high_intent_urgency_threshold = 7.0
+    near_threshold_groups: list[dict[str, Any]] = []
+    for row in near_threshold_group_rows:
+        confidence_value = (
+            float(row["corroborated_confidence_score"])
+            if row.get("corroborated_confidence_score") is not None
+            else None
+        )
+        urgency_value = (
+            float(row["max_urgency_score"])
+            if row.get("max_urgency_score") is not None
+            else None
+        )
+        gap_reason = row.get("canonical_gap_reason")
+        confidence_gap = None
+        urgency_gap = None
+        if gap_reason == "low_confidence_low_trust_source" and confidence_value is not None:
+            confidence_gap = max(0.0, round(low_trust_confidence_min - confidence_value, 3))
+        if gap_reason == "below_high_intent_threshold" and urgency_value is not None:
+            urgency_gap = max(0.0, round(high_intent_urgency_threshold - urgency_value, 2))
+        near_threshold_groups.append({
+            "group_id": str(row["id"]) if row.get("id") else None,
+            "company": row.get("company_name"),
+            "display_company": row.get("display_company_name") or row.get("company_name"),
+            "vendor": row.get("vendor_name"),
+            "review_count": row.get("review_count") or 0,
+            "distinct_source_count": row.get("distinct_source_count") or 0,
+            "candidate_bucket": row.get("candidate_bucket"),
+            "canonical_gap_reason": gap_reason,
+            "corroborated_confidence_score": confidence_value,
+            "max_urgency": urgency_value,
+            "representative_source": row.get("representative_source"),
+            "confidence_gap_to_canonical": confidence_gap,
+            "urgency_gap_to_high_intent": urgency_gap,
+        })
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
@@ -12585,6 +12661,7 @@ async def read_company_signal_candidate_group_summary(
         "blocked_top_vendor_reasons": [dict(row) for row in blocked_vendor_reason_rows],
         "near_threshold_top_vendors": [dict(row) for row in near_threshold_vendor_rows],
         "near_threshold_gap_reasons": [dict(row) for row in near_threshold_reason_rows],
+        "near_threshold_groups": near_threshold_groups,
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],

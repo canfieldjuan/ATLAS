@@ -465,6 +465,21 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             ],
             [
                 {
+                    "id": uuid4(),
+                    "company_name": "coppercorp",
+                    "display_company_name": "Copper Corp",
+                    "vendor_name": "Copper",
+                    "review_count": 2,
+                    "canonical_gap_reason": "low_confidence_low_trust_source",
+                    "candidate_bucket": "analyst_review",
+                    "distinct_source_count": 1,
+                    "max_urgency_score": Decimal("5.0"),
+                    "corroborated_confidence_score": Decimal("0.41"),
+                    "representative_source": "reddit",
+                }
+            ],
+            [
+                {
                     "confidence_tier": "high",
                     "group_count": 2,
                 },
@@ -608,16 +623,17 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     blocked_vendor_reason_sql = pool.fetch.call_args_list[5][0][0]
     near_threshold_vendor_sql = pool.fetch.call_args_list[6][0][0]
     near_threshold_reason_sql = pool.fetch.call_args_list[7][0][0]
-    confidence_sql = pool.fetch.call_args_list[8][0][0]
-    priority_sql = pool.fetch.call_args_list[9][0][0]
-    pending_band_sql = pool.fetch.call_args_list[10][0][0]
-    pending_reason_sql = pool.fetch.call_args_list[11][0][0]
-    pending_sla_band_sql = pool.fetch.call_args_list[12][0][0]
-    pending_sla_reason_sql = pool.fetch.call_args_list[13][0][0]
-    oldest_pending_sql = pool.fetch.call_args_list[14][0][0]
-    pending_sla_band_args = pool.fetch.call_args_list[12][0][1:]
-    pending_sla_reason_args = pool.fetch.call_args_list[13][0][1:]
-    oldest_pending_args = pool.fetch.call_args_list[14][0][1:]
+    near_threshold_group_sql = pool.fetch.call_args_list[8][0][0]
+    confidence_sql = pool.fetch.call_args_list[9][0][0]
+    priority_sql = pool.fetch.call_args_list[10][0][0]
+    pending_band_sql = pool.fetch.call_args_list[11][0][0]
+    pending_reason_sql = pool.fetch.call_args_list[12][0][0]
+    pending_sla_band_sql = pool.fetch.call_args_list[13][0][0]
+    pending_sla_reason_sql = pool.fetch.call_args_list[14][0][0]
+    oldest_pending_sql = pool.fetch.call_args_list[15][0][0]
+    pending_sla_band_args = pool.fetch.call_args_list[13][0][1:]
+    pending_sla_reason_args = pool.fetch.call_args_list[14][0][1:]
+    oldest_pending_args = pool.fetch.call_args_list[15][0][1:]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -649,6 +665,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "below_threshold_near_threshold_groups" in near_threshold_vendor_sql
     assert "near_threshold_group_count" in near_threshold_reason_sql
     assert "canonical_gap_reason" in near_threshold_reason_sql
+    assert "COALESCE(corroborated_confidence_score, 0) DESC" in near_threshold_group_sql
+    assert "representative_source" in near_threshold_group_sql
     assert "GROUP BY 1" in confidence_sql
     assert "review_priority_band" in priority_sql
     assert "review_priority_reason" in priority_sql
@@ -689,6 +707,11 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["blocked_top_vendor_reasons"][0]["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["near_threshold_top_vendors"][0]["vendor_name"] == "Copper"
     assert summary["near_threshold_gap_reasons"][0]["canonical_gap_reason"] == "low_confidence_low_trust_source"
+    assert summary["near_threshold_groups"][0]["vendor"] == "Copper"
+    assert summary["near_threshold_groups"][0]["company"] == "coppercorp"
+    assert summary["near_threshold_groups"][0]["representative_source"] == "reddit"
+    assert summary["near_threshold_groups"][0]["confidence_gap_to_canonical"] == 0.19
+    assert summary["near_threshold_groups"][0]["urgency_gap_to_high_intent"] is None
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"
