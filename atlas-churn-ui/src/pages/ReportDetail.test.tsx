@@ -329,6 +329,32 @@ describe('ReportDetail', () => {
     expect(router.state.location.pathname).toBe('/vendors/Zendesk')
   })
 
+
+  it('returns to review detail when back_to targets a review path', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/reviews/:id', element: <div data-testid="review-route">Review route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Review' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('review-route')).toBeInTheDocument()
+    })
+    expect(router.state.location.pathname).toBe('/reviews/review-1')
+    expect(router.state.location.search).toBe('?back_to=%2Fwatchlists%3Fview%3Dview-1')
+  })
+
   it('returns to opportunities when back_to targets the opportunity workbench', async () => {
     const router = createMemoryRouter(
       [

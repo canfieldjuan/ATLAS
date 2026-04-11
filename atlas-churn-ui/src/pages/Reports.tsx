@@ -157,6 +157,7 @@ function reportExternalBackTarget(searchParams: URLSearchParams) {
   if (
     value.startsWith('/vendors/')
     || value.startsWith('/watchlists')
+    || value.startsWith('/reviews')
     || value.startsWith('/evidence')
     || value.startsWith('/opportunities')
   ) return value
@@ -304,10 +305,12 @@ export default function Reports() {
     ? 'Back to Vendor'
     : reportsBackTarget.startsWith('/watchlists')
       ? 'Back to Watchlists'
-      : reportsBackTarget.startsWith('/evidence')
-        ? 'Back to Evidence'
-        : reportsBackTarget.startsWith('/opportunities')
-          ? 'Back to Opportunities'
+      : reportsBackTarget.startsWith('/reviews')
+        ? 'Back to Review'
+        : reportsBackTarget.startsWith('/evidence')
+          ? 'Back to Evidence'
+          : reportsBackTarget.startsWith('/opportunities')
+            ? 'Back to Opportunities'
       : 'Back to Library'
 
   useEffect(() => {
