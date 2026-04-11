@@ -3891,6 +3891,15 @@ export default function Watchlists() {
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
         onViewReport={(item) => navigate(watchlistReportsPath(searchParams, item.vendor))}
+        onCopyReportLink={(item) => void navigator.clipboard.writeText(watchlistReportsUrl(searchParams, item.vendor))
+          .then(() => {
+            setActionError(null)
+            setActionMessage(`Copied reports link for ${item.company || item.vendor}`)
+          })
+          .catch((err) => {
+            setActionMessage(null)
+            setActionError(err instanceof Error ? err.message : 'Failed to copy reports link')
+          })}
         onViewOpportunity={(item) => navigate(watchlistOpportunitiesPath(searchParams, item.vendor))}
         onViewReview={(reviewId) => selectedAccount
           ? navigate(watchlistReviewDetailPath(searchParams, selectedAccount, reviewId))
