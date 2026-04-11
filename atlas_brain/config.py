@@ -2678,7 +2678,7 @@ class B2BChurnConfig(BaseSettings):
 
     # Product profiles
     product_profile_enabled: bool = Field(default=True, description="Enable product profile generation")
-    product_profile_cron: str = Field(default="30 21 * * *", description="Product profile schedule (9:30 PM)")
+    product_profile_cron: str = Field(default="40 21 * * *", description="Product profile schedule (9:30 PM)")
     product_profile_min_reviews: int = Field(default=5, description="Min enriched reviews to generate a profile")
     product_profile_max_tokens: int = Field(default=1024, description="Max LLM output tokens for profile synthesis")
     product_profile_vllm_url: str = Field(
@@ -3548,7 +3548,7 @@ class B2BChurnConfig(BaseSettings):
         default=True,
         description="Require explicit churn/evaluation/renewal signal evidence before reviewer-company rows enter named-account high-intent products",
     )
-    accounts_in_motion_cron: str = Field(default="35 21 * * *", description="Cron for accounts-in-motion prospecting lists")
+    accounts_in_motion_cron: str = Field(default="45 21 * * *", description="Cron for accounts-in-motion prospecting lists")
     accounts_in_motion_max_per_vendor: int = Field(default=25, ge=1, le=100, description="Max accounts per vendor in accounts_in_motion report")
     accounts_in_motion_feed_max_total: int = Field(default=100, ge=1, le=200, description="Max total tenant feed rows returned by the aggregated accounts_in_motion endpoint")
     accounts_in_motion_min_urgency: float = Field(default=5.0, ge=0, le=10, description="Min urgency to include an account in motion")
@@ -3564,7 +3564,7 @@ class B2BChurnConfig(BaseSettings):
     accounts_in_motion_invalid_alternative_terms: list[str] = Field(default=["bare metal"], description="Configured non-vendor alternative terms to drop from accounts_in_motion alternatives")
 
     # Challenger brief
-    challenger_brief_cron: str = Field(default="40 21 * * *", description="Cron for challenger brief report (runs after all other follow-ups)")
+    challenger_brief_cron: str = Field(default="50 21 * * *", description="Cron for challenger brief report (runs after all other follow-ups)")
     challenger_brief_min_displacement_mentions: int = Field(default=3, ge=1, le=100, description="Min displacement mentions to generate a challenger brief")
     challenger_brief_max_pairs_per_incumbent: int = Field(default=5, ge=1, le=20, description="Top N challengers per incumbent to generate briefs for")
     challenger_brief_max_target_accounts: int = Field(default=15, ge=1, le=100, description="Max accounts in target_accounts section of challenger brief")
@@ -3575,8 +3575,8 @@ class B2BChurnConfig(BaseSettings):
 
     # Follow-up task scheduling (staggered after core)
     reports_cron: str = Field(default="30 21 * * *", description="Cron for churn reports follow-up task")
-    battle_cards_cron: str = Field(default="30 21 * * *", description="Cron for battle cards follow-up task")
-    article_correlation_cron: str = Field(default="35 21 * * *", description="Cron for article correlation follow-up task")
+    battle_cards_cron: str = Field(default="35 21 * * *", description="Cron for battle cards follow-up task")
+    article_correlation_cron: str = Field(default="45 21 * * *", description="Cron for article correlation follow-up task")
 
 
 class B2BAlertConfig(BaseSettings):

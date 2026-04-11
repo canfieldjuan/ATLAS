@@ -91,6 +91,27 @@ ATLAS_B2B_CHURN_PRODUCT_PROFILE_OPENROUTER_MODEL=anthropic/claude-sonnet-4-5
 | Ollama (night) | qwen3:32b | Graphiti nightly sync |
 | llama.cpp (Pi) | Phi-3-mini-4k Q4 | Edge node offline fallback |
 
+
+
+## Nightly Batch Schedule (staggered)
+
+| Time | Task | LLM? | Notes |
+|---|---|---|---|
+| 21:00 | b2b_churn_intelligence | No LLM (deterministic pools) | Currently disabled (GPU down) |
+| 21:15 | b2b_reasoning_synthesis | Sonnet-4-5 (OpenRouter + Batch) | Scoped to competitive sets |
+| 21:30 | b2b_churn_reports | Sonnet-4-5 (scorecard narratives) | |
+| 21:35 | b2b_battle_cards | Sonnet-4-5 (7 fields per card) | Staggered from 21:30 |
+| 21:40 | b2b_product_profiles | Sonnet-4-5 | Staggered from 21:30 |
+| 21:45 | b2b_accounts_in_motion | No LLM (SQL aggregation) | Staggered from 21:35 |
+| 21:45 | b2b_article_correlation | No LLM | |
+| 21:50 | b2b_challenger_brief | No LLM (SQL aggregation) | Staggered from 21:40 |
+
+### Cost Issues Found (2026-04-11)
+
+1. **GPU dead** — vLLM/Ollama fallback to paid Anthropic APIs. Fix: power cycle PC.
+2. **.env overrides** — `BLOG_POST_CRON` was every 4h (fixed to weekly), `INTELLIGENCE_CRON` was every 6h (fixed to daily).
+3. **21:30 pile-up** — 3 LLM-heavy tasks firing simultaneously. Fixed: staggered 5min apart.
+4. **email_auto_approve** — 4,594 Haiku calls/week at 2min interval. Disabled.
 ## Cost Tiers
 
 - **High**: Tasks using claude-sonnet-4-5 (reasoning synthesis, reports, battle cards, blog gen)
