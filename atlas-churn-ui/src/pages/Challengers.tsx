@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect, useMemo } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Swords,
   RefreshCw,
@@ -33,9 +33,48 @@ interface ChallengerSummary {
   avgUrgency: number
 }
 
+function challengersPath(search: string) {
+  const next = new URLSearchParams()
+  if (search.trim()) next.set('search', search.trim())
+  const qs = next.toString()
+  return qs ? `/challengers?${qs}` : '/challengers'
+}
+
+function vendorDetailPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  if (backTo !== '/challengers') next.set('back_to', backTo)
+  const qs = next.toString()
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  return qs ? `${base}?${qs}` : base
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
+
 export default function Challengers() {
-  const [searchInput, setSearchInput] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') ?? '')
+  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get('search') ?? '')
   const [generatingFor, setGeneratingFor] = useState<string | null>(null)
   const [actionResult, setActionResult] = useState<string | null>(null)
   const [lastGenVendor, setLastGenVendor] = useState<string | null>(null)
@@ -44,6 +83,14 @@ export default function Challengers() {
     const t = setTimeout(() => setDebouncedSearch(searchInput), 300)
     return () => clearTimeout(t)
   }, [searchInput])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (debouncedSearch.trim()) next.set('search', debouncedSearch.trim())
+    else next.delete('search')
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [debouncedSearch, searchParams, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     async () => {
@@ -131,6 +178,7 @@ export default function Challengers() {
   const filtered = debouncedSearch
     ? challengerSummaries.filter(s => s.name.toLowerCase().includes(debouncedSearch.toLowerCase()))
     : challengerSummaries
+  const currentListPath = useMemo(() => challengersPath(debouncedSearch), [debouncedSearch])
 
   const totalLeads = filtered.reduce((s, c) => s + c.totalLeads, 0)
   const totalActive = filtered.reduce((s, c) => s + c.activePurchase, 0)
@@ -230,16 +278,39 @@ export default function Challengers() {
     },
     {
       key: 'actions',
-      header: '',
+      header: 'Actions',
       render: (r) => (
-        <button
-          onClick={(e) => { e.stopPropagation(); handleGenerate(r.name) }}
-          disabled={generatingFor === r.name}
-          className="p-1 text-slate-400 hover:text-green-400 transition-colors disabled:opacity-50"
-          title="Generate Campaign"
-        >
-          <Send className={clsx('h-3.5 w-3.5', generatingFor === r.name && 'animate-pulse')} />
-        </button>
+        <div className="flex items-center gap-3 text-xs">
+          <Link
+            to={evidencePath(r.name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-violet-300 hover:text-violet-200 transition-colors"
+          >
+            Evidence
+          </Link>
+          <Link
+            to={reportsPath(r.name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+          >
+            Reports
+          </Link>
+          <Link
+            to={opportunitiesPath(r.name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-emerald-300 hover:text-emerald-200 transition-colors"
+          >
+            Opportunities
+          </Link>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleGenerate(r.name) }}
+            disabled={generatingFor === r.name}
+            className="p-1 text-slate-400 hover:text-green-400 transition-colors disabled:opacity-50"
+            title="Generate Campaign"
+          >
+            <Send className={clsx('h-3.5 w-3.5', generatingFor === r.name && 'animate-pulse')} />
+          </button>
+        </div>
       ),
     },
   ]
@@ -344,6 +415,7 @@ export default function Challengers() {
           <DataTable
             columns={columns}
             data={filtered}
+            onRowClick={(row) => navigate(vendorDetailPath(row.name, currentListPath))}
             emptyMessage={targets.length === 0
               ? 'No challenger targets configured. Add them in Vendor Targets.'
               : 'No matching challengers found'
