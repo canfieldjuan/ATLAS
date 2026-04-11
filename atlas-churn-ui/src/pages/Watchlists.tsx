@@ -1660,8 +1660,10 @@ export default function Watchlists() {
     {
       key: 'vendor',
       header: 'Vendor Movement',
-      render: (row) => (
-        <div>
+      render: (row) => {
+        const primaryWitnessId = row.reasoning_reference_ids?.witness_ids?.[0] || ''
+        return (
+          <div>
           <div className="font-medium text-white">{row.vendor_name}</div>
           <div className="text-xs text-slate-500">{row.product_category ?? 'Uncategorized'}</div>
           <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
@@ -1692,6 +1694,16 @@ export default function Watchlists() {
             Evidence Explorer
           </Link>
           <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
+            {primaryWitnessId ? (
+              <Link
+                to={watchlistEvidenceExplorerPath(searchParams, row.vendor_name, primaryWitnessId, selectedSourceFilter)}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={`Open vendor witness for ${row.vendor_name}`}
+                className="text-cyan-300 hover:text-cyan-200"
+              >
+                Witness
+              </Link>
+            ) : null}
             <Link
               to={watchlistReportsPath(searchParams, row.vendor_name)}
               onClick={(event) => event.stopPropagation()}
@@ -1710,7 +1722,7 @@ export default function Watchlists() {
             </Link>
           </div>
         </div>
-      ),
+      )},
       sortable: true,
       sortValue: (row) => row.vendor_name,
     },

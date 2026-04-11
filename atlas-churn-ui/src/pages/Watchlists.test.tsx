@@ -176,6 +176,7 @@ describe('Watchlists', () => {
           freshness_reason: 'Reasoning synthesis has not been materialized for this vendor yet',
           freshness_timestamp: '2026-04-07T16:00:00Z',
           synthesis_wedge_label: 'Reliability pressure',
+          reasoning_reference_ids: { witness_ids: ['witness:vendor:zendesk:1'] },
           reasoning_delta: {
             wedge_changed: true,
             confidence_changed: false,
@@ -836,6 +837,20 @@ describe('Watchlists', () => {
     expect(screen.getByRole('link', { name: 'Open primary witness for Zendesk' })).toHaveAttribute(
       'href',
       '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Azendesk%3A1&source=reddit&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
+  })
+
+  it('preserves direct vendor witness drilldown from the movement feed', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open vendor witness for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&witness_id=witness%3Avendor%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1',
     )
   })
 
