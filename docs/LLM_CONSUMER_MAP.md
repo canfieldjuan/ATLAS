@@ -1,6 +1,11 @@
 # Atlas LLM Consumer Map
 
 > Last updated: 2026-04-11
+>
+> **WARNING**: GPU is not detected (NVRM: No NVIDIA GPU found). All local
+> inference (vLLM, Ollama) is non-functional. Tasks designed for free local
+> inference are falling back to paid APIs. See docs/GPU_STATUS.md.
+> Full power cycle of the Brain PC is required to recover.
 
 ## Active API Providers
 
@@ -9,8 +14,8 @@
 | **Anthropic Direct** | claude-3-5-haiku-latest | Anthropic API key | Active |
 | **Anthropic Batch** | claude-haiku-4-5, claude-sonnet-4-5 (50% discount) | Anthropic API key | Active |
 | **OpenRouter** | anthropic/claude-haiku-4-5, anthropic/claude-sonnet-4-5 | OpenRouter API key | Active |
-| **vLLM (local)** | Qwen3-30B-A3B-AWQ | Free | Inactive |
-| **Ollama (local)** | qwen3:14b, qwen3:32b, phi3:mini | Free | Inactive |
+| **vLLM (local)** | Qwen3-30B-A3B-AWQ | Free | **DOWN - GPU not detected** |
+| **Ollama (local)** | qwen3:14b, qwen3:32b, phi3:mini | Free | **DOWN - GPU not detected** |
 
 ## .env Model Overrides
 
