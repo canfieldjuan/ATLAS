@@ -430,6 +430,10 @@ function watchlistVendorUrl(searchParams: URLSearchParams, vendorName: string) {
   return `${window.location.origin}${watchlistPath(vendorFocusParams(searchParams, vendorName))}`
 }
 
+function watchlistVendorWorkspaceUrl(searchParams: URLSearchParams, vendorName: string) {
+  return `${window.location.origin}${watchlistVendorPath(searchParams, vendorName)}`
+}
+
 function watchlistOpportunitiesUrl(searchParams: URLSearchParams, vendorName: string) {
   return `${window.location.origin}${watchlistOpportunitiesPath(searchParams, vendorName)}`
 }
@@ -1467,6 +1471,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyAccountRowVendorLink(row: AccountsInMotionFeedItem) {
+    try {
+      await navigator.clipboard.writeText(watchlistVendorWorkspaceUrl(outboundWatchlistSearchParams, row.vendor))
+      setActionError(null)
+      setActionMessage(`Copied vendor link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy vendor link')
+    }
+  }
+
   async function handleCopyAccountRowReviewLink(row: AccountsInMotionFeedItem, reviewId: string) {
     try {
       await navigator.clipboard.writeText(watchlistReviewUrl(searchParams, row, reviewId))
@@ -2471,6 +2486,18 @@ export default function Watchlists() {
               }}
             >
               View vendor
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopyAccountRowVendorLink(row)
+              }}
+              aria-label={`Copy account vendor link for ${row.vendor}`}
+              className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+              title="Copy vendor link"
+            >
+              Copy vendor
             </button>
             {row.company && (
               <Link

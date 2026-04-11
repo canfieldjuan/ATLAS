@@ -424,6 +424,27 @@ describe('Watchlists', () => {
     )
   })
 
+  it('copies a vendor workspace link directly from an account row', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy account vendor link for Zendesk' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1`,
+      )
+    })
+    expect(await screen.findByText('Copied vendor link for Acme Corp')).toBeInTheDocument()
+  })
+
   it('copies an opportunity link directly from an account row', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
