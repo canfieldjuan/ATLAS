@@ -142,6 +142,59 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('2 event types selected')).toBeInTheDocument()
   })
 
+  it('shows live setup checks before save', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+
+    expect(screen.getByText('Webhook URL is required')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Endpoint URL'), 'hooks.example.com/atlas')
+    expect(screen.getByText('Webhook URL must start with http:// or https://')).toBeInTheDocument()
+
+    await user.clear(screen.getByLabelText('Signing Secret'))
+    await user.type(screen.getByLabelText('Signing Secret'), 'short-secret')
+    expect(screen.getByText('Webhook secret must be at least 16 characters')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /CRM Escalation/i }))
+    expect(screen.getByText('CRM channels require an auth header')).toBeInTheDocument()
+  })
+
+  it('updates the sample payload preview for channel-specific formats', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+
+    expect(screen.getByText('Payload Preview')).toBeInTheDocument()
+    expect(screen.getByText(/"event": "churn_alert"/)).toBeInTheDocument()
+    expect(screen.getByText(/"vendor": "Acme Rival"/)).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Channel'), 'slack')
+    expect(screen.getByText(/"text": "Atlas: churn_alert for Acme Rival"/)).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Channel'), 'teams')
+    expect(screen.getByText(/"text": "Atlas Intelligence: churn_alert"/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /CRM Escalation/i }))
+    await user.type(screen.getByLabelText('Auth Header'), 'Bearer atlas-token')
+    expect(screen.getByText(/"dealname": "Churn Signal: Acme Rival"/)).toBeInTheDocument()
+    expect(screen.getByText(/"Authorization": "Bearer atlas-token"/)).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Preview Event'), 'report_generated')
+    expect(screen.getByText(/"hs_note_body": "Atlas Intelligence: report_generated for Acme Rival/)).toBeInTheDocument()
+  })
+
   it('creates a webhook from the form', async () => {
     const user = userEvent.setup()
 

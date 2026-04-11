@@ -98,6 +98,195 @@ const CHANNEL_GUIDANCE: Record<WebhookChannel, { title: string; detail: string }
 }
 
 const SUMMARY_WINDOWS = [7, 30, 90] as const
+const MIN_SECRET_LENGTH = 16
+
+const SAMPLE_EVENT_PAYLOADS: Record<WebhookEventType, Record<string, string | number>> = {
+  churn_alert: {
+    signal_type: 'competitive_displacement',
+    severity: 'high',
+    account_name: 'Acme Bank',
+    company_name: 'Acme Bank',
+    evidence_count: 4,
+  },
+  change_event: {
+    event_type: 'pricing_change',
+    delta: 2.1,
+    market: 'mid-market support',
+    confidence: 'elevated',
+  },
+  signal_update: {
+    signal_type: 'review_velocity',
+    evidence_window_days: 30,
+    witness_count: 8,
+    refresh_reason: 'watchlist_monitoring',
+  },
+  report_generated: {
+    artifact_type: 'battle_card',
+    report_title: 'Acme Rival Battle Card',
+    report_id: 'report_123',
+    freshness_state: 'fresh',
+  },
+}
+
+function previewTimestamp() {
+  return '2026-04-10T12:00:00Z'
+}
+
+function buildPreviewEnvelope(eventType: WebhookEventType) {
+  return {
+    event: eventType,
+    vendor: 'Acme Rival',
+    timestamp: previewTimestamp(),
+    data: SAMPLE_EVENT_PAYLOADS[eventType],
+  }
+}
+
+function formatSlackPreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
+  const fields = Object.entries(envelope.data)
+    .slice(0, 10)
+    .map(([key, value]) => ({ type: 'mrkdwn', text: `*${key}:* ${value}` }))
+
+  return {
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: `:bell: *Atlas Intelligence Alert*  |  \`${envelope.event}\`` } },
+      { type: 'section', text: { type: 'mrkdwn', text: `*Vendor:* ${envelope.vendor}  |  ${envelope.timestamp.slice(0, 19)}` } },
+      ...(fields.length ? [{ type: 'section', fields }] : []),
+    ],
+    text: `Atlas: ${envelope.event} for ${envelope.vendor}`,
+  }
+}
+
+function formatTeamsPreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
+  const facts = Object.entries(envelope.data)
+    .slice(0, 10)
+    .map(([key, value]) => ({ title: String(key), value: String(value) }))
+
+  return {
+    type: 'message',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      contentUrl: null,
+      content: {
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        type: 'AdaptiveCard',
+        version: '1.4',
+        body: [
+          {
+            type: 'TextBlock',
+            size: 'Medium',
+            weight: 'Bolder',
+            text: `Atlas Intelligence: ${envelope.event}`,
+          },
+          {
+            type: 'FactSet',
+            facts: [
+              { title: 'Vendor', value: envelope.vendor },
+              { title: 'Time', value: envelope.timestamp.slice(0, 19) },
+              ...facts,
+            ],
+          },
+        ],
+      },
+    }],
+  }
+}
+
+function formatHubSpotPreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
+  if (envelope.event === 'churn_alert' || envelope.event === 'signal_update') {
+    const properties: Record<string, string> = {
+      dealname: `Churn Signal: ${envelope.vendor}`,
+      pipeline: 'default',
+      dealstage: 'qualifiedtobuy',
+      atlas_vendor: envelope.vendor,
+      atlas_event_type: envelope.event,
+    }
+    Object.entries(envelope.data)
+      .slice(0, 15)
+      .forEach(([key, value]) => {
+        properties[`atlas_${key}`.toLowerCase().replaceAll(' ', '_').slice(0, 50)] = String(value).slice(0, 65535)
+      })
+    return { properties }
+  }
+
+  return {
+    properties: {
+      hs_note_body: [
+        `Atlas Intelligence: ${envelope.event} for ${envelope.vendor}`,
+        ...Object.entries(envelope.data).slice(0, 20).map(([key, value]) => `  ${key}: ${value}`),
+      ].join('\n'),
+      hs_timestamp: envelope.timestamp,
+    },
+  }
+}
+
+function formatSalesforcePreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
+  const fields: Record<string, string> = {
+    Atlas_Vendor__c: envelope.vendor,
+    Atlas_Event_Type__c: envelope.event,
+    Atlas_Timestamp__c: envelope.timestamp,
+  }
+  Object.entries(envelope.data)
+    .slice(0, 15)
+    .forEach(([key, value]) => {
+      fields[`Atlas_${key}__c`.slice(0, 40)] = String(value).slice(0, 255)
+    })
+  return fields
+}
+
+function formatPipedrivePreview(envelope: ReturnType<typeof buildPreviewEnvelope>) {
+  if (envelope.event === 'churn_alert' || envelope.event === 'signal_update') {
+    return {
+      title: `Churn Signal: ${envelope.vendor}`,
+      status: 'open',
+      atlas_vendor: envelope.vendor,
+      atlas_event_type: envelope.event,
+      ...Object.fromEntries(
+        Object.entries(envelope.data).slice(0, 10).map(([key, value]) => [`atlas_${key}`, String(value)]),
+      ),
+    }
+  }
+
+  return {
+    content: [
+      `Atlas Intelligence: ${envelope.event} for ${envelope.vendor}`,
+      ...Object.entries(envelope.data).slice(0, 20).map(([key, value]) => `  ${key}: ${value}`),
+    ].join('\n'),
+  }
+}
+
+function buildPayloadPreview(channel: WebhookChannel, eventType: WebhookEventType) {
+  const envelope = buildPreviewEnvelope(eventType)
+  if (channel === 'slack') return formatSlackPreview(envelope)
+  if (channel === 'teams') return formatTeamsPreview(envelope)
+  if (channel === 'crm_hubspot') return formatHubSpotPreview(envelope)
+  if (channel === 'crm_salesforce') return formatSalesforcePreview(envelope)
+  if (channel === 'crm_pipedrive') return formatPipedrivePreview(envelope)
+  return envelope
+}
+
+function validateWebhookForm(form: WebhookCreateBody) {
+  const issues: string[] = []
+  const url = form.url.trim()
+  const secret = form.secret.trim()
+  const authHeader = form.auth_header?.trim() || ''
+  if (!url) {
+    issues.push('Webhook URL is required')
+  } else if (!/^https?:\/\//i.test(url)) {
+    issues.push('Webhook URL must start with http:// or https://')
+  }
+  if (!secret) {
+    issues.push('Webhook secret is required')
+  } else if (secret.length < MIN_SECRET_LENGTH) {
+    issues.push(`Webhook secret must be at least ${MIN_SECRET_LENGTH} characters`)
+  }
+  if (form.event_types.length === 0) {
+    issues.push('Select at least one event type')
+  }
+  if (form.channel.startsWith('crm_') && !authHeader) {
+    issues.push('CRM channels require an auth header')
+  }
+  return issues
+}
 
 function formatTs(value: string | null | undefined) {
   if (!value) return '--'
@@ -146,6 +335,7 @@ export default function IncidentAlerts() {
   const [busyWebhookId, setBusyWebhookId] = useState<string | null>(null)
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
+  const [selectedPreviewEventType, setSelectedPreviewEventType] = useState<WebhookEventType>('churn_alert')
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -211,6 +401,20 @@ export default function IncidentAlerts() {
   const selectedEventCount = form.event_types.length
   const requiresAuthHeader = form.channel.startsWith('crm_')
   const sortedEvents = useMemo(() => new Set(form.event_types), [form.event_types])
+  const validationIssues = useMemo(() => validateWebhookForm(form), [form])
+  const previewEventType = form.event_types.includes(selectedPreviewEventType)
+    ? selectedPreviewEventType
+    : (form.event_types[0] ?? 'churn_alert')
+  const previewPayload = useMemo(
+    () => buildPayloadPreview(form.channel, previewEventType),
+    [form.channel, previewEventType],
+  )
+  const previewHeaders = useMemo(() => ({
+    'Content-Type': 'application/json',
+    'X-Atlas-Event': previewEventType,
+    'X-Atlas-Signature': 'sha256=<computed-hmac>',
+    ...(form.auth_header?.trim() ? { Authorization: form.auth_header.trim() } : {}),
+  }), [form.auth_header, previewEventType])
   const activityLoading = deliveryLoading || crmPushLoading
   const activityRefreshing = deliveryRefreshing || crmPushRefreshing
   const channelGuidance = CHANNEL_GUIDANCE[form.channel]
@@ -240,12 +444,14 @@ export default function IncidentAlerts() {
       }
       return { ...current, event_types: Array.from(next) as WebhookEventType[] }
     })
+    setSelectedPreviewEventType(eventType)
   }
 
   function applyPreset(presetId: string) {
     const preset = WEBHOOK_PRESETS.find((item) => item.id === presetId)
     if (!preset) return
     setSelectedPresetId(preset.id)
+    setSelectedPreviewEventType(preset.event_types[0] ?? 'churn_alert')
     setForm((current) => ({
       ...current,
       channel: preset.channel,
@@ -255,23 +461,8 @@ export default function IncidentAlerts() {
 
   async function handleCreateWebhook(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!form.url.trim()) {
-      setActionError('Webhook URL is required')
-      setMessage(null)
-      return
-    }
-    if (!form.secret.trim()) {
-      setActionError('Webhook secret is required')
-      setMessage(null)
-      return
-    }
-    if (form.event_types.length === 0) {
-      setActionError('Select at least one event type')
-      setMessage(null)
-      return
-    }
-    if (requiresAuthHeader && !form.auth_header?.trim()) {
-      setActionError('CRM channels require an auth header')
+    if (validationIssues.length > 0) {
+      setActionError(validationIssues[0])
       setMessage(null)
       return
     }
@@ -784,6 +975,67 @@ export default function IncidentAlerts() {
                 {selectedEventCount} event type{selectedEventCount === 1 ? '' : 's'} selected
               </div>
             </fieldset>
+
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+                <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Setup Checks</div>
+                <div className="mt-2 text-sm text-slate-300">
+                  {validationIssues.length ? 'Resolve these issues before saving this webhook.' : 'This webhook configuration is ready to save.'}
+                </div>
+                <ul className="mt-3 space-y-2 text-sm">
+                  {validationIssues.length ? validationIssues.map((issue) => (
+                    <li key={issue} className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-rose-200">
+                      {issue}
+                    </li>
+                  )) : (
+                    <li className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-emerald-200">
+                      Atlas will sign the payload, include the selected event header, and deliver the formatted body shown here.
+                    </li>
+                  )}
+                </ul>
+              </div>
+
+              <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Payload Preview</div>
+                    <div className="mt-1 text-sm text-slate-300">
+                      Sample {previewEventType} payload for {CHANNEL_OPTIONS.find((option) => option.value === form.channel)?.label ?? form.channel}.
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="preview-event-type" className="text-xs uppercase tracking-wide text-slate-500">
+                      Preview Event
+                    </label>
+                    <select
+                      id="preview-event-type"
+                      value={previewEventType}
+                      onChange={(event) => setSelectedPreviewEventType(event.target.value as WebhookEventType)}
+                      className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+                    >
+                      {form.event_types.length ? form.event_types.map((eventType) => (
+                        <option key={eventType} value={eventType}>{eventType}</option>
+                      )) : (
+                        <option value="churn_alert">churn_alert</option>
+                      )}
+                    </select>
+                    <span className={`rounded-full border px-2 py-1 text-xs ${channelTone(form.channel)}`}>
+                      {CHANNEL_OPTIONS.find((option) => option.value === form.channel)?.label ?? form.channel}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Headers Sent</div>
+                    <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-xs text-slate-300">{JSON.stringify(previewHeaders, null, 2)}</pre>
+                  </div>
+                  <div>
+                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Request Body</div>
+                    <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-xs text-slate-300">{JSON.stringify(previewPayload, null, 2)}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <button
               type="submit"
