@@ -2072,15 +2072,28 @@ export default function Watchlists() {
           {row.synthesis_wedge_label && (
             <div className="mt-1 text-[11px] text-cyan-300">{row.synthesis_wedge_label}</div>
           )}
-          <Link
-            to={watchlistEvidenceExplorerPath(searchParams, row.vendor_name, null, selectedSourceFilter)}
-            onClick={(event) => event.stopPropagation()}
-            aria-label={`Open vendor evidence for ${row.vendor_name}`}
-            className="mt-2 inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200"
-          >
-            <Fingerprint className="h-3 w-3" />
-            Evidence Explorer
-          </Link>
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px]">
+            <Link
+              to={watchlistEvidenceExplorerPath(searchParams, row.vendor_name, null, selectedSourceFilter)}
+              onClick={(event) => event.stopPropagation()}
+              aria-label={`Open vendor evidence for ${row.vendor_name}`}
+              className="inline-flex items-center gap-1 text-violet-300 hover:text-violet-200"
+            >
+              <Fingerprint className="h-3 w-3" />
+              Evidence Explorer
+            </Link>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopyVendorEvidenceLink(row.vendor_name, selectedSourceFilter)
+              }}
+              aria-label={`Copy vendor evidence link for ${row.vendor_name}`}
+              className="text-slate-300 hover:text-slate-200"
+            >
+              Copy evidence
+            </button>
+          </div>
           <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
             {primaryWitnessId ? (
               <Link
