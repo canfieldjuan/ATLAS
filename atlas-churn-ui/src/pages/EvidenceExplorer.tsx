@@ -110,7 +110,15 @@ function parseBackTo(value: string | null) {
 
 function backToLabel(value: string | null) {
   if (!value) return 'Back'
-  if (value.startsWith('/watchlists')) return 'Back to Watchlists'
+  if (value.startsWith('/watchlists')) {
+    try {
+      const url = new URL(value, window.location.origin)
+      if (url.searchParams.get('account_company')?.trim()) return 'Back to Account Review'
+    } catch {
+      // Fall through to the generic label.
+    }
+    return 'Back to Watchlists'
+  }
   if (value.startsWith('/vendors/')) return 'Back to Vendor'
   if (value.startsWith('/opportunities')) return 'Back to Opportunities'
   if (value.startsWith('/reports')) return 'Back to Reports'

@@ -64,6 +64,23 @@ describe('ReviewDetail', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/vendors/Zendesk')
   })
 
+  it('returns to the focused account review when back_to points at a watchlist account path', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to Account Review' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor')
+  })
+
   it('returns to evidence explorer when back_to points at an evidence workspace', async () => {
     const user = userEvent.setup()
 

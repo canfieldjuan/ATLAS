@@ -161,7 +161,15 @@ function normalizeBackTo(value: string | null | undefined): string | null {
 }
 
 function backToLabel(backTo: string): string {
-  if (backTo.startsWith('/watchlists')) return 'Back to Watchlists'
+  if (backTo.startsWith('/watchlists')) {
+    try {
+      const url = new URL(backTo, window.location.origin)
+      if (url.searchParams.get('account_company')?.trim()) return 'Back to Account Review'
+    } catch {
+      // Fall through to the generic label.
+    }
+    return 'Back to Watchlists'
+  }
   if (backTo.startsWith('/evidence')) return 'Back to Evidence'
   if (backTo.startsWith('/reports')) return 'Back to Reports'
   if (backTo.startsWith('/opportunities')) return 'Back to Opportunities'

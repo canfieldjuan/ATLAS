@@ -66,6 +66,22 @@ function opportunitiesPath(vendorName: string, backTo: string) {
 
 // Shared specialized and structured report rendering is imported for this page.
 
+function backToLabel(value: string) {
+  if (value.startsWith('/vendors/')) return 'Back to Vendor'
+  if (value.startsWith('/watchlists')) {
+    try {
+      const url = new URL(value, window.location.origin)
+      if (url.searchParams.get('account_company')?.trim()) return 'Back to Account Review'
+    } catch {
+      // Fall through to the generic label.
+    }
+    return 'Back to Watchlists'
+  }
+  if (value.startsWith('/evidence')) return 'Back to Evidence'
+  if (value.startsWith('/opportunities')) return 'Back to Opportunities'
+  return 'Back to Reports'
+}
+
 // ---------------------------------------------------------------------------
 // Page component
 // ---------------------------------------------------------------------------
@@ -136,15 +152,7 @@ export default function ReportDetail() {
     ) ? value : null
   })()
   const backToReports = stateBackTo ?? queryBackTo ?? '/reports'
-  const backButtonLabel = backToReports.startsWith('/vendors/')
-    ? 'Back to Vendor'
-    : backToReports.startsWith('/watchlists')
-      ? 'Back to Watchlists'
-      : backToReports.startsWith('/evidence')
-        ? 'Back to Evidence'
-        : backToReports.startsWith('/opportunities')
-          ? 'Back to Opportunities'
-      : 'Back to Reports'
+  const backButtonLabel = backToLabel(backToReports)
   const detailShareUrl = (() => {
     const next = new URLSearchParams()
     if (subModalOpen) {

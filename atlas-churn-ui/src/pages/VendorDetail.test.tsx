@@ -202,7 +202,7 @@ describe('VendorDetail', () => {
     const user = userEvent.setup()
 
     render(
-      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp']}>
         <Routes>
           <Route path="/vendors/:name" element={<VendorDetail />} />
         </Routes>
@@ -210,9 +210,9 @@ describe('VendorDetail', () => {
     )
 
     expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Back to Watchlists' }))
+    await user.click(screen.getByRole('button', { name: 'Back to Account Review' }))
 
-    expect(mockNavigate).toHaveBeenCalledWith('/watchlists?view=view-1&account_vendor=Zendesk')
+    expect(mockNavigate).toHaveBeenCalledWith('/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp')
   })
 
   it('surfaces the upstream watchlist path when entered from evidence explorer', async () => {

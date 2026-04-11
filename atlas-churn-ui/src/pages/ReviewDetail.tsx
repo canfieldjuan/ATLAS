@@ -52,6 +52,23 @@ function opportunitiesPath(vendorName: string, backTo: string) {
   return `/opportunities?${next.toString()}`
 }
 
+function backToLabel(value: string) {
+  if (value.startsWith('/vendors/')) return 'Back to Vendor'
+  if (value.startsWith('/watchlists')) {
+    try {
+      const url = new URL(value, window.location.origin)
+      if (url.searchParams.get('account_company')?.trim()) return 'Back to Account Review'
+    } catch {
+      // Fall through to the generic label.
+    }
+    return 'Back to Watchlists'
+  }
+  if (value.startsWith('/evidence')) return 'Back to Evidence'
+  if (value.startsWith('/reports')) return 'Back to Reports'
+  if (value.startsWith('/opportunities')) return 'Back to Opportunities'
+  return 'Back to Reviews'
+}
+
 export default function ReviewDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -125,17 +142,7 @@ export default function ReviewDetail() {
           className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          {backToReviews.startsWith('/vendors/')
-            ? 'Back to Vendor'
-            : backToReviews.startsWith('/watchlists')
-              ? 'Back to Watchlists'
-              : backToReviews.startsWith('/evidence')
-                ? 'Back to Evidence'
-                : backToReviews.startsWith('/reports')
-                  ? 'Back to Reports'
-                  : backToReviews.startsWith('/opportunities')
-                    ? 'Back to Opportunities'
-                  : 'Back to Reviews'}
+          {backToLabel(backToReviews)}
         </button>
         <button
           onClick={refresh}

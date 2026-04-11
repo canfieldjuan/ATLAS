@@ -518,4 +518,27 @@ describe('ReportDetail', () => {
     expect(router.state.location.pathname).toBe('/evidence')
     expect(router.state.location.search).toBe('?vendor=Zendesk&tab=witnesses&source=reddit')
   })
+
+  it('returns to the focused account review when back_to targets a watchlist account path', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/watchlists', element: <div data-testid="watchlists-route">Watchlists route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Account Review' }))
+
+    expect(await screen.findByTestId('watchlists-route')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/watchlists')
+    expect(router.state.location.search).toBe('?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor')
+  })
 })
