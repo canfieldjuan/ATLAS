@@ -314,7 +314,7 @@ async def get_witness(
                r.source AS review_source, r.source_url, r.enrichment,
                r.reviewer_name, r.enrichment_status
         FROM b2b_vendor_witnesses w
-        LEFT JOIN b2b_reviews r ON r.id = w.review_id
+        LEFT JOIN b2b_reviews r ON r.id = w.review_id::uuid
         WHERE w.vendor_name = $1 AND w.witness_id = $2
           AND w.analysis_window_days = $3
           AND w.as_of_date = $4
@@ -526,7 +526,13 @@ async def get_trace(
     witnesses = [_row_to_dict(r) for r in witness_rows]
 
     # Layer 4: Source reviews (unique review_ids from witnesses)
-    review_ids = list({r["review_id"] for r in witness_rows if r["review_id"]})
+    review_ids = []
+    for r in witness_rows:
+        try:
+            if r["review_id"]:
+                review_ids.append(_uuid.UUID(r["review_id"]))
+        except (ValueError, AttributeError):
+            pass
     reviews = []
     if review_ids:
         review_rows = await pool.fetch(
