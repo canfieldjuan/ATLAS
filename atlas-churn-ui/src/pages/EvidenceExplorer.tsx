@@ -8,7 +8,7 @@ import {
 import { clsx } from 'clsx'
 import EvidenceDrawer, { SourceBadge, SIGNAL_COLORS } from '../components/EvidenceDrawer'
 import {
-  listTrackedVendors, searchAvailableVendors, fetchWitnesses, fetchEvidenceVault, fetchEvidenceTrace,
+  listTrackedVendors, listWatchlistViews, searchAvailableVendors, fetchWitnesses, fetchEvidenceVault, fetchEvidenceTrace,
 } from '../api/client'
 import type {
   EvidenceWitness, EvidenceFacets, EvidenceVault, EvidenceTrace,
@@ -68,11 +68,17 @@ function evidenceVendorPath(searchParams: URLSearchParams, vendorName: string) {
   return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
 }
 
-function evidenceWatchlistsPath(searchParams: URLSearchParams, vendorName: string) {
+function evidenceWatchlistsPath(searchParams: URLSearchParams, vendorName: string, viewId?: string | null) {
   const params = new URLSearchParams()
-  params.set('vendor_name', vendorName)
+  if (viewId) params.set('view', viewId)
+  else params.set('vendor_name', vendorName)
   params.set('back_to', evidenceExplorerPath(searchParams))
   return `/watchlists?${params.toString()}`
+}
+
+function watchlistViewVendorNames(view: { vendor_names?: string[] | null; vendor_name?: string | null }) {
+  if (view.vendor_names?.length) return view.vendor_names
+  return view.vendor_name ? [view.vendor_name] : []
 }
 
 function parseBackTo(value: string | null) {
@@ -156,6 +162,7 @@ export default function EvidenceExplorer() {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [trackedVendorNames, setTrackedVendorNames] = useState<string[]>([])
+  const [watchlistViews, setWatchlistViews] = useState<Array<{ id: string; vendor_names?: string[] | null; vendor_name?: string | null }>>([])
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Tab state
@@ -192,6 +199,18 @@ export default function EvidenceExplorer() {
     () => Boolean(activeVendor) && trackedVendorNames.includes(activeVendor.toLowerCase()),
     [activeVendor, trackedVendorNames],
   )
+  const matchedWatchlistViewId = useMemo(() => {
+    if (!activeVendor) return null
+    const normalizedVendor = activeVendor.toLowerCase()
+    const exactSingleVendorMatch = watchlistViews.find((view) => {
+      const vendorNames = watchlistViewVendorNames(view).map((name) => name.toLowerCase())
+      return vendorNames.length === 1 && vendorNames[0] === normalizedVendor
+    })
+    if (exactSingleVendorMatch) return exactSingleVendorMatch.id
+    return watchlistViews.find((view) => (
+      watchlistViewVendorNames(view).some((name) => name.toLowerCase() === normalizedVendor)
+    ))?.id ?? null
+  }, [activeVendor, watchlistViews])
   const drawerBackToPath = useMemo(() => {
     const next = new URLSearchParams(searchParams.toString())
     if (activeVendor) next.set('vendor', activeVendor)
@@ -245,14 +264,19 @@ export default function EvidenceExplorer() {
 
   useEffect(() => {
     let cancelled = false
-    listTrackedVendors()
-      .then((res) => {
+    Promise.all([
+      listTrackedVendors(),
+      listWatchlistViews().catch(() => ({ views: [], count: 0 })),
+    ])
+      .then(([trackedRes, savedViewsRes]) => {
         if (cancelled) return
-        setTrackedVendorNames((res.vendors || []).map((vendor) => vendor.vendor_name.toLowerCase()))
+        setTrackedVendorNames((trackedRes.vendors || []).map((vendor) => vendor.vendor_name.toLowerCase()))
+        setWatchlistViews(savedViewsRes.views || [])
       })
       .catch(() => {
         if (cancelled) return
         setTrackedVendorNames([])
+        setWatchlistViews([])
       })
     return () => {
       cancelled = true
@@ -453,7 +477,7 @@ export default function EvidenceExplorer() {
               </span>
               {isTrackedVendor ? (
                 <Link
-                  to={evidenceWatchlistsPath(searchParams, activeVendor)}
+                  to={evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId)}
                   className="text-violet-300 hover:text-violet-200 transition-colors"
                 >
                   Watchlists
