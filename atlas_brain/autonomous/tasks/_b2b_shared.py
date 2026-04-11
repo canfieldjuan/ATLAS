@@ -11883,6 +11883,7 @@ async def read_company_signal_candidate_group_summary(
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
+            "pending_priority_reasons": [],
             "oldest_pending_group": None,
         }
 
@@ -12040,6 +12041,34 @@ async def read_company_signal_candidate_group_summary(
         """,
         *params,
     )
+    pending_reason_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT {_company_signal_candidate_group_priority_band_sql()} AS review_priority_band,
+               {_company_signal_candidate_group_priority_reason_sql()} AS review_priority_reason,
+               COUNT(*)::int AS group_count,
+               COALESCE(SUM(review_count), 0)::int AS review_count
+        FROM filtered
+        WHERE review_status = 'pending'
+        GROUP BY 1, 2
+        ORDER BY CASE {_company_signal_candidate_group_priority_band_sql()}
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     ELSE 3
+                 END,
+                 group_count DESC,
+                 review_count DESC,
+                 review_priority_reason ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     oldest_pending_rows = await pool.fetch(
         f"""
         WITH filtered AS (
@@ -12117,6 +12146,7 @@ async def read_company_signal_candidate_group_summary(
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],
+        "pending_priority_reasons": [dict(row) for row in pending_reason_rows],
         "oldest_pending_group": oldest_pending_group,
     }
 
@@ -12206,6 +12236,7 @@ async def read_company_signal_review_impact_summary(
             },
             "scopes": [],
             "priority_bands": [],
+            "priority_reasons": [],
             "top_vendors": [],
         }
 
@@ -12319,6 +12350,68 @@ async def read_company_signal_review_impact_summary(
         """,
         *params,
     )
+    priority_reason_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        rebuild_rows AS (
+            SELECT DISTINCT ON (review_batch_id, vendor_name)
+                   review_batch_id,
+                   vendor_name,
+                   COALESCE(review_priority_band, 'unknown') AS review_priority_band,
+                   COALESCE(review_priority_reason, 'unknown') AS review_priority_reason,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY review_batch_id, vendor_name, created_at DESC
+        ),
+        reason_rebuilds AS (
+            SELECT review_priority_band,
+                   review_priority_reason,
+                   COUNT(*) FILTER (WHERE rebuild_requested)::int AS rebuild_requests,
+                   COUNT(*) FILTER (WHERE rebuild_triggered)::int AS rebuild_triggered,
+                   COALESCE(SUM(rebuild_persisted_count), 0)::int AS rebuild_persisted_reports,
+                   COALESCE(SUM(rebuild_total_accounts), 0)::int AS rebuild_total_accounts
+            FROM rebuild_rows
+            GROUP BY 1, 2
+        )
+        SELECT COALESCE(f.review_priority_band, 'unknown') AS review_priority_band,
+               COALESCE(f.review_priority_reason, 'unknown') AS review_priority_reason,
+               COUNT(*)::int AS action_count,
+               COUNT(*) FILTER (WHERE f.review_action = 'approved')::int AS approvals,
+               COUNT(*) FILTER (WHERE f.review_action = 'suppressed')::int AS suppressions,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'created')::int AS company_signal_creations,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'updated')::int AS company_signal_updates,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'deleted')::int AS company_signal_deletions,
+               COUNT(*) FILTER (WHERE f.company_signal_action = 'none')::int AS company_signal_noops,
+               COALESCE(rr.rebuild_requests, 0)::int AS rebuild_requests,
+               COALESCE(rr.rebuild_triggered, 0)::int AS rebuild_triggered,
+               COALESCE(rr.rebuild_persisted_reports, 0)::int AS rebuild_persisted_reports,
+               COALESCE(rr.rebuild_total_accounts, 0)::int AS rebuild_total_accounts
+        FROM filtered f
+        LEFT JOIN reason_rebuilds rr
+          ON rr.review_priority_band = COALESCE(f.review_priority_band, 'unknown')
+         AND rr.review_priority_reason = COALESCE(f.review_priority_reason, 'unknown')
+        GROUP BY 1, 2, rr.rebuild_requests, rr.rebuild_triggered, rr.rebuild_persisted_reports, rr.rebuild_total_accounts
+        ORDER BY CASE COALESCE(f.review_priority_band, 'unknown')
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     WHEN 'low' THEN 3
+                     ELSE 4
+                 END,
+                 action_count DESC,
+                 review_priority_reason ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     vendor_rows = await pool.fetch(
         f"""
         WITH filtered AS (
@@ -12420,6 +12513,7 @@ async def read_company_signal_review_impact_summary(
         "totals": totals_payload,
         "scopes": [dict(row) for row in scope_rows],
         "priority_bands": [_with_effect_metrics(row) for row in priority_rows],
+        "priority_reasons": [_with_effect_metrics(row) for row in priority_reason_rows],
         "top_vendors": [_with_effect_metrics(row) for row in vendor_rows],
     }
 

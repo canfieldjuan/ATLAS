@@ -421,6 +421,20 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             ],
             [
                 {
+                    "review_priority_band": "promote_now",
+                    "review_priority_reason": "canonical_ready",
+                    "group_count": 2,
+                    "review_count": 5,
+                },
+                {
+                    "review_priority_band": "medium",
+                    "review_priority_reason": "cross_source_corroboration",
+                    "group_count": 4,
+                    "review_count": 12,
+                },
+            ],
+            [
+                {
                     "id": uuid4(),
                     "company_name": "acme",
                     "display_company_name": "Acme Corp",
@@ -459,7 +473,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     confidence_sql = pool.fetch.call_args_list[2][0][0]
     priority_sql = pool.fetch.call_args_list[3][0][0]
     pending_band_sql = pool.fetch.call_args_list[4][0][0]
-    oldest_pending_sql = pool.fetch.call_args_list[5][0][0]
+    pending_reason_sql = pool.fetch.call_args_list[5][0][0]
+    oldest_pending_sql = pool.fetch.call_args_list[6][0][0]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -480,6 +495,9 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "canonical_ready_review_count" in priority_sql
     assert "representative_source" in priority_sql
     assert "WHERE review_status = 'pending'" in pending_band_sql
+    assert "GROUP BY 1, 2" in pending_reason_sql
+    assert "review_priority_reason" in pending_reason_sql
+    assert "WHERE review_status = 'pending'" in pending_reason_sql
     assert "pending_age_days" in oldest_pending_sql
     assert "WHERE review_status = 'pending'" in oldest_pending_sql
     assert summary["totals"]["total_groups"] == 12
@@ -490,6 +508,7 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"
     assert summary["pending_priority_bands"][0]["review_priority_band"] == "promote_now"
+    assert summary["pending_priority_reasons"][0]["review_priority_reason"] == "canonical_ready"
     assert summary["oldest_pending_group"]["vendor"] == "Zendesk"
     assert summary["oldest_pending_group"]["pending_age_days"] == 5.5
 
@@ -542,6 +561,23 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
             ],
             [
                 {
+                    "review_priority_band": "promote_now",
+                    "review_priority_reason": "canonical_ready",
+                    "action_count": 3,
+                    "approvals": 3,
+                    "suppressions": 0,
+                    "company_signal_creations": 2,
+                    "company_signal_updates": 1,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 0,
+                    "rebuild_requests": 2,
+                    "rebuild_triggered": 2,
+                    "rebuild_persisted_reports": 2,
+                    "rebuild_total_accounts": 9,
+                }
+            ],
+            [
+                {
                     "vendor_name": "Zendesk",
                     "action_count": 5,
                     "approvals": 3,
@@ -571,7 +607,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     totals_sql = pool.fetchrow.call_args[0][0]
     scopes_sql = pool.fetch.call_args_list[0][0][0]
     priority_sql = pool.fetch.call_args_list[1][0][0]
-    vendors_sql = pool.fetch.call_args_list[2][0][0]
+    priority_reason_sql = pool.fetch.call_args_list[2][0][0]
+    vendors_sql = pool.fetch.call_args_list[3][0][0]
     assert "review_action =" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
     assert "review_priority_band" in totals_sql
@@ -581,6 +618,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "GROUP BY 1" in scopes_sql
     assert "review_priority_band" in priority_sql
     assert "band_rebuilds" in priority_sql
+    assert "review_priority_reason" in priority_reason_sql
+    assert "reason_rebuilds" in priority_reason_sql
     assert "vendor_actions" in vendors_sql
     assert "vendor_rebuilds" in vendors_sql
     assert summary["totals"]["total_actions"] == 6
@@ -595,6 +634,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["priority_bands"][0]["company_signal_creation_rate"] == 2 / 3
     assert summary["priority_bands"][0]["rebuild_trigger_rate"] == 1.0
     assert summary["priority_bands"][0]["avg_rebuild_accounts_per_triggered"] == 4.5
+    assert summary["priority_reasons"][0]["review_priority_reason"] == "canonical_ready"
+    assert summary["priority_reasons"][0]["company_signal_effect_rate"] == 1.0
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
     assert summary["top_vendors"][0]["company_signal_effect_rate"] == 1.0
     assert summary["top_vendors"][0]["rebuild_trigger_rate"] == 2 / 3
