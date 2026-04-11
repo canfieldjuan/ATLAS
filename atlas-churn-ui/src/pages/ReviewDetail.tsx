@@ -125,7 +125,7 @@ export default function ReviewDetail() {
   const location = useLocation()
   const [searchParams] = useSearchParams()
   const [copied, setCopied] = useState(false)
-  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'account' | 'evidence'; status: 'copied' | 'error' } | null>(null)
+  const [copiedShortcutState, setCopiedShortcutState] = useState<{ key: 'account' | 'evidence' | 'vendor'; status: 'copied' | 'error' } | null>(null)
 
   const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
     () => {
@@ -260,12 +260,25 @@ export default function ReviewDetail() {
                 </button>
               </span>
             ) : null}
-            <Link
-              to={vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
-              className="text-cyan-400 hover:text-cyan-300 transition-colors"
-            >
-              Vendor workspace
-            </Link>
+            <span className="inline-flex items-center gap-1.5">
+              <Link
+                to={vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
+                className="text-cyan-400 hover:text-cyan-300 transition-colors"
+              >
+                Vendor workspace
+              </Link>
+              <button
+                type="button"
+                onClick={() => handleCopyShortcutLink('vendor', vendorDetailPath(review.vendor_name, reviewDetailBackPath))}
+                className="text-slate-400 hover:text-white transition-colors"
+                aria-label="Copy vendor workspace link"
+                title="Copy vendor workspace link"
+              >
+                {copiedShortcutState?.key === 'vendor' && copiedShortcutState.status === 'copied'
+                  ? <Check className="h-3.5 w-3.5 text-green-400" />
+                  : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </span>
             <span className="inline-flex items-center gap-1.5">
               <Link
                 to={reviewEvidencePath}
