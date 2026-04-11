@@ -1,10 +1,13 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ReviewDetail from './ReviewDetail'
 
 const mockNavigate = vi.hoisted(() => vi.fn())
+const clipboard = vi.hoisted(() => ({
+  writeText: vi.fn(),
+}))
 
 const api = vi.hoisted(() => ({
   fetchReview: vi.fn(),
@@ -27,6 +30,11 @@ describe('ReviewDetail', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: clipboard,
+    })
+    clipboard.writeText.mockResolvedValue(undefined)
     api.fetchReview.mockResolvedValue({
       id: 'review-1',
       vendor_name: 'Zendesk',
@@ -113,6 +121,25 @@ describe('ReviewDetail', () => {
     await user.click(screen.getByRole('button', { name: 'Back to Opportunities' }))
 
     expect(mockNavigate).toHaveBeenCalledWith('/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1')
+  })
+
+  it('copies a shareable review detail link with preserved back context', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByTitle('Copy link'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
+    })
   })
 
   it('shows vendor workspace, evidence, opportunities, and reports shortcuts for the review vendor', async () => {

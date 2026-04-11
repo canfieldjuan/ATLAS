@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Check, Copy, ExternalLink, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import UrgencyBadge from '../components/UrgencyBadge'
 import { PageError } from '../components/ErrorBoundary'
@@ -74,6 +75,7 @@ export default function ReviewDetail() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
+  const [copied, setCopied] = useState(false)
 
   const { data: review, loading, error, refresh, refreshing } = useApiData<ReviewDetailType>(
     () => {
@@ -119,6 +121,13 @@ export default function ReviewDetail() {
     const qs = next.toString()
     return qs ? `/reviews/${review.id}?${qs}` : `/reviews/${review.id}`
   })()
+  const handleCopyLink = () => {
+    const url = `${window.location.origin}${reviewDetailBackPath}`
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
 
   const enrichment = review.enrichment as Record<string, unknown> | null
   const urgency = enrichment?.urgency_score as number | undefined
@@ -144,13 +153,23 @@ export default function ReviewDetail() {
           <ArrowLeft className="h-4 w-4" />
           {backToLabel(backToReviews)}
         </button>
-        <button
-          onClick={refresh}
-          disabled={refreshing}
-          className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleCopyLink}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+            title="Copy link"
+          >
+            {copied ? <Check className="h-3.5 w-3.5 text-green-400" /> : <Copy className="h-3.5 w-3.5" />}
+            {copied ? 'Copied' : 'Link'}
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
+          </button>
+        </div>
       </div>
 
       <div className="flex items-start justify-between">
