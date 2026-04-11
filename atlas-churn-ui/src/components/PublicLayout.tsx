@@ -7,7 +7,7 @@ const NAV_LINKS = [
 
 type Props = {
   children: React.ReactNode
-  /** "report" strips Blog/Sign-in, changes CTA to "Get Weekly Reports" */
+  /** "report" strips Blog/Sign-in, changes CTA to "Get Weekly Intelligence" */
   variant?: 'default' | 'report'
   /** Called when the report-variant CTA is clicked (wires to Stripe checkout) */
   onCtaClick?: () => void
@@ -22,7 +22,7 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
       onClick={onCtaClick}
       className="text-sm px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg font-medium transition-colors cursor-pointer"
     >
-      Get Weekly Reports
+      Get Weekly Intelligence
     </button>
   ) : null
 
@@ -87,7 +87,7 @@ export default function PublicLayout({ children, variant = 'default', onCtaClick
             {isReport ? (
               onCtaClick && (
                 <button onClick={onCtaClick} className="hover:text-slate-300 transition-colors cursor-pointer">
-                  Get Weekly Reports
+                  Get Weekly Intelligence
                 </button>
               )
             ) : (

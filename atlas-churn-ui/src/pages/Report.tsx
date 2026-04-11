@@ -618,7 +618,7 @@ function ReportView({ data }: { data: ReportData }) {
             onClick={() => setShowPricing(true)}
             className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors cursor-pointer"
           >
-            Get Weekly Reports
+            Get Weekly Intelligence
           </button>
           <p className="text-xs text-slate-500 mt-2">Starting at $499/mo</p>
         </div>
