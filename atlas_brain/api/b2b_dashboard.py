@@ -3115,6 +3115,12 @@ async def approve_company_signal_candidate(
         ),
         "company_name": canonical_row["company_name"] if canonical_row else candidate["company_name"],
         "vendor_name": canonical_row["vendor_name"] if canonical_row else candidate["vendor_name"],
+        "review_priority_band": review_priority_band,
+        "review_priority_reason": review_priority_reason,
+        "candidate_source": unlock_snapshot.get("candidate_source"),
+        "canonical_gap_reason": unlock_snapshot.get("canonical_gap_reason"),
+        "review_unlock_path": unlock_snapshot.get("review_unlock_path"),
+        "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
         "rebuild": rebuild,
     }
 
@@ -3223,11 +3229,19 @@ async def suppress_company_signal_candidate(
             if deleted_signal and deleted_signal.get("id")
             else None
         ),
+        "company_name": candidate["company_name"],
+        "vendor_name": candidate["vendor_name"],
         "company_signal_action": (
             deleted_signal.get("company_signal_action")
             if deleted_signal
             else "none"
         ),
+        "review_priority_band": review_priority_band,
+        "review_priority_reason": review_priority_reason,
+        "candidate_source": unlock_snapshot.get("candidate_source"),
+        "canonical_gap_reason": unlock_snapshot.get("canonical_gap_reason"),
+        "review_unlock_path": unlock_snapshot.get("review_unlock_path"),
+        "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
         "rebuild": rebuild,
     }
 
@@ -3341,6 +3355,12 @@ async def approve_company_signal_candidate_group(
         "company_name": canonical_row["company_name"] if canonical_row else group["company_name"],
         "vendor_name": canonical_row["vendor_name"] if canonical_row else group["vendor_name"],
         "review_count": group.get("review_count") or 0,
+        "review_priority_band": review_priority_band,
+        "review_priority_reason": review_priority_reason,
+        "candidate_source": unlock_snapshot.get("candidate_source"),
+        "canonical_gap_reason": unlock_snapshot.get("canonical_gap_reason"),
+        "review_unlock_path": unlock_snapshot.get("review_unlock_path"),
+        "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
         "rebuild": rebuild,
     }
 
@@ -3431,6 +3451,8 @@ async def suppress_company_signal_candidate_group(
         ),
         "reviewed_by": reviewed["reviewed_by"] if reviewed else reviewer,
         "review_notes": reviewed["review_notes"] if reviewed else body.notes,
+        "company_name": group["company_name"],
+        "vendor_name": group["vendor_name"],
         "review_count": group.get("review_count") or 0,
         "retracted_company_signal_id": (
             str(deleted_signal["id"])
@@ -3442,6 +3464,12 @@ async def suppress_company_signal_candidate_group(
             if deleted_signal
             else "none"
         ),
+        "review_priority_band": review_priority_band,
+        "review_priority_reason": review_priority_reason,
+        "candidate_source": unlock_snapshot.get("candidate_source"),
+        "canonical_gap_reason": unlock_snapshot.get("canonical_gap_reason"),
+        "review_unlock_path": unlock_snapshot.get("review_unlock_path"),
+        "review_unlock_reason": unlock_snapshot.get("review_unlock_reason"),
         "rebuild": rebuild,
     }
 

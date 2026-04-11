@@ -677,6 +677,12 @@ async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
     assert result["review_status_updated_at"] == "2026-04-11T12:00:00+00:00"
     assert result["company_signal_id"] == "22222222-2222-2222-2222-222222222222"
     assert result["company_signal_action"] == "created"
+    assert result["review_priority_band"] == "medium"
+    assert result["review_priority_reason"] == "has_decision_maker"
+    assert result["candidate_source"] == "reddit"
+    assert result["canonical_gap_reason"] is None
+    assert result["review_unlock_path"] == "canonical_or_unblocked"
+    assert result["review_unlock_reason"] == "canonical_or_unblocked"
     assert result["rebuild"]["triggered"] is True
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
     event_sql = pool.execute.await_args_list[-1][0][0]
@@ -750,6 +756,12 @@ async def test_approve_company_signal_candidate_group_promotes_and_triggers_rebu
     assert result["company_signal_id"] == "22222222-2222-2222-2222-222222222222"
     assert result["company_signal_action"] == "created"
     assert result["review_count"] == 4
+    assert result["review_priority_band"] == "low"
+    assert result["review_priority_reason"] == "low_signal"
+    assert result["candidate_source"] == "reddit"
+    assert result["canonical_gap_reason"] is None
+    assert result["review_unlock_path"] == "canonical_or_unblocked"
+    assert result["review_unlock_reason"] == "canonical_or_unblocked"
     assert result["rebuild"]["triggered"] is True
     rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
     assert pool.execute.await_count == 2
@@ -815,7 +827,15 @@ async def test_suppress_company_signal_candidate_marks_suppressed_without_rebuil
     assert result["review_status_updated_at"] == "2026-04-11T12:05:00+00:00"
     assert result["review_notes"] == "not a real target"
     assert result["retracted_company_signal_id"] == "22222222-2222-2222-2222-222222222222"
+    assert result["company_name"] == "Acme Corp"
+    assert result["vendor_name"] == "Zendesk"
     assert result["company_signal_action"] == "deleted"
+    assert result["review_priority_band"] == "medium"
+    assert result["review_priority_reason"] == "has_decision_maker"
+    assert result["candidate_source"] == "reddit"
+    assert result["canonical_gap_reason"] is None
+    assert result["review_unlock_path"] == "canonical_or_unblocked"
+    assert result["review_unlock_reason"] == "canonical_or_unblocked"
     assert result["rebuild"]["reason"] == "disabled"
 
 
@@ -875,7 +895,15 @@ async def test_suppress_company_signal_candidate_group_marks_members_suppressed(
     assert result["review_status_updated_at"] == "2026-04-11T12:15:00+00:00"
     assert result["review_count"] == 4
     assert result["retracted_company_signal_id"] == "44444444-4444-4444-4444-444444444444"
+    assert result["company_name"] == "acme"
+    assert result["vendor_name"] == "Zendesk"
     assert result["company_signal_action"] == "deleted"
+    assert result["review_priority_band"] == "low"
+    assert result["review_priority_reason"] == "low_signal"
+    assert result["candidate_source"] == "reddit"
+    assert result["canonical_gap_reason"] is None
+    assert result["review_unlock_path"] == "canonical_or_unblocked"
+    assert result["review_unlock_reason"] == "canonical_or_unblocked"
     assert result["rebuild"]["reason"] == "disabled"
     assert pool.execute.await_count == 2
 
