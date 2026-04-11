@@ -180,6 +180,67 @@ describe('IncidentAlerts', () => {
     expect(screen.queryByText(/attempt 1/i)).not.toBeInTheDocument()
   })
 
+  it('links CRM push activity back into vendor workflows', async () => {
+    api.listWebhooks.mockResolvedValue({
+      webhooks: [
+        {
+          id: 'wh-crm',
+          url: 'https://hooks.example.com/crm',
+          event_types: ['churn_alert', 'report_generated'],
+          channel: 'crm_hubspot',
+          enabled: true,
+          description: 'CRM escalation',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 4,
+          recent_success_rate_7d: 1,
+        },
+      ],
+      count: 1,
+    })
+    api.listWebhookCrmPushLog.mockResolvedValue({
+      pushes: [
+        {
+          id: 'push-1',
+          signal_type: 'competitive_displacement',
+          signal_id: 'sig-1',
+          vendor_name: 'Acme Rival',
+          company_name: 'Acme Bank',
+          crm_record_id: 'deal-1',
+          crm_record_type: 'deal',
+          status: 'success',
+          error: null,
+          pushed_at: '2026-04-10T03:05:00Z',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-crm&crm_status=success']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Acme%20Rival?back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-crm%26crm_status%3Dsuccess',
+    )
+  })
+
   it('filters delivery activity by result and event type', async () => {
     const user = userEvent.setup()
 

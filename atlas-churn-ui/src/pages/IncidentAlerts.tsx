@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
@@ -359,7 +359,25 @@ function buildActivitySearchParams({
   return next
 }
 
+function buildBackToPath(pathname: string, search: string) {
+  return search ? `${pathname}${search}` : pathname
+}
+
+function buildVendorWorkspacePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/vendors/${encodeURIComponent(vendorName)}?${next.toString()}`
+}
+
+function buildVendorScopedPath(pathname: string, vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `${pathname}?${next.toString()}`
+}
+
 export default function IncidentAlerts() {
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedWebhookId = searchParams.get('webhook')?.trim() || ''
   const requestedDeliveryStatus = searchParams.get('delivery_status') === 'success' || searchParams.get('delivery_status') === 'failed'
@@ -495,6 +513,26 @@ export default function IncidentAlerts() {
     const values = new Set((deliveryData?.deliveries ?? []).map((delivery) => delivery.event_type as WebhookEventType))
     return Array.from(values)
   }, [deliveryData?.deliveries])
+  const activityBackTo = useMemo(() => {
+    if (!selectedWebhookId) {
+      return buildBackToPath(location.pathname, location.search)
+    }
+    const next = buildActivitySearchParams({
+      webhookId: selectedWebhookId,
+      deliveryStatus: deliveryStatusFilter,
+      deliveryEvent: deliveryEventFilter,
+      crmStatus: crmStatusFilter,
+    })
+    const query = next.toString()
+    return query ? `${location.pathname}?${query}` : location.pathname
+  }, [
+    crmStatusFilter,
+    deliveryEventFilter,
+    deliveryStatusFilter,
+    location.pathname,
+    location.search,
+    selectedWebhookId,
+  ])
 
   useEffect(() => {
     if (!requestedWebhookId) return
@@ -1026,6 +1064,34 @@ export default function IncidentAlerts() {
                                     <div className="mt-1 text-xs text-slate-300">
                                       {push.crm_record_type || 'record'}{push.crm_record_id ? ` · ${push.crm_record_id}` : ''} · {formatTs(push.pushed_at)}
                                     </div>
+                                    {push.vendor_name ? (
+                                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                        <Link
+                                          to={buildVendorWorkspacePath(push.vendor_name, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Vendor workspace
+                                        </Link>
+                                        <Link
+                                          to={buildVendorScopedPath('/evidence', push.vendor_name, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Evidence
+                                        </Link>
+                                        <Link
+                                          to={buildVendorScopedPath('/reports', push.vendor_name, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Reports
+                                        </Link>
+                                        <Link
+                                          to={buildVendorScopedPath('/opportunities', push.vendor_name, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Opportunities
+                                        </Link>
+                                      </div>
+                                    ) : null}
                                     {push.error ? (
                                       <div className="mt-2 text-xs text-rose-200">{push.error}</div>
                                     ) : null}
