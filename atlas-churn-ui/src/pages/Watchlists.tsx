@@ -1450,6 +1450,23 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyAccountRowWitnessLink(
+    row: AccountsInMotionFeedItem,
+    witnessId: string,
+    source?: string | null,
+  ) {
+    try {
+      await navigator.clipboard.writeText(
+        `${window.location.origin}${watchlistAccountEvidenceExplorerPath(searchParams, row, witnessId, source)}`,
+      )
+      setActionError(null)
+      setActionMessage(`Copied witness link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy witness link')
+    }
+  }
+
   async function handleCopyVendorRowLink(vendorName: string) {
     try {
       await navigator.clipboard.writeText(watchlistVendorUrl(searchParams, vendorName))
@@ -2250,6 +2267,20 @@ export default function Watchlists() {
               >
                 <Fingerprint className="inline h-3 w-3" />
               </Link>
+            )}
+            {primaryWitnessId && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyAccountRowWitnessLink(row, primaryWitnessId, primaryWitnessSource)
+                }}
+                aria-label={`Copy witness link for ${row.vendor}`}
+                className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                title="Copy witness link"
+              >
+                Copy witness
+              </button>
             )}
             {primaryWitnessId && (
               <Link
