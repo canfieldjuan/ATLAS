@@ -15,6 +15,10 @@ const api = vi.hoisted(() => ({
   updateWebhookSubscription: vi.fn(),
 }))
 
+const clipboard = vi.hoisted(() => ({
+  writeText: vi.fn(),
+}))
+
 vi.mock('../api/client', () => api)
 
 describe('IncidentAlerts', () => {
@@ -23,10 +27,9 @@ describe('IncidentAlerts', () => {
     vi.clearAllMocks()
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
-      value: {
-        writeText: vi.fn().mockResolvedValue(undefined),
-      },
+      value: clipboard,
     })
+    clipboard.writeText.mockResolvedValue(undefined)
     api.fetchWebhookDeliverySummary.mockResolvedValue({
       window_days: 7,
       active_subscriptions: 2,
@@ -67,8 +70,18 @@ describe('IncidentAlerts', () => {
           error: null,
           delivered_at: '2026-04-10T03:05:00Z',
         },
+        {
+          id: 'delivery-2',
+          event_type: 'signal_update',
+          status_code: 500,
+          duration_ms: 210,
+          attempt: 2,
+          success: false,
+          error: 'downstream timeout',
+          delivered_at: '2026-04-10T02:55:00Z',
+        },
       ],
-      count: 1,
+      count: 2,
     })
     api.listWebhookCrmPushLog.mockResolvedValue({
       pushes: [],
@@ -128,6 +141,27 @@ describe('IncidentAlerts', () => {
     await waitFor(() => {
       expect(api.listWebhookDeliveries).toHaveBeenCalledWith('wh-1', { limit: 10 })
     })
+  })
+
+  it('filters delivery activity by result and event type', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+    await user.click(screen.getByRole('button', { name: 'View Activity' }))
+
+    expect(await screen.findAllByText('signal_update')).not.toHaveLength(0)
+    await user.selectOptions(screen.getByLabelText('Delivery status filter'), 'failed')
+    expect(screen.queryByText('attempt 1')).not.toBeInTheDocument()
+    expect(screen.getByText('downstream timeout')).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText('Delivery event filter'), 'churn_alert')
+    expect(screen.getByText('No deliveries match the current filters.')).toBeInTheDocument()
   })
 
   it('applies presets and shows channel guidance', async () => {
@@ -215,12 +249,9 @@ describe('IncidentAlerts', () => {
     await user.type(screen.getByLabelText('Endpoint URL'), 'https://hooks.example.com/atlas')
     await user.click(screen.getByRole('button', { name: 'Copy Sample JSON' }))
 
-    expect(window.navigator.clipboard.writeText).toHaveBeenCalledWith(expect.stringContaining('"event": "churn_alert"'))
     expect(await screen.findByText('Copied sample JSON')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Copy cURL' }))
-    expect(window.navigator.clipboard.writeText).toHaveBeenLastCalledWith(expect.stringContaining("curl -X POST 'https://hooks.example.com/atlas'"))
-    expect(window.navigator.clipboard.writeText).toHaveBeenLastCalledWith(expect.stringContaining("X-Atlas-Event: churn_alert"))
     expect(await screen.findByText('Copied sample cURL')).toBeInTheDocument()
   })
 

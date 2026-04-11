@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
@@ -345,6 +345,9 @@ export default function IncidentAlerts() {
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [selectedPreviewEventType, setSelectedPreviewEventType] = useState<WebhookEventType>('churn_alert')
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'all' | 'success' | 'failed'>('all')
+  const [deliveryEventFilter, setDeliveryEventFilter] = useState<'all' | WebhookEventType>('all')
+  const [crmStatusFilter, setCrmStatusFilter] = useState<'all' | 'success' | 'failed'>('all')
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -432,6 +435,33 @@ export default function IncidentAlerts() {
   const activityLoading = deliveryLoading || crmPushLoading
   const activityRefreshing = deliveryRefreshing || crmPushRefreshing
   const channelGuidance = CHANNEL_GUIDANCE[form.channel]
+  const filteredDeliveries = useMemo(() => {
+    const deliveries = deliveryData?.deliveries ?? []
+    return deliveries.filter((delivery) => {
+      if (deliveryStatusFilter === 'success' && !delivery.success) return false
+      if (deliveryStatusFilter === 'failed' && delivery.success) return false
+      if (deliveryEventFilter !== 'all' && delivery.event_type !== deliveryEventFilter) return false
+      return true
+    })
+  }, [deliveryData?.deliveries, deliveryEventFilter, deliveryStatusFilter])
+  const filteredCrmPushes = useMemo(() => {
+    const pushes = crmPushData?.pushes ?? []
+    return pushes.filter((push) => {
+      if (crmStatusFilter === 'success') return push.status === 'success'
+      if (crmStatusFilter === 'failed') return push.status !== 'success'
+      return true
+    })
+  }, [crmPushData?.pushes, crmStatusFilter])
+  const deliveryEventOptions = useMemo(() => {
+    const values = new Set((deliveryData?.deliveries ?? []).map((delivery) => delivery.event_type as WebhookEventType))
+    return Array.from(values)
+  }, [deliveryData?.deliveries])
+
+  useEffect(() => {
+    setDeliveryStatusFilter('all')
+    setDeliveryEventFilter('all')
+    setCrmStatusFilter('all')
+  }, [selectedWebhookId])
 
   async function refreshAll() {
     refreshSummary()
@@ -786,7 +816,30 @@ export default function IncidentAlerts() {
                             </div>
                           ) : deliveryData?.deliveries?.length ? (
                             <div className="space-y-2">
-                              {deliveryData.deliveries.map((delivery) => (
+                              <div className="mb-3 flex flex-wrap gap-2">
+                                <select
+                                  aria-label="Delivery status filter"
+                                  value={deliveryStatusFilter}
+                                  onChange={(event) => setDeliveryStatusFilter(event.target.value as 'all' | 'success' | 'failed')}
+                                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+                                >
+                                  <option value="all">All delivery results</option>
+                                  <option value="success">Successful only</option>
+                                  <option value="failed">Failed only</option>
+                                </select>
+                                <select
+                                  aria-label="Delivery event filter"
+                                  value={deliveryEventFilter}
+                                  onChange={(event) => setDeliveryEventFilter(event.target.value as 'all' | WebhookEventType)}
+                                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+                                >
+                                  <option value="all">All event types</option>
+                                  {deliveryEventOptions.map((eventType) => (
+                                    <option key={eventType} value={eventType}>{eventType}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              {filteredDeliveries.length ? filteredDeliveries.map((delivery) => (
                                 <div key={delivery.id} className={`rounded-lg border px-3 py-3 text-sm ${deliveryTone(delivery.success)}`}>
                                   <div className="flex items-center justify-between gap-3">
                                     <span className="font-medium">{delivery.event_type}</span>
@@ -801,7 +854,11 @@ export default function IncidentAlerts() {
                                     <div className="mt-2 text-xs text-rose-200">{delivery.error}</div>
                                   ) : null}
                                 </div>
-                              ))}
+                              )) : (
+                                <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+                                  No deliveries match the current filters.
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
@@ -815,7 +872,19 @@ export default function IncidentAlerts() {
                           {selectedWebhook?.channel.startsWith('crm_') ? (
                             crmPushData?.pushes?.length ? (
                               <div className="space-y-2">
-                                {crmPushData.pushes.map((push) => (
+                                <div className="mb-3 flex flex-wrap gap-2">
+                                  <select
+                                    aria-label="CRM push status filter"
+                                    value={crmStatusFilter}
+                                    onChange={(event) => setCrmStatusFilter(event.target.value as 'all' | 'success' | 'failed')}
+                                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+                                  >
+                                    <option value="all">All CRM push results</option>
+                                    <option value="success">Successful only</option>
+                                    <option value="failed">Failed only</option>
+                                  </select>
+                                </div>
+                                {filteredCrmPushes.length ? filteredCrmPushes.map((push) => (
                                   <div key={push.id} className={`rounded-lg border px-3 py-3 text-sm ${deliveryTone(push.status === 'success')}`}>
                                     <div className="flex items-center justify-between gap-3">
                                       <span className="font-medium">
@@ -830,7 +899,11 @@ export default function IncidentAlerts() {
                                       <div className="mt-2 text-xs text-rose-200">{push.error}</div>
                                     ) : null}
                                   </div>
-                                ))}
+                                )) : (
+                                  <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+                                    No CRM pushes match the current filters.
+                                  </div>
+                                )}
                               </div>
                             ) : (
                               <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
