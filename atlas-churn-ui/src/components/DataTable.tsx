@@ -111,6 +111,15 @@ export default function DataTable<T>({
             {columns.map((col) => (
               <th
                 key={col.key}
+                aria-sort={
+                  !col.sortable
+                    ? undefined
+                    : sortKey !== col.key
+                      ? 'none'
+                      : sortDir === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                }
                 className={clsx(
                   'px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider',
                   col.sortable && 'cursor-pointer select-none hover:text-slate-200'
@@ -172,7 +181,7 @@ export default function DataTable<T>({
         <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700/50">
           <div className="flex items-center gap-2 text-xs text-slate-400">
             <span>
-              {safePage * perPage + 1}--{Math.min((safePage + 1) * perPage, sorted.length)} of {sorted.length}
+              {safePage * perPage + 1}-{Math.min((safePage + 1) * perPage, sorted.length)} of {sorted.length}
             </span>
             <select
               value={perPage}
@@ -186,6 +195,7 @@ export default function DataTable<T>({
           </div>
           <div className="flex items-center gap-1">
             <button
+              aria-label="Previous page"
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={safePage === 0}
               className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
@@ -196,6 +206,7 @@ export default function DataTable<T>({
               {safePage + 1} / {totalPages}
             </span>
             <button
+              aria-label="Next page"
               onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               disabled={safePage >= totalPages - 1}
               className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
