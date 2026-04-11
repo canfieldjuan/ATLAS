@@ -242,6 +242,7 @@ export default function EvidenceExplorer() {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
+  const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const matchedWatchlistViewId = useMemo(() => {
     if (!activeVendor) return null
     const normalizedVendor = activeVendor.toLowerCase()
@@ -559,6 +560,15 @@ export default function EvidenceExplorer() {
       setCopiedAccountReviewState({ id: witnessId, status: 'copied' })
     } catch {
       setCopiedAccountReviewState({ id: witnessId, status: 'error' })
+    }
+  }
+
+  async function handleCopyReviewLink(witnessId: string, reviewId: string) {
+    try {
+      await copyText(`${window.location.origin}${reviewDetailPath(searchParams, reviewId)}`)
+      setCopiedReviewState({ id: witnessId, status: 'copied' })
+    } catch {
+      setCopiedReviewState({ id: witnessId, status: 'error' })
     }
   }
 
@@ -905,13 +915,26 @@ export default function EvidenceExplorer() {
                               </>
                             ) : null}
                             {w.review_id ? (
-                              <Link
-                                to={reviewDetailPath(searchParams, w.review_id)}
-                                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-                              >
-                                Open review detail
-                                <ExternalLink className="h-3 w-3" />
-                              </Link>
+                              <>
+                                <button
+                                  type="button"
+                                  aria-label={`Copy review link for witness ${w.witness_id}`}
+                                  onClick={() => void handleCopyReviewLink(w.witness_id, w.review_id)}
+                                  className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-white"
+                                >
+                                  <Copy className="h-3 w-3" />
+                                  {copiedReviewState?.id === w.witness_id
+                                    ? (copiedReviewState.status === 'copied' ? 'Copied' : 'Copy Failed')
+                                    : 'Copy review link'}
+                                </button>
+                                <Link
+                                  to={reviewDetailPath(searchParams, w.review_id)}
+                                  className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                >
+                                  Open review detail
+                                  <ExternalLink className="h-3 w-3" />
+                                </Link>
+                              </>
                             ) : null}
                           </div>
                         </div>
