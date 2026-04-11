@@ -182,3 +182,132 @@ async def test_upsert_company_signal_candidates_persists_materialization_run_id(
     assert "review_status_updated_at =" not in query
     assert rows[0][-1] == "run-456"
     assert rows[0][-2] == "analyst_review"
+
+
+def test_build_company_signal_candidate_groups_corroborates_low_trust_cluster():
+    review_ids = [str(uuid4()) for _ in range(4)]
+
+    groups = mod._build_company_signal_candidate_groups(
+        [
+            {
+                "review_id": review_ids[0],
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "source": "reddit",
+                "urgency_score": 8.1,
+                "confidence_score": 0.26,
+                "signal_evidence_present": True,
+                "decision_maker": True,
+                "candidate_bucket": "analyst_review",
+                "canonical_gap_reason": "low_confidence_low_trust_source",
+                "role_level": "vp",
+                "pain_category": "pricing",
+            },
+            {
+                "review_id": review_ids[1],
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "source": "reddit",
+                "urgency_score": 7.9,
+                "confidence_score": 0.26,
+                "signal_evidence_present": True,
+                "decision_maker": False,
+                "candidate_bucket": "analyst_review",
+                "canonical_gap_reason": "low_confidence_low_trust_source",
+                "role_level": "director",
+                "pain_category": "pricing",
+            },
+            {
+                "review_id": review_ids[2],
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "source": "reddit",
+                "urgency_score": 7.2,
+                "confidence_score": 0.26,
+                "signal_evidence_present": False,
+                "decision_maker": False,
+                "candidate_bucket": "analyst_review",
+                "canonical_gap_reason": "low_confidence_low_trust_source",
+                "role_level": "manager",
+                "pain_category": "pricing",
+            },
+            {
+                "review_id": review_ids[3],
+                "company_name": "Acme Corp",
+                "company_name_raw": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "source": "reddit",
+                "urgency_score": 7.0,
+                "confidence_score": 0.26,
+                "signal_evidence_present": False,
+                "decision_maker": False,
+                "candidate_bucket": "analyst_review",
+                "canonical_gap_reason": "low_confidence_low_trust_source",
+                "role_level": "manager",
+                "pain_category": "pricing",
+            },
+        ],
+    )
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group["company_name"] == "acme"
+    assert group["review_count"] == 4
+    assert group["candidate_bucket"] == "canonical_ready"
+    assert group["canonical_gap_reason"] is None
+    assert group["corroborated_confidence_score"] >= 0.6
+
+
+@pytest.mark.asyncio
+async def test_upsert_company_signal_candidate_groups_persists_materialization_run_id():
+    pool = CapturePool()
+
+    persisted = await mod._upsert_company_signal_candidate_groups(
+        pool,
+        groups=[
+            {
+                "company_name": "acme",
+                "display_company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 4,
+                "distinct_source_count": 1,
+                "decision_maker_count": 1,
+                "signal_evidence_count": 2,
+                "canonical_ready_review_count": 0,
+                "avg_urgency_score": 7.55,
+                "max_urgency_score": 8.1,
+                "avg_confidence_score": 0.26,
+                "max_confidence_score": 0.26,
+                "corroborated_confidence_score": 0.61,
+                "confidence_tier": "high",
+                "source_distribution": {"reddit": 4},
+                "gap_reason_distribution": {"low_confidence_low_trust_source": 4},
+                "sample_review_ids": [str(uuid4())],
+                "representative_review_id": str(uuid4()),
+                "representative_source": "reddit",
+                "representative_pain_category": "pricing",
+                "representative_buyer_role": "vp",
+                "representative_decision_maker": True,
+                "representative_seat_count": 120,
+                "representative_contract_end": "2026-07-01",
+                "representative_buying_stage": "evaluation",
+                "representative_confidence_score": 0.26,
+                "representative_urgency_score": 8.1,
+                "canonical_gap_reason": None,
+                "candidate_bucket": "canonical_ready",
+            },
+        ],
+        materialization_run_id="run-789",
+    )
+
+    assert persisted == 1
+    assert len(pool.executemany_calls) == 1
+    query, rows = pool.executemany_calls[0]
+    assert "b2b_company_signal_candidate_groups" in query
+    assert "materialization_run_id" in query
+    assert rows[0][-1] == "run-789"
+    assert rows[0][-2] == "canonical_ready"

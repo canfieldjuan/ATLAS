@@ -3490,6 +3490,36 @@ class B2BChurnConfig(BaseSettings):
         le=1.0,
         description="Minimum unit-confidence for analyst-assist company-signal candidates to be labeled high confidence",
     )
+    company_signal_group_per_extra_review_boost: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description="Confidence bonus added per extra supporting review when corroborating grouped company-signal candidates",
+    )
+    company_signal_group_per_extra_source_boost: float = Field(
+        default=0.08,
+        ge=0.0,
+        le=1.0,
+        description="Confidence bonus added per extra distinct source when corroborating grouped company-signal candidates",
+    )
+    company_signal_group_decision_maker_boost: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Confidence bonus applied when a grouped company-signal candidate has at least one decision-maker review",
+    )
+    company_signal_group_signal_evidence_boost: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Confidence bonus applied when a grouped company-signal candidate has explicit churn-signal evidence",
+    )
+    company_signal_group_max_corroboration_boost: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="Maximum total corroboration bonus applied to grouped company-signal candidates",
+    )
     high_intent_require_signal_evidence: bool = Field(
         default=True,
         description="Require explicit churn/evaluation/renewal signal evidence before reviewer-company rows enter named-account high-intent products",

@@ -39,6 +39,7 @@ from ..autonomous.tasks._b2b_shared import (
     has_complete_core_run_marker,
     latest_complete_core_report_date,
     read_company_signal_candidates,
+    read_company_signal_candidate_groups,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
     read_vendor_signal_detail,
@@ -322,6 +323,127 @@ async def _fetch_company_signal_candidate_or_404(
         raise HTTPException(status_code=404, detail="Company signal candidate not found")
 
     return dict(row)
+
+
+async def _fetch_company_signal_candidate_group_or_404(
+    pool,
+    group_id: str,
+    user: AuthUser | None,
+) -> dict[str, Any]:
+    try:
+        gid = _uuid.UUID(group_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="group_id must be a valid UUID")
+
+    row = await pool.fetchrow(
+        """
+        SELECT id,
+               company_name,
+               display_company_name,
+               vendor_name,
+               product_category,
+               review_count,
+               max_urgency_score,
+               corroborated_confidence_score,
+               representative_review_id,
+               representative_source,
+               representative_pain_category,
+               representative_buyer_role,
+               representative_decision_maker,
+               representative_seat_count,
+               representative_contract_end,
+               representative_buying_stage,
+               review_status
+        FROM b2b_company_signal_candidate_groups
+        WHERE id = $1
+        """,
+        gid,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Company signal candidate group not found")
+
+    scoped_vendors = await _get_scoped_vendors(pool, user)
+    scoped_vendor_keys = {
+        _normalize_vendor_name(vendor_name)
+        for vendor_name in (scoped_vendors or [])
+        if _normalize_vendor_name(vendor_name)
+    }
+    if scoped_vendors is not None and _normalize_vendor_name(row.get("vendor_name")) not in scoped_vendor_keys:
+        raise HTTPException(status_code=404, detail="Company signal candidate group not found")
+
+    return dict(row)
+
+
+async def _set_company_signal_candidate_group_status(
+    pool,
+    *,
+    company_name: str,
+    vendor_name: str,
+    status: str,
+    reviewed_by: str,
+    review_notes: str | None,
+    group_id: str | None = None,
+) -> dict[str, Any] | None:
+    if group_id is not None:
+        return await pool.fetchrow(
+            """
+            UPDATE b2b_company_signal_candidate_groups
+            SET review_status = $2,
+                review_status_updated_at = NOW(),
+                reviewed_by = $3,
+                review_notes = $4
+            WHERE id = $1::uuid
+            RETURNING id, review_status, review_status_updated_at, reviewed_by, review_notes
+            """,
+            group_id,
+            status,
+            reviewed_by,
+            review_notes,
+        )
+    await pool.execute(
+        """
+        UPDATE b2b_company_signal_candidate_groups
+        SET review_status = $3,
+            review_status_updated_at = NOW(),
+            reviewed_by = $4,
+            review_notes = $5
+        WHERE company_name = $1
+          AND vendor_name = $2
+        """,
+        company_name,
+        vendor_name,
+        status,
+        reviewed_by,
+        review_notes,
+    )
+    return None
+
+
+async def _set_company_signal_candidate_member_status(
+    pool,
+    *,
+    company_name: str,
+    vendor_name: str,
+    status: str,
+    reviewed_by: str,
+    review_notes: str | None,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE b2b_company_signal_candidates
+        SET review_status = $3,
+            review_status_updated_at = NOW(),
+            reviewed_by = $4,
+            review_notes = $5
+        WHERE company_name = $1
+          AND vendor_name = $2
+        """,
+        company_name,
+        vendor_name,
+        status,
+        reviewed_by,
+        review_notes,
+    )
 
 
 async def _trigger_accounts_in_motion_rebuild(pool, vendor_name: str) -> dict[str, Any]:
@@ -2278,6 +2400,60 @@ async def list_company_signals(
     return {"signals": signals, "count": len(signals)}
 
 
+@router.get("/company-signal-candidate-groups")
+async def list_company_signal_candidate_groups(
+    vendor_name: Optional[str] = Query(None),
+    company_name: Optional[str] = Query(None),
+    candidate_bucket: str = Query("analyst_review"),
+    review_status: str = Query("pending"),
+    canonical_gap_reason: Optional[str] = Query(None),
+    min_urgency: float = Query(0, ge=0, le=10),
+    min_confidence: Optional[float] = Query(None, ge=0, le=1),
+    min_reviews: int = Query(1, ge=1, le=100),
+    decision_makers_only: bool = Query(False),
+    signal_evidence_present: Optional[bool] = Query(None),
+    window_days: int = Query(90, ge=1, le=3650),
+    limit: int = Query(50, ge=1, le=200),
+    user: AuthUser | None = Depends(optional_auth),
+):
+    """List grouped company-signal candidates as the primary operator queue."""
+    if candidate_bucket not in {"analyst_review", "canonical_ready"}:
+        raise HTTPException(
+            status_code=400,
+            detail="candidate_bucket must be 'analyst_review' or 'canonical_ready'",
+        )
+    if review_status not in {"pending", "approved", "suppressed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_status must be 'pending', 'approved', or 'suppressed'",
+        )
+
+    pool = _pool_or_503()
+    scoped_vendors = await _get_scoped_vendors(pool, user)
+    groups = await read_company_signal_candidate_groups(
+        pool,
+        window_days=window_days,
+        vendor_name=vendor_name,
+        company_name=company_name,
+        scoped_vendors=scoped_vendors,
+        candidate_bucket=candidate_bucket,
+        review_status=review_status,
+        canonical_gap_reason=canonical_gap_reason,
+        min_urgency=min_urgency,
+        min_confidence=min_confidence,
+        min_reviews=min_reviews,
+        decision_makers_only=decision_makers_only,
+        signal_evidence_present=signal_evidence_present,
+        limit=limit,
+    )
+    return {
+        "groups": groups,
+        "count": len(groups),
+        "candidate_bucket": candidate_bucket,
+        "review_status": review_status,
+    }
+
+
 @router.get("/company-signal-candidates")
 async def list_company_signal_candidates(
     vendor_name: Optional[str] = Query(None),
@@ -2338,6 +2514,7 @@ async def approve_company_signal_candidate(
 ):
     pool = _pool_or_503()
     candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
+    reviewer = _candidate_reviewer(user)
 
     canonical_row = await pool.fetchrow(
         """
@@ -2387,8 +2564,24 @@ async def approve_company_signal_candidate(
         RETURNING id, review_status, review_status_updated_at, reviewed_by, review_notes
         """,
         candidate_id,
-        _candidate_reviewer(user),
+        reviewer,
         body.notes,
+    )
+    await _set_company_signal_candidate_group_status(
+        pool,
+        company_name=candidate["company_name"],
+        vendor_name=candidate["vendor_name"],
+        status="approved",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
+    )
+    await _set_company_signal_candidate_member_status(
+        pool,
+        company_name=candidate["company_name"],
+        vendor_name=candidate["vendor_name"],
+        status="approved",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
     )
 
     rebuild = {"triggered": False, "reason": "disabled"}
@@ -2426,7 +2619,8 @@ async def suppress_company_signal_candidate(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
-    await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
+    candidate = await _fetch_company_signal_candidate_or_404(pool, candidate_id, user)
+    reviewer = _candidate_reviewer(user)
     reviewed = await pool.fetchrow(
         """
         UPDATE b2b_company_signal_candidates
@@ -2438,8 +2632,24 @@ async def suppress_company_signal_candidate(
         RETURNING id, review_status, review_status_updated_at, reviewed_by, review_notes
         """,
         candidate_id,
-        _candidate_reviewer(user),
+        reviewer,
         body.notes,
+    )
+    await _set_company_signal_candidate_group_status(
+        pool,
+        company_name=candidate["company_name"],
+        vendor_name=candidate["vendor_name"],
+        status="suppressed",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
+    )
+    await _set_company_signal_candidate_member_status(
+        pool,
+        company_name=candidate["company_name"],
+        vendor_name=candidate["vendor_name"],
+        status="suppressed",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
     )
     return {
         "candidate_id": str(reviewed["id"]),
@@ -2451,6 +2661,139 @@ async def suppress_company_signal_candidate(
         ),
         "reviewed_by": reviewed["reviewed_by"],
         "review_notes": reviewed["review_notes"],
+    }
+
+
+@router.post("/company-signal-candidate-groups/{group_id}/approve")
+async def approve_company_signal_candidate_group(
+    group_id: str,
+    body: CompanySignalCandidateReviewBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
+    reviewer = _candidate_reviewer(user)
+
+    canonical_row = await pool.fetchrow(
+        """
+        INSERT INTO b2b_company_signals (
+            company_name, vendor_name, urgency_score,
+            pain_category, buyer_role, decision_maker,
+            seat_count, contract_end, buying_stage,
+            review_id, source, confidence_score, last_seen_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        ON CONFLICT (company_name, vendor_name)
+        DO UPDATE SET
+            urgency_score = GREATEST(b2b_company_signals.urgency_score, EXCLUDED.urgency_score),
+            pain_category = COALESCE(EXCLUDED.pain_category, b2b_company_signals.pain_category),
+            buyer_role = COALESCE(EXCLUDED.buyer_role, b2b_company_signals.buyer_role),
+            decision_maker = COALESCE(EXCLUDED.decision_maker, b2b_company_signals.decision_maker),
+            seat_count = COALESCE(EXCLUDED.seat_count, b2b_company_signals.seat_count),
+            contract_end = COALESCE(EXCLUDED.contract_end, b2b_company_signals.contract_end),
+            buying_stage = COALESCE(EXCLUDED.buying_stage, b2b_company_signals.buying_stage),
+            review_id = COALESCE(EXCLUDED.review_id, b2b_company_signals.review_id),
+            source = COALESCE(EXCLUDED.source, b2b_company_signals.source),
+            confidence_score = GREATEST(b2b_company_signals.confidence_score, EXCLUDED.confidence_score),
+            last_seen_at = EXCLUDED.last_seen_at
+        RETURNING id, company_name, vendor_name
+        """,
+        group["company_name"],
+        group["vendor_name"],
+        group.get("max_urgency_score"),
+        group.get("representative_pain_category"),
+        group.get("representative_buyer_role"),
+        group.get("representative_decision_maker"),
+        group.get("representative_seat_count"),
+        group.get("representative_contract_end"),
+        group.get("representative_buying_stage"),
+        group.get("representative_review_id"),
+        group.get("representative_source"),
+        group.get("corroborated_confidence_score"),
+    )
+    reviewed = await _set_company_signal_candidate_group_status(
+        pool,
+        company_name=group["company_name"],
+        vendor_name=group["vendor_name"],
+        status="approved",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
+        group_id=group_id,
+    )
+    await _set_company_signal_candidate_member_status(
+        pool,
+        company_name=group["company_name"],
+        vendor_name=group["vendor_name"],
+        status="approved",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
+    )
+
+    rebuild = {"triggered": False, "reason": "disabled"}
+    if body.trigger_rebuild:
+        try:
+            rebuild = await _trigger_accounts_in_motion_rebuild(pool, group["vendor_name"])
+        except Exception:
+            logger.exception(
+                "Company signal candidate group approval rebuild failed for %s",
+                group["vendor_name"],
+            )
+            rebuild = {"triggered": False, "reason": "rebuild_failed"}
+
+    return {
+        "group_id": str(reviewed["id"]) if reviewed else group_id,
+        "review_status": reviewed["review_status"] if reviewed else "approved",
+        "review_status_updated_at": (
+            reviewed["review_status_updated_at"].isoformat()
+            if reviewed and reviewed["review_status_updated_at"]
+            else None
+        ),
+        "reviewed_by": reviewed["reviewed_by"] if reviewed else reviewer,
+        "review_notes": reviewed["review_notes"] if reviewed else body.notes,
+        "company_signal_id": str(canonical_row["id"]) if canonical_row else None,
+        "company_name": canonical_row["company_name"] if canonical_row else group["company_name"],
+        "vendor_name": canonical_row["vendor_name"] if canonical_row else group["vendor_name"],
+        "review_count": group.get("review_count") or 0,
+        "rebuild": rebuild,
+    }
+
+
+@router.post("/company-signal-candidate-groups/{group_id}/suppress")
+async def suppress_company_signal_candidate_group(
+    group_id: str,
+    body: CompanySignalCandidateReviewBody,
+    user: AuthUser | None = Depends(optional_auth),
+):
+    pool = _pool_or_503()
+    group = await _fetch_company_signal_candidate_group_or_404(pool, group_id, user)
+    reviewer = _candidate_reviewer(user)
+    reviewed = await _set_company_signal_candidate_group_status(
+        pool,
+        company_name=group["company_name"],
+        vendor_name=group["vendor_name"],
+        status="suppressed",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
+        group_id=group_id,
+    )
+    await _set_company_signal_candidate_member_status(
+        pool,
+        company_name=group["company_name"],
+        vendor_name=group["vendor_name"],
+        status="suppressed",
+        reviewed_by=reviewer,
+        review_notes=body.notes,
+    )
+    return {
+        "group_id": str(reviewed["id"]) if reviewed else group_id,
+        "review_status": reviewed["review_status"] if reviewed else "suppressed",
+        "review_status_updated_at": (
+            reviewed["review_status_updated_at"].isoformat()
+            if reviewed and reviewed["review_status_updated_at"]
+            else None
+        ),
+        "reviewed_by": reviewed["reviewed_by"] if reviewed else reviewer,
+        "review_notes": reviewed["review_notes"] if reviewed else body.notes,
+        "review_count": group.get("review_count") or 0,
     }
 
 

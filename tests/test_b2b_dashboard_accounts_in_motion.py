@@ -176,6 +176,62 @@ async def test_list_company_signal_candidates_uses_analyst_review_bucket_by_defa
 
 
 @pytest.mark.asyncio
+async def test_list_company_signal_candidate_groups_uses_group_reader_by_default():
+    pool = MagicMock()
+    returned = [{"group_id": "group-1", "display_company": "Acme Corp"}]
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ) as scope_mock:
+            with patch.object(
+                b2b_dashboard,
+                "read_company_signal_candidate_groups",
+                new=AsyncMock(return_value=returned),
+            ) as read_mock:
+                result = await b2b_dashboard.list_company_signal_candidate_groups(
+                    vendor_name=None,
+                    company_name=None,
+                    candidate_bucket="analyst_review",
+                    review_status="pending",
+                    canonical_gap_reason=None,
+                    min_urgency=0,
+                    min_confidence=None,
+                    min_reviews=1,
+                    decision_makers_only=False,
+                    signal_evidence_present=None,
+                    window_days=90,
+                    limit=50,
+                    user=None,
+                )
+
+    assert result == {
+        "groups": returned,
+        "count": 1,
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+    }
+    scope_mock.assert_awaited_once_with(pool, None)
+    read_mock.assert_awaited_once_with(
+        pool,
+        window_days=90,
+        vendor_name=None,
+        company_name=None,
+        scoped_vendors=None,
+        candidate_bucket="analyst_review",
+        review_status="pending",
+        canonical_gap_reason=None,
+        min_urgency=0,
+        min_confidence=None,
+        min_reviews=1,
+        decision_makers_only=False,
+        signal_evidence_present=None,
+        limit=50,
+    )
+
+
+@pytest.mark.asyncio
 async def test_list_company_signal_candidates_passes_scope_and_filters():
     pool = MagicMock()
     user = MagicMock()
@@ -274,6 +330,7 @@ async def test_list_company_signal_candidates_rejects_invalid_review_status():
 @pytest.mark.asyncio
 async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
     pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
     pool.fetchrow = AsyncMock(
         side_effect=[
             {
@@ -335,8 +392,75 @@ async def test_approve_company_signal_candidate_promotes_and_triggers_rebuild():
 
 
 @pytest.mark.asyncio
+async def test_approve_company_signal_candidate_group_promotes_and_triggers_rebuild():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "company_name": "acme",
+                "display_company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 4,
+                "max_urgency_score": 8.4,
+                "corroborated_confidence_score": 0.66,
+                "representative_review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "representative_source": "reddit",
+                "representative_pain_category": "pricing",
+                "representative_buyer_role": "vp",
+                "representative_decision_maker": True,
+                "representative_seat_count": 120,
+                "representative_contract_end": "2026-07-01",
+                "representative_buying_stage": "evaluation",
+                "review_status": "pending",
+            },
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "company_name": "acme",
+                "vendor_name": "Zendesk",
+            },
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "review_status": "approved",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 10, tzinfo=timezone.utc),
+                "reviewed_by": "api:user-1",
+                "review_notes": "cluster is real",
+            },
+        ]
+    )
+    body = b2b_dashboard.CompanySignalCandidateReviewBody(notes="cluster is real", trigger_rebuild=True)
+    user = MagicMock(user_id="user-1")
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                "_trigger_accounts_in_motion_rebuild",
+                new=AsyncMock(return_value={"triggered": True, "vendor_name": "Zendesk"}),
+            ) as rebuild_mock:
+                result = await b2b_dashboard.approve_company_signal_candidate_group(
+                    "33333333-3333-3333-3333-333333333333",
+                    body,
+                    user,
+                )
+
+    assert result["review_status"] == "approved"
+    assert result["company_signal_id"] == "22222222-2222-2222-2222-222222222222"
+    assert result["review_count"] == 4
+    assert result["rebuild"]["triggered"] is True
+    rebuild_mock.assert_awaited_once_with(pool, "Zendesk")
+    pool.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_suppress_company_signal_candidate_marks_suppressed_without_rebuild():
     pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
     pool.fetchrow = AsyncMock(
         side_effect=[
             {
@@ -382,6 +506,59 @@ async def test_suppress_company_signal_candidate_marks_suppressed_without_rebuil
     assert result["review_status"] == "suppressed"
     assert result["review_status_updated_at"] == "2026-04-11T12:05:00+00:00"
     assert result["review_notes"] == "not a real target"
+
+
+@pytest.mark.asyncio
+async def test_suppress_company_signal_candidate_group_marks_members_suppressed():
+    pool = MagicMock()
+    pool.execute = AsyncMock(return_value=None)
+    pool.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "company_name": "acme",
+                "display_company_name": "Acme Corp",
+                "vendor_name": "Zendesk",
+                "product_category": "Customer Support",
+                "review_count": 4,
+                "max_urgency_score": 8.4,
+                "corroborated_confidence_score": 0.66,
+                "representative_review_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "representative_source": "reddit",
+                "representative_pain_category": "pricing",
+                "representative_buyer_role": "vp",
+                "representative_decision_maker": True,
+                "representative_seat_count": 120,
+                "representative_contract_end": "2026-07-01",
+                "representative_buying_stage": "evaluation",
+                "review_status": "pending",
+            },
+            {
+                "id": "33333333-3333-3333-3333-333333333333",
+                "review_status": "suppressed",
+                "review_status_updated_at": datetime(2026, 4, 11, 12, 15, tzinfo=timezone.utc),
+                "reviewed_by": "analyst",
+                "review_notes": "noise cluster",
+            },
+        ]
+    )
+    body = b2b_dashboard.CompanySignalCandidateReviewBody(notes="noise cluster", trigger_rebuild=False)
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            "_get_scoped_vendors",
+            new=AsyncMock(return_value=None),
+        ):
+            result = await b2b_dashboard.suppress_company_signal_candidate_group(
+                "33333333-3333-3333-3333-333333333333",
+                body,
+                None,
+            )
+
+    assert result["review_status"] == "suppressed"
+    assert result["review_status_updated_at"] == "2026-04-11T12:15:00+00:00"
+    assert result["review_count"] == 4
+    pool.execute.assert_awaited_once()
 
 
 @pytest.mark.asyncio

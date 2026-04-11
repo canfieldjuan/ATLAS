@@ -11458,6 +11458,231 @@ async def read_company_signal_candidates(
     return results
 
 
+async def _load_company_signal_candidate_support_reviews(
+    pool,
+    review_ids: list[Any],
+) -> dict[str, dict[str, Any]]:
+    if not review_ids:
+        return {}
+    rows = await pool.fetch(
+        """
+        SELECT id,
+               source,
+               summary,
+               LEFT(review_text, 500) AS review_excerpt,
+               source_url,
+               COALESCE(reviewed_at, imported_at, enriched_at) AS reviewed_at,
+               enrichment->'quotable_phrases' AS quotable_phrases
+        FROM b2b_reviews
+        WHERE id = ANY($1::uuid[])
+        """,
+        review_ids,
+    )
+    results: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        quote_excerpt = None
+        for item in _safe_json(row.get("quotable_phrases")) or []:
+            text = _quote_text(item) if isinstance(item, dict) else str(item or "").strip()
+            if text:
+                quote_excerpt = text
+                break
+        rid = str(row["id"]) if row.get("id") else None
+        if not rid:
+            continue
+        results[rid] = {
+            "review_id": rid,
+            "source": row.get("source"),
+            "summary": row.get("summary"),
+            "review_excerpt": row.get("review_excerpt"),
+            "source_url": row.get("source_url"),
+            "reviewed_at": str(row.get("reviewed_at") or "") or None,
+            "quote_excerpt": quote_excerpt,
+        }
+    return results
+
+
+async def read_company_signal_candidate_groups(
+    pool,
+    *,
+    window_days: int = 90,
+    vendor_name: str | None = None,
+    company_name: str | None = None,
+    scoped_vendors: list[str] | None = None,
+    candidate_bucket: str | None = None,
+    review_status: str | None = None,
+    canonical_gap_reason: str | None = None,
+    min_urgency: float = 0.0,
+    min_confidence: float | None = None,
+    min_reviews: int = 1,
+    decision_makers_only: bool = False,
+    signal_evidence_present: bool | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Primary grouped operator surface for analyst-assist company-signal review."""
+    conditions = ["last_seen_at >= NOW() - make_interval(days => $1)"]
+    params: list[Any] = [window_days]
+    idx = 2
+
+    if scoped_vendors is not None:
+        if not scoped_vendors:
+            return []
+        conditions.append(f"vendor_name = ANY(${idx}::text[])")
+        params.append(scoped_vendors)
+        idx += 1
+    if vendor_name:
+        conditions.append(f"vendor_name ILIKE '%' || ${idx} || '%'")
+        params.append(vendor_name)
+        idx += 1
+    if company_name:
+        conditions.append(f"(company_name ILIKE '%' || ${idx} || '%' OR display_company_name ILIKE '%' || ${idx} || '%')")
+        params.append(company_name)
+        idx += 1
+    if candidate_bucket:
+        conditions.append(f"candidate_bucket = ${idx}")
+        params.append(candidate_bucket)
+        idx += 1
+    if review_status:
+        conditions.append(f"review_status = ${idx}")
+        params.append(review_status)
+        idx += 1
+    if canonical_gap_reason:
+        conditions.append(f"canonical_gap_reason = ${idx}")
+        params.append(canonical_gap_reason)
+        idx += 1
+    if min_urgency > 0:
+        conditions.append(f"COALESCE(max_urgency_score, 0) >= ${idx}")
+        params.append(min_urgency)
+        idx += 1
+    if min_confidence is not None:
+        conditions.append(f"COALESCE(corroborated_confidence_score, 0) >= ${idx}")
+        params.append(min_confidence)
+        idx += 1
+    if min_reviews > 1:
+        conditions.append(f"review_count >= ${idx}")
+        params.append(min_reviews)
+        idx += 1
+    if decision_makers_only:
+        conditions.append("decision_maker_count > 0")
+    if signal_evidence_present is not None:
+        operator = ">" if signal_evidence_present else "="
+        conditions.append(f"signal_evidence_count {operator} 0")
+
+    limit_param = idx
+    params.append(limit)
+    rows = await pool.fetch(
+        f"""
+        SELECT id,
+               company_name,
+               display_company_name,
+               vendor_name,
+               product_category,
+               review_count,
+               distinct_source_count,
+               decision_maker_count,
+               signal_evidence_count,
+               canonical_ready_review_count,
+               avg_urgency_score,
+               max_urgency_score,
+               avg_confidence_score,
+               max_confidence_score,
+               corroborated_confidence_score,
+               confidence_tier,
+               source_distribution,
+               gap_reason_distribution,
+               sample_review_ids,
+               representative_review_id,
+               representative_source,
+               representative_pain_category,
+               representative_buyer_role,
+               representative_decision_maker,
+               representative_seat_count,
+               representative_contract_end,
+               representative_buying_stage,
+               representative_confidence_score,
+               representative_urgency_score,
+               canonical_gap_reason,
+               candidate_bucket,
+               review_status,
+               review_status_updated_at,
+               reviewed_by,
+               review_notes,
+               materialization_run_id,
+               first_seen_at,
+               last_seen_at
+        FROM b2b_company_signal_candidate_groups
+        WHERE {" AND ".join(conditions)}
+        ORDER BY CASE WHEN candidate_bucket = 'canonical_ready' THEN 0 ELSE 1 END,
+                 review_status_updated_at DESC NULLS LAST,
+                 review_count DESC,
+                 corroborated_confidence_score DESC NULLS LAST,
+                 max_urgency_score DESC NULLS LAST,
+                 last_seen_at DESC
+        LIMIT ${limit_param}
+        """,
+        *params,
+    )
+    sample_review_ids: list[Any] = []
+    for row in rows:
+        for review_id in row.get("sample_review_ids") or []:
+            if review_id and review_id not in sample_review_ids:
+                sample_review_ids.append(review_id)
+        representative_review_id = row.get("representative_review_id")
+        if representative_review_id and representative_review_id not in sample_review_ids:
+            sample_review_ids.append(representative_review_id)
+    support_reviews = await _load_company_signal_candidate_support_reviews(pool, sample_review_ids)
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        sample_ids = [str(review_id) for review_id in (row.get("sample_review_ids") or []) if review_id]
+        supporting_reviews = [
+            support_reviews[str(review_id)]
+            for review_id in sample_ids[:3]
+            if str(review_id) in support_reviews
+        ]
+        results.append({
+            "group_id": str(row["id"]) if row.get("id") else None,
+            "company": row.get("company_name"),
+            "display_company": row.get("display_company_name") or row.get("company_name"),
+            "vendor": row.get("vendor_name"),
+            "category": row.get("product_category"),
+            "review_count": row.get("review_count") or 0,
+            "distinct_source_count": row.get("distinct_source_count") or 0,
+            "decision_maker_count": row.get("decision_maker_count") or 0,
+            "signal_evidence_count": row.get("signal_evidence_count") or 0,
+            "canonical_ready_review_count": row.get("canonical_ready_review_count") or 0,
+            "avg_urgency": float(row["avg_urgency_score"]) if row.get("avg_urgency_score") is not None else None,
+            "max_urgency": float(row["max_urgency_score"]) if row.get("max_urgency_score") is not None else None,
+            "avg_confidence_score": float(row["avg_confidence_score"]) if row.get("avg_confidence_score") is not None else None,
+            "max_confidence_score": float(row["max_confidence_score"]) if row.get("max_confidence_score") is not None else None,
+            "corroborated_confidence_score": float(row["corroborated_confidence_score"]) if row.get("corroborated_confidence_score") is not None else None,
+            "confidence_tier": row.get("confidence_tier"),
+            "source_distribution": _safe_json(row.get("source_distribution")) or {},
+            "gap_reason_distribution": _safe_json(row.get("gap_reason_distribution")) or {},
+            "sample_review_ids": sample_ids,
+            "representative_review_id": str(row["representative_review_id"]) if row.get("representative_review_id") else None,
+            "representative_source": row.get("representative_source"),
+            "representative_pain_category": row.get("representative_pain_category"),
+            "representative_buyer_role": row.get("representative_buyer_role"),
+            "representative_decision_maker": row.get("representative_decision_maker"),
+            "representative_seat_count": row.get("representative_seat_count"),
+            "representative_contract_end": row.get("representative_contract_end"),
+            "representative_buying_stage": row.get("representative_buying_stage"),
+            "representative_confidence_score": float(row["representative_confidence_score"]) if row.get("representative_confidence_score") is not None else None,
+            "representative_urgency_score": float(row["representative_urgency_score"]) if row.get("representative_urgency_score") is not None else None,
+            "canonical_gap_reason": row.get("canonical_gap_reason"),
+            "candidate_bucket": row.get("candidate_bucket"),
+            "review_status": row.get("review_status"),
+            "review_status_updated_at": str(row.get("review_status_updated_at") or "") or None,
+            "reviewed_by": row.get("reviewed_by"),
+            "review_notes": row.get("review_notes"),
+            "materialization_run_id": row.get("materialization_run_id"),
+            "first_seen_at": str(row.get("first_seen_at") or "") or None,
+            "last_seen_at": str(row.get("last_seen_at") or "") or None,
+            "supporting_reviews": supporting_reviews,
+        })
+    return results
+
+
 async def read_review_details(
     pool,
     *,

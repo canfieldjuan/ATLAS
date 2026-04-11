@@ -18,6 +18,7 @@ import logging
 import re
 import time
 import uuid as _uuid
+from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -52,6 +53,7 @@ _PERSISTENCE_PHASES = (
     "churn_signals",
     "company_signals",
     "company_signal_candidates",
+    "company_signal_candidate_groups",
     "pain_points",
     "use_cases",
     "integrations",
@@ -103,6 +105,9 @@ from ._b2b_shared import (  # noqa: E402
     _build_company_signal_blocked_names_by_vendor,
     _company_signal_name_is_eligible,
     _company_signal_exclusion_reason,
+    _company_signal_candidate_confidence_tier,
+    _company_signal_low_trust_sources,
+    _normalize_company_signal_confidence,
     _battle_card_competitor_is_eligible,
     _merge_canonical_company_signals,
     build_evidence_vault,
@@ -174,6 +179,203 @@ class _TaskTimer:
 def _task_run_id(task: ScheduledTask | Any) -> str | None:
     """Return the scheduler execution id or best task-correlated fallback."""
     return _task_execution_run_id(task)
+
+
+def _company_signal_candidate_reviewed_at(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _company_signal_candidate_rank(candidate: dict[str, Any]) -> tuple[int, int, float, float, datetime]:
+    urgency = candidate.get("urgency_score")
+    try:
+        urgency_value = float(urgency) if urgency is not None else 0.0
+    except (TypeError, ValueError):
+        urgency_value = 0.0
+    confidence_value = _normalize_company_signal_confidence(candidate.get("confidence_score")) or 0.0
+    reviewed_at = _company_signal_candidate_reviewed_at(candidate.get("reviewed_at"))
+    if reviewed_at is None:
+        reviewed_at = datetime.min.replace(tzinfo=timezone.utc)
+    return (
+        1 if candidate.get("signal_evidence_present") else 0,
+        1 if candidate.get("decision_maker") else 0,
+        confidence_value,
+        urgency_value,
+        reviewed_at,
+    )
+
+
+def _compute_company_signal_group_corroborated_confidence(
+    *,
+    base_confidence: Any,
+    review_count: int,
+    distinct_source_count: int,
+    decision_maker_count: int,
+    signal_evidence_count: int,
+) -> float:
+    base = _normalize_company_signal_confidence(base_confidence) or 0.0
+    review_boost = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_group_per_extra_review_boost", 0.1),
+    ) or 0.1
+    source_boost = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_group_per_extra_source_boost", 0.08),
+    ) or 0.08
+    decision_maker_boost = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_group_decision_maker_boost", 0.05),
+    ) or 0.05
+    signal_evidence_boost = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_group_signal_evidence_boost", 0.05),
+    ) or 0.05
+    max_boost = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_group_max_corroboration_boost", 0.45),
+    ) or 0.45
+    bonus = max(review_count - 1, 0) * review_boost
+    bonus += max(distinct_source_count - 1, 0) * source_boost
+    if decision_maker_count > 0:
+        bonus += decision_maker_boost
+    if signal_evidence_count > 0:
+        bonus += signal_evidence_boost
+    bonus = min(max_boost, bonus)
+    return round(min(1.0, base + bonus), 3)
+
+
+def _build_company_signal_candidate_groups(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for candidate in candidates or []:
+        vendor_name = _canonicalize_vendor(candidate.get("vendor_name") or "")
+        company_name = normalize_company_name(candidate.get("company_name") or "")
+        if not vendor_name or not company_name:
+            continue
+        grouped.setdefault((company_name, vendor_name), []).append(candidate)
+
+    low_trust_sources = _company_signal_low_trust_sources()
+    low_trust_min_confidence = _normalize_company_signal_confidence(
+        getattr(settings.b2b_churn, "company_signal_low_trust_min_confidence", 0.6),
+    ) or 0.6
+    urgency_threshold = float(getattr(settings.b2b_churn, "high_churn_urgency_threshold", 7.0))
+    require_signal_evidence = bool(
+        getattr(settings.b2b_churn, "high_intent_require_signal_evidence", True),
+    )
+    results: list[dict[str, Any]] = []
+
+    for (company_name, vendor_name), items in grouped.items():
+        ranked = sorted(items, key=_company_signal_candidate_rank, reverse=True)
+        representative = ranked[0]
+        urgencies: list[float] = []
+        confidences: list[float] = []
+        source_counter: Counter[str] = Counter()
+        gap_counter: Counter[str] = Counter()
+        decision_maker_count = 0
+        signal_evidence_count = 0
+        canonical_ready_review_count = 0
+
+        for item in ranked:
+            confidence_value = _normalize_company_signal_confidence(item.get("confidence_score")) or 0.0
+            confidences.append(confidence_value)
+            urgency = item.get("urgency_score")
+            try:
+                urgencies.append(float(urgency) if urgency is not None else 0.0)
+            except (TypeError, ValueError):
+                urgencies.append(0.0)
+            source = str(item.get("source") or "").strip().lower()
+            if source:
+                source_counter[source] += 1
+            gap_counter[str(item.get("canonical_gap_reason") or "canonical_ready")] += 1
+            if item.get("decision_maker"):
+                decision_maker_count += 1
+            if item.get("signal_evidence_present"):
+                signal_evidence_count += 1
+            if item.get("candidate_bucket") == "canonical_ready":
+                canonical_ready_review_count += 1
+
+        review_count = len(ranked)
+        distinct_source_count = len(source_counter)
+        max_confidence = max(confidences) if confidences else 0.0
+        avg_confidence = round(sum(confidences) / len(confidences), 3) if confidences else 0.0
+        max_urgency = max(urgencies) if urgencies else 0.0
+        avg_urgency = round(sum(urgencies) / len(urgencies), 2) if urgencies else 0.0
+        corroborated_confidence = _compute_company_signal_group_corroborated_confidence(
+            base_confidence=max_confidence,
+            review_count=review_count,
+            distinct_source_count=distinct_source_count,
+            decision_maker_count=decision_maker_count,
+            signal_evidence_count=signal_evidence_count,
+        )
+        has_trusted_source = any(source not in low_trust_sources for source in source_counter)
+        canonical_gap_reason = None
+        if not has_trusted_source and corroborated_confidence < low_trust_min_confidence:
+            canonical_gap_reason = "low_confidence_low_trust_source"
+        elif max_urgency < urgency_threshold:
+            canonical_gap_reason = "below_high_intent_threshold"
+        elif require_signal_evidence and signal_evidence_count <= 0:
+            canonical_gap_reason = "missing_signal_evidence"
+        candidate_bucket = "canonical_ready" if canonical_gap_reason is None else "analyst_review"
+
+        sample_review_ids: list[str] = []
+        for item in ranked:
+            review_id = item.get("review_id")
+            if not review_id:
+                continue
+            review_id_text = str(review_id)
+            if review_id_text not in sample_review_ids:
+                sample_review_ids.append(review_id_text)
+            if len(sample_review_ids) >= 5:
+                break
+
+        representative_confidence = _normalize_company_signal_confidence(
+            representative.get("confidence_score"),
+        )
+        representative_urgency = representative.get("urgency_score")
+        try:
+            representative_urgency_value = float(representative_urgency) if representative_urgency is not None else None
+        except (TypeError, ValueError):
+            representative_urgency_value = None
+        results.append({
+            "company_name": company_name,
+            "display_company_name": (
+                representative.get("company_name_raw")
+                or representative.get("company_name")
+                or company_name
+            ),
+            "vendor_name": vendor_name,
+            "product_category": representative.get("product_category"),
+            "review_count": review_count,
+            "distinct_source_count": distinct_source_count,
+            "decision_maker_count": decision_maker_count,
+            "signal_evidence_count": signal_evidence_count,
+            "canonical_ready_review_count": canonical_ready_review_count,
+            "avg_urgency_score": avg_urgency,
+            "max_urgency_score": round(max_urgency, 2),
+            "avg_confidence_score": avg_confidence,
+            "max_confidence_score": round(max_confidence, 3),
+            "corroborated_confidence_score": corroborated_confidence,
+            "confidence_tier": _company_signal_candidate_confidence_tier(corroborated_confidence),
+            "source_distribution": dict(sorted(source_counter.items())),
+            "gap_reason_distribution": dict(sorted(gap_counter.items())),
+            "sample_review_ids": sample_review_ids,
+            "representative_review_id": representative.get("review_id"),
+            "representative_source": representative.get("source"),
+            "representative_pain_category": representative.get("pain_category"),
+            "representative_buyer_role": representative.get("role_level"),
+            "representative_decision_maker": representative.get("decision_maker"),
+            "representative_seat_count": representative.get("seat_count"),
+            "representative_contract_end": representative.get("contract_end"),
+            "representative_buying_stage": representative.get("buying_stage"),
+            "representative_confidence_score": representative_confidence,
+            "representative_urgency_score": representative_urgency_value,
+            "canonical_gap_reason": canonical_gap_reason,
+            "candidate_bucket": candidate_bucket,
+        })
+    return results
 
 
 _GENERIC_PRODUCT_CATEGORIES = {"", "unknown", "b2b software"}
@@ -2499,6 +2701,15 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         for item in (company_signal_candidates or [])
         if item.get("candidate_bucket") == "canonical_ready"
     )
+    company_signal_candidate_groups = _build_company_signal_candidate_groups(
+        company_signal_candidates or [],
+    )
+    company_signal_candidate_groups_persisted = 0
+    canonical_ready_company_signal_candidate_groups = sum(
+        1
+        for item in company_signal_candidate_groups
+        if item.get("candidate_bucket") == "canonical_ready"
+    )
     pain_points_persisted = 0
     use_cases_persisted = 0
     integrations_persisted = 0
@@ -2522,6 +2733,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             company_signals_persisted=company_signals_persisted,
             company_signal_candidates_persisted=company_signal_candidates_persisted,
             canonical_ready_company_signal_candidates=canonical_ready_company_signal_candidates,
+            company_signal_candidate_groups_persisted=company_signal_candidate_groups_persisted,
+            canonical_ready_company_signal_candidate_groups=canonical_ready_company_signal_candidate_groups,
             pain_points_persisted=pain_points_persisted,
             use_cases_persisted=use_cases_persisted,
             integrations_persisted=integrations_persisted,
@@ -2756,6 +2969,22 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
     except Exception:
         company_signal_candidates_persisted = 0
         logger.exception("Failed to persist company signal candidates")
+    persistence_progress += 1
+    await _update_persist_progress()
+
+    try:
+        company_signal_candidate_groups_persisted = await _upsert_company_signal_candidate_groups(
+            pool,
+            company_signal_candidate_groups,
+            materialization_run_id=materialization_run_id,
+        )
+        await _sync_company_signal_candidate_member_status_from_groups(
+            pool,
+            materialization_run_id=materialization_run_id,
+        )
+    except Exception:
+        company_signal_candidate_groups_persisted = 0
+        logger.exception("Failed to persist company signal candidate groups")
     persistence_progress += 1
     await _update_persist_progress()
 
@@ -3030,6 +3259,8 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         company_signals_persisted=company_signals_persisted,
         company_signal_candidates_persisted=company_signal_candidates_persisted,
         canonical_ready_company_signal_candidates=canonical_ready_company_signal_candidates,
+        company_signal_candidate_groups_persisted=company_signal_candidate_groups_persisted,
+        canonical_ready_company_signal_candidate_groups=canonical_ready_company_signal_candidate_groups,
         pain_points_persisted=pain_points_persisted,
         use_cases_persisted=use_cases_persisted,
         integrations_persisted=integrations_persisted,
@@ -3058,6 +3289,9 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
         "company_signal_candidates": len(company_signal_candidates),
         "canonical_ready_company_signal_candidates": canonical_ready_company_signal_candidates,
         "company_signal_candidates_persisted": company_signal_candidates_persisted,
+        "company_signal_candidate_groups": len(company_signal_candidate_groups),
+        "canonical_ready_company_signal_candidate_groups": canonical_ready_company_signal_candidate_groups,
+        "company_signal_candidate_groups_persisted": company_signal_candidate_groups_persisted,
         "pain_points_persisted": pain_points_persisted,
         "use_cases_persisted": use_cases_persisted,
         "integrations_persisted": integrations_persisted,
@@ -3653,6 +3887,198 @@ async def _upsert_company_signal_candidates(
         rows,
     )
     return len(rows)
+
+
+async def _upsert_company_signal_candidate_groups(
+    pool,
+    groups: list[dict[str, Any]],
+    *,
+    materialization_run_id: str | None = None,
+) -> int:
+    """Persist grouped company candidates for the primary operator review surface."""
+    rows: list[tuple[Any, ...]] = []
+    for group in groups or []:
+        vendor_name = _canonicalize_vendor(group.get("vendor_name") or "")
+        company_name = normalize_company_name(group.get("company_name") or "")
+        if not vendor_name or not company_name:
+            continue
+        representative_review_id = None
+        representative_review_id_raw = group.get("representative_review_id")
+        if representative_review_id_raw:
+            try:
+                representative_review_id = _uuid.UUID(str(representative_review_id_raw))
+            except (TypeError, ValueError):
+                representative_review_id = None
+        sample_review_ids: list[_uuid.UUID] = []
+        for review_id_raw in group.get("sample_review_ids") or []:
+            try:
+                review_id = _uuid.UUID(str(review_id_raw))
+            except (TypeError, ValueError):
+                continue
+            if review_id not in sample_review_ids:
+                sample_review_ids.append(review_id)
+            if len(sample_review_ids) >= 5:
+                break
+        rows.append((
+            company_name,
+            group.get("display_company_name"),
+            vendor_name,
+            group.get("product_category"),
+            group.get("review_count") or 0,
+            group.get("distinct_source_count") or 0,
+            group.get("decision_maker_count") or 0,
+            group.get("signal_evidence_count") or 0,
+            group.get("canonical_ready_review_count") or 0,
+            group.get("avg_urgency_score"),
+            group.get("max_urgency_score"),
+            group.get("avg_confidence_score"),
+            group.get("max_confidence_score"),
+            group.get("corroborated_confidence_score"),
+            group.get("confidence_tier") or "low",
+            json.dumps(group.get("source_distribution") or {}),
+            json.dumps(group.get("gap_reason_distribution") or {}),
+            sample_review_ids,
+            representative_review_id,
+            group.get("representative_source"),
+            group.get("representative_pain_category"),
+            group.get("representative_buyer_role"),
+            group.get("representative_decision_maker"),
+            group.get("representative_seat_count"),
+            group.get("representative_contract_end"),
+            group.get("representative_buying_stage"),
+            group.get("representative_confidence_score"),
+            group.get("representative_urgency_score"),
+            group.get("canonical_gap_reason"),
+            group.get("candidate_bucket") or "analyst_review",
+            materialization_run_id,
+        ))
+    if not rows:
+        return 0
+    await pool.executemany(
+        """
+        INSERT INTO b2b_company_signal_candidate_groups (
+            company_name,
+            display_company_name,
+            vendor_name,
+            product_category,
+            review_count,
+            distinct_source_count,
+            decision_maker_count,
+            signal_evidence_count,
+            canonical_ready_review_count,
+            avg_urgency_score,
+            max_urgency_score,
+            avg_confidence_score,
+            max_confidence_score,
+            corroborated_confidence_score,
+            confidence_tier,
+            source_distribution,
+            gap_reason_distribution,
+            sample_review_ids,
+            representative_review_id,
+            representative_source,
+            representative_pain_category,
+            representative_buyer_role,
+            representative_decision_maker,
+            representative_seat_count,
+            representative_contract_end,
+            representative_buying_stage,
+            representative_confidence_score,
+            representative_urgency_score,
+            canonical_gap_reason,
+            candidate_bucket,
+            materialization_run_id,
+            last_seen_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18::uuid[],
+            $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, NOW()
+        )
+        ON CONFLICT (company_name, vendor_name) DO UPDATE SET
+            display_company_name = COALESCE(EXCLUDED.display_company_name, b2b_company_signal_candidate_groups.display_company_name),
+            product_category = COALESCE(EXCLUDED.product_category, b2b_company_signal_candidate_groups.product_category),
+            review_count = EXCLUDED.review_count,
+            distinct_source_count = EXCLUDED.distinct_source_count,
+            decision_maker_count = EXCLUDED.decision_maker_count,
+            signal_evidence_count = EXCLUDED.signal_evidence_count,
+            canonical_ready_review_count = EXCLUDED.canonical_ready_review_count,
+            avg_urgency_score = EXCLUDED.avg_urgency_score,
+            max_urgency_score = EXCLUDED.max_urgency_score,
+            avg_confidence_score = EXCLUDED.avg_confidence_score,
+            max_confidence_score = EXCLUDED.max_confidence_score,
+            corroborated_confidence_score = EXCLUDED.corroborated_confidence_score,
+            confidence_tier = EXCLUDED.confidence_tier,
+            source_distribution = EXCLUDED.source_distribution,
+            gap_reason_distribution = EXCLUDED.gap_reason_distribution,
+            sample_review_ids = EXCLUDED.sample_review_ids,
+            representative_review_id = EXCLUDED.representative_review_id,
+            representative_source = EXCLUDED.representative_source,
+            representative_pain_category = EXCLUDED.representative_pain_category,
+            representative_buyer_role = EXCLUDED.representative_buyer_role,
+            representative_decision_maker = EXCLUDED.representative_decision_maker,
+            representative_seat_count = EXCLUDED.representative_seat_count,
+            representative_contract_end = EXCLUDED.representative_contract_end,
+            representative_buying_stage = EXCLUDED.representative_buying_stage,
+            representative_confidence_score = EXCLUDED.representative_confidence_score,
+            representative_urgency_score = EXCLUDED.representative_urgency_score,
+            canonical_gap_reason = EXCLUDED.canonical_gap_reason,
+            candidate_bucket = EXCLUDED.candidate_bucket,
+            materialization_run_id = EXCLUDED.materialization_run_id,
+            last_seen_at = EXCLUDED.last_seen_at
+        """,
+        rows,
+    )
+    return len(rows)
+
+
+async def _sync_company_signal_candidate_member_status_from_groups(
+    pool,
+    *,
+    materialization_run_id: str | None = None,
+) -> None:
+    """Carry existing group review decisions onto newly materialized member rows."""
+    if materialization_run_id:
+        await pool.execute(
+            """
+            UPDATE b2b_company_signal_candidates AS c
+            SET review_status = g.review_status,
+                review_status_updated_at = g.review_status_updated_at,
+                reviewed_by = g.reviewed_by,
+                review_notes = g.review_notes
+            FROM b2b_company_signal_candidate_groups AS g
+            WHERE c.company_name = g.company_name
+              AND c.vendor_name = g.vendor_name
+              AND c.materialization_run_id = $1
+              AND g.review_status <> 'pending'
+              AND (
+                    c.review_status IS DISTINCT FROM g.review_status
+                 OR c.review_status_updated_at IS DISTINCT FROM g.review_status_updated_at
+                 OR c.reviewed_by IS DISTINCT FROM g.reviewed_by
+                 OR c.review_notes IS DISTINCT FROM g.review_notes
+              )
+            """,
+            materialization_run_id,
+        )
+        return
+    await pool.execute(
+        """
+        UPDATE b2b_company_signal_candidates AS c
+        SET review_status = g.review_status,
+            review_status_updated_at = g.review_status_updated_at,
+            reviewed_by = g.reviewed_by,
+            review_notes = g.review_notes
+        FROM b2b_company_signal_candidate_groups AS g
+        WHERE c.company_name = g.company_name
+          AND c.vendor_name = g.vendor_name
+          AND g.review_status <> 'pending'
+          AND (
+                c.review_status IS DISTINCT FROM g.review_status
+             OR c.review_status_updated_at IS DISTINCT FROM g.review_status_updated_at
+             OR c.reviewed_by IS DISTINCT FROM g.reviewed_by
+             OR c.review_notes IS DISTINCT FROM g.review_notes
+          )
+        """
+    )
 
 
 # ------------------------------------------------------------------
