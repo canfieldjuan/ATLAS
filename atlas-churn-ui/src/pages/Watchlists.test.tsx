@@ -424,6 +424,23 @@ describe('Watchlists', () => {
     )
   })
 
+  it('preserves watchlist context when opening vendor workspace from an account row', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    mockNavigate.mockClear()
+    await user.click(screen.getAllByRole('button', { name: 'View vendor' })[0])
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
   it('copies a vendor workspace link directly from an account row', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)

@@ -2482,7 +2482,7 @@ export default function Watchlists() {
               className="rounded-md bg-cyan-500/10 px-2 py-1 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
               onClick={(event) => {
                 event.stopPropagation()
-                navigate(watchlistVendorPath(searchParams, row.vendor))
+                navigate(watchlistVendorPath(outboundWatchlistSearchParams, row.vendor))
               }}
             >
               View vendor
