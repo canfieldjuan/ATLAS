@@ -192,10 +192,14 @@ describe('EvidenceExplorer', () => {
         window_days: 30,
       })
     })
-    expect(await screen.findByRole('link', { name: 'Open account review' })).toHaveAttribute(
-      'href',
-      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
-    )
+    const accountReviewLinks = await screen.findAllByRole('link', { name: 'Open account review' })
+    expect(accountReviewLinks.length).toBeGreaterThan(0)
+    for (const link of accountReviewLinks) {
+      expect(link).toHaveAttribute(
+        'href',
+        '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26pain_category%3Dpricing%26source%3Dreddit%26witness_type%3Dpricing%26witness_id%3Dwitness%253Azendesk%253A1%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk',
+      )
+    }
   })
 
 
@@ -492,6 +496,52 @@ describe('EvidenceExplorer', () => {
     expect(screen.getByRole('link', { name: 'Open review detail' })).toHaveAttribute(
       'href',
       '/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit',
+    )
+  })
+
+
+  it('shows a direct account review shortcut on witness cards when the reviewer company matches a tracked account', async () => {
+    api.fetchWitnesses.mockResolvedValueOnce({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-09',
+      analysis_window_days: 30,
+      total: 61,
+      limit: 30,
+      offset: 30,
+      facets: {
+        pain_categories: ['pricing'],
+        sources: ['reddit'],
+        witness_types: ['pricing'],
+      },
+      witnesses: [{
+        witness_id: 'witness:zendesk:31',
+        review_id: 'review-31',
+        witness_type: 'pricing',
+        excerpt_text: 'The renewal window is now urgent.',
+        source: 'reddit',
+        reviewed_at: '2026-04-03T00:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP Support',
+        pain_category: 'pricing',
+        competitor: 'Freshdesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        as_of_date: '2026-04-09',
+      }],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&offset=30']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open account review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26offset%3D30%26witness_id%3Dwitness%253Azendesk%253A31',
     )
   })
 

@@ -8,10 +8,10 @@ import {
 import { clsx } from 'clsx'
 import EvidenceDrawer, { SourceBadge, SIGNAL_COLORS } from '../components/EvidenceDrawer'
 import {
-  listTrackedVendors, listWatchlistViews, searchAvailableVendors, fetchWitnesses, fetchEvidenceVault, fetchEvidenceTrace,
+  listTrackedVendors, listWatchlistViews, searchAvailableVendors, fetchWitnesses, fetchEvidenceVault, fetchEvidenceTrace, fetchAccountsInMotionFeed,
 } from '../api/client'
 import type {
-  EvidenceWitness, EvidenceFacets, EvidenceVault, EvidenceTrace,
+  AccountsInMotionFeedItem, EvidenceWitness, EvidenceFacets, EvidenceVault, EvidenceTrace,
 } from '../api/client'
 
 
@@ -84,6 +84,19 @@ function reviewDetailPath(searchParams: URLSearchParams, reviewId: string) {
   const params = new URLSearchParams()
   params.set('back_to', evidenceExplorerPath(searchParams))
   return `/reviews/${encodeURIComponent(reviewId)}?${params.toString()}`
+}
+
+
+function accountReviewPath(row: AccountsInMotionFeedItem, backToPath: string) {
+  const params = new URLSearchParams()
+  params.set('account_vendor', row.vendor || '')
+  params.set('account_company', row.company || '')
+  params.set('account_report_date', row.report_date || '')
+  params.set('account_watch_vendor', row.watch_vendor || '')
+  params.set('account_category', row.category || '')
+  params.set('account_track_mode', row.track_mode || '')
+  params.set('back_to', backToPath)
+  return `/watchlists?${params.toString()}`
 }
 
 function evidenceWatchlistsPath(searchParams: URLSearchParams, vendorName: string, viewId?: string | null) {
@@ -192,6 +205,8 @@ export default function EvidenceExplorer() {
   const [watchlistViews, setWatchlistViews] = useState<Array<{ id: string; vendor_names?: string[] | null; vendor_name?: string | null }>>([])
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const [accountReviewRows, setAccountReviewRows] = useState<AccountsInMotionFeedItem[]>([])
+
   // Tab state
   const [activeTab, setActiveTab] = useState<Tab>(requestedTab)
 
@@ -267,6 +282,24 @@ export default function EvidenceExplorer() {
     searchParams,
   ])
 
+
+  const matchedAccountReviewPaths = useMemo(() => {
+    const rowsByCompany = new Map(
+      accountReviewRows
+        .filter((row) => row.company?.trim())
+        .map((row) => [row.company!.trim().toLowerCase(), row] as const),
+    )
+    return Object.fromEntries(
+      witnesses.flatMap((witness) => {
+        const reviewerCompany = witness.reviewer_company?.trim().toLowerCase()
+        if (!reviewerCompany) return []
+        const match = rowsByCompany.get(reviewerCompany)
+        if (!match) return []
+        return [[witness.witness_id, accountReviewPath(match, evidenceWitnessPath(searchParams, witness.witness_id))]]
+      }),
+    ) as Record<string, string>
+  }, [accountReviewRows, searchParams, witnesses])
+
   // -- Search handler ---------------------------------------------------------
 
   const handleSearchInput = useCallback((query: string) => {
@@ -313,6 +346,30 @@ export default function EvidenceExplorer() {
       cancelled = true
     }
   }, [])
+
+
+  useEffect(() => {
+    if (!activeVendor) {
+      setAccountReviewRows([])
+      return
+    }
+    let cancelled = false
+    fetchAccountsInMotionFeed({
+      vendor_name: activeVendor,
+      include_stale: true,
+    })
+      .then((res) => {
+        if (cancelled) return
+        setAccountReviewRows(res.accounts || [])
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAccountReviewRows([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeVendor])
 
   // Request version counter to prevent stale responses from overwriting state
   const requestVersionRef = useRef(0)
@@ -812,6 +869,15 @@ export default function EvidenceExplorer() {
                                 ? (copiedWitnessState.status === 'copied' ? 'Copied' : 'Copy Failed')
                                 : 'Copy witness link'}
                             </button>
+                            {matchedAccountReviewPaths[w.witness_id] ? (
+                              <Link
+                                to={matchedAccountReviewPaths[w.witness_id]}
+                                className="inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
+                              >
+                                Open account review
+                                <ExternalLink className="h-3 w-3" />
+                              </Link>
+                            ) : null}
                             {w.review_id ? (
                               <Link
                                 to={reviewDetailPath(searchParams, w.review_id)}
