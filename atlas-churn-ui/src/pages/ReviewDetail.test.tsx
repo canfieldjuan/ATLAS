@@ -158,6 +158,38 @@ describe('ReviewDetail', () => {
     )
   })
 
+  it('shows a direct account review shortcut for focused watchlist context', async () => {
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor',
+    )
+  })
+
+  it('surfaces the account review shortcut through nested evidence context', async () => {
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26witness_id%3Dwitness%253Azendesk%253A1%26source%3Dreddit%26back_to%3D%252Fwatchlists%253Faccount_vendor%253DZendesk%2526account_company%253DAcme%252BCorp%2526account_report_date%253D2026-04-05%2526account_watch_vendor%253DZendesk%2526account_category%253DHelpdesk%2526account_track_mode%253Dcompetitor']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute(
+      'href',
+      '/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor',
+    )
+  })
+
   it('shows vendor workspace, evidence, opportunities, and reports shortcuts for the review vendor', async () => {
     render(
       <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1']}>

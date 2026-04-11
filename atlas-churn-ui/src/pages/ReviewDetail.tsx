@@ -89,6 +89,30 @@ function backToLabel(value: string) {
   return 'Back to Reviews'
 }
 
+function accountReviewPath(backTo: string | null): string | null {
+  let current = backTo?.trim() || ''
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/watchlists')) {
+      try {
+        const url = new URL(current, window.location.origin)
+        return url.searchParams.get('account_company')?.trim() ? current : null
+      } catch {
+        return null
+      }
+    }
+
+    try {
+      const url = new URL(current, window.location.origin)
+      current = url.searchParams.get('back_to')?.trim() || ''
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 export default function ReviewDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -133,6 +157,7 @@ export default function ReviewDetail() {
   })()
   const backToReviews = stateBackTo ?? queryBackTo ?? '/reviews'
   const upstreamEvidencePath = backToReviews.startsWith('/evidence') ? backToReviews : null
+  const directAccountReviewPath = accountReviewPath(backToReviews)
   const reviewDetailBackPath = (() => {
     const next = new URLSearchParams()
     if (backToReviews !== '/reviews') {
@@ -196,6 +221,14 @@ export default function ReviewDetail() {
         <div>
           <h1 className="text-2xl font-bold text-white">{review.vendor_name}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+            {directAccountReviewPath ? (
+              <Link
+                to={directAccountReviewPath}
+                className="text-amber-300 hover:text-amber-200 transition-colors"
+              >
+                Account Review
+              </Link>
+            ) : null}
             <Link
               to={vendorDetailPath(review.vendor_name, reviewDetailBackPath)}
               className="text-cyan-400 hover:text-cyan-300 transition-colors"
