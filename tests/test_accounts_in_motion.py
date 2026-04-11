@@ -288,6 +288,10 @@ class TestFallbackIntentRows:
 
         assert not _company_signal_name_is_eligible("midsized ERP software", current_vendor="Salesforce")
         assert not _company_signal_name_is_eligible("a multinational pharmaceutical", current_vendor="ClickUp")
+        assert not _company_signal_name_is_eligible(
+            "https://chatgpt.com/g/g-LsO4PHxnv-robert-on-ai-and-craftsmanship",
+            current_vendor="Salesforce",
+        )
         assert _company_signal_name_is_eligible("Acme Pharmaceutical", current_vendor="ClickUp")
 
 

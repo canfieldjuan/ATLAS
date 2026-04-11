@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+from atlas_brain.autonomous.tasks import _b2b_shared as shared_mod
 from atlas_brain.autonomous.tasks._b2b_shared import read_high_intent_companies
 
 
@@ -290,6 +291,26 @@ async def test_ineligible_company_filtered_out():
 
 
 @pytest.mark.asyncio
+async def test_url_like_company_filtered_out():
+    pool = FakePool([_make_db_row(reviewer_company="https://chatgpt.com/g/g-LsO4PHxnv-robert-on-ai-and-craftsmanship")])
+    results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_low_trust_source_uses_provisional_confidence(monkeypatch):
+    monkeypatch.setattr(
+        shared_mod.settings.b2b_churn,
+        "company_signal_low_trust_min_confidence",
+        0.2,
+    )
+    pool = FakePool([_make_db_row(source="reddit")])
+    results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30)
+    assert len(results) == 1
+    assert results[0]["source"] == "reddit"
+
+
+@pytest.mark.asyncio
 async def test_scoped_vendors_empty_returns_zero_rows():
     """Empty scoped_vendors means scoped user with no tracked vendors = zero results."""
     pool = FakePool([_make_db_row()])
@@ -300,7 +321,7 @@ async def test_scoped_vendors_empty_returns_zero_rows():
 
 @pytest.mark.asyncio
 async def test_scoped_vendors_none_means_unscoped():
-    """scoped_vendors=None means no scoping (admin/public) — query runs, no vendor_name ANY filter."""
+    """scoped_vendors=None means no scoping (admin/public); query runs without vendor ANY()."""
     pool = FakePool([_make_db_row()])
     results = await read_high_intent_companies(pool, min_urgency=7.0, window_days=30, scoped_vendors=None)
     assert len(results) == 1

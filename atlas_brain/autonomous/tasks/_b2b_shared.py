@@ -5,6 +5,7 @@ Extracted from b2b_churn_intelligence.py to enable follow-up tasks
 importing the monolith.
 """
 
+import ast
 import asyncio
 import json
 import logging
@@ -644,9 +645,22 @@ def _eligible_review_filters(*, window_param: int | None = 1, source_param: int 
 
 
 def _parse_task_result_payload(result_text: Any) -> dict[str, Any]:
-    """Safely parse scheduler result payloads stored as JSON text."""
-    parsed = _safe_json(result_text, {})
-    return parsed if isinstance(parsed, dict) else {}
+    """Safely parse scheduler result payloads stored as JSON or legacy literals."""
+    if isinstance(result_text, dict):
+        return result_text
+    if not isinstance(result_text, str):
+        return {}
+    try:
+        parsed = json.loads(result_text)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+    try:
+        legacy = ast.literal_eval(result_text)
+    except (SyntaxError, ValueError):
+        return {}
+    return legacy if isinstance(legacy, dict) else {}
 
 
 def _extract_scrape_intake_funnel_from_result(
@@ -5881,12 +5895,24 @@ async def _fetch_high_intent_companies(
             for name in _extract_alternative_names(alternatives)
             if normalize_company_name(name)
         }
+        seat_count = None
+        if r["seat_count"]:
+            try:
+                seat_count = int(r["seat_count"])
+            except (ValueError, TypeError):
+                pass
+        provisional_confidence = _compute_company_signal_confidence({
+            "source": r["source"],
+            "decision_maker": bool(r["is_dm"]) if r["is_dm"] is not None else None,
+            "buying_stage": r["buying_stage"],
+            "seat_count": seat_count,
+        })
         if _company_signal_exclusion_reason(
             r["reviewer_company"],
             current_vendor=r["vendor_name"],
             blocked_names=blocked_names,
             source=r["source"],
-            confidence_score=None,
+            confidence_score=provisional_confidence,
         ):
             continue
         if _high_intent_signal_evidence_enabled() and not _high_intent_row_has_signal_evidence(dict(r)):
@@ -5895,13 +5921,6 @@ async def _fetch_high_intent_companies(
             urgency = float(r["urgency"]) if r["urgency"] is not None else 0
         except (ValueError, TypeError):
             urgency = 0
-        # Parse seat_count safely
-        seat_count = None
-        if r["seat_count"]:
-            try:
-                seat_count = int(r["seat_count"])
-            except (ValueError, TypeError):
-                pass
         results.append({
             "company": r["reviewer_company"],
             "raw_company": r["raw_reviewer_company"],
@@ -11671,6 +11690,23 @@ def _looks_like_company_domain(raw_name: str) -> bool:
     return bool(re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", text))
 
 
+def _looks_like_company_url(raw_name: Any) -> bool:
+    """Return True for URL-like labels that should never become company names."""
+    text = str(raw_name or "").strip().lower()
+    if not text:
+        return False
+    if re.match(r"^[a-z][a-z0-9+.-]*://", text):
+        return True
+    if text.startswith("www.") and "." in text:
+        return True
+    candidate = text
+    for separator in ("/", "?", "#"):
+        if separator in candidate:
+            candidate = candidate.split(separator, 1)[0]
+            break
+    return candidate != text and _looks_like_company_domain(candidate)
+
+
 _GENERIC_COMPANY_PATTERNS = (
     re.compile(r"^(msp|saas|fintech|startup|start up|non-?profit|university|school|government|public sector)$", re.I),
     re.compile(r"(^| )(software company|tech company|saas company|consulting company)( |$)", re.I),
@@ -11869,6 +11905,8 @@ def _company_signal_name_is_eligible(
     if not normalized:
         return False
     if _looks_like_company_domain(name):
+        return False
+    if _looks_like_company_url(name):
         return False
     if _looks_like_generic_company_descriptor(name):
         return False

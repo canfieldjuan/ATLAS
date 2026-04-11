@@ -113,6 +113,15 @@ async def test_fetch_review_funnel_audit_filters_recent_scrape_intake_counts_to_
                         )
                     },
                     {
+                        "result_text": (
+                            "{'results': [{'source': 'g2', 'found': 3, 'filtered': 1, "
+                            "'short_flagged': 1, 'quality_gate_flagged': 0, "
+                            "'duplicate_or_existing': 1, 'retained_pending': 0, "
+                            "'retained_raw_only': 0, 'inserted': 2, "
+                            "'company_signal_eligible_reviews': 1}]}"
+                        )
+                    },
+                    {
                         "result_text": json.dumps(
                             {
                                 "results": [
@@ -149,15 +158,27 @@ async def test_fetch_review_funnel_audit_filters_recent_scrape_intake_counts_to_
         result = await mod._fetch_review_funnel_audit(pool, 30)
 
     assert result["found"] == 5
-    assert result["scrape_runs"] == 1
+    assert result["scrape_runs"] == 2
     assert result["scrape_found"] != 99
     assert result["scrape_filtered"] != 99
-    assert result["scrape_found"] == 12
-    assert result["scrape_filtered"] == 5
-    assert result["scrape_short_flagged"] == 2
+    assert result["scrape_found"] == 15
+    assert result["scrape_filtered"] == 6
+    assert result["scrape_short_flagged"] == 3
     assert result["scrape_quality_gated"] == 1
-    assert result["scrape_duplicate_or_existing"] == 3
+    assert result["scrape_duplicate_or_existing"] == 4
     assert result["scrape_retained_pending"] == 4
     assert result["scrape_retained_raw_only"] == 2
-    assert result["scrape_inserted"] == 6
-    assert result["scrape_company_signal_eligible"] == 1
+    assert result["scrape_inserted"] == 8
+    assert result["scrape_company_signal_eligible"] == 2
+
+
+def test_parse_task_result_payload_accepts_legacy_python_literal():
+    from atlas_brain.autonomous.tasks import _b2b_shared as mod
+
+    payload = mod._parse_task_result_payload(
+        "{'results': [{'source': 'g2', 'found': 3, 'inserted': 2}]}"
+    )
+
+    assert payload == {
+        "results": [{"source": "g2", "found": 3, "inserted": 2}],
+    }
