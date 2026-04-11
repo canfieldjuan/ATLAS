@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Mail,
   RefreshCw,
@@ -27,10 +27,56 @@ import {
 } from '../api/client'
 
 type StatusTab = 'pending_approval' | 'sent' | 'rejected' | 'all'
+const DEFAULT_STATUS_TAB: StatusTab = 'pending_approval'
 
 interface VendorGroup {
   vendor: string
   briefings: BriefingDraft[]
+}
+
+function parseStatusTab(value: string | null): StatusTab {
+  return value === 'sent' || value === 'rejected' || value === 'all' ? value : DEFAULT_STATUS_TAB
+}
+
+function buildBriefingReviewSearchParams(statusTab: StatusTab, vendor: string | null) {
+  const params = new URLSearchParams()
+  if (statusTab !== DEFAULT_STATUS_TAB) params.set('status', statusTab)
+  if (vendor?.trim()) params.set('vendor', vendor.trim())
+  return params
+}
+
+function briefingReviewPath(statusTab: StatusTab, vendor: string | null) {
+  const params = buildBriefingReviewSearchParams(statusTab, vendor)
+  const query = params.toString()
+  return query ? `/briefing-review?${query}` : '/briefing-review'
+}
+
+function briefingVendorPath(statusTab: StatusTab, vendor: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('back_to', briefingReviewPath(statusTab, vendor))
+  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
+}
+
+function briefingEvidencePath(statusTab: StatusTab, vendor: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('tab', 'witnesses')
+  params.set('back_to', briefingReviewPath(statusTab, vendor))
+  return `/evidence?${params.toString()}`
+}
+
+function briefingReportsPath(statusTab: StatusTab, vendor: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor_filter', vendorName)
+  params.set('back_to', briefingReviewPath(statusTab, vendor))
+  return `/reports?${params.toString()}`
+}
+
+function briefingOpportunitiesPath(statusTab: StatusTab, vendor: string | null, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', briefingReviewPath(statusTab, vendor))
+  return `/opportunities?${params.toString()}`
 }
 
 function BriefingStatusBadge({ status }: { status: string }) {
@@ -88,8 +134,9 @@ function HtmlPreviewModal({ html, subject, onClose }: { html: string; subject: s
 }
 
 export default function BriefingReview() {
-  const [statusTab, setStatusTab] = useState<StatusTab>('pending_approval')
-  const [expandedVendor, setExpandedVendor] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const statusTab = parseStatusTab(searchParams.get('status'))
+  const expandedVendor = searchParams.get('vendor')?.trim() || null
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkLoading, setBulkLoading] = useState(false)
   const [previewBriefing, setPreviewBriefing] = useState<BriefingDraft | null>(null)
@@ -118,6 +165,10 @@ export default function BriefingReview() {
       .map(([vendor, items]) => ({ vendor, briefings: items }))
       .sort((a, b) => b.briefings.length - a.briefings.length)
   }, [queueData])
+
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [statusTab, expandedVendor])
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
@@ -242,7 +293,7 @@ export default function BriefingReview() {
             return (
               <button
                 key={tab}
-                onClick={() => { setStatusTab(tab); setExpandedVendor(null); setSelectedIds(new Set()) }}
+                onClick={() => setSearchParams(buildBriefingReviewSearchParams(tab, expandedVendor))}
                 className={clsx(
                   'px-4 py-2 text-sm font-medium transition-colors border-b-2',
                   statusTab === tab
@@ -311,7 +362,7 @@ export default function BriefingReview() {
               >
                 {/* Vendor header */}
                 <button
-                  onClick={() => setExpandedVendor(isExpanded ? null : group.vendor)}
+                  onClick={() => setSearchParams(buildBriefingReviewSearchParams(statusTab, isExpanded ? null : group.vendor))}
                   className="w-full flex items-center justify-between p-4 hover:bg-slate-800/30 transition-colors"
                 >
                   <div className="flex items-center gap-3">
@@ -370,11 +421,32 @@ export default function BriefingReview() {
                               <Mail className="h-3 w-3" />
                               <span className="text-slate-300">{briefing.recipient_email}</span>
                               <Link
-                                to={`/reports?vendor_filter=${encodeURIComponent(briefing.vendor_name)}`}
+                                to={briefingVendorPath(statusTab, expandedVendor, briefing.vendor_name)}
                                 className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 ml-2"
                                 onClick={(e) => e.stopPropagation()}
                               >
-                                Library <ExternalLink className="h-3 w-3" />
+                                Vendor workspace <ExternalLink className="h-3 w-3" />
+                              </Link>
+                              <Link
+                                to={briefingEvidencePath(statusTab, expandedVendor, briefing.vendor_name)}
+                                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                Evidence <ExternalLink className="h-3 w-3" />
+                              </Link>
+                              <Link
+                                to={briefingReportsPath(statusTab, expandedVendor, briefing.vendor_name)}
+                                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                Reports <ExternalLink className="h-3 w-3" />
+                              </Link>
+                              <Link
+                                to={briefingOpportunitiesPath(statusTab, expandedVendor, briefing.vendor_name)}
+                                className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                Opportunities <ExternalLink className="h-3 w-3" />
                               </Link>
                               {briefing.created_at && (
                                 <>
