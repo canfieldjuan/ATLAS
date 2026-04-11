@@ -12166,6 +12166,11 @@ async def read_company_signal_review_impact_summary(
                 "rebuild_persisted_runs": 0,
                 "rebuild_persisted_reports": 0,
                 "rebuild_total_accounts": 0,
+                "company_signal_effect_rate": 0.0,
+                "company_signal_creation_rate": 0.0,
+                "rebuild_trigger_rate": 0.0,
+                "avg_rebuild_reports_per_triggered": 0.0,
+                "avg_rebuild_accounts_per_triggered": 0.0,
             },
             "scopes": [],
             "priority_bands": [],
@@ -12341,11 +12346,49 @@ async def read_company_signal_review_impact_summary(
         *params,
         top_n,
     )
+    def _safe_rate(numerator: Any, denominator: Any) -> float:
+        try:
+            num = float(numerator or 0)
+            den = float(denominator or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if den <= 0:
+            return 0.0
+        return num / den
+
+    def _with_effect_metrics(row: Mapping[str, Any], *, action_key: str = "action_count") -> dict[str, Any]:
+        payload = dict(row)
+        action_count = payload.get(action_key) or 0
+        effect_count = (
+            (payload.get("company_signal_creations") or 0)
+            + (payload.get("company_signal_updates") or 0)
+            + (payload.get("company_signal_deletions") or 0)
+        )
+        payload["company_signal_effect_rate"] = _safe_rate(effect_count, action_count)
+        payload["company_signal_creation_rate"] = _safe_rate(
+            payload.get("company_signal_creations") or 0,
+            action_count,
+        )
+        payload["rebuild_trigger_rate"] = _safe_rate(
+            payload.get("rebuild_triggered") or 0,
+            payload.get("rebuild_requests") or 0,
+        )
+        payload["avg_rebuild_reports_per_triggered"] = _safe_rate(
+            payload.get("rebuild_persisted_reports") or 0,
+            payload.get("rebuild_triggered") or 0,
+        )
+        payload["avg_rebuild_accounts_per_triggered"] = _safe_rate(
+            payload.get("rebuild_total_accounts") or 0,
+            payload.get("rebuild_triggered") or 0,
+        )
+        return payload
+
+    totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     return {
-        "totals": dict(totals or {}),
+        "totals": totals_payload,
         "scopes": [dict(row) for row in scope_rows],
-        "priority_bands": [dict(row) for row in priority_rows],
-        "top_vendors": [dict(row) for row in vendor_rows],
+        "priority_bands": [_with_effect_metrics(row) for row in priority_rows],
+        "top_vendors": [_with_effect_metrics(row) for row in vendor_rows],
     }
 
 

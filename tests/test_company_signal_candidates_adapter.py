@@ -572,6 +572,17 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "vendor_actions" in vendors_sql
     assert "vendor_rebuilds" in vendors_sql
     assert summary["totals"]["total_actions"] == 6
+    assert summary["totals"]["company_signal_effect_rate"] == 1.0
+    assert summary["totals"]["company_signal_creation_rate"] == 0.5
+    assert summary["totals"]["rebuild_trigger_rate"] == 0.75
+    assert summary["totals"]["avg_rebuild_reports_per_triggered"] == 2 / 3
+    assert summary["totals"]["avg_rebuild_accounts_per_triggered"] == 3.0
     assert summary["scopes"][0]["review_scope"] == "bulk_group"
     assert summary["priority_bands"][0]["review_priority_band"] == "promote_now"
+    assert summary["priority_bands"][0]["company_signal_effect_rate"] == 1.0
+    assert summary["priority_bands"][0]["company_signal_creation_rate"] == 2 / 3
+    assert summary["priority_bands"][0]["rebuild_trigger_rate"] == 1.0
+    assert summary["priority_bands"][0]["avg_rebuild_accounts_per_triggered"] == 4.5
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
+    assert summary["top_vendors"][0]["company_signal_effect_rate"] == 1.0
+    assert summary["top_vendors"][0]["rebuild_trigger_rate"] == 2 / 3
