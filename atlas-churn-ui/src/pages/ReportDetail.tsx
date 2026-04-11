@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
+import { Link, useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
@@ -43,6 +43,25 @@ function DetailSkeleton() {
       <div className="bg-slate-900/50 border border-slate-700/50 rounded-xl p-5 h-48" />
     </div>
   )
+}
+
+function vendorDetailPath(vendorName: string) {
+  return `/vendors/${encodeURIComponent(vendorName)}`
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
 }
 
 // Shared specialized and structured report rendering is imported for this page.
@@ -101,8 +120,8 @@ export default function ReportDetail() {
       (location.state as { backTo: string }).backTo.startsWith('/reports')
       || (location.state as { backTo: string }).backTo.startsWith('/vendors/')
       || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
-      || (location.state as { backTo: string }).backTo.startsWith('/opportunities')
       || (location.state as { backTo: string }).backTo.startsWith('/evidence')
+      || (location.state as { backTo: string }).backTo.startsWith('/opportunities')
     )
     ? (location.state as { backTo: string }).backTo
     : null
@@ -112,8 +131,8 @@ export default function ReportDetail() {
       value.startsWith('/reports')
       || value.startsWith('/vendors/')
       || value.startsWith('/watchlists')
-      || value.startsWith('/opportunities')
       || value.startsWith('/evidence')
+      || value.startsWith('/opportunities')
     ) ? value : null
   })()
   const backToReports = stateBackTo ?? queryBackTo ?? '/reports'
@@ -121,10 +140,10 @@ export default function ReportDetail() {
     ? 'Back to Vendor'
     : backToReports.startsWith('/watchlists')
       ? 'Back to Watchlists'
-      : backToReports.startsWith('/opportunities')
-        ? 'Back to Opportunities'
       : backToReports.startsWith('/evidence')
         ? 'Back to Evidence'
+        : backToReports.startsWith('/opportunities')
+          ? 'Back to Opportunities'
       : 'Back to Reports'
   const detailShareUrl = (() => {
     const next = new URLSearchParams()
@@ -132,6 +151,14 @@ export default function ReportDetail() {
       next.set('subscription', 'report')
       next.set('report_focus_label', reportScopeLabel)
     }
+    if (backToReports !== '/reports') {
+      next.set('back_to', backToReports)
+    }
+    const qs = next.toString()
+    return qs ? `/reports/${report.id}?${qs}` : `/reports/${report.id}`
+  })()
+  const detailBackPath = (() => {
+    const next = new URLSearchParams()
     if (backToReports !== '/reports') {
       next.set('back_to', backToReports)
     }
@@ -203,6 +230,31 @@ export default function ReportDetail() {
         <h1 className="text-2xl font-bold text-white break-words">
           {title}
         </h1>
+        {report.vendor_filter ? (
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-slate-500">
+              Focused on <span className="text-slate-300">{report.vendor_filter}</span>
+            </span>
+            <Link
+              to={vendorDetailPath(report.vendor_filter)}
+              className="text-cyan-400 hover:text-cyan-300 transition-colors"
+            >
+              Vendor workspace
+            </Link>
+            <Link
+              to={evidencePath(report.vendor_filter, detailBackPath)}
+              className="text-violet-300 hover:text-violet-200 transition-colors"
+            >
+              Evidence
+            </Link>
+            <Link
+              to={opportunitiesPath(report.vendor_filter, detailBackPath)}
+              className="text-emerald-300 hover:text-emerald-200 transition-colors"
+            >
+              Opportunities
+            </Link>
+          </div>
+        ) : null}
         <div className="flex items-center gap-3 mt-1">
           <p className="text-sm text-slate-400 break-all">
             {report.report_date ?? report.created_at}
@@ -346,7 +398,6 @@ export default function ReportDetail() {
         vendorName={drawerVendor}
         witnessId={drawerWitnessId}
         open={drawerOpen}
-        backToPath={detailShareUrl}
         onClose={() => {
           setDrawerOpen(false)
           setDrawerWitnessId(null)

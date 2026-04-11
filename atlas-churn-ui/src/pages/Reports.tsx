@@ -1,4 +1,4 @@
-import { useNavigate, Link, useSearchParams } from 'react-router-dom'
+import { useNavigate, Link, useLocation, useSearchParams } from 'react-router-dom'
 import { FileBarChart, RefreshCw, Search, X, Loader2, ChevronLeft, ChevronRight, Bell, Pencil, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PageError } from '../components/ErrorBoundary'
@@ -154,7 +154,12 @@ function reportDetailLocation(reportId: string, backTo: string) {
 function reportExternalBackTarget(searchParams: URLSearchParams) {
   const value = searchParams.get('back_to')
   if (!value) return null
-  if (value.startsWith('/vendors/') || value.startsWith('/watchlists') || value.startsWith('/evidence')) return value
+  if (
+    value.startsWith('/vendors/')
+    || value.startsWith('/watchlists')
+    || value.startsWith('/evidence')
+    || value.startsWith('/opportunities')
+  ) return value
   return null
 }
 
@@ -212,6 +217,25 @@ function buildSubscriptionManageLocation(subscriptionId: string) {
   return `/reports?${next.toString()}`
 }
 
+function vendorDetailPath(vendorName: string) {
+  return `/vendors/${encodeURIComponent(vendorName)}`
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
+
 type ReportComposer =
   | 'vendor_comparison'
   | 'account_deep_dive'
@@ -227,6 +251,7 @@ const REPORT_COMPOSERS = new Set<ReportComposer>([
 
 export default function Reports() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const { canAccessReports } = usePlanGate()
   const [typeFilter, setTypeFilter] = useState(() => searchParams.get('report_type') ?? '')
@@ -271,12 +296,18 @@ export default function Reports() {
   const effectiveTypeFilter = typeFilter || (requestedReportSubscriptionId ? requestedReportFocusType : '')
   const effectiveVendorFilter = activeVendorFilter || (requestedReportSubscriptionId ? requestedReportFocusVendor : '')
   const reportsBackTarget = useMemo(() => buildReportsBackTarget(searchParams), [searchParams])
+  const currentLibraryPath = useMemo(
+    () => `${location.pathname}${location.search}`,
+    [location.pathname, location.search],
+  )
   const backButtonLabel = reportsBackTarget.startsWith('/vendors/')
     ? 'Back to Vendor'
     : reportsBackTarget.startsWith('/watchlists')
       ? 'Back to Watchlists'
       : reportsBackTarget.startsWith('/evidence')
         ? 'Back to Evidence'
+        : reportsBackTarget.startsWith('/opportunities')
+          ? 'Back to Opportunities'
       : 'Back to Library'
 
   useEffect(() => {
@@ -765,7 +796,34 @@ export default function Reports() {
                 {backButtonLabel}
               </button>
             )}
-            <h1 className="text-2xl font-bold text-white">Intelligence Library</h1>
+            <div>
+              <h1 className="text-2xl font-bold text-white">Intelligence Library</h1>
+              {activeVendorFilter ? (
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+                  <span className="text-slate-500">
+                    Filtered to <span className="text-slate-300">{activeVendorFilter}</span>
+                  </span>
+                  <Link
+                    to={vendorDetailPath(activeVendorFilter)}
+                    className="text-cyan-400 hover:text-cyan-300 transition-colors"
+                  >
+                    Vendor workspace
+                  </Link>
+                  <Link
+                    to={evidencePath(activeVendorFilter, currentLibraryPath)}
+                    className="text-violet-300 hover:text-violet-200 transition-colors"
+                  >
+                    Evidence
+                  </Link>
+                  <Link
+                    to={opportunitiesPath(activeVendorFilter, currentLibraryPath)}
+                    className="text-emerald-300 hover:text-emerald-200 transition-colors"
+                  >
+                    Opportunities
+                  </Link>
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Link

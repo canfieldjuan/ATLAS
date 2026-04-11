@@ -902,6 +902,76 @@ describe('Reports', () => {
     )
   })
 
+  it('preserves opportunities back_to when opening report detail from an opportunity-scoped library view', async () => {
+    function ReportDetailRouteProbe() {
+      const location = useLocation()
+      return (
+        <div data-testid="report-detail-route">
+          {JSON.stringify(location.state)}
+        </div>
+      )
+    }
+
+    const router = createMemoryRouter(
+      [
+        { path: '/reports', element: <Reports /> },
+        { path: '/reports/:id', element: <ReportDetailRouteProbe /> },
+      ],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    expect(screen.getByRole('button', { name: 'Back to Opportunities' })).toBeInTheDocument()
+
+    const card = await screen.findByTestId('report-card-report-1')
+    fireEvent.click(within(card).getByRole('button', { name: /summary/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('report-detail-route')).toBeInTheDocument()
+    })
+
+    expect(router.state.location.pathname).toBe('/reports/report-1')
+    expect(router.state.location.search).toBe('?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1')
+    expect(screen.getByTestId('report-detail-route')).toHaveTextContent(
+      '"backTo":"/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1"',
+    )
+  })
+
+  it('shows vendor workspace, evidence, and opportunity shortcuts for an active vendor filter', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+        'href',
+        '/vendors/Zendesk',
+      )
+    })
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Zendesk&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+  })
+
   it('hydrates library filters from the URL query string', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports', element: <Reports /> }],

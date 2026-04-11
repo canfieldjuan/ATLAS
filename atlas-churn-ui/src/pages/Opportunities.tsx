@@ -722,6 +722,7 @@ export default function Opportunities() {
     () => opportunitiesPath(debouncedVendor, backTarget),
     [debouncedVendor, backTarget],
   )
+  const activeVendorFilter = debouncedVendor.trim()
 
   if (error) return <PageError error={error} onRetry={refresh} />
 
@@ -740,7 +741,34 @@ export default function Opportunities() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-white">Opportunity Workbench</h1>
+          <div>
+            <h1 className="text-2xl font-bold text-white">Opportunity Workbench</h1>
+            {activeVendorFilter ? (
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+                <span className="text-slate-500">
+                  Filtered to <span className="text-slate-300">{activeVendorFilter}</span>
+                </span>
+                <Link
+                  to={vendorDetailPath(activeVendorFilter)}
+                  className="text-cyan-400 hover:text-cyan-300 transition-colors"
+                >
+                  Vendor workspace
+                </Link>
+                <Link
+                  to={evidencePath(activeVendorFilter, currentPagePath)}
+                  className="text-violet-300 hover:text-violet-200 transition-colors"
+                >
+                  Evidence
+                </Link>
+                <Link
+                  to={reportsPath(activeVendorFilter, currentPagePath)}
+                  className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+                >
+                  Reports
+                </Link>
+              </div>
+            ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button

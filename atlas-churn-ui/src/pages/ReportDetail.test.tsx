@@ -141,7 +141,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     expect(actionBarState.lastProps.hasSubscription).toBe(true)
     expect(actionBarState.lastProps.subscriptionState).toBe('active')
   })
@@ -181,7 +181,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Notion')
+    await screen.findByRole('heading', { name: 'Notion' })
     expect(actionBarState.lastProps.subscriptionState).toBe('paused')
   })
 
@@ -193,7 +193,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     fireEvent.click(screen.getByText('Open subscription'))
 
     await waitFor(() => {
@@ -238,7 +238,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     fireEvent.click(screen.getByText('Open subscription'))
 
     await waitFor(() => {
@@ -272,7 +272,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     fireEvent.click(screen.getByRole('button', { name: 'Back to Reports' }))
 
     await waitFor(() => {
@@ -297,7 +297,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     fireEvent.click(screen.getByRole('button', { name: 'Back to Reports' }))
 
     expect(await screen.findByTestId('reports-route')).toBeInTheDocument()
@@ -320,13 +320,65 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     fireEvent.click(screen.getByRole('button', { name: 'Back to Vendor' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('vendor-route')).toBeInTheDocument()
     })
     expect(router.state.location.pathname).toBe('/vendors/Zendesk')
+  })
+
+  it('returns to opportunities when back_to targets the opportunity workbench', async () => {
+    const router = createMemoryRouter(
+      [
+        { path: '/opportunities', element: <div data-testid="opportunities-route">Opportunities route</div> },
+        { path: '/reports/:id', element: <ReportDetail /> },
+      ],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Opportunities' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('opportunities-route')).toBeInTheDocument()
+    })
+    expect(router.state.location.pathname).toBe('/opportunities')
+    expect(router.state.location.search).toBe('?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1')
+  })
+
+  it('shows vendor workspace, evidence, and opportunity shortcuts for the report vendor', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports/:id', element: <ReportDetail /> }],
+      {
+        initialEntries: [
+          '/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByRole('heading', { name: 'Zendesk' })
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Zendesk&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
   })
 
   it('passes a normalized share URL to the detail action bar', async () => {
@@ -341,7 +393,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     expect(actionBarState.lastProps.linkUrl).toBe(
       '/reports/report-1?back_to=%2Freports%3Freport_type%3Dbattle_card%26vendor_filter%3DZendesk%26freshness_state%3Dstale',
     )
@@ -438,7 +490,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Intercom')
+    await screen.findByRole('heading', { name: 'Intercom' })
     expect(screen.getAllByText('Partial evidence')).toHaveLength(2)
     expect(screen.getByText('Section has evidence metadata, but no linked witness citations yet.')).toBeInTheDocument()
     expect(screen.getByText('Backend flagged this section for operator review.')).toBeInTheDocument()
@@ -459,7 +511,7 @@ describe('ReportDetail', () => {
 
     render(<RouterProvider router={router} />)
 
-    await screen.findByText('Zendesk')
+    await screen.findByRole('heading', { name: 'Zendesk' })
     fireEvent.click(screen.getByRole('button', { name: 'Back to Evidence' }))
 
     expect(await screen.findByTestId('evidence-route')).toBeInTheDocument()

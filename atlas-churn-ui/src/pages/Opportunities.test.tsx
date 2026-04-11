@@ -113,6 +113,30 @@ describe('Opportunities', () => {
     })
   })
 
+  it('shows vendor workspace, evidence, and report shortcuts for the active vendor filter', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/opportunities', element: <Opportunities /> }],
+      { initialEntries: ['/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1'] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByText('Filtered to')).toBeInTheDocument()
+    expect(screen.getByText('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fopportunities%3Fvendor%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+    )
+  })
+
   it('keeps expanded opportunity links scoped back to the current workbench context', async () => {
     const user = userEvent.setup()
     api.fetchHighIntent.mockResolvedValue({
