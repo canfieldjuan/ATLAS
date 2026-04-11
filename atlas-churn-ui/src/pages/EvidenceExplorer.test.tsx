@@ -288,6 +288,25 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('keeps the watchlists shortcut when a saved view exists even without tracked-vendor membership', async () => {
+    api.listTrackedVendors.mockResolvedValueOnce({
+      vendors: [],
+      count: 0,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses',
+    )
+  })
+
   it('opens review detail from witness drilldown with evidence back_to preserved', async () => {
     const user = userEvent.setup()
 

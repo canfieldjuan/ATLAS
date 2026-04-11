@@ -195,10 +195,6 @@ export default function EvidenceExplorer() {
   const [drawerOpen, setDrawerOpen] = useState(Boolean(requestedVendor && requestedWitnessId))
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
-  const isTrackedVendor = useMemo(
-    () => Boolean(activeVendor) && trackedVendorNames.includes(activeVendor.toLowerCase()),
-    [activeVendor, trackedVendorNames],
-  )
   const matchedWatchlistViewId = useMemo(() => {
     if (!activeVendor) return null
     const normalizedVendor = activeVendor.toLowerCase()
@@ -211,6 +207,13 @@ export default function EvidenceExplorer() {
       watchlistViewVendorNames(view).some((name) => name.toLowerCase() === normalizedVendor)
     ))?.id ?? null
   }, [activeVendor, watchlistViews])
+  const hasWatchlistsShortcut = useMemo(
+    () => Boolean(activeVendor) && (
+      trackedVendorNames.includes(activeVendor.toLowerCase())
+      || Boolean(matchedWatchlistViewId)
+    ),
+    [activeVendor, matchedWatchlistViewId, trackedVendorNames],
+  )
   const drawerBackToPath = useMemo(() => {
     const next = new URLSearchParams(searchParams.toString())
     if (activeVendor) next.set('vendor', activeVendor)
@@ -475,7 +478,7 @@ export default function EvidenceExplorer() {
               <span className="text-slate-500">
                 Focused on <span className="text-slate-300">{activeVendor}</span>
               </span>
-              {isTrackedVendor ? (
+              {hasWatchlistsShortcut ? (
                 <Link
                   to={evidenceWatchlistsPath(searchParams, activeVendor, matchedWatchlistViewId)}
                   className="text-violet-300 hover:text-violet-200 transition-colors"

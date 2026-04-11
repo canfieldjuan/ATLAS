@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useMemo } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Search, RefreshCw, X, Loader2, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import DataTable, { type Column } from '../components/DataTable'
@@ -11,14 +11,63 @@ import type { ReviewSummary } from '../types'
 
 const REVIEW_WINDOW_DAYS = 365
 
+function reviewsPath(vendor: string, company: string, minUrgency: number, churnOnly: boolean) {
+  const next = new URLSearchParams()
+  if (vendor.trim()) next.set('vendor', vendor.trim())
+  if (company.trim()) next.set('company', company.trim())
+  if (minUrgency > 0) next.set('min_urgency', String(minUrgency))
+  if (churnOnly) next.set('churn_only', 'true')
+  const qs = next.toString()
+  return qs ? `/reviews?${qs}` : '/reviews'
+}
+
+function reviewDetailPath(reviewId: string, backTo: string) {
+  const next = new URLSearchParams()
+  if (backTo !== '/reviews') next.set('back_to', backTo)
+  const qs = next.toString()
+  const base = `/reviews/${encodeURIComponent(reviewId)}`
+  return qs ? `${base}?${qs}` : base
+}
+
+function vendorDetailPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  if (backTo !== '/reviews') next.set('back_to', backTo)
+  const qs = next.toString()
+  const base = `/vendors/${encodeURIComponent(vendorName)}`
+  return qs ? `${base}?${qs}` : base
+}
+
+function evidencePath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('tab', 'witnesses')
+  next.set('back_to', backTo)
+  return `/evidence?${next.toString()}`
+}
+
+function reportsPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor_filter', vendorName)
+  next.set('back_to', backTo)
+  return `/reports?${next.toString()}`
+}
+
+function opportunitiesPath(vendorName: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('vendor', vendorName)
+  next.set('back_to', backTo)
+  return `/opportunities?${next.toString()}`
+}
+
 export default function Reviews() {
   const navigate = useNavigate()
-  const [vendor, setVendor] = useState('')
-  const [debouncedVendor, setDebouncedVendor] = useState('')
-  const [company, setCompany] = useState('')
-  const [debouncedCompany, setDebouncedCompany] = useState('')
-  const [minUrgency, setMinUrgency] = useState(0)
-  const [churnOnly, setChurnOnly] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [vendor, setVendor] = useState(() => searchParams.get('vendor') ?? '')
+  const [debouncedVendor, setDebouncedVendor] = useState(() => searchParams.get('vendor') ?? '')
+  const [company, setCompany] = useState(() => searchParams.get('company') ?? '')
+  const [debouncedCompany, setDebouncedCompany] = useState(() => searchParams.get('company') ?? '')
+  const [minUrgency, setMinUrgency] = useState(() => Number(searchParams.get('min_urgency') ?? '0') || 0)
+  const [churnOnly, setChurnOnly] = useState(() => searchParams.get('churn_only') === 'true')
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -27,6 +76,20 @@ export default function Reviews() {
     }, 300)
     return () => clearTimeout(timer)
   }, [vendor, company])
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (debouncedVendor.trim()) next.set('vendor', debouncedVendor.trim())
+    else next.delete('vendor')
+    if (debouncedCompany.trim()) next.set('company', debouncedCompany.trim())
+    else next.delete('company')
+    if (minUrgency > 0) next.set('min_urgency', String(minUrgency))
+    else next.delete('min_urgency')
+    if (churnOnly) next.set('churn_only', 'true')
+    else next.delete('churn_only')
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [churnOnly, debouncedCompany, debouncedVendor, minUrgency, searchParams, setSearchParams])
 
   const { data, loading, error, refresh, refreshing } = useApiData(
     () =>
@@ -44,6 +107,10 @@ export default function Reviews() {
   const reviews = data?.reviews ?? []
   const hasFilters = vendor !== '' || company !== '' || minUrgency > 0 || churnOnly
   const debouncePending = vendor !== debouncedVendor || company !== debouncedCompany
+  const currentListPath = useMemo(
+    () => reviewsPath(debouncedVendor, debouncedCompany, minUrgency, churnOnly),
+    [churnOnly, debouncedCompany, debouncedVendor, minUrgency],
+  )
 
   function clearFilters() {
     setVendor('')
@@ -159,6 +226,42 @@ export default function Reviews() {
         )
       },
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (r) => (
+        <div className="flex items-center gap-3 text-xs">
+          <Link
+            to={vendorDetailPath(r.vendor_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-cyan-400 hover:text-cyan-300 transition-colors"
+          >
+            Vendor
+          </Link>
+          <Link
+            to={evidencePath(r.vendor_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-violet-300 hover:text-violet-200 transition-colors"
+          >
+            Evidence
+          </Link>
+          <Link
+            to={reportsPath(r.vendor_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+          >
+            Reports
+          </Link>
+          <Link
+            to={opportunitiesPath(r.vendor_name, currentListPath)}
+            onClick={(event) => event.stopPropagation()}
+            className="text-emerald-300 hover:text-emerald-200 transition-colors"
+          >
+            Opportunities
+          </Link>
+        </div>
+      ),
+    },
   ]
 
   if (error) return <PageError error={error} onRetry={refresh} />
@@ -266,7 +369,7 @@ export default function Reviews() {
           <DataTable
             columns={columns}
             data={reviews}
-            onRowClick={(r) => navigate(`/reviews/${r.id}`)}
+            onRowClick={(r) => navigate(reviewDetailPath(r.id, currentListPath))}
             emptyMessage="No reviews match your filters"
             emptyAction={hasFilters ? { label: 'Clear all filters', onClick: clearFilters } : undefined}
           />
