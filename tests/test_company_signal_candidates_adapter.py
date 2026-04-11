@@ -961,6 +961,18 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
                     "rebuild_total_accounts": 9,
                 }
             ],
+            [
+                {
+                    "rebuild_reason": "ok",
+                    "rebuild_rows": 3,
+                    "rebuild_requests": 3,
+                    "rebuild_triggered": 2,
+                    "rebuild_blocked": 1,
+                    "rebuild_persisted_runs": 1,
+                    "rebuild_persisted_reports": 2,
+                    "rebuild_total_accounts": 9,
+                }
+            ],
         ]
     )
 
@@ -988,6 +1000,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     priority_reason_sql = pool.fetch.call_args_list[3][0][0]
     vendors_sql = pool.fetch.call_args_list[4][0][0]
     vendor_reasons_sql = pool.fetch.call_args_list[5][0][0]
+    rebuild_reasons_sql = pool.fetch.call_args_list[6][0][0]
     assert "review_scope =" in totals_sql
     assert "review_action =" in totals_sql
     assert "company_signal_action =" in totals_sql
@@ -1014,6 +1027,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "vendor_rebuilds" in vendors_sql
     assert "vendor_reason_actions" in vendor_reasons_sql
     assert "vendor_reason_rebuilds" in vendor_reasons_sql
+    assert "rebuild_reason" in rebuild_reasons_sql
+    assert "FROM rebuild_rows" in rebuild_reasons_sql
     assert summary["review_scope"] == "bulk_group"
     assert summary["canonical_gap_reason"] == "low_confidence_low_trust_source"
     assert summary["rebuild_outcome"] == "triggered"
@@ -1041,3 +1056,6 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["top_vendor_reasons"][0]["vendor_name"] == "Zendesk"
     assert summary["top_vendor_reasons"][0]["review_priority_reason"] == "canonical_ready"
     assert summary["top_vendor_reasons"][0]["company_signal_effect_rate"] == 1.0
+    assert summary["rebuild_reasons"][0]["rebuild_reason"] == "ok"
+    assert summary["rebuild_reasons"][0]["rebuild_trigger_rate"] == 2 / 3
+    assert summary["rebuild_reasons"][0]["rebuild_block_rate"] == 1 / 3

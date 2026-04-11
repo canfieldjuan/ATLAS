@@ -13399,6 +13399,7 @@ async def read_company_signal_review_impact_summary(
             "priority_reasons": [],
             "top_vendors": [],
             "top_vendor_reasons": [],
+            "rebuild_reasons": [],
         }
 
     where_clause = " AND ".join(conditions)
@@ -13784,6 +13785,43 @@ async def read_company_signal_review_impact_summary(
         *params,
         top_n,
     )
+    rebuild_reason_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        rebuild_rows AS (
+            SELECT DISTINCT ON (review_batch_id, vendor_name)
+                   review_batch_id,
+                   vendor_name,
+                   COALESCE(rebuild_reason, 'unknown') AS rebuild_reason,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY review_batch_id, vendor_name, created_at DESC
+        )
+        SELECT rebuild_reason,
+               COUNT(*)::int AS rebuild_rows,
+               COUNT(*) FILTER (WHERE rebuild_requested)::int AS rebuild_requests,
+               COUNT(*) FILTER (WHERE rebuild_triggered)::int AS rebuild_triggered,
+               COUNT(*) FILTER (WHERE rebuild_requested AND NOT rebuild_triggered)::int AS rebuild_blocked,
+               COUNT(*) FILTER (WHERE rebuild_triggered AND rebuild_persisted_count > 0)::int AS rebuild_persisted_runs,
+               COALESCE(SUM(rebuild_persisted_count) FILTER (WHERE rebuild_triggered), 0)::int AS rebuild_persisted_reports,
+               COALESCE(SUM(rebuild_total_accounts) FILTER (WHERE rebuild_triggered), 0)::int AS rebuild_total_accounts
+        FROM rebuild_rows
+        GROUP BY 1
+        ORDER BY rebuild_rows DESC,
+                 rebuild_triggered DESC,
+                 rebuild_reason ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     def _safe_rate(numerator: Any, denominator: Any) -> float:
         try:
             num = float(numerator or 0)
@@ -13821,6 +13859,26 @@ async def read_company_signal_review_impact_summary(
         )
         return payload
 
+    def _with_rebuild_metrics(row: Mapping[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        payload["rebuild_trigger_rate"] = _safe_rate(
+            payload.get("rebuild_triggered") or 0,
+            payload.get("rebuild_requests") or 0,
+        )
+        payload["rebuild_block_rate"] = _safe_rate(
+            payload.get("rebuild_blocked") or 0,
+            payload.get("rebuild_requests") or 0,
+        )
+        payload["avg_rebuild_reports_per_triggered"] = _safe_rate(
+            payload.get("rebuild_persisted_reports") or 0,
+            payload.get("rebuild_triggered") or 0,
+        )
+        payload["avg_rebuild_accounts_per_triggered"] = _safe_rate(
+            payload.get("rebuild_total_accounts") or 0,
+            payload.get("rebuild_triggered") or 0,
+        )
+        return payload
+
     totals_payload = _with_effect_metrics(dict(totals or {}), action_key="total_actions")
     return {
         "totals": totals_payload,
@@ -13833,6 +13891,7 @@ async def read_company_signal_review_impact_summary(
         "priority_reasons": [_with_effect_metrics(row) for row in priority_reason_rows],
         "top_vendors": [_with_effect_metrics(row) for row in vendor_rows],
         "top_vendor_reasons": [_with_effect_metrics(row) for row in vendor_reason_rows],
+        "rebuild_reasons": [_with_rebuild_metrics(row) for row in rebuild_reason_rows],
     }
 
 

@@ -379,6 +379,7 @@ async def test_get_company_signal_review_impact_summary_uses_shared_reader():
         "priority_bands": [{"review_priority_band": "high", "action_count": 3}],
         "priority_reasons": [{"review_priority_band": "high", "review_priority_reason": "has_signal_evidence_and_decision_maker", "action_count": 3}],
         "top_vendors": [{"vendor_name": "Zendesk", "action_count": 4}],
+        "rebuild_reasons": [{"rebuild_reason": "ok", "rebuild_rows": 1}],
     }
     with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
         with patch.object(
