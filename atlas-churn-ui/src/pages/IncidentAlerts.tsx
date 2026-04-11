@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
@@ -339,7 +340,35 @@ function deliveryTone(success: boolean) {
     : 'border-rose-500/20 bg-rose-500/5 text-rose-100'
 }
 
+function buildActivitySearchParams({
+  webhookId,
+  deliveryStatus,
+  deliveryEvent,
+  crmStatus,
+}: {
+  webhookId: string
+  deliveryStatus: 'all' | 'success' | 'failed'
+  deliveryEvent: 'all' | WebhookEventType
+  crmStatus: 'all' | 'success' | 'failed'
+}) {
+  const next = new URLSearchParams()
+  next.set('webhook', webhookId)
+  if (deliveryStatus !== 'all') next.set('delivery_status', deliveryStatus)
+  if (deliveryEvent !== 'all') next.set('delivery_event', deliveryEvent)
+  if (crmStatus !== 'all') next.set('crm_status', crmStatus)
+  return next
+}
+
 export default function IncidentAlerts() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedWebhookId = searchParams.get('webhook')?.trim() || ''
+  const requestedDeliveryStatus = searchParams.get('delivery_status') === 'success' || searchParams.get('delivery_status') === 'failed'
+    ? (searchParams.get('delivery_status') as 'success' | 'failed')
+    : 'all'
+  const requestedDeliveryEvent = searchParams.get('delivery_event')?.trim() || 'all'
+  const requestedCrmStatus = searchParams.get('crm_status') === 'success' || searchParams.get('crm_status') === 'failed'
+    ? (searchParams.get('crm_status') as 'success' | 'failed')
+    : 'all'
   const [summaryWindow, setSummaryWindow] = useState<(typeof SUMMARY_WINDOWS)[number]>(7)
   const [form, setForm] = useState<WebhookCreateBody>({
     url: '',
@@ -351,12 +380,12 @@ export default function IncidentAlerts() {
   })
   const [saving, setSaving] = useState(false)
   const [busyWebhookId, setBusyWebhookId] = useState<string | null>(null)
-  const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null)
+  const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(requestedWebhookId || null)
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null)
   const [selectedPreviewEventType, setSelectedPreviewEventType] = useState<WebhookEventType>('churn_alert')
-  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'all' | 'success' | 'failed'>('all')
-  const [deliveryEventFilter, setDeliveryEventFilter] = useState<'all' | WebhookEventType>('all')
-  const [crmStatusFilter, setCrmStatusFilter] = useState<'all' | 'success' | 'failed'>('all')
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState<'all' | 'success' | 'failed'>(requestedDeliveryStatus)
+  const [deliveryEventFilter, setDeliveryEventFilter] = useState<'all' | WebhookEventType>(requestedDeliveryEvent as 'all' | WebhookEventType)
+  const [crmStatusFilter, setCrmStatusFilter] = useState<'all' | 'success' | 'failed'>(requestedCrmStatus)
   const [manualTestResults, setManualTestResults] = useState<Record<string, { success: boolean; testedAt: string }>>({})
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -468,10 +497,43 @@ export default function IncidentAlerts() {
   }, [deliveryData?.deliveries])
 
   useEffect(() => {
-    setDeliveryStatusFilter('all')
-    setDeliveryEventFilter('all')
-    setCrmStatusFilter('all')
-  }, [selectedWebhookId])
+    if (!requestedWebhookId) return
+    if (!webhooks.some((webhook) => webhook.id === requestedWebhookId)) return
+    setSelectedWebhookId((current) => (current === requestedWebhookId ? current : requestedWebhookId))
+  }, [requestedWebhookId, webhooks])
+
+  useEffect(() => {
+    if (!selectedWebhookId) {
+      if (!searchParams.has('webhook') && !searchParams.has('delivery_status') && !searchParams.has('delivery_event') && !searchParams.has('crm_status')) {
+        return
+      }
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current)
+        next.delete('webhook')
+        next.delete('delivery_status')
+        next.delete('delivery_event')
+        next.delete('crm_status')
+        return next
+      }, { replace: true })
+      return
+    }
+
+    const next = buildActivitySearchParams({
+      webhookId: selectedWebhookId,
+      deliveryStatus: deliveryStatusFilter,
+      deliveryEvent: deliveryEventFilter,
+      crmStatus: crmStatusFilter,
+    })
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [
+    crmStatusFilter,
+    deliveryEventFilter,
+    deliveryStatusFilter,
+    searchParams,
+    selectedWebhookId,
+    setSearchParams,
+  ])
 
   async function refreshAll() {
     refreshSummary()
@@ -491,6 +553,25 @@ export default function IncidentAlerts() {
     } catch (err) {
       setMessage(null)
       setActionError(err instanceof Error ? err.message : `Failed to copy ${label}`)
+    }
+  }
+
+  async function copyActivityLink(webhookId: string) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard is unavailable in this browser')
+      const next = buildActivitySearchParams({
+        webhookId,
+        deliveryStatus: selectedWebhookId === webhookId ? deliveryStatusFilter : 'all',
+        deliveryEvent: selectedWebhookId === webhookId ? deliveryEventFilter : 'all',
+        crmStatus: selectedWebhookId === webhookId ? crmStatusFilter : 'all',
+      })
+      const path = `${window.location.origin}${window.location.pathname}?${next.toString()}`
+      await navigator.clipboard.writeText(path)
+      setActionError(null)
+      setMessage('Copied activity link')
+    } catch (err) {
+      setMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy activity link')
     }
   }
 
@@ -823,6 +904,14 @@ export default function IncidentAlerts() {
                     >
                       {selectedWebhookId === webhook.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                       {selectedWebhookId === webhook.id ? 'Hide Activity' : 'View Activity'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copyActivityLink(webhook.id)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800"
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copy Activity Link
                     </button>
                   </div>
 

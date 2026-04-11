@@ -114,7 +114,7 @@ describe('IncidentAlerts', () => {
 
   it('renders delivery health and existing webhooks', async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={['/alerts']}>
         <IncidentAlerts />
       </MemoryRouter>,
     )
@@ -163,6 +163,21 @@ describe('IncidentAlerts', () => {
     await waitFor(() => {
       expect(api.listWebhookDeliveries).toHaveBeenCalledWith('wh-1', { limit: 10 })
     })
+  })
+
+  it('hydrates activity drillthrough and filters from the URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts?webhook=wh-1&delivery_status=failed&delivery_event=signal_update']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Delivery status filter')).toHaveValue('failed')
+    expect(screen.getByLabelText('Delivery event filter')).toHaveValue('signal_update')
+    expect(screen.getByText('downstream timeout')).toBeInTheDocument()
+    expect(screen.queryByText(/attempt 1/i)).not.toBeInTheDocument()
   })
 
   it('filters delivery activity by result and event type', async () => {
