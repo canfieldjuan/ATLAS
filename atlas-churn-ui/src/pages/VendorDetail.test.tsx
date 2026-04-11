@@ -255,6 +255,28 @@ describe('VendorDetail', () => {
     expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
   })
 
+  it('copies the evidence shortcut link with preserved watchlist back context', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fwatchlists%3Fview%3Dview-1']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Copy evidence link' })[0])
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Fview%3Dview-1`,
+      )
+    })
+  })
+
 
   it('surfaces the upstream watchlist path when entered from evidence explorer', async () => {
     const user = userEvent.setup()
