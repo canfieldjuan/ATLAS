@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   Building2,
   Calendar,
+  Copy,
   ExternalLink,
   FileText,
   Fingerprint,
@@ -30,6 +31,7 @@ interface AccountMovementDrawerProps {
   onOpenWitness?: (witnessId: string, vendorName: string) => void
   onGenerateCampaign?: (item: AccountsInMotionFeedItem) => void
   onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
+  onCopyLink?: () => void
   generating?: boolean
 }
 
@@ -77,6 +79,7 @@ export default function AccountMovementDrawer({
   onOpenWitness,
   onGenerateCampaign,
   onViewOpportunity,
+  onCopyLink,
   generating,
 }: AccountMovementDrawerProps) {
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
@@ -152,6 +155,15 @@ export default function AccountMovementDrawer({
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <UrgencyBadge score={item.urgency} />
+            {onCopyLink && (
+              <button
+                className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={onCopyLink}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy link
+              </button>
+            )}
             <button
               className="inline-flex items-center gap-1 rounded-md bg-cyan-500/10 px-2.5 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20"
               onClick={() => onViewVendor(item.vendor)}

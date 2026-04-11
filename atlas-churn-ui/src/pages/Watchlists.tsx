@@ -308,6 +308,18 @@ function watchlistViewUrl(viewId: string) {
   return `${window.location.origin}/watchlists?${params.toString()}`
 }
 
+function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
+  const next = new URLSearchParams(searchParams)
+  const focus = accountFocusFromRow(row)
+  next.set('account_vendor', focus.vendor)
+  next.set('account_company', focus.company)
+  next.set('account_report_date', focus.report_date)
+  next.set('account_watch_vendor', focus.watch_vendor)
+  next.set('account_category', focus.category)
+  next.set('account_track_mode', focus.track_mode)
+  return `${window.location.origin}/watchlists?${next.toString()}`
+}
+
 function accountFocusFromRow(row: AccountsInMotionFeedItem) {
   return {
     vendor: row.vendor || '',
@@ -918,6 +930,18 @@ export default function Watchlists() {
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : `Failed to copy link for ${view.name}`)
+    }
+  }
+
+  async function handleCopySelectedAccountLink() {
+    if (!selectedAccount) return
+    try {
+      await navigator.clipboard.writeText(watchlistAccountUrl(searchParams, selectedAccount))
+      setActionError(null)
+      setActionMessage(`Copied account link for ${selectedAccount.company || selectedAccount.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy account link')
     }
   }
 
@@ -2799,6 +2823,7 @@ export default function Watchlists() {
         open={selectedAccount != null}
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
+        onCopyLink={() => void handleCopySelectedAccountLink()}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
         onViewOpportunity={(item) => navigate(`/opportunities?vendor=${encodeURIComponent(item.vendor)}`)}
