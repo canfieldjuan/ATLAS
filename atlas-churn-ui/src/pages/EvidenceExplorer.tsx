@@ -241,6 +241,7 @@ export default function EvidenceExplorer() {
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWitnessState, setCopiedWitnessState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
+  const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const matchedWatchlistViewId = useMemo(() => {
     if (!activeVendor) return null
     const normalizedVendor = activeVendor.toLowerCase()
@@ -549,6 +550,15 @@ export default function EvidenceExplorer() {
       setCopiedWitnessState({ id: witnessId, status: 'copied' })
     } catch {
       setCopiedWitnessState({ id: witnessId, status: 'error' })
+    }
+  }
+
+  async function handleCopyAccountReviewLink(witnessId: string, path: string) {
+    try {
+      await copyText(`${window.location.origin}${path}`)
+      setCopiedAccountReviewState({ id: witnessId, status: 'copied' })
+    } catch {
+      setCopiedAccountReviewState({ id: witnessId, status: 'error' })
     }
   }
 
@@ -873,13 +883,26 @@ export default function EvidenceExplorer() {
                                 : 'Copy witness link'}
                             </button>
                             {matchedAccountReviewPaths[w.witness_id] ? (
-                              <Link
-                                to={matchedAccountReviewPaths[w.witness_id]}
-                                className="inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
-                              >
-                                Open account review
-                                <ExternalLink className="h-3 w-3" />
-                              </Link>
+                              <>
+                                <button
+                                  type="button"
+                                  aria-label={`Copy account review link for witness ${w.witness_id}`}
+                                  onClick={() => void handleCopyAccountReviewLink(w.witness_id, matchedAccountReviewPaths[w.witness_id])}
+                                  className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-white"
+                                >
+                                  <Copy className="h-3 w-3" />
+                                  {copiedAccountReviewState?.id === w.witness_id
+                                    ? (copiedAccountReviewState.status === 'copied' ? 'Copied' : 'Copy Failed')
+                                    : 'Copy account review link'}
+                                </button>
+                                <Link
+                                  to={matchedAccountReviewPaths[w.witness_id]}
+                                  className="inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
+                                >
+                                  Open account review
+                                  <ExternalLink className="h-3 w-3" />
+                                </Link>
+                              </>
                             ) : null}
                             {w.review_id ? (
                               <Link

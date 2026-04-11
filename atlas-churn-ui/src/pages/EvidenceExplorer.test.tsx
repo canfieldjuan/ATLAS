@@ -559,6 +559,57 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('copies a direct account review link from a witness card', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.fetchWitnesses.mockResolvedValueOnce({
+      vendor_name: 'Zendesk',
+      as_of_date: '2026-04-09',
+      analysis_window_days: 30,
+      total: 61,
+      limit: 30,
+      offset: 30,
+      facets: {
+        pain_categories: ['pricing'],
+        sources: ['reddit'],
+        witness_types: ['pricing'],
+      },
+      witnesses: [{
+        witness_id: 'witness:zendesk:31',
+        review_id: 'review-31',
+        witness_type: 'pricing',
+        excerpt_text: 'The renewal window is now urgent.',
+        source: 'reddit',
+        reviewed_at: '2026-04-03T00:00:00Z',
+        reviewer_company: 'Acme Corp',
+        reviewer_title: 'VP Support',
+        pain_category: 'pricing',
+        competitor: 'Freshdesk',
+        salience_score: 0.92,
+        specificity_score: 0.76,
+        selection_reason: 'named_account',
+        signal_tags: ['pricing_backlash'],
+        as_of_date: '2026-04-09',
+      }],
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&offset=30']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy account review link for witness witness:zendesk:31' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/watchlists?account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26offset%3D30%26witness_id%3Dwitness%253Azendesk%253A31`,
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Copy account review link for witness witness:zendesk:31' })).toHaveTextContent('Copied')
+  })
+
   it('opens review detail from witness drilldown with evidence back_to preserved', async () => {
     const user = userEvent.setup()
 
