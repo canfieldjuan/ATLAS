@@ -856,6 +856,7 @@ export default function IncidentAlerts() {
                 : null
               const latestManualTest = manualTestResults[webhook.id] ?? persistedManualTest
               const hasLatestFailure = Boolean(webhook.latest_failure_at)
+              const latestFailureIsManualTest = webhook.latest_failure_event_type === 'test'
               const testButtonLabel = hasLatestFailure || Boolean(latestManualTest) ? 'Re-test Endpoint' : 'Send Test'
               return (
                 <article key={webhook.id} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
@@ -883,7 +884,7 @@ export default function IncidentAlerts() {
                           </span>
                         ))}
                       </div>
-                      {webhook.latest_failure_at ? (
+                      {webhook.latest_failure_at && !latestFailureIsManualTest ? (
                         <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
                           <div className="font-medium text-rose-100">
                             Latest failure{webhook.latest_failure_event_type ? ` · ${webhook.latest_failure_event_type}` : ''}

@@ -160,6 +160,44 @@ describe('IncidentAlerts', () => {
     expect(await screen.findByText('Test webhook delivered')).toBeInTheDocument()
   })
 
+
+  it('does not duplicate a failed manual test as the latest failure banner', async () => {
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-test',
+          url: 'https://hooks.example.com/test-only',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Manual test endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 1,
+          recent_success_rate_7d: 0,
+          latest_failure_event_type: 'test',
+          latest_failure_status_code: 504,
+          latest_failure_error: 'test timeout',
+          latest_failure_at: '2026-04-10T02:40:00Z',
+          latest_test_success: false,
+          latest_test_status_code: 504,
+          latest_test_error: 'test timeout',
+          latest_test_at: '2026-04-10T02:40:00Z',
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Latest manual test failed')).toBeInTheDocument()
+    expect(screen.queryByText(/Latest failure/)).not.toBeInTheDocument()
+  })
+
   it('shows delivery activity drillthrough for a webhook', async () => {
     const user = userEvent.setup()
 
