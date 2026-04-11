@@ -311,6 +311,8 @@ async def test_read_company_signal_candidate_groups_maps_rows_and_support_review
         min_reviews=2,
         decision_makers_only=True,
         signal_evidence_present=True,
+        review_priority_band="medium",
+        review_priority_reason="cross_source_corroboration",
         limit=25,
     )
 
@@ -322,6 +324,8 @@ async def test_read_company_signal_candidate_groups_maps_rows_and_support_review
     assert "corroborated_confidence_score" in primary_sql
     assert "signal_evidence_count > 0" in primary_sql
     assert "decision_maker_count > 0" in primary_sql
+    assert "promote_now" in primary_sql
+    assert "cross_source_corroboration" in primary_sql
     assert "ANY(" in primary_sql
     assert "WHERE id = ANY($1::uuid[])" in support_sql
     assert len(results) == 1
@@ -444,6 +448,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
         min_reviews=2,
         decision_makers_only=True,
         signal_evidence_present=True,
+        review_priority_band="medium",
+        review_priority_reason="cross_source_corroboration",
         top_n=5,
     )
 
@@ -462,6 +468,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "decision_maker_count > 0" in totals_sql
     assert "avg_pending_age_days" in totals_sql
     assert "oldest_pending_age_days" in totals_sql
+    assert "promote_now" in totals_sql
+    assert "cross_source_corroboration" in totals_sql
     assert "vendor_name ILIKE" not in totals_sql
     assert "ANY(" in totals_sql
     assert "GROUP BY 1" in gap_sql

@@ -11515,6 +11515,8 @@ def _company_signal_candidate_group_filters(
     min_reviews: int = 1,
     decision_makers_only: bool = False,
     signal_evidence_present: bool | None = None,
+    review_priority_band: str | None = None,
+    review_priority_reason: str | None = None,
 ) -> tuple[list[str], list[Any], int]:
     conditions = ["last_seen_at >= NOW() - make_interval(days => $1)"]
     params: list[Any] = [window_days]
@@ -11565,6 +11567,14 @@ def _company_signal_candidate_group_filters(
     if signal_evidence_present is not None:
         operator = ">" if signal_evidence_present else "="
         conditions.append(f"signal_evidence_count {operator} 0")
+    if review_priority_band:
+        conditions.append(f"{_company_signal_candidate_group_priority_band_sql()} = ${idx}")
+        params.append(review_priority_band)
+        idx += 1
+    if review_priority_reason:
+        conditions.append(f"{_company_signal_candidate_group_priority_reason_sql()} = ${idx}")
+        params.append(review_priority_reason)
+        idx += 1
 
     return conditions, params, idx
 
@@ -11660,6 +11670,8 @@ async def read_company_signal_candidate_groups(
     min_reviews: int = 1,
     decision_makers_only: bool = False,
     signal_evidence_present: bool | None = None,
+    review_priority_band: str | None = None,
+    review_priority_reason: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """Primary grouped operator surface for analyst-assist company-signal review."""
@@ -11676,6 +11688,8 @@ async def read_company_signal_candidate_groups(
         min_reviews=min_reviews,
         decision_makers_only=decision_makers_only,
         signal_evidence_present=signal_evidence_present,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
     )
     if not conditions:
         return []
@@ -11825,6 +11839,8 @@ async def read_company_signal_candidate_group_summary(
     min_reviews: int = 1,
     decision_makers_only: bool = False,
     signal_evidence_present: bool | None = None,
+    review_priority_band: str | None = None,
+    review_priority_reason: str | None = None,
     top_n: int = 10,
 ) -> dict[str, Any]:
     """Return queue-health summary for grouped company-signal candidates."""
@@ -11841,6 +11857,8 @@ async def read_company_signal_candidate_group_summary(
         min_reviews=min_reviews,
         decision_makers_only=decision_makers_only,
         signal_evidence_present=signal_evidence_present,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
     )
     if not conditions:
         return {

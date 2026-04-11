@@ -205,6 +205,8 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
                     candidate_bucket="analyst_review",
                     review_status="pending",
                     canonical_gap_reason=None,
+                    review_priority_band="medium",
+                    review_priority_reason="cross_source_corroboration",
                     min_urgency=0,
                     min_confidence=None,
                     min_reviews=1,
@@ -220,6 +222,8 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
         "count": 1,
         "candidate_bucket": "analyst_review",
         "review_status": "pending",
+        "review_priority_band": "medium",
+        "review_priority_reason": "cross_source_corroboration",
     }
     scope_mock.assert_awaited_once_with(pool, None)
     read_mock.assert_awaited_once_with(
@@ -231,6 +235,8 @@ async def test_list_company_signal_candidate_groups_uses_group_reader_by_default
         candidate_bucket="analyst_review",
         review_status="pending",
         canonical_gap_reason=None,
+        review_priority_band="medium",
+        review_priority_reason="cross_source_corroboration",
         min_urgency=0,
         min_confidence=None,
         min_reviews=1,
@@ -266,6 +272,8 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
                     candidate_bucket=None,
                     review_status=None,
                     canonical_gap_reason=None,
+                    review_priority_band="medium",
+                    review_priority_reason="cross_source_corroboration",
                     min_urgency=0,
                     min_confidence=None,
                     min_reviews=1,
@@ -280,6 +288,8 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
         **returned,
         "candidate_bucket": None,
         "review_status": None,
+        "review_priority_band": "medium",
+        "review_priority_reason": "cross_source_corroboration",
     }
     scope_mock.assert_awaited_once_with(pool, None)
     read_mock.assert_awaited_once_with(
@@ -291,6 +301,8 @@ async def test_get_company_signal_candidate_group_summary_uses_summary_reader():
         candidate_bucket=None,
         review_status=None,
         canonical_gap_reason=None,
+        review_priority_band="medium",
+        review_priority_reason="cross_source_corroboration",
         min_urgency=0,
         min_confidence=None,
         min_reviews=1,
@@ -322,6 +334,32 @@ async def test_get_company_signal_candidate_group_summary_rejects_invalid_bucket
 
     assert exc.value.status_code == 400
     assert "candidate_bucket" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_list_company_signal_candidate_groups_rejects_invalid_priority_band():
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=MagicMock()):
+        with pytest.raises(b2b_dashboard.HTTPException) as exc:
+            await b2b_dashboard.list_company_signal_candidate_groups(
+                vendor_name=None,
+                company_name=None,
+                candidate_bucket="analyst_review",
+                review_status="pending",
+                canonical_gap_reason=None,
+                review_priority_band="urgent",
+                review_priority_reason=None,
+                min_urgency=0,
+                min_confidence=None,
+                min_reviews=1,
+                decision_makers_only=False,
+                signal_evidence_present=None,
+                window_days=90,
+                limit=50,
+                user=None,
+            )
+
+    assert exc.value.status_code == 400
+    assert "review_priority_band" in exc.value.detail
 
 
 @pytest.mark.asyncio

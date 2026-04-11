@@ -2727,6 +2727,8 @@ async def list_company_signal_candidate_groups(
     candidate_bucket: str = Query("analyst_review"),
     review_status: str = Query("pending"),
     canonical_gap_reason: Optional[str] = Query(None),
+    review_priority_band: Optional[str] = Query(None),
+    review_priority_reason: Optional[str] = Query(None),
     min_urgency: float = Query(0, ge=0, le=10),
     min_confidence: Optional[float] = Query(None, ge=0, le=1),
     min_reviews: int = Query(1, ge=1, le=100),
@@ -2747,6 +2749,11 @@ async def list_company_signal_candidate_groups(
             status_code=400,
             detail="review_status must be 'pending', 'approved', or 'suppressed'",
         )
+    if review_priority_band is not None and review_priority_band not in {"promote_now", "high", "medium", "low"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_priority_band must be 'promote_now', 'high', 'medium', or 'low'",
+        )
 
     pool = _pool_or_503()
     scoped_vendors = await _get_scoped_vendors(pool, user)
@@ -2759,6 +2766,8 @@ async def list_company_signal_candidate_groups(
         candidate_bucket=candidate_bucket,
         review_status=review_status,
         canonical_gap_reason=canonical_gap_reason,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
         min_urgency=min_urgency,
         min_confidence=min_confidence,
         min_reviews=min_reviews,
@@ -2771,6 +2780,8 @@ async def list_company_signal_candidate_groups(
         "count": len(groups),
         "candidate_bucket": candidate_bucket,
         "review_status": review_status,
+        "review_priority_band": review_priority_band,
+        "review_priority_reason": review_priority_reason,
     }
 
 
@@ -2781,6 +2792,8 @@ async def get_company_signal_candidate_group_summary(
     candidate_bucket: Optional[str] = Query(None),
     review_status: Optional[str] = Query(None),
     canonical_gap_reason: Optional[str] = Query(None),
+    review_priority_band: Optional[str] = Query(None),
+    review_priority_reason: Optional[str] = Query(None),
     min_urgency: float = Query(0, ge=0, le=10),
     min_confidence: Optional[float] = Query(None, ge=0, le=1),
     min_reviews: int = Query(1, ge=1, le=100),
@@ -2801,6 +2814,11 @@ async def get_company_signal_candidate_group_summary(
             status_code=400,
             detail="review_status must be 'pending', 'approved', or 'suppressed'",
         )
+    if review_priority_band is not None and review_priority_band not in {"promote_now", "high", "medium", "low"}:
+        raise HTTPException(
+            status_code=400,
+            detail="review_priority_band must be 'promote_now', 'high', 'medium', or 'low'",
+        )
 
     pool = _pool_or_503()
     scoped_vendors = await _get_scoped_vendors(pool, user)
@@ -2813,6 +2831,8 @@ async def get_company_signal_candidate_group_summary(
         candidate_bucket=candidate_bucket,
         review_status=review_status,
         canonical_gap_reason=canonical_gap_reason,
+        review_priority_band=review_priority_band,
+        review_priority_reason=review_priority_reason,
         min_urgency=min_urgency,
         min_confidence=min_confidence,
         min_reviews=min_reviews,
@@ -2822,6 +2842,8 @@ async def get_company_signal_candidate_group_summary(
     )
     summary["candidate_bucket"] = candidate_bucket
     summary["review_status"] = review_status
+    summary["review_priority_band"] = review_priority_band
+    summary["review_priority_reason"] = review_priority_reason
     return summary
 
 
