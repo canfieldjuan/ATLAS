@@ -430,6 +430,10 @@ function watchlistVendorUrl(searchParams: URLSearchParams, vendorName: string) {
   return `${window.location.origin}${watchlistPath(vendorFocusParams(searchParams, vendorName))}`
 }
 
+function watchlistOpportunitiesUrl(searchParams: URLSearchParams, vendorName: string) {
+  return `${window.location.origin}${watchlistOpportunitiesPath(searchParams, vendorName)}`
+}
+
 function watchlistEvidenceExplorerPath(
   searchParams: URLSearchParams,
   vendorName: string,
@@ -1502,6 +1506,17 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopyVendorOpportunitiesLink(vendorName: string) {
+    try {
+      await navigator.clipboard.writeText(watchlistOpportunitiesUrl(searchParams, vendorName))
+      setActionError(null)
+      setActionMessage(`Copied opportunities link for ${vendorName}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy opportunities link')
+    }
+  }
+
   async function handleCopyVendorWitnessLink(
     vendorName: string,
     witnessId: string,
@@ -2009,6 +2024,17 @@ export default function Watchlists() {
             type="button"
             onClick={(event) => {
               event.stopPropagation()
+              void handleCopyVendorOpportunitiesLink(row.vendor_name)
+            }}
+            aria-label={`Copy opportunities link for ${row.vendor_name}`}
+            className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+          >
+            Copy Opportunities
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
               void handleCopyVendorEvidenceLink(row.vendor_name, selectedSourceFilter)
             }}
             aria-label={`Copy evidence link for ${row.vendor_name}`}
@@ -2168,6 +2194,17 @@ export default function Watchlists() {
             >
               Opportunities
             </Link>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleCopyVendorOpportunitiesLink(row.vendor_name)
+              }}
+              aria-label={`Copy vendor opportunities link for ${row.vendor_name}`}
+              className="text-slate-300 hover:text-slate-200"
+            >
+              Copy opportunities
+            </button>
             <button
               type="button"
               onClick={(event) => {

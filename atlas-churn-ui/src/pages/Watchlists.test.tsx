@@ -1121,6 +1121,34 @@ describe('Watchlists', () => {
     expect(await screen.findByText('Copied evidence link for Zendesk')).toBeInTheDocument()
   })
 
+  it('copies a vendor-scoped opportunities link directly from the movement feed', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy vendor opportunities link for Zendesk' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/opportunities')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Zendesk')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('source')).toBe('reddit')
+    expect(await screen.findByText('Copied opportunities link for Zendesk')).toBeInTheDocument()
+  })
+
   it('copies a focused vendor witness drilldown link directly from the movement feed', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
@@ -1283,6 +1311,35 @@ describe('Watchlists', () => {
     expect(backToUrl.searchParams.get('category')).toBe('Helpdesk')
     expect(backToUrl.searchParams.get('source')).toBe('reddit')
     expect(await screen.findByText('Copied evidence link for Intercom')).toBeInTheDocument()
+  })
+
+  it('copies a vendor-scoped opportunities link from the tracked vendor list', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1&source=reddit&category=Helpdesk']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy opportunities link for Intercom' })
+    await user.click(copyButton)
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalled()
+    })
+    const copiedText = clipboardSpy.mock.calls[clipboardSpy.mock.calls.length - 1]?.[0] as string
+    const copiedUrl = new URL(copiedText)
+    expect(copiedUrl.pathname).toBe('/opportunities')
+    expect(copiedUrl.searchParams.get('vendor')).toBe('Intercom')
+    const backTo = copiedUrl.searchParams.get('back_to')
+    expect(backTo).toBeTruthy()
+    const backToUrl = new URL(backTo!, window.location.origin)
+    expect(backToUrl.pathname).toBe('/watchlists')
+    expect(backToUrl.searchParams.get('category')).toBe('Helpdesk')
+    expect(backToUrl.searchParams.get('source')).toBe('reddit')
+    expect(await screen.findByText('Copied opportunities link for Intercom')).toBeInTheDocument()
   })
 
   it('shows a header evidence explorer shortcut for single-vendor saved views', async () => {
