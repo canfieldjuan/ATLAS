@@ -231,4 +231,23 @@ describe('VendorDetail', () => {
 
     expect(mockNavigate).toHaveBeenCalledWith('/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp')
   })
+
+  it('preserves the upstream evidence path when re-opening validation from the vendor workspace', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26back_to%3D%252Fwatchlists%253Fview%253Dview-1%2526account_vendor%253DZendesk%2526account_company%253DAcme%252BCorp']}>
+        <Routes>
+          <Route path="/vendors/:name" element={<VendorDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: 'Validate Evidence' })[0])
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk%26account_company%3DAcme%2BCorp',
+    )
+  })
 })

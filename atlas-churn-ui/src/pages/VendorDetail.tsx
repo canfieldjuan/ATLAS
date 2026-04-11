@@ -190,6 +190,11 @@ function upstreamWatchlistsLabel(backTo: string | null): string {
   }
 }
 
+function upstreamEvidencePath(backTo: string | null): string | null {
+  if (!backTo?.startsWith('/evidence')) return null
+  return normalizeBackTo(backTo)
+}
+
 function vendorEvidenceExplorerPath(vendorName: string): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -311,7 +316,7 @@ export default function VendorDetail() {
   const backLabel = backToLabel(backTo)
   const watchlistsReturnPath = upstreamWatchlistsPath(backTo)
   const watchlistsReturnLabel = upstreamWatchlistsLabel(watchlistsReturnPath)
-  const evidenceExplorerPath = vendorEvidenceExplorerPath(profile.vendor_name)
+  const evidenceExplorerPath = upstreamEvidencePath(backTo) ?? vendorEvidenceExplorerPath(profile.vendor_name)
   const reportsPath = vendorReportsPath(profile.vendor_name)
   const opportunitiesPath = vendorOpportunitiesPath(profile.vendor_name)
   const recentReports = data?.recentReports ?? []
