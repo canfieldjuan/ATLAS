@@ -351,6 +351,8 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
             "pending_analyst_review_groups": 6,
             "decision_maker_groups": 7,
             "signal_evidence_groups": 4,
+            "avg_pending_age_days": 2.75,
+            "oldest_pending_age_days": 5.5,
         }
     )
     pool.fetch = AsyncMock(
@@ -401,6 +403,32 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
                     "review_priority_reason": "canonical_ready",
                 }
             ],
+            [
+                {
+                    "review_priority_band": "promote_now",
+                    "group_count": 2,
+                    "review_count": 5,
+                },
+                {
+                    "review_priority_band": "medium",
+                    "group_count": 4,
+                    "review_count": 12,
+                },
+            ],
+            [
+                {
+                    "id": uuid4(),
+                    "company_name": "acme",
+                    "display_company_name": "Acme Corp",
+                    "vendor_name": "Zendesk",
+                    "review_count": 3,
+                    "candidate_bucket": "canonical_ready",
+                    "canonical_gap_reason": None,
+                    "review_priority_band": "promote_now",
+                    "review_priority_reason": "canonical_ready",
+                    "pending_age_days": 5.5,
+                }
+            ],
         ]
     )
 
@@ -424,12 +452,16 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     vendor_sql = pool.fetch.call_args_list[1][0][0]
     confidence_sql = pool.fetch.call_args_list[2][0][0]
     priority_sql = pool.fetch.call_args_list[3][0][0]
+    pending_band_sql = pool.fetch.call_args_list[4][0][0]
+    oldest_pending_sql = pool.fetch.call_args_list[5][0][0]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
     assert "corroborated_confidence_score" in totals_sql
     assert "signal_evidence_count > 0" in totals_sql
     assert "decision_maker_count > 0" in totals_sql
+    assert "avg_pending_age_days" in totals_sql
+    assert "oldest_pending_age_days" in totals_sql
     assert "vendor_name ILIKE" not in totals_sql
     assert "ANY(" in totals_sql
     assert "GROUP BY 1" in gap_sql
@@ -439,12 +471,19 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "review_priority_reason" in priority_sql
     assert "canonical_ready_review_count" in priority_sql
     assert "representative_source" in priority_sql
+    assert "WHERE review_status = 'pending'" in pending_band_sql
+    assert "pending_age_days" in oldest_pending_sql
+    assert "WHERE review_status = 'pending'" in oldest_pending_sql
     assert summary["totals"]["total_groups"] == 12
+    assert summary["totals"]["avg_pending_age_days"] == 2.75
     assert summary["gap_reasons"][0]["gap_reason"] == "low_confidence_low_trust_source"
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
     assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
     assert summary["priority_groups"][0]["vendor"] == "Zendesk"
+    assert summary["pending_priority_bands"][0]["review_priority_band"] == "promote_now"
+    assert summary["oldest_pending_group"]["vendor"] == "Zendesk"
+    assert summary["oldest_pending_group"]["pending_age_days"] == 5.5
 
 
 @pytest.mark.asyncio

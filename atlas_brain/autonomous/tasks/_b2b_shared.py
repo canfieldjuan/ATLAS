@@ -11857,11 +11857,15 @@ async def read_company_signal_candidate_group_summary(
                 "pending_analyst_review_groups": 0,
                 "decision_maker_groups": 0,
                 "signal_evidence_groups": 0,
+                "avg_pending_age_days": 0.0,
+                "oldest_pending_age_days": 0.0,
             },
             "gap_reasons": [],
             "top_vendors": [],
             "confidence_tiers": [],
             "priority_groups": [],
+            "pending_priority_bands": [],
+            "oldest_pending_group": None,
         }
 
     where_clause = " AND ".join(conditions)
@@ -11888,7 +11892,19 @@ async def read_company_signal_candidate_group_summary(
                    WHERE review_status = 'pending' AND candidate_bucket = 'analyst_review'
                )::int AS pending_analyst_review_groups,
                COUNT(*) FILTER (WHERE decision_maker_count > 0)::int AS decision_maker_groups,
-               COUNT(*) FILTER (WHERE signal_evidence_count > 0)::int AS signal_evidence_groups
+               COUNT(*) FILTER (WHERE signal_evidence_count > 0)::int AS signal_evidence_groups,
+               COALESCE(
+                   AVG(
+                       EXTRACT(EPOCH FROM (NOW() - COALESCE(review_status_updated_at, first_seen_at))) / 86400.0
+                   ) FILTER (WHERE review_status = 'pending'),
+                   0
+               )::float8 AS avg_pending_age_days,
+               COALESCE(
+                   MAX(
+                       EXTRACT(EPOCH FROM (NOW() - COALESCE(review_status_updated_at, first_seen_at))) / 86400.0
+                   ) FILTER (WHERE review_status = 'pending'),
+                   0
+               )::float8 AS oldest_pending_age_days
         FROM filtered
         """,
         *params,
@@ -11982,6 +11998,57 @@ async def read_company_signal_candidate_group_summary(
         *params,
         top_n,
     )
+    pending_priority_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT {_company_signal_candidate_group_priority_band_sql()} AS review_priority_band,
+               COUNT(*)::int AS group_count,
+               COALESCE(SUM(review_count), 0)::int AS review_count
+        FROM filtered
+        WHERE review_status = 'pending'
+        GROUP BY 1
+        ORDER BY CASE {_company_signal_candidate_group_priority_band_sql()}
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     ELSE 3
+                 END,
+                 group_count DESC,
+                 review_count DESC
+        """,
+        *params,
+    )
+    oldest_pending_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT id,
+               company_name,
+               display_company_name,
+               vendor_name,
+               review_count,
+               canonical_gap_reason,
+               candidate_bucket,
+               {_company_signal_candidate_group_priority_band_sql()} AS review_priority_band,
+               {_company_signal_candidate_group_priority_reason_sql()} AS review_priority_reason,
+               (
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(review_status_updated_at, first_seen_at))) / 86400.0
+               )::float8 AS pending_age_days
+        FROM filtered
+        WHERE review_status = 'pending'
+        ORDER BY pending_age_days DESC,
+                 {_company_signal_candidate_group_priority_order_sql()}
+        LIMIT 1
+        """,
+        *params,
+    )
     priority_groups: list[dict[str, Any]] = []
     for row in priority_rows:
         priority_band = row.get("review_priority_band")
@@ -12006,12 +12073,33 @@ async def read_company_signal_candidate_group_summary(
             "review_priority_band": priority_band,
             "review_priority_reason": priority_reason,
         })
+    oldest_pending_group = None
+    if oldest_pending_rows:
+        row = oldest_pending_rows[0]
+        priority_band = row.get("review_priority_band")
+        priority_reason = row.get("review_priority_reason")
+        if not priority_band or not priority_reason:
+            priority_band, priority_reason = _company_signal_candidate_group_priority_values(row)
+        oldest_pending_group = {
+            "group_id": str(row["id"]) if row.get("id") else None,
+            "company": row.get("company_name"),
+            "display_company": row.get("display_company_name") or row.get("company_name"),
+            "vendor": row.get("vendor_name"),
+            "review_count": row.get("review_count") or 0,
+            "candidate_bucket": row.get("candidate_bucket"),
+            "canonical_gap_reason": row.get("canonical_gap_reason"),
+            "review_priority_band": priority_band,
+            "review_priority_reason": priority_reason,
+            "pending_age_days": float(row["pending_age_days"]) if row.get("pending_age_days") is not None else 0.0,
+        }
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
         "top_vendors": [dict(row) for row in vendor_rows],
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
+        "pending_priority_bands": [dict(row) for row in pending_priority_rows],
+        "oldest_pending_group": oldest_pending_group,
     }
 
 
