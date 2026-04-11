@@ -13,7 +13,7 @@ import math
 import re
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from ...config import settings
 from ...services.apollo_company_overrides import fetch_company_override_map
@@ -11569,6 +11569,82 @@ def _company_signal_candidate_group_filters(
     return conditions, params, idx
 
 
+def _company_signal_candidate_group_priority_rank_sql(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return (
+        "CASE "
+        f"WHEN {prefix}candidate_bucket = 'canonical_ready' THEN 0 "
+        f"WHEN COALESCE({prefix}canonical_ready_review_count, 0) > 0 THEN 1 "
+        f"WHEN COALESCE({prefix}signal_evidence_count, 0) > 0 "
+        f"AND COALESCE({prefix}decision_maker_count, 0) > 0 THEN 2 "
+        f"WHEN COALESCE({prefix}signal_evidence_count, 0) > 0 THEN 3 "
+        f"WHEN COALESCE({prefix}decision_maker_count, 0) > 0 THEN 4 "
+        f"WHEN COALESCE({prefix}distinct_source_count, 0) > 1 THEN 5 "
+        "ELSE 6 END"
+    )
+
+
+def _company_signal_candidate_group_priority_band_sql(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return (
+        "CASE "
+        f"WHEN {prefix}candidate_bucket = 'canonical_ready' THEN 'promote_now' "
+        f"WHEN COALESCE({prefix}canonical_ready_review_count, 0) > 0 THEN 'high' "
+        f"WHEN COALESCE({prefix}signal_evidence_count, 0) > 0 "
+        f"AND COALESCE({prefix}decision_maker_count, 0) > 0 THEN 'high' "
+        f"WHEN COALESCE({prefix}signal_evidence_count, 0) > 0 "
+        f"OR COALESCE({prefix}decision_maker_count, 0) > 0 "
+        f"OR COALESCE({prefix}distinct_source_count, 0) > 1 THEN 'medium' "
+        "ELSE 'low' END"
+    )
+
+
+def _company_signal_candidate_group_priority_reason_sql(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return (
+        "CASE "
+        f"WHEN {prefix}candidate_bucket = 'canonical_ready' THEN 'canonical_ready' "
+        f"WHEN COALESCE({prefix}canonical_ready_review_count, 0) > 0 THEN 'has_canonical_ready_member' "
+        f"WHEN COALESCE({prefix}signal_evidence_count, 0) > 0 "
+        f"AND COALESCE({prefix}decision_maker_count, 0) > 0 THEN 'has_signal_evidence_and_decision_maker' "
+        f"WHEN COALESCE({prefix}signal_evidence_count, 0) > 0 THEN 'has_signal_evidence' "
+        f"WHEN COALESCE({prefix}decision_maker_count, 0) > 0 THEN 'has_decision_maker' "
+        f"WHEN COALESCE({prefix}distinct_source_count, 0) > 1 THEN 'cross_source_corroboration' "
+        f"ELSE COALESCE({prefix}canonical_gap_reason, 'low_signal') END"
+    )
+
+
+def _company_signal_candidate_group_priority_order_sql(alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return (
+        f"{_company_signal_candidate_group_priority_rank_sql(alias)}, "
+        f"COALESCE({prefix}canonical_ready_review_count, 0) DESC, "
+        f"COALESCE({prefix}signal_evidence_count, 0) DESC, "
+        f"COALESCE({prefix}decision_maker_count, 0) DESC, "
+        f"COALESCE({prefix}distinct_source_count, 0) DESC, "
+        f"COALESCE({prefix}corroborated_confidence_score, 0) DESC, "
+        f"COALESCE({prefix}max_urgency_score, 0) DESC, "
+        f"{prefix}review_count DESC, "
+        f"{prefix}last_seen_at DESC"
+    )
+
+
+def _company_signal_candidate_group_priority_values(row: Mapping[str, Any]) -> tuple[str, str]:
+    if row.get("candidate_bucket") == "canonical_ready":
+        return "promote_now", "canonical_ready"
+    if int(row.get("canonical_ready_review_count") or 0) > 0:
+        return "high", "has_canonical_ready_member"
+    if int(row.get("signal_evidence_count") or 0) > 0 and int(row.get("decision_maker_count") or 0) > 0:
+        return "high", "has_signal_evidence_and_decision_maker"
+    if int(row.get("signal_evidence_count") or 0) > 0:
+        return "medium", "has_signal_evidence"
+    if int(row.get("decision_maker_count") or 0) > 0:
+        return "medium", "has_decision_maker"
+    if int(row.get("distinct_source_count") or 0) > 1:
+        return "medium", "cross_source_corroboration"
+    return "low", str(row.get("canonical_gap_reason") or "low_signal")
+
+
 async def read_company_signal_candidate_groups(
     pool,
     *,
@@ -11603,6 +11679,17 @@ async def read_company_signal_candidate_groups(
     )
     if not conditions:
         return []
+
+    priority_band_sql = _company_signal_candidate_group_priority_band_sql()
+    priority_reason_sql = _company_signal_candidate_group_priority_reason_sql()
+    if review_status in {None, "pending"}:
+        order_sql = _company_signal_candidate_group_priority_order_sql()
+    else:
+        order_sql = (
+            "review_status_updated_at DESC NULLS LAST, "
+            "last_seen_at DESC, "
+            "review_count DESC"
+        )
 
     limit_param = idx
     params.append(limit)
@@ -11639,6 +11726,8 @@ async def read_company_signal_candidate_groups(
                representative_urgency_score,
                canonical_gap_reason,
                candidate_bucket,
+               {priority_band_sql} AS review_priority_band,
+               {priority_reason_sql} AS review_priority_reason,
                review_status,
                review_status_updated_at,
                reviewed_by,
@@ -11648,12 +11737,7 @@ async def read_company_signal_candidate_groups(
                last_seen_at
         FROM b2b_company_signal_candidate_groups
         WHERE {" AND ".join(conditions)}
-        ORDER BY CASE WHEN candidate_bucket = 'canonical_ready' THEN 0 ELSE 1 END,
-                 review_status_updated_at DESC NULLS LAST,
-                 review_count DESC,
-                 corroborated_confidence_score DESC NULLS LAST,
-                 max_urgency_score DESC NULLS LAST,
-                 last_seen_at DESC
+        ORDER BY {order_sql}
         LIMIT ${limit_param}
         """,
         *params,
@@ -11670,6 +11754,10 @@ async def read_company_signal_candidate_groups(
 
     results: list[dict[str, Any]] = []
     for row in rows:
+        priority_band = row.get("review_priority_band")
+        priority_reason = row.get("review_priority_reason")
+        if not priority_band or not priority_reason:
+            priority_band, priority_reason = _company_signal_candidate_group_priority_values(row)
         sample_ids = [str(review_id) for review_id in (row.get("sample_review_ids") or []) if review_id]
         supporting_reviews = [
             support_reviews[str(review_id)]
@@ -11708,6 +11796,8 @@ async def read_company_signal_candidate_groups(
             "representative_urgency_score": float(row["representative_urgency_score"]) if row.get("representative_urgency_score") is not None else None,
             "canonical_gap_reason": row.get("canonical_gap_reason"),
             "candidate_bucket": row.get("candidate_bucket"),
+            "review_priority_band": priority_band,
+            "review_priority_reason": priority_reason,
             "review_status": row.get("review_status"),
             "review_status_updated_at": str(row.get("review_status_updated_at") or "") or None,
             "reviewed_by": row.get("reviewed_by"),
@@ -11771,6 +11861,7 @@ async def read_company_signal_candidate_group_summary(
             "gap_reasons": [],
             "top_vendors": [],
             "confidence_tiers": [],
+            "priority_groups": [],
         }
 
     where_clause = " AND ".join(conditions)
@@ -11861,11 +11952,66 @@ async def read_company_signal_candidate_group_summary(
         """,
         *params,
     )
+    priority_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        )
+        SELECT id,
+               company_name,
+               display_company_name,
+               vendor_name,
+               review_count,
+               distinct_source_count,
+               decision_maker_count,
+               signal_evidence_count,
+               canonical_ready_review_count,
+               max_urgency_score,
+               corroborated_confidence_score,
+               representative_source,
+               canonical_gap_reason,
+               candidate_bucket,
+               {_company_signal_candidate_group_priority_band_sql()} AS review_priority_band,
+               {_company_signal_candidate_group_priority_reason_sql()} AS review_priority_reason
+        FROM filtered
+        ORDER BY {_company_signal_candidate_group_priority_order_sql()}
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    priority_groups: list[dict[str, Any]] = []
+    for row in priority_rows:
+        priority_band = row.get("review_priority_band")
+        priority_reason = row.get("review_priority_reason")
+        if not priority_band or not priority_reason:
+            priority_band, priority_reason = _company_signal_candidate_group_priority_values(row)
+        priority_groups.append({
+            "group_id": str(row["id"]) if row.get("id") else None,
+            "company": row.get("company_name"),
+            "display_company": row.get("display_company_name") or row.get("company_name"),
+            "vendor": row.get("vendor_name"),
+            "review_count": row.get("review_count") or 0,
+            "distinct_source_count": row.get("distinct_source_count") or 0,
+            "decision_maker_count": row.get("decision_maker_count") or 0,
+            "signal_evidence_count": row.get("signal_evidence_count") or 0,
+            "canonical_ready_review_count": row.get("canonical_ready_review_count") or 0,
+            "max_urgency": float(row["max_urgency_score"]) if row.get("max_urgency_score") is not None else None,
+            "corroborated_confidence_score": float(row["corroborated_confidence_score"]) if row.get("corroborated_confidence_score") is not None else None,
+            "representative_source": row.get("representative_source"),
+            "candidate_bucket": row.get("candidate_bucket"),
+            "canonical_gap_reason": row.get("canonical_gap_reason"),
+            "review_priority_band": priority_band,
+            "review_priority_reason": priority_reason,
+        })
     return {
         "totals": dict(totals or {}),
         "gap_reasons": [dict(row) for row in gap_rows],
         "top_vendors": [dict(row) for row in vendor_rows],
         "confidence_tiers": [dict(row) for row in confidence_rows],
+        "priority_groups": priority_groups,
     }
 
 

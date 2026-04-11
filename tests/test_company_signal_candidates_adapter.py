@@ -329,6 +329,8 @@ async def test_read_company_signal_candidate_groups_maps_rows_and_support_review
     assert results[0]["display_company"] == "Acme Corp"
     assert results[0]["review_count"] == 3
     assert results[0]["corroborated_confidence_score"] == 0.68
+    assert results[0]["review_priority_band"] == "promote_now"
+    assert results[0]["review_priority_reason"] == "canonical_ready"
     assert results[0]["supporting_reviews"][0]["quote_excerpt"] == "Renewal risk keeps coming up"
 
 
@@ -379,6 +381,26 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
                     "group_count": 10,
                 },
             ],
+            [
+                {
+                    "id": uuid4(),
+                    "company_name": "acme",
+                    "display_company_name": "Acme Corp",
+                    "vendor_name": "Zendesk",
+                    "review_count": 3,
+                    "distinct_source_count": 2,
+                    "decision_maker_count": 1,
+                    "signal_evidence_count": 2,
+                    "canonical_ready_review_count": 1,
+                    "max_urgency_score": Decimal("8.8"),
+                    "corroborated_confidence_score": Decimal("0.68"),
+                    "representative_source": "reddit",
+                    "candidate_bucket": "canonical_ready",
+                    "canonical_gap_reason": None,
+                    "review_priority_band": "promote_now",
+                    "review_priority_reason": "canonical_ready",
+                }
+            ],
         ]
     )
 
@@ -401,6 +423,7 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     gap_sql = pool.fetch.call_args_list[0][0][0]
     vendor_sql = pool.fetch.call_args_list[1][0][0]
     confidence_sql = pool.fetch.call_args_list[2][0][0]
+    priority_sql = pool.fetch.call_args_list[3][0][0]
     assert "candidate_bucket =" in totals_sql
     assert "review_status =" in totals_sql
     assert "review_count >=" in totals_sql
@@ -412,10 +435,16 @@ async def test_read_company_signal_candidate_group_summary_aggregates_queue_heal
     assert "GROUP BY 1" in gap_sql
     assert "GROUP BY 1" in vendor_sql
     assert "GROUP BY 1" in confidence_sql
+    assert "review_priority_band" in priority_sql
+    assert "review_priority_reason" in priority_sql
+    assert "canonical_ready_review_count" in priority_sql
+    assert "representative_source" in priority_sql
     assert summary["totals"]["total_groups"] == 12
     assert summary["gap_reasons"][0]["gap_reason"] == "low_confidence_low_trust_source"
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
     assert summary["confidence_tiers"][0]["confidence_tier"] == "high"
+    assert summary["priority_groups"][0]["review_priority_band"] == "promote_now"
+    assert summary["priority_groups"][0]["vendor"] == "Zendesk"
 
 
 @pytest.mark.asyncio
