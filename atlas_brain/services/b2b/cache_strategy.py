@@ -112,6 +112,13 @@ CORE_B2B_CACHE_STRATEGIES: tuple[CacheStrategy, ...] = (
         mode="evidence_hash",
         rationale="Cross-vendor synthesis should rerun only when comparison evidence changes.",
     ),
+    CacheStrategy(
+        stage_id="win_loss.strategy",
+        file_path="atlas_brain/api/b2b_win_loss.py",
+        mode="exact",
+        namespace="win_loss.strategy",
+        rationale="Win/loss strategy is deterministic given the same vendor signals. Cache to avoid redundant LLM calls.",
+    ),
 )
 
 

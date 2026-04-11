@@ -21,9 +21,20 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..auth.rate_limit import limiter, _dynamic_limit
-from ..pipelines.llm import call_llm_with_skill, parse_json_response
+from ..pipelines.llm import call_llm_with_skill, clean_llm_output
+from ..config import settings
+from ..services.b2b.cache_runner import (
+    lookup_b2b_exact_stage_text,
+    prepare_b2b_exact_skill_stage_request,
+    store_b2b_exact_stage_text,
+)
+from ..services.b2b.llm_exact_cache import CacheUnavailable
 from ..services.vendor_registry import resolve_vendor_name
 from ..storage.database import get_db_pool
+
+class _CacheHit(Exception):
+    pass
+
 
 logger = logging.getLogger("atlas.api.b2b_win_loss")
 
@@ -857,21 +868,63 @@ async def _compute_prediction(
             "segment_match": segment_data,
         }
 
-        raw = call_llm_with_skill(
-            "digest/win_loss_strategy",
-            strategy_payload,
-            workload="synthesis",
-            max_tokens=STRATEGY_MAX_TOKENS,
-            temperature=STRATEGY_TEMPERATURE,
-        )
+        win_loss_model = str(getattr(settings.b2b_churn, "win_loss_model", "anthropic/claude-haiku-4-5")).strip()
+        payload_text = json.dumps(strategy_payload, sort_keys=True, ensure_ascii=True)
 
-        if raw:
-            parsed = parse_json_response(raw, recover_truncated=True)
-            recommended_approach = parsed.get("recommended_approach")
-            lead_with = parsed.get("lead_with") or []
-            talking_points = parsed.get("talking_points") or []
-            timing_advice = parsed.get("timing_advice")
-            risk_factors = parsed.get("risk_factors") or []
+        # Check exact cache first
+        cache_request = None
+        try:
+            cache_request, _ = prepare_b2b_exact_skill_stage_request(
+                "win_loss.strategy",
+                skill_name="digest/win_loss_strategy",
+                payload=payload_text,
+                provider="openrouter",
+                model=win_loss_model,
+                max_tokens=STRATEGY_MAX_TOKENS,
+                temperature=STRATEGY_TEMPERATURE,
+                response_format={"type": "json_object"},
+            )
+            cached = await lookup_b2b_exact_stage_text(cache_request)
+            if cached is not None:
+                parsed = parse_json_response(cached["response_text"], recover_truncated=True)
+                if isinstance(parsed, dict) and not parsed.get("_parse_fallback"):
+                    recommended_approach = parsed.get("recommended_approach")
+                    lead_with = parsed.get("lead_with") or []
+                    talking_points = parsed.get("talking_points") or []
+                    timing_advice = parsed.get("timing_advice")
+                    risk_factors = parsed.get("risk_factors") or []
+                    raise _CacheHit()
+        except CacheUnavailable:
+            cache_request = None
+        except _CacheHit:
+            pass
+        else:
+            raw = call_llm_with_skill(
+                "digest/win_loss_strategy",
+                payload_text,
+                workload="openrouter",
+                try_openrouter=True,
+                openrouter_model=win_loss_model,
+                max_tokens=STRATEGY_MAX_TOKENS,
+                temperature=STRATEGY_TEMPERATURE,
+            )
+
+            if raw:
+                parsed = parse_json_response(raw, recover_truncated=True)
+                recommended_approach = parsed.get("recommended_approach")
+                lead_with = parsed.get("lead_with") or []
+                talking_points = parsed.get("talking_points") or []
+                timing_advice = parsed.get("timing_advice")
+                risk_factors = parsed.get("risk_factors") or []
+
+                if cache_request is not None:
+                    await store_b2b_exact_stage_text(
+                        cache_request,
+                        response_text=clean_llm_output(raw),
+                        metadata={"model": win_loss_model},
+                    )
+    except _CacheHit:
+        pass
     except Exception as e:
         logger.warning("LLM strategy synthesis failed: %s", e)
 

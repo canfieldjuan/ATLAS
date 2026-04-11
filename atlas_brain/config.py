@@ -195,7 +195,7 @@ class LLMConfig(BaseSettings):
 
     # OpenRouter reasoning model (synthesis/reasoning workloads)
     openrouter_reasoning_model: str = Field(
-        default="openai/gpt-oss-120b",
+        default="anthropic/claude-haiku-4-5",
         description=(
             "OpenRouter model for synthesis/reasoning workloads. "
             "Set via ATLAS_LLM__OPENROUTER_REASONING_MODEL "
@@ -2523,6 +2523,10 @@ class B2BChurnConfig(BaseSettings):
         ge=1,
         le=20,
         description="Consecutive rounds with zero promotions before circuit breaker trips",
+    )
+    win_loss_model: str = Field(
+        default="anthropic/claude-haiku-4-5",
+        description="OpenRouter model for win/loss strategy synthesis",
     )
     evidence_default_analysis_window_days: int = Field(
         default=30,
