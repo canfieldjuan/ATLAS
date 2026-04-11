@@ -439,10 +439,45 @@ describe('Watchlists', () => {
 
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
-        `${window.location.origin}/opportunities?vendor=Zendesk&back_to=%2Fwatchlists`,
+        `${window.location.origin}/opportunities?vendor=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1`,
       )
     })
     expect(await screen.findByText('Copied opportunity link for Acme Corp')).toBeInTheDocument()
+  })
+
+  it('preserves watchlist context when opening reports from an account row', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'View reports for Zendesk' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    )
+  })
+
+  it('copies a reports link directly from an account row', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy account reports link for Zendesk' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1`,
+      )
+    })
+    expect(await screen.findByText('Copied reports link for Acme Corp')).toBeInTheDocument()
   })
 
   it('renders empty states when no tracked vendors or persisted accounts exist', async () => {

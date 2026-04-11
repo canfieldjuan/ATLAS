@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Activity,
@@ -821,6 +821,15 @@ export default function Watchlists() {
       : null),
     [requestedWatchlistViewId, watchlistViews],
   )
+  const initialRequestedWatchlistViewIdRef = useRef(requestedWatchlistViewId)
+  const outboundWatchlistSearchParams = useMemo(() => {
+    const next = new URLSearchParams(searchParams)
+    const durableViewId = initialRequestedWatchlistViewIdRef.current || requestedWatchlistViewId || activeWatchlistView?.id || ''
+    if (durableViewId) {
+      next.set('view', durableViewId)
+    }
+    return next
+  }, [activeWatchlistView?.id, requestedWatchlistViewId, searchParams])
   const {
     data: activeAlertEventsData,
     refresh: refreshAlertEvents,
@@ -1488,12 +1497,23 @@ export default function Watchlists() {
 
   async function handleCopyAccountRowOpportunityLink(row: AccountsInMotionFeedItem) {
     try {
-      await navigator.clipboard.writeText(watchlistOpportunitiesUrl(searchParams, row.vendor))
+      await navigator.clipboard.writeText(watchlistOpportunitiesUrl(outboundWatchlistSearchParams, row.vendor))
       setActionError(null)
       setActionMessage(`Copied opportunity link for ${row.company || row.vendor}`)
     } catch (err) {
       setActionMessage(null)
       setActionError(err instanceof Error ? err.message : 'Failed to copy opportunity link')
+    }
+  }
+
+  async function handleCopyAccountRowReportsLink(row: AccountsInMotionFeedItem) {
+    try {
+      await navigator.clipboard.writeText(watchlistReportsUrl(outboundWatchlistSearchParams, row.vendor))
+      setActionError(null)
+      setActionMessage(`Copied reports link for ${row.company || row.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy reports link')
     }
   }
 
@@ -2529,7 +2549,32 @@ export default function Watchlists() {
             )}
             {row.company && (
               <Link
-                to={watchlistOpportunitiesPath(searchParams, row.vendor)}
+                to={watchlistReportsPath(outboundWatchlistSearchParams, row.vendor)}
+                onClick={(e) => e.stopPropagation()}
+                aria-label={`View reports for ${row.vendor}`}
+                className="rounded-md bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-300 hover:bg-violet-500/20"
+                title="View reports"
+              >
+                Reports
+              </Link>
+            )}
+            {row.company && (
+              <button
+                type="button"
+                className="rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void handleCopyAccountRowReportsLink(row)
+                }}
+                aria-label={`Copy account reports link for ${row.vendor}`}
+                title="Copy reports link"
+              >
+                Copy reports
+              </button>
+            )}
+            {row.company && (
+              <Link
+                to={watchlistOpportunitiesPath(outboundWatchlistSearchParams, row.vendor)}
                 onClick={(e) => e.stopPropagation()}
                 aria-label={`View opportunities for ${row.vendor}`}
                 className="rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
