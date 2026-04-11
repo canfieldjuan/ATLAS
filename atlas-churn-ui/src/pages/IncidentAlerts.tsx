@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { BellRing, CheckCircle2, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
+import { BellRing, CheckCircle2, ChevronDown, ChevronRight, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
@@ -7,6 +7,8 @@ import {
   createWebhook,
   deleteWebhookSubscription,
   fetchWebhookDeliverySummary,
+  listWebhookCrmPushLog,
+  listWebhookDeliveries,
   listWebhooks,
   testWebhookSubscription,
   updateWebhookSubscription,
@@ -60,6 +62,12 @@ function channelTone(channel: WebhookChannel) {
   return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200'
 }
 
+function deliveryTone(success: boolean) {
+  return success
+    ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-100'
+    : 'border-rose-500/20 bg-rose-500/5 text-rose-100'
+}
+
 export default function IncidentAlerts() {
   const [summaryWindow, setSummaryWindow] = useState<(typeof SUMMARY_WINDOWS)[number]>(7)
   const [form, setForm] = useState<WebhookCreateBody>({
@@ -72,6 +80,7 @@ export default function IncidentAlerts() {
   })
   const [saving, setSaving] = useState(false)
   const [busyWebhookId, setBusyWebhookId] = useState<string | null>(null)
+  const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -103,13 +112,50 @@ export default function IncidentAlerts() {
   const refreshing = summaryRefreshing || listRefreshing
   const loading = summaryLoading || listLoading
   const error = summaryError || listError
+  const selectedWebhook = useMemo(
+    () => webhooks.find((webhook) => webhook.id === selectedWebhookId) ?? null,
+    [selectedWebhookId, webhooks],
+  )
+
+  const {
+    data: deliveryData,
+    loading: deliveryLoading,
+    refresh: refreshDeliveries,
+    refreshing: deliveryRefreshing,
+  } = useApiData(
+    () => (selectedWebhookId
+      ? listWebhookDeliveries(selectedWebhookId, { limit: 10 })
+      : Promise.resolve({ deliveries: [], count: 0 })),
+    [selectedWebhookId],
+    { refreshOnFocus: false, refreshOnReconnect: false },
+  )
+
+  const {
+    data: crmPushData,
+    loading: crmPushLoading,
+    refresh: refreshCrmPushLog,
+    refreshing: crmPushRefreshing,
+  } = useApiData(
+    () => (selectedWebhookId && selectedWebhook?.channel.startsWith('crm_')
+      ? listWebhookCrmPushLog(selectedWebhookId, 10)
+      : Promise.resolve({ pushes: [], count: 0 })),
+    [selectedWebhook?.channel, selectedWebhookId],
+    { refreshOnFocus: false, refreshOnReconnect: false },
+  )
 
   const selectedEventCount = form.event_types.length
   const requiresAuthHeader = form.channel.startsWith('crm_')
   const sortedEvents = useMemo(() => new Set(form.event_types), [form.event_types])
+  const activityLoading = deliveryLoading || crmPushLoading
+  const activityRefreshing = deliveryRefreshing || crmPushRefreshing
 
   async function refreshAll() {
-    await Promise.all([refreshSummary(), refreshWebhooks()])
+    refreshSummary()
+    refreshWebhooks()
+    if (selectedWebhookId) {
+      refreshDeliveries()
+      refreshCrmPushLog()
+    }
   }
 
   function setFormValue<K extends keyof WebhookCreateBody>(key: K, value: WebhookCreateBody[K]) {
@@ -218,6 +264,7 @@ export default function IncidentAlerts() {
     setMessage(null)
     try {
       await deleteWebhookSubscription(webhookId)
+      setSelectedWebhookId((current) => (current === webhookId ? null : current))
       setMessage('Webhook deleted')
       await refreshAll()
     } catch (err) {
@@ -400,7 +447,108 @@ export default function IncidentAlerts() {
                       <Trash2 className="h-4 w-4" />
                       Delete
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedWebhookId((current) => (current === webhook.id ? null : webhook.id))}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-800"
+                    >
+                      {selectedWebhookId === webhook.id ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      {selectedWebhookId === webhook.id ? 'Hide Activity' : 'View Activity'}
+                    </button>
                   </div>
+
+                  {selectedWebhookId === webhook.id ? (
+                    <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-sm font-medium text-white">Recent Activity</h3>
+                          <p className="mt-1 text-xs text-slate-400">
+                            Delivery attempts and downstream CRM pushes for this endpoint.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            refreshDeliveries()
+                            refreshCrmPushLog()
+                          }}
+                          disabled={activityRefreshing}
+                          className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-slate-800/60 hover:text-white disabled:opacity-50"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${activityRefreshing ? 'animate-spin' : ''}`} />
+                          Refresh Activity
+                        </button>
+                      </div>
+
+                      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                        <div>
+                          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Deliveries</div>
+                          {activityLoading ? (
+                            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+                              Loading delivery activity...
+                            </div>
+                          ) : deliveryData?.deliveries?.length ? (
+                            <div className="space-y-2">
+                              {deliveryData.deliveries.map((delivery) => (
+                                <div key={delivery.id} className={`rounded-lg border px-3 py-3 text-sm ${deliveryTone(delivery.success)}`}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="font-medium">{delivery.event_type}</span>
+                                    <span className="text-xs">
+                                      {delivery.success ? 'success' : `failed${delivery.status_code ? ` · ${delivery.status_code}` : ''}`}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-300">
+                                    attempt {delivery.attempt} · {formatDurationMs(delivery.duration_ms)} · {formatTs(delivery.delivered_at)}
+                                  </div>
+                                  {delivery.error ? (
+                                    <div className="mt-2 text-xs text-rose-200">{delivery.error}</div>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+                              No recent delivery attempts for this webhook.
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">CRM Push Log</div>
+                          {selectedWebhook?.channel.startsWith('crm_') ? (
+                            crmPushData?.pushes?.length ? (
+                              <div className="space-y-2">
+                                {crmPushData.pushes.map((push) => (
+                                  <div key={push.id} className={`rounded-lg border px-3 py-3 text-sm ${deliveryTone(push.status === 'success')}`}>
+                                    <div className="flex items-center justify-between gap-3">
+                                      <span className="font-medium">
+                                        {push.company_name || push.vendor_name || push.signal_type}
+                                      </span>
+                                      <span className="text-xs">{push.status}</span>
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-300">
+                                      {push.crm_record_type || 'record'}{push.crm_record_id ? ` · ${push.crm_record_id}` : ''} · {formatTs(push.pushed_at)}
+                                    </div>
+                                    {push.error ? (
+                                      <div className="mt-2 text-xs text-rose-200">{push.error}</div>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+                                No CRM push activity recorded for this webhook yet.
+                              </div>
+                            )
+                          ) : (
+                            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
+                              CRM push history is only available for CRM webhook channels.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </article>
               )
             })}

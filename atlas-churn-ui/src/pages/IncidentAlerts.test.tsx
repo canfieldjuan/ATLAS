@@ -8,6 +8,8 @@ const api = vi.hoisted(() => ({
   createWebhook: vi.fn(),
   deleteWebhookSubscription: vi.fn(),
   fetchWebhookDeliverySummary: vi.fn(),
+  listWebhookCrmPushLog: vi.fn(),
+  listWebhookDeliveries: vi.fn(),
   listWebhooks: vi.fn(),
   testWebhookSubscription: vi.fn(),
   updateWebhookSubscription: vi.fn(),
@@ -47,6 +49,25 @@ describe('IncidentAlerts', () => {
       ],
       count: 1,
     })
+    api.listWebhookDeliveries.mockResolvedValue({
+      deliveries: [
+        {
+          id: 'delivery-1',
+          event_type: 'churn_alert',
+          status_code: 202,
+          duration_ms: 180,
+          attempt: 1,
+          success: true,
+          error: null,
+          delivered_at: '2026-04-10T03:05:00Z',
+        },
+      ],
+      count: 1,
+    })
+    api.listWebhookCrmPushLog.mockResolvedValue({
+      pushes: [],
+      count: 0,
+    })
     api.createWebhook.mockResolvedValue({
       id: 'wh-2',
       url: 'https://hooks.example.com/new',
@@ -80,6 +101,27 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('18')).toBeInTheDocument()
     expect(screen.getByText('89%')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send Test' })).toBeInTheDocument()
+  })
+
+  it('shows delivery activity drillthrough for a webhook', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    await screen.findByRole('heading', { name: 'Incident Alerts API' })
+    await user.click(screen.getByRole('button', { name: 'View Activity' }))
+
+    expect(await screen.findByRole('heading', { name: 'Recent Activity' })).toBeInTheDocument()
+    expect(screen.getByText(/attempt 1/i)).toBeInTheDocument()
+    expect(screen.getByText('success')).toBeInTheDocument()
+    expect(screen.getByText('CRM push history is only available for CRM webhook channels.')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(api.listWebhookDeliveries).toHaveBeenCalledWith('wh-1', { limit: 10 })
+    })
   })
 
   it('creates a webhook from the form', async () => {

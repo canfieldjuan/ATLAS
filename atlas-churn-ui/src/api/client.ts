@@ -504,6 +504,30 @@ export interface WebhookDeliverySummary {
   last_delivery_at: string | null
 }
 
+export interface WebhookDelivery {
+  id: string
+  event_type: string
+  status_code: number | null
+  duration_ms: number | null
+  attempt: number
+  success: boolean
+  error: string | null
+  delivered_at: string
+}
+
+export interface WebhookCrmPushLogEntry {
+  id: string
+  signal_type: string
+  signal_id: string | null
+  vendor_name: string | null
+  company_name: string | null
+  crm_record_id: string | null
+  crm_record_type: string | null
+  status: string
+  error: string | null
+  pushed_at: string
+}
+
 export interface WebhookCreateBody {
   url: string
   secret: string
@@ -549,6 +573,26 @@ export async function deleteWebhookSubscription(webhookId: string) {
 
 export async function testWebhookSubscription(webhookId: string) {
   return post<WebhookTestResult>(WEBHOOKS_BASE, `/webhooks/${encodeURIComponent(webhookId)}/test`)
+}
+
+export async function listWebhookDeliveries(webhookId: string, params?: {
+  success?: boolean
+  event_type?: string
+  limit?: number
+}) {
+  return get<{ deliveries: WebhookDelivery[]; count: number }>(
+    WEBHOOKS_BASE,
+    `/webhooks/${encodeURIComponent(webhookId)}/deliveries`,
+    params,
+  )
+}
+
+export async function listWebhookCrmPushLog(webhookId: string, limit = 20) {
+  return get<{ pushes: WebhookCrmPushLogEntry[]; count: number }>(
+    WEBHOOKS_BASE,
+    `/webhooks/${encodeURIComponent(webhookId)}/crm-push-log`,
+    { limit },
+  )
 }
 
 export async function approveCampaign(id: string) {
