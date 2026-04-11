@@ -195,7 +195,7 @@ class LLMConfig(BaseSettings):
 
     # OpenRouter reasoning model (synthesis/reasoning workloads)
     openrouter_reasoning_model: str = Field(
-        default="anthropic/claude-haiku-4-5",
+        default="openai/gpt-oss-120b",
         description=(
             "OpenRouter model for synthesis/reasoning workloads. "
             "Set via ATLAS_LLM__OPENROUTER_REASONING_MODEL "

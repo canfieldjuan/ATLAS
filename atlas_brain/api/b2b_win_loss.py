@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from ..auth.dependencies import AuthUser, require_b2b_plan
 from ..auth.rate_limit import limiter, _dynamic_limit
-from ..pipelines.llm import call_llm_with_skill, clean_llm_output
+from ..pipelines.llm import call_llm_with_skill, clean_llm_output, parse_json_response
 from ..config import settings
 from ..services.b2b.cache_runner import (
     lookup_b2b_exact_stage_text,
@@ -868,7 +868,7 @@ async def _compute_prediction(
             "segment_match": segment_data,
         }
 
-        win_loss_model = str(getattr(settings.b2b_churn, "win_loss_model", "anthropic/claude-haiku-4-5")).strip()
+        win_loss_model = str(settings.b2b_churn.win_loss_model).strip()
         payload_text = json.dumps(strategy_payload, sort_keys=True, ensure_ascii=True)
 
         # Check exact cache first
@@ -901,12 +901,13 @@ async def _compute_prediction(
         else:
             raw = call_llm_with_skill(
                 "digest/win_loss_strategy",
-                payload_text,
+                strategy_payload,
                 workload="openrouter",
                 try_openrouter=True,
                 openrouter_model=win_loss_model,
                 max_tokens=STRATEGY_MAX_TOKENS,
                 temperature=STRATEGY_TEMPERATURE,
+                response_format={"type": "json_object"},
             )
 
             if raw:
