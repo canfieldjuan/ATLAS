@@ -12480,6 +12480,7 @@ async def read_company_signal_review_impact_summary(
             "priority_bands": [],
             "priority_reasons": [],
             "top_vendors": [],
+            "top_vendor_reasons": [],
         }
 
     where_clause = " AND ".join(conditions)
@@ -12713,6 +12714,86 @@ async def read_company_signal_review_impact_summary(
         *params,
         top_n,
     )
+    vendor_reason_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_review_events
+            WHERE {where_clause}
+        ),
+        vendor_reason_actions AS (
+            SELECT vendor_name,
+                   COALESCE(review_priority_band, 'unknown') AS review_priority_band,
+                   COALESCE(review_priority_reason, 'unknown') AS review_priority_reason,
+                   COUNT(*)::int AS action_count,
+                   COUNT(*) FILTER (WHERE review_action = 'approved')::int AS approvals,
+                   COUNT(*) FILTER (WHERE review_action = 'suppressed')::int AS suppressions,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'created')::int AS company_signal_creations,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'updated')::int AS company_signal_updates,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'deleted')::int AS company_signal_deletions,
+                   COUNT(*) FILTER (WHERE company_signal_action = 'none')::int AS company_signal_noops
+            FROM filtered
+            GROUP BY 1, 2, 3
+        ),
+        rebuild_rows AS (
+            SELECT DISTINCT ON (review_batch_id, vendor_name, COALESCE(review_priority_band, 'unknown'), COALESCE(review_priority_reason, 'unknown'))
+                   review_batch_id,
+                   vendor_name,
+                   COALESCE(review_priority_band, 'unknown') AS review_priority_band,
+                   COALESCE(review_priority_reason, 'unknown') AS review_priority_reason,
+                   rebuild_requested,
+                   rebuild_triggered,
+                   COALESCE(rebuild_persisted_count, 0) AS rebuild_persisted_count,
+                   COALESCE(rebuild_total_accounts, 0) AS rebuild_total_accounts
+            FROM filtered
+            ORDER BY review_batch_id, vendor_name, COALESCE(review_priority_band, 'unknown'), COALESCE(review_priority_reason, 'unknown'), created_at DESC
+        ),
+        vendor_reason_rebuilds AS (
+            SELECT vendor_name,
+                   review_priority_band,
+                   review_priority_reason,
+                   COUNT(*) FILTER (WHERE rebuild_requested)::int AS rebuild_requests,
+                   COUNT(*) FILTER (WHERE rebuild_triggered)::int AS rebuild_triggered,
+                   COALESCE(SUM(rebuild_persisted_count), 0)::int AS rebuild_persisted_reports,
+                   COALESCE(SUM(rebuild_total_accounts), 0)::int AS rebuild_total_accounts
+            FROM rebuild_rows
+            GROUP BY 1, 2, 3
+        )
+        SELECT vra.vendor_name,
+               vra.review_priority_band,
+               vra.review_priority_reason,
+               vra.action_count,
+               vra.approvals,
+               vra.suppressions,
+               vra.company_signal_creations,
+               vra.company_signal_updates,
+               vra.company_signal_deletions,
+               vra.company_signal_noops,
+               COALESCE(vrr.rebuild_requests, 0)::int AS rebuild_requests,
+               COALESCE(vrr.rebuild_triggered, 0)::int AS rebuild_triggered,
+               COALESCE(vrr.rebuild_persisted_reports, 0)::int AS rebuild_persisted_reports,
+               COALESCE(vrr.rebuild_total_accounts, 0)::int AS rebuild_total_accounts
+        FROM vendor_reason_actions vra
+        LEFT JOIN vendor_reason_rebuilds vrr
+          ON vrr.vendor_name = vra.vendor_name
+         AND vrr.review_priority_band = vra.review_priority_band
+         AND vrr.review_priority_reason = vra.review_priority_reason
+        ORDER BY vra.action_count DESC,
+                 vra.approvals DESC,
+                 CASE vra.review_priority_band
+                     WHEN 'promote_now' THEN 0
+                     WHEN 'high' THEN 1
+                     WHEN 'medium' THEN 2
+                     WHEN 'low' THEN 3
+                     ELSE 4
+                 END,
+                 vra.vendor_name ASC,
+                 vra.review_priority_reason ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     def _safe_rate(numerator: Any, denominator: Any) -> float:
         try:
             num = float(numerator or 0)
@@ -12757,6 +12838,7 @@ async def read_company_signal_review_impact_summary(
         "priority_bands": [_with_effect_metrics(row) for row in priority_rows],
         "priority_reasons": [_with_effect_metrics(row) for row in priority_reason_rows],
         "top_vendors": [_with_effect_metrics(row) for row in vendor_rows],
+        "top_vendor_reasons": [_with_effect_metrics(row) for row in vendor_reason_rows],
     }
 
 

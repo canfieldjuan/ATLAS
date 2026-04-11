@@ -719,6 +719,24 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
                     "rebuild_total_accounts": 9,
                 }
             ],
+            [
+                {
+                    "vendor_name": "Zendesk",
+                    "review_priority_band": "promote_now",
+                    "review_priority_reason": "canonical_ready",
+                    "action_count": 3,
+                    "approvals": 3,
+                    "suppressions": 0,
+                    "company_signal_creations": 2,
+                    "company_signal_updates": 1,
+                    "company_signal_deletions": 0,
+                    "company_signal_noops": 0,
+                    "rebuild_requests": 2,
+                    "rebuild_triggered": 2,
+                    "rebuild_persisted_reports": 2,
+                    "rebuild_total_accounts": 9,
+                }
+            ],
         ]
     )
 
@@ -737,6 +755,7 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     priority_sql = pool.fetch.call_args_list[1][0][0]
     priority_reason_sql = pool.fetch.call_args_list[2][0][0]
     vendors_sql = pool.fetch.call_args_list[3][0][0]
+    vendor_reasons_sql = pool.fetch.call_args_list[4][0][0]
     assert "review_action =" in totals_sql
     assert "vendor_name = ANY(" in totals_sql
     assert "review_priority_band" in totals_sql
@@ -750,6 +769,8 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert "reason_rebuilds" in priority_reason_sql
     assert "vendor_actions" in vendors_sql
     assert "vendor_rebuilds" in vendors_sql
+    assert "vendor_reason_actions" in vendor_reasons_sql
+    assert "vendor_reason_rebuilds" in vendor_reasons_sql
     assert summary["totals"]["total_actions"] == 6
     assert summary["totals"]["company_signal_effect_rate"] == 1.0
     assert summary["totals"]["company_signal_creation_rate"] == 0.5
@@ -767,3 +788,6 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["top_vendors"][0]["vendor_name"] == "Zendesk"
     assert summary["top_vendors"][0]["company_signal_effect_rate"] == 1.0
     assert summary["top_vendors"][0]["rebuild_trigger_rate"] == 2 / 3
+    assert summary["top_vendor_reasons"][0]["vendor_name"] == "Zendesk"
+    assert summary["top_vendor_reasons"][0]["review_priority_reason"] == "canonical_ready"
+    assert summary["top_vendor_reasons"][0]["company_signal_effect_rate"] == 1.0
