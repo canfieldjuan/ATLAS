@@ -391,7 +391,7 @@ export default function EvidenceDrawer({
                       href={`/reports?vendor_filter=${encodeURIComponent(vendorName)}`}
                       className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
                     >
-                      View reports <ExternalLink className="h-3 w-3" />
+                      View library <ExternalLink className="h-3 w-3" />
                     </a>
                   )}
                   {witness.source_url && (

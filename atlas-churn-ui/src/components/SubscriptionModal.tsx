@@ -31,16 +31,24 @@ function describeFilterPayload(filterPayload?: ReportLibraryViewFilters) {
   return lines
 }
 
+function describeSubscriptionScope(scopeType: ReportSubscriptionScopeType) {
+  if (scopeType === 'report') return 'report'
+  if (scopeType === 'library_view') return 'library view'
+  return 'library'
+}
+
 function getSubscriptionModalPresentation(
+  scopeType: ReportSubscriptionScopeType,
   existing: ReportSubscription | null,
   enabled: boolean,
 ) {
+  const scopeLabel = describeSubscriptionScope(scopeType)
   if (!existing) {
     return {
-      heading: 'Subscribe to Reports',
+      heading: `Subscribe to ${scopeLabel === 'report' ? 'Report' : 'Library'}`,
       badge: 'New',
       badgeClassName: 'bg-slate-800 text-slate-300 border border-slate-700',
-      description: 'Set up recurring delivery for this report scope.',
+      description: `Set up recurring delivery for this ${scopeLabel}.`,
     }
   }
 
@@ -62,15 +70,17 @@ function getSubscriptionModalPresentation(
 }
 
 function getSubscriptionSavePresentation(
+  scopeType: ReportSubscriptionScopeType,
   existing: ReportSubscription | null,
   enabled: boolean,
 ) {
+  const scopeLabel = describeSubscriptionScope(scopeType)
   if (!existing) {
     if (enabled) {
       return {
         actionLabel: 'Subscribe',
         savingLabel: 'Subscribing...',
-        helperText: 'This will create a recurring delivery for this report scope.',
+        helperText: `This will create a recurring delivery for this ${scopeLabel}.`,
       }
     }
     return {
@@ -132,8 +142,8 @@ export default function SubscriptionModal({
   const [enabled, setEnabled] = useState(true)
   const [existing, setExisting] = useState<ReportSubscription | null>(null)
   const filterSummary = describeFilterPayload(filterPayload)
-  const modalPresentation = getSubscriptionModalPresentation(existing, enabled)
-  const savePresentation = getSubscriptionSavePresentation(existing, enabled)
+  const modalPresentation = getSubscriptionModalPresentation(scopeType, existing, enabled)
+  const savePresentation = getSubscriptionSavePresentation(scopeType, existing, enabled)
 
   // Load existing subscription
   useEffect(() => {

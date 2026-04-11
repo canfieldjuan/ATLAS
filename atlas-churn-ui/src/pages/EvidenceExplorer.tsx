@@ -400,7 +400,7 @@ export default function EvidenceExplorer() {
               to={`/reports?vendor_filter=${encodeURIComponent(activeVendor)}`}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
-              View reports for {activeVendor} <ExternalLink className="h-3 w-3" />
+              View library for {activeVendor} <ExternalLink className="h-3 w-3" />
             </Link>
           )}
 

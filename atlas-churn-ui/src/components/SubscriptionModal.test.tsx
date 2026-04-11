@@ -108,15 +108,15 @@ describe('SubscriptionModal', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Subscribe to Reports' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Subscribe to Library' })).toBeInTheDocument()
     })
-    expect(screen.getAllByText('Set up recurring delivery for this report scope.')).not.toHaveLength(0)
+    expect(screen.getAllByText('Set up recurring delivery for this library.')).not.toHaveLength(0)
     expect(screen.getByDisplayValue('Full Report Library')).toBeInTheDocument()
     expect(screen.getByLabelText('Frequency')).toHaveValue('weekly')
     expect(screen.getByLabelText('Deliverable Focus')).toHaveValue('all')
     expect(screen.getByLabelText('Freshness Policy')).toHaveValue('fresh_or_monitor')
     expect(screen.getByText('Active')).toBeInTheDocument()
-    expect(screen.getByText('This will create a recurring delivery for this report scope.')).toBeInTheDocument()
+    expect(screen.getByText('This will create a recurring delivery for this library.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Subscribe' })).toBeInTheDocument()
     expect(screen.queryByDisplayValue('team@example.com')).not.toBeInTheDocument()
     expect(screen.queryByDisplayValue('Carry forward')).not.toBeInTheDocument()
@@ -292,7 +292,7 @@ describe('SubscriptionModal', () => {
     }
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Subscribe to Reports' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Subscribe to Library' })).toBeInTheDocument()
     })
 
     await waitFor(() => {

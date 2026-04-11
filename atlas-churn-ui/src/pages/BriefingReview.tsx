@@ -374,7 +374,7 @@ export default function BriefingReview() {
                                 className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 ml-2"
                                 onClick={(e) => e.stopPropagation()}
                               >
-                                Reports <ExternalLink className="h-3 w-3" />
+                                Library <ExternalLink className="h-3 w-3" />
                               </Link>
                               {briefing.created_at && (
                                 <>
