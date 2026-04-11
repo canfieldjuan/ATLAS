@@ -5,6 +5,7 @@ import {
   BellRing,
   Building2,
   Download,
+  Fingerprint,
   Plus,
   RefreshCw,
   Search,
@@ -321,7 +322,7 @@ function watchlistPath(searchParams: URLSearchParams) {
   return `/watchlists${query ? `?${query}` : ''}`
 }
 
-function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
+function accountFocusParams(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
   const next = new URLSearchParams(searchParams)
   const focus = accountFocusFromRow(row)
   next.set('account_vendor', focus.vendor)
@@ -330,7 +331,11 @@ function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotio
   next.set('account_watch_vendor', focus.watch_vendor)
   next.set('account_category', focus.category)
   next.set('account_track_mode', focus.track_mode)
-  return `${window.location.origin}${watchlistPath(next)}`
+  return next
+}
+
+function watchlistAccountUrl(searchParams: URLSearchParams, row: AccountsInMotionFeedItem) {
+  return `${window.location.origin}${watchlistPath(accountFocusParams(searchParams, row))}`
 }
 
 function watchlistEvidenceExplorerPath(
@@ -344,6 +349,14 @@ function watchlistEvidenceExplorerPath(
   if (witnessId) params.set('witness_id', witnessId)
   params.set('back_to', watchlistPath(searchParams))
   return `/evidence?${params.toString()}`
+}
+
+function watchlistAccountEvidenceExplorerPath(
+  searchParams: URLSearchParams,
+  row: AccountsInMotionFeedItem,
+  witnessId?: string | null,
+) {
+  return watchlistEvidenceExplorerPath(accountFocusParams(searchParams, row), row.vendor, witnessId)
 }
 
 function accountFocusFromRow(row: AccountsInMotionFeedItem) {
@@ -1539,6 +1552,15 @@ export default function Watchlists() {
           {row.synthesis_wedge_label && (
             <div className="mt-1 text-[11px] text-cyan-300">{row.synthesis_wedge_label}</div>
           )}
+          <Link
+            to={watchlistEvidenceExplorerPath(searchParams, row.vendor_name)}
+            onClick={(event) => event.stopPropagation()}
+            aria-label={`Open vendor evidence for ${row.vendor_name}`}
+            className="mt-2 inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200"
+          >
+            <Fingerprint className="h-3 w-3" />
+            Evidence Explorer
+          </Link>
         </div>
       ),
       sortable: true,
@@ -1723,6 +1745,17 @@ export default function Watchlists() {
             >
               View vendor
             </button>
+            {row.company && (
+              <Link
+                to={watchlistAccountEvidenceExplorerPath(searchParams, row)}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={`Open account evidence for ${row.vendor}`}
+                className="rounded-md bg-violet-500/10 px-2 py-1 text-xs font-medium text-violet-300 hover:bg-violet-500/20"
+                title="Open in Evidence Explorer"
+              >
+                <Fingerprint className="inline h-3 w-3" />
+              </Link>
+            )}
             {row.company && (
               <Link
                 to={`/opportunities?vendor=${encodeURIComponent(row.vendor)}`}
@@ -2958,7 +2991,7 @@ export default function Watchlists() {
         onClose={handleCloseSelectedAccount}
         onViewVendor={(vendorName) => navigate(`/vendors/${encodeURIComponent(vendorName)}`)}
         onCopyLink={() => void handleCopySelectedAccountLink()}
-        evidenceExplorerUrl={selectedAccount ? watchlistEvidenceExplorerPath(searchParams, selectedAccount.vendor) : null}
+        evidenceExplorerUrl={selectedAccount ? watchlistAccountEvidenceExplorerPath(searchParams, selectedAccount) : null}
         onOpenWitness={handleOpenWitness}
         onGenerateCampaign={handleGenerateCampaign}
         onViewOpportunity={(item) => navigate(`/opportunities?vendor=${encodeURIComponent(item.vendor)}`)}

@@ -764,6 +764,25 @@ describe('Watchlists', () => {
     })
   })
 
+  it('shows direct evidence explorer links for vendor and account rows', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+
+    expect(screen.getByRole('link', { name: 'Open vendor evidence for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists',
+    )
+    expect(screen.getByRole('link', { name: 'Open account evidence for Zendesk' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+    )
+  })
+
   it('copies a deep link for a saved view', async () => {
     const user = userEvent.setup()
     const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
