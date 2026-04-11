@@ -1126,3 +1126,287 @@ async def test_read_company_signal_review_impact_summary_aggregates_actions_and_
     assert summary["trend_recommendation"]["priority"] == "high"
     assert summary["trend_recommendation"]["owner"] == "review_ops"
     assert summary["trend_recommendation"]["supporting_focuses"] == ["effect_rate_down", "approval_volume_up"]
+
+
+def _make_review_impact_summary_pool(*, totals=None, daily_trends=None):
+    pool = type("ImpactTrendPool", (), {})()
+    pool.fetchrow = AsyncMock(return_value=totals or {"total_actions": 0})
+    pool.fetch = AsyncMock(
+        side_effect=[
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            daily_trends or [],
+        ]
+    )
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_returns_no_data_without_daily_trends():
+    pool = _make_review_impact_summary_pool(totals={"total_actions": 2, "approvals": 1})
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["daily_trends"] == []
+    assert summary["trend_comparison"]["anchor_day"] is None
+    assert summary["trend_comparison"]["recent_days_present"] == 0
+    assert summary["trend_comparison"]["prior_days_present"] == 0
+    assert summary["trend_focus"]["status"] == "no_data"
+    assert summary["trend_focus"]["focus"] is None
+    assert summary["trend_alerts"] == []
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_marks_flat_windows_as_stable():
+    pool = _make_review_impact_summary_pool(
+        totals={
+            "total_actions": 2,
+            "approvals": 2,
+            "company_signal_creations": 2,
+            "rebuild_requests": 2,
+            "rebuild_triggered": 2,
+        },
+        daily_trends=[
+            {
+                "action_day": "2026-04-10",
+                "action_count": 1,
+                "approvals": 1,
+                "suppressions": 0,
+                "company_signal_creations": 1,
+                "company_signal_updates": 0,
+                "company_signal_deletions": 0,
+                "company_signal_noops": 0,
+                "rebuild_requests": 1,
+                "rebuild_triggered": 1,
+                "rebuild_blocked": 0,
+                "rebuild_persisted_runs": 1,
+                "rebuild_persisted_reports": 1,
+                "rebuild_total_accounts": 1,
+            },
+            {
+                "action_day": "2026-04-03",
+                "action_count": 1,
+                "approvals": 1,
+                "suppressions": 0,
+                "company_signal_creations": 1,
+                "company_signal_updates": 0,
+                "company_signal_deletions": 0,
+                "company_signal_noops": 0,
+                "rebuild_requests": 1,
+                "rebuild_triggered": 1,
+                "rebuild_blocked": 0,
+                "rebuild_persisted_runs": 1,
+                "rebuild_persisted_reports": 1,
+                "rebuild_total_accounts": 1,
+            },
+        ],
+    )
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["trend_comparison"]["anchor_day"] == "2026-04-10"
+    assert summary["trend_comparison"]["deltas"]["approvals"] == 0
+    assert summary["trend_comparison"]["deltas"]["company_signal_effect_rate"] == 0.0
+    assert summary["trend_focus"]["status"] == "stable"
+    assert summary["trend_focus"]["focus"] is None
+    assert summary["trend_focus"]["rationale"] == "Recent review impact is broadly flat relative to the prior window."
+    assert summary["trend_alerts"] == []
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_prioritizes_rebuild_blocks_alerts():
+    pool = _make_review_impact_summary_pool(
+        totals={
+            "total_actions": 2,
+            "approvals": 2,
+            "company_signal_creations": 2,
+            "rebuild_requests": 2,
+            "rebuild_triggered": 1,
+            "rebuild_blocked": 1,
+        },
+        daily_trends=[
+            {
+                "action_day": "2026-04-10",
+                "action_count": 1,
+                "approvals": 1,
+                "suppressions": 0,
+                "company_signal_creations": 1,
+                "company_signal_updates": 0,
+                "company_signal_deletions": 0,
+                "company_signal_noops": 0,
+                "rebuild_requests": 1,
+                "rebuild_triggered": 0,
+                "rebuild_blocked": 1,
+                "rebuild_persisted_runs": 0,
+                "rebuild_persisted_reports": 0,
+                "rebuild_total_accounts": 0,
+            },
+            {
+                "action_day": "2026-04-03",
+                "action_count": 1,
+                "approvals": 1,
+                "suppressions": 0,
+                "company_signal_creations": 1,
+                "company_signal_updates": 0,
+                "company_signal_deletions": 0,
+                "company_signal_noops": 0,
+                "rebuild_requests": 1,
+                "rebuild_triggered": 1,
+                "rebuild_blocked": 0,
+                "rebuild_persisted_runs": 1,
+                "rebuild_persisted_reports": 1,
+                "rebuild_total_accounts": 1,
+            },
+        ],
+    )
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["trend_focus"]["status"] == "watch"
+    assert summary["trend_focus"]["focus"] == "rebuild_blocks_up"
+    assert summary["trend_focus"]["metric"] == "rebuild_blocked"
+    assert summary["trend_focus"]["direction"] == "up"
+    assert summary["trend_focus"]["delta"] == 1.0
+    assert summary["trend_alerts"][0]["focus"] == "rebuild_blocks_up"
+    assert summary["trend_alerts"][1]["focus"] == "rebuild_trigger_rate_down"
+
+
+def _make_review_impact_daily_trend(action_day: str, **overrides):
+    row = {
+        "action_day": action_day,
+        "action_count": 1,
+        "approvals": 1,
+        "suppressions": 0,
+        "company_signal_creations": 1,
+        "company_signal_updates": 0,
+        "company_signal_deletions": 0,
+        "company_signal_noops": 0,
+        "rebuild_requests": 1,
+        "rebuild_triggered": 1,
+        "rebuild_blocked": 0,
+        "rebuild_persisted_runs": 1,
+        "rebuild_persisted_reports": 1,
+        "rebuild_total_accounts": 1,
+    }
+    row.update(overrides)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_recommendation_is_no_data_without_history():
+    pool = _make_review_impact_summary_pool(totals={"total_actions": 2})
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["trend_recommendation"] == {
+        "status": "no_data",
+        "action": None,
+        "priority": None,
+        "owner": None,
+        "rationale": None,
+        "supporting_focuses": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_recommends_monitor_when_trends_are_flat():
+    pool = _make_review_impact_summary_pool(
+        totals={"total_actions": 2, "approvals": 2, "company_signal_creations": 2},
+        daily_trends=[
+            _make_review_impact_daily_trend("2026-04-10"),
+            _make_review_impact_daily_trend("2026-04-03"),
+        ],
+    )
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["trend_recommendation"]["status"] == "monitor"
+    assert summary["trend_recommendation"]["action"] == "monitor_trends"
+    assert summary["trend_recommendation"]["priority"] == "low"
+    assert summary["trend_recommendation"]["owner"] == "review_ops"
+    assert summary["trend_recommendation"]["supporting_focuses"] == []
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_recommends_rebuild_pipeline_inspection_when_blocks_rise():
+    pool = _make_review_impact_summary_pool(
+        totals={"total_actions": 2, "approvals": 2, "rebuild_requests": 2, "rebuild_triggered": 1, "rebuild_blocked": 1},
+        daily_trends=[
+            _make_review_impact_daily_trend(
+                "2026-04-10",
+                rebuild_triggered=0,
+                rebuild_blocked=1,
+                rebuild_persisted_runs=0,
+                rebuild_persisted_reports=0,
+                rebuild_total_accounts=0,
+            ),
+            _make_review_impact_daily_trend("2026-04-03"),
+        ],
+    )
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["trend_recommendation"]["status"] == "act"
+    assert summary["trend_recommendation"]["action"] == "inspect_rebuild_pipeline"
+    assert summary["trend_recommendation"]["priority"] == "high"
+    assert summary["trend_recommendation"]["owner"] == "backend_pipeline"
+    assert summary["trend_recommendation"]["supporting_focuses"] == ["rebuild_blocks_up", "rebuild_trigger_rate_down"]
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_recommends_maintain_when_effect_rate_improves():
+    pool = _make_review_impact_summary_pool(
+        totals={"total_actions": 2, "approvals": 2, "company_signal_creations": 1},
+        daily_trends=[
+            _make_review_impact_daily_trend("2026-04-10"),
+            _make_review_impact_daily_trend(
+                "2026-04-03",
+                company_signal_creations=0,
+                company_signal_noops=1,
+            ),
+        ],
+    )
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["trend_focus"]["focus"] == "effect_rate_up"
+    assert summary["trend_recommendation"]["status"] == "maintain"
+    assert summary["trend_recommendation"]["action"] == "maintain_current_course"
+    assert summary["trend_recommendation"]["priority"] == "low"
+    assert summary["trend_recommendation"]["owner"] == "review_ops"
+    assert summary["trend_recommendation"]["supporting_focuses"] == ["effect_rate_up"]
+
+
+@pytest.mark.asyncio
+async def test_read_company_signal_review_impact_summary_recommends_throughput_recovery_when_approvals_drop():
+    pool = _make_review_impact_summary_pool(
+        totals={"total_actions": 2, "approvals": 1, "company_signal_creations": 1},
+        daily_trends=[
+            _make_review_impact_daily_trend(
+                "2026-04-10",
+                approvals=0,
+                company_signal_creations=0,
+                company_signal_noops=1,
+            ),
+            _make_review_impact_daily_trend(
+                "2026-04-03",
+                approvals=1,
+                company_signal_creations=0,
+                company_signal_noops=1,
+            ),
+        ],
+    )
+
+    summary = await read_company_signal_review_impact_summary(pool, window_days=30, top_n=5)
+
+    assert summary["trend_focus"]["focus"] == "approval_volume_down"
+    assert summary["trend_recommendation"]["status"] == "act"
+    assert summary["trend_recommendation"]["action"] == "increase_review_throughput"
+    assert summary["trend_recommendation"]["priority"] == "medium"
+    assert summary["trend_recommendation"]["owner"] == "review_ops"
+    assert summary["trend_recommendation"]["supporting_focuses"] == ["approval_volume_down"]
