@@ -11977,9 +11977,11 @@ async def read_company_signal_candidate_group_summary(
             "actionable_top_vendor_reasons": [],
             "blocked_top_vendors": [],
             "blocked_top_vendor_reasons": [],
+            "blocked_source_mix": [],
             "near_threshold_top_vendors": [],
             "near_threshold_gap_reasons": [],
             "near_threshold_groups": [],
+            "near_threshold_source_mix": [],
             "confidence_tiers": [],
             "priority_groups": [],
             "pending_priority_bands": [],
@@ -12359,6 +12361,101 @@ async def read_company_signal_candidate_group_summary(
         *params,
         top_n,
     )
+    blocked_source_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT id,
+                   review_count,
+                   representative_source,
+                   COALESCE(source_distribution, '{{}}'::jsonb) AS source_distribution
+            FROM filtered
+            WHERE review_status = 'pending'
+              AND {pending_priority_band_sql} = 'low'
+        ),
+        expanded AS (
+            SELECT p.id,
+                   COALESCE(
+                       NULLIF(LOWER(TRIM(src.source)), ''),
+                       NULLIF(LOWER(TRIM(p.representative_source)), ''),
+                       'unknown'
+                   ) AS source,
+                   COALESCE(src.source_review_count, p.review_count, 0)::int AS source_review_count
+            FROM pending p
+            LEFT JOIN LATERAL (
+                SELECT key AS source,
+                       CASE
+                           WHEN value ~ '^[0-9]+$' THEN value::int
+                           ELSE NULL
+                       END AS source_review_count
+                FROM jsonb_each_text(p.source_distribution)
+            ) src ON TRUE
+        )
+        SELECT source,
+               COUNT(DISTINCT id)::int AS group_count,
+               COALESCE(SUM(source_review_count), 0)::int AS review_count
+        FROM expanded
+        GROUP BY 1
+        ORDER BY group_count DESC,
+                 review_count DESC,
+                 source ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
+    near_threshold_source_rows = await pool.fetch(
+        f"""
+        WITH filtered AS (
+            SELECT *
+            FROM b2b_company_signal_candidate_groups
+            WHERE {where_clause}
+        ),
+        pending AS (
+            SELECT id,
+                   review_count,
+                   representative_source,
+                   COALESCE(source_distribution, '{{}}'::jsonb) AS source_distribution
+            FROM filtered
+            WHERE review_status = 'pending'
+              AND {pending_priority_band_sql} = 'low'
+              AND {near_threshold_sql}
+        ),
+        expanded AS (
+            SELECT p.id,
+                   COALESCE(
+                       NULLIF(LOWER(TRIM(src.source)), ''),
+                       NULLIF(LOWER(TRIM(p.representative_source)), ''),
+                       'unknown'
+                   ) AS source,
+                   COALESCE(src.source_review_count, p.review_count, 0)::int AS source_review_count
+            FROM pending p
+            LEFT JOIN LATERAL (
+                SELECT key AS source,
+                       CASE
+                           WHEN value ~ '^[0-9]+$' THEN value::int
+                           ELSE NULL
+                       END AS source_review_count
+                FROM jsonb_each_text(p.source_distribution)
+            ) src ON TRUE
+        )
+        SELECT source,
+               COUNT(DISTINCT id)::int AS group_count,
+               COALESCE(SUM(source_review_count), 0)::int AS review_count
+        FROM expanded
+        GROUP BY 1
+        ORDER BY group_count DESC,
+                 review_count DESC,
+                 source ASC
+        LIMIT ${top_n_param}
+        """,
+        *params,
+        top_n,
+    )
     confidence_rows = await pool.fetch(
         f"""
         WITH filtered AS (
@@ -12659,9 +12756,11 @@ async def read_company_signal_candidate_group_summary(
         "actionable_top_vendor_reasons": [dict(row) for row in actionable_vendor_reason_rows],
         "blocked_top_vendors": [dict(row) for row in blocked_vendor_rows],
         "blocked_top_vendor_reasons": [dict(row) for row in blocked_vendor_reason_rows],
+        "blocked_source_mix": [dict(row) for row in blocked_source_rows],
         "near_threshold_top_vendors": [dict(row) for row in near_threshold_vendor_rows],
         "near_threshold_gap_reasons": [dict(row) for row in near_threshold_reason_rows],
         "near_threshold_groups": near_threshold_groups,
+        "near_threshold_source_mix": [dict(row) for row in near_threshold_source_rows],
         "confidence_tiers": [dict(row) for row in confidence_rows],
         "priority_groups": priority_groups,
         "pending_priority_bands": [dict(row) for row in pending_priority_rows],
