@@ -1662,6 +1662,16 @@ export default function Watchlists() {
       header: 'Vendor Movement',
       render: (row) => {
         const primaryWitnessId = row.reasoning_reference_ids?.witness_ids?.[0] || ''
+        const accountSignals = Array.isArray(row.reasoning_delta?.new_account_signals)
+          ? row.reasoning_delta.new_account_signals.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+          : []
+        const matchedAccountReview = accountSignals.length > 0
+          ? visibleAccounts.find((account) => (
+            account.vendor === row.vendor_name
+            && account.company
+            && accountSignals.includes(account.company.trim().toLowerCase())
+          )) ?? null
+          : null
         return (
           <div>
           <div className="font-medium text-white">{row.vendor_name}</div>
@@ -1702,6 +1712,16 @@ export default function Watchlists() {
                 className="text-cyan-300 hover:text-cyan-200"
               >
                 Witness
+              </Link>
+            ) : null}
+            {matchedAccountReview ? (
+              <Link
+                to={watchlistPath(accountFocusParams(searchParams, matchedAccountReview))}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={`Open account review for ${row.vendor_name}`}
+                className="text-emerald-300 hover:text-emerald-200"
+              >
+                Account Review
               </Link>
             ) : null}
             <Link

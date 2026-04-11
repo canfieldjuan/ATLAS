@@ -840,6 +840,20 @@ describe('Watchlists', () => {
     )
   })
 
+  it('links vendor movement rows into focused account review when a named account is available', async () => {
+    render(
+      <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
+        <Watchlists />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Acme Corp')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open account review for Zendesk' })).toHaveAttribute(
+      'href',
+      '/watchlists?view=view-1&account_vendor=Zendesk&account_company=Acme+Corp&account_report_date=2026-04-05&account_watch_vendor=Zendesk&account_category=Helpdesk&account_track_mode=competitor',
+    )
+  })
+
   it('preserves direct vendor witness drilldown from the movement feed', async () => {
     render(
       <MemoryRouter initialEntries={['/watchlists?view=view-1']}>
