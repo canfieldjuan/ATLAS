@@ -168,6 +168,28 @@ function backToLabel(backTo: string): string {
   return 'Back to Vendors'
 }
 
+function upstreamWatchlistsPath(backTo: string | null): string | null {
+  if (!backTo?.startsWith('/evidence')) return null
+  try {
+    const url = new URL(backTo, window.location.origin)
+    return normalizeBackTo(url.searchParams.get('back_to'))
+  } catch {
+    return null
+  }
+}
+
+function upstreamWatchlistsLabel(backTo: string | null): string {
+  if (!backTo) return 'Open Watchlists'
+  try {
+    const url = new URL(backTo, window.location.origin)
+    return url.searchParams.get('account_company')?.trim()
+      ? 'Open Account Review'
+      : 'Open Watchlists'
+  } catch {
+    return 'Open Watchlists'
+  }
+}
+
 function vendorEvidenceExplorerPath(vendorName: string): string {
   const params = new URLSearchParams()
   params.set('vendor', vendorName)
@@ -287,6 +309,8 @@ export default function VendorDetail() {
   const queryBackTo = normalizeBackTo(searchParams.get('back_to'))
   const backTo = stateBackTo ?? queryBackTo ?? '/vendors'
   const backLabel = backToLabel(backTo)
+  const watchlistsReturnPath = upstreamWatchlistsPath(backTo)
+  const watchlistsReturnLabel = upstreamWatchlistsLabel(watchlistsReturnPath)
   const evidenceExplorerPath = vendorEvidenceExplorerPath(profile.vendor_name)
   const reportsPath = vendorReportsPath(profile.vendor_name)
   const opportunitiesPath = vendorOpportunitiesPath(profile.vendor_name)
@@ -615,6 +639,14 @@ export default function VendorDetail() {
         </div>
         <div className="flex items-center gap-4">
           <div className="hidden sm:flex items-center gap-2">
+            {watchlistsReturnPath ? (
+              <button
+                onClick={() => navigate(watchlistsReturnPath)}
+                className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-200 hover:border-violet-400/50 hover:text-white transition-colors"
+              >
+                {watchlistsReturnLabel}
+              </button>
+            ) : null}
             <button
               onClick={() => navigate(opportunitiesPath)}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
@@ -651,6 +683,14 @@ export default function VendorDetail() {
       </div>
 
       <div className="flex sm:hidden flex-wrap gap-2">
+        {watchlistsReturnPath ? (
+          <button
+            onClick={() => navigate(watchlistsReturnPath)}
+            className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-200 hover:border-violet-400/50 hover:text-white transition-colors"
+          >
+            {watchlistsReturnLabel}
+          </button>
+        ) : null}
         <button
           onClick={() => navigate(opportunitiesPath)}
           className="inline-flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:border-cyan-500/40 hover:text-white transition-colors"
