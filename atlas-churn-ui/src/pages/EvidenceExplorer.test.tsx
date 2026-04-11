@@ -163,6 +163,20 @@ describe('EvidenceExplorer', () => {
     })
   })
 
+  it('accepts vendor back_to and renders a vendor return link', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Fvendors%2FZendesk']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to Vendor' })).toHaveAttribute(
+      'href',
+      '/vendors/Zendesk',
+    )
+  })
+
   it('writes witness focus back into the URL when a witness is opened', async () => {
     const user = userEvent.setup()
 
@@ -213,7 +227,7 @@ describe('EvidenceExplorer', () => {
     )
   })
 
-  it('links the vendor workspace back to the current explorer state', async () => {
+  it('shows vendor workspace, opportunities, and reports shortcuts for the active vendor', async () => {
     render(
       <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
         <EvidenceExplorer />
@@ -221,9 +235,17 @@ describe('EvidenceExplorer', () => {
     )
 
     expect(await screen.findByDisplayValue('Zendesk')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open vendor workspace' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
-      '/vendors/Zendesk?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+      '/vendors/Zendesk',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
   })
 

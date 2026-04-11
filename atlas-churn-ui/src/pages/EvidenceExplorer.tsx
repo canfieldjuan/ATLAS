@@ -48,6 +48,17 @@ function evidenceExplorerPath(searchParams: URLSearchParams) {
   return `/evidence${query ? `?${query}` : ''}`
 }
 
+function vendorDetailPath(vendorName: string) {
+  return `/vendors/${encodeURIComponent(vendorName)}`
+}
+
+function evidenceOpportunitiesPath(searchParams: URLSearchParams, vendorName: string) {
+  const params = new URLSearchParams()
+  params.set('vendor', vendorName)
+  params.set('back_to', evidenceExplorerPath(searchParams))
+  return `/opportunities?${params.toString()}`
+}
+
 function evidenceReportsPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('vendor_filter', vendorName)
@@ -55,24 +66,40 @@ function evidenceReportsPath(searchParams: URLSearchParams, vendorName: string) 
   return `/reports?${params.toString()}`
 }
 
-function evidenceVendorPath(searchParams: URLSearchParams, vendorName: string) {
-  const params = new URLSearchParams()
-  params.set('back_to', evidenceExplorerPath(searchParams))
-  return `/vendors/${encodeURIComponent(vendorName)}?${params.toString()}`
-}
-
 function parseBackTo(value: string | null) {
   if (!value) return null
-  if (value.startsWith('/watchlists')) return value
+  if (
+    value.startsWith('/watchlists')
+    || value.startsWith('/vendors/')
+    || value.startsWith('/opportunities')
+    || value.startsWith('/reports')
+  ) return value
   try {
     const url = new URL(value, window.location.origin)
-    if (url.origin === window.location.origin && url.pathname === '/watchlists') {
+    if (
+      url.origin === window.location.origin
+      && (
+        url.pathname === '/watchlists'
+        || url.pathname.startsWith('/vendors/')
+        || url.pathname === '/opportunities'
+        || url.pathname === '/reports'
+      )
+    ) {
       return `${url.pathname}${url.search}`
     }
   } catch {
     return null
   }
   return null
+}
+
+function backToLabel(value: string | null) {
+  if (!value) return 'Back'
+  if (value.startsWith('/watchlists')) return 'Back to Watchlists'
+  if (value.startsWith('/vendors/')) return 'Back to Vendor'
+  if (value.startsWith('/opportunities')) return 'Back to Opportunities'
+  if (value.startsWith('/reports')) return 'Back to Reports'
+  return 'Back'
 }
 
 async function copyText(text: string) {
@@ -379,7 +406,7 @@ export default function EvidenceExplorer() {
               className="mb-3 inline-flex items-center gap-2 text-sm text-cyan-300 hover:text-cyan-200"
             >
               <ArrowLeft className="h-4 w-4" />
-              Back to Watchlists
+              {backToLabel(requestedBackTo)}
             </Link>
           )}
           <h1 className="text-2xl font-bold text-white flex items-center gap-2.5">
@@ -389,6 +416,31 @@ export default function EvidenceExplorer() {
           <p className="text-slate-400 mt-1">
             Drill down from claims to review text. Every signal has a witness, every witness has a source.
           </p>
+          {activeVendor ? (
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+              <span className="text-slate-500">
+                Focused on <span className="text-slate-300">{activeVendor}</span>
+              </span>
+              <Link
+                to={vendorDetailPath(activeVendor)}
+                className="text-cyan-400 hover:text-cyan-300 transition-colors"
+              >
+                Vendor workspace
+              </Link>
+              <Link
+                to={evidenceOpportunitiesPath(searchParams, activeVendor)}
+                className="text-emerald-300 hover:text-emerald-200 transition-colors"
+              >
+                Opportunities
+              </Link>
+              <Link
+                to={evidenceReportsPath(searchParams, activeVendor)}
+                className="text-fuchsia-300 hover:text-fuchsia-200 transition-colors"
+              >
+                Reports
+              </Link>
+            </div>
+          ) : null}
         </div>
         <button
           onClick={() => void handleCopyLink()}
@@ -436,20 +488,15 @@ export default function EvidenceExplorer() {
 
       {activeVendor && (
         <>
-          <div className="flex flex-wrap items-center gap-3">
-            <Link
-              to={evidenceVendorPath(searchParams, activeVendor)}
-              className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
-            >
-              Open vendor workspace <ExternalLink className="h-3 w-3" />
-            </Link>
+          {/* Vendor reports link */}
+          {activeVendor && (
             <Link
               to={evidenceReportsPath(searchParams, activeVendor)}
               className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
             >
               View library for {activeVendor} <ExternalLink className="h-3 w-3" />
             </Link>
-          </div>
+          )}
 
           {/* Tab bar */}
           <div className="flex items-center gap-1 border-b border-slate-700/50 pb-px">
