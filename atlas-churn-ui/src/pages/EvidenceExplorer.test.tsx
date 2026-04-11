@@ -213,6 +213,25 @@ describe('EvidenceExplorer', () => {
     )
   })
 
+  it('opens review detail from witness drilldown with evidence back_to preserved', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const witnessCard = await screen.findByRole('button', { name: /We need to move fast before renewal\./i })
+    await user.click(witnessCard)
+
+    expect(await screen.findByRole('heading', { name: 'Witness Detail' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open review detail' })).toHaveAttribute(
+      'href',
+      '/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+    )
+  })
+
   it('keeps the page usable when witness loading fails', async () => {
     api.fetchWitnesses.mockRejectedValue(new Error('API 500: witness search unavailable'))
 

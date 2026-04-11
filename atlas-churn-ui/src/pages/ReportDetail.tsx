@@ -101,6 +101,7 @@ export default function ReportDetail() {
       (location.state as { backTo: string }).backTo.startsWith('/reports')
       || (location.state as { backTo: string }).backTo.startsWith('/vendors/')
       || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
+      || (location.state as { backTo: string }).backTo.startsWith('/opportunities')
       || (location.state as { backTo: string }).backTo.startsWith('/evidence')
     )
     ? (location.state as { backTo: string }).backTo
@@ -111,6 +112,7 @@ export default function ReportDetail() {
       value.startsWith('/reports')
       || value.startsWith('/vendors/')
       || value.startsWith('/watchlists')
+      || value.startsWith('/opportunities')
       || value.startsWith('/evidence')
     ) ? value : null
   })()
@@ -119,6 +121,8 @@ export default function ReportDetail() {
     ? 'Back to Vendor'
     : backToReports.startsWith('/watchlists')
       ? 'Back to Watchlists'
+      : backToReports.startsWith('/opportunities')
+        ? 'Back to Opportunities'
       : backToReports.startsWith('/evidence')
         ? 'Back to Evidence'
       : 'Back to Reports'
@@ -342,6 +346,7 @@ export default function ReportDetail() {
         vendorName={drawerVendor}
         witnessId={drawerWitnessId}
         open={drawerOpen}
+        backToPath={detailShareUrl}
         onClose={() => {
           setDrawerOpen(false)
           setDrawerWitnessId(null)

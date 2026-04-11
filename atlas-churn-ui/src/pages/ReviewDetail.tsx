@@ -49,12 +49,21 @@ export default function ReviewDetail() {
     && (
       (location.state as { backTo: string }).backTo.startsWith('/reviews')
       || (location.state as { backTo: string }).backTo.startsWith('/vendors/')
+      || (location.state as { backTo: string }).backTo.startsWith('/watchlists')
+      || (location.state as { backTo: string }).backTo.startsWith('/evidence')
+      || (location.state as { backTo: string }).backTo.startsWith('/reports')
     )
     ? (location.state as { backTo: string }).backTo
     : null
   const queryBackTo = (() => {
     const value = searchParams.get('back_to')
-    return value && (value.startsWith('/reviews') || value.startsWith('/vendors/')) ? value : null
+    return value && (
+      value.startsWith('/reviews')
+      || value.startsWith('/vendors/')
+      || value.startsWith('/watchlists')
+      || value.startsWith('/evidence')
+      || value.startsWith('/reports')
+    ) ? value : null
   })()
   const backToReviews = stateBackTo ?? queryBackTo ?? '/reviews'
 
@@ -80,7 +89,15 @@ export default function ReviewDetail() {
           className="flex items-center gap-1 text-sm text-slate-400 hover:text-white transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
-          {backToReviews.startsWith('/vendors/') ? 'Back to Vendor' : 'Back to Reviews'}
+          {backToReviews.startsWith('/vendors/')
+            ? 'Back to Vendor'
+            : backToReviews.startsWith('/watchlists')
+              ? 'Back to Watchlists'
+              : backToReviews.startsWith('/evidence')
+                ? 'Back to Evidence'
+                : backToReviews.startsWith('/reports')
+                  ? 'Back to Reports'
+                  : 'Back to Reviews'}
         </button>
         <button
           onClick={refresh}

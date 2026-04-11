@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import {
   X, ExternalLink, Quote, User, Building2, Calendar,
   Star, Tag, Fingerprint, FileText, ChevronRight, Loader2,
@@ -89,6 +90,14 @@ interface EvidenceDrawerProps {
   open: boolean
   onClose: () => void
   explorerUrl?: string | null
+  backToPath?: string | null
+}
+
+function reviewDetailPath(reviewId: string, backToPath?: string | null) {
+  const params = new URLSearchParams()
+  if (backToPath) params.set('back_to', backToPath)
+  const query = params.toString()
+  return query ? `/reviews/${reviewId}?${query}` : `/reviews/${reviewId}`
 }
 
 export default function EvidenceDrawer({
@@ -99,6 +108,7 @@ export default function EvidenceDrawer({
   open,
   onClose,
   explorerUrl,
+  backToPath,
 }: EvidenceDrawerProps) {
   const [witness, setWitness] = useState<EvidenceWitnessDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -393,6 +403,14 @@ export default function EvidenceDrawer({
                     >
                       View library <ExternalLink className="h-3 w-3" />
                     </a>
+                  )}
+                  {witness.review_id && (
+                    <Link
+                      to={reviewDetailPath(witness.review_id, backToPath)}
+                      className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
+                    >
+                      Open review detail <ExternalLink className="h-3 w-3" />
+                    </Link>
                   )}
                   {witness.source_url && (
                     <a href={witness.source_url} target="_blank" rel="noopener noreferrer"

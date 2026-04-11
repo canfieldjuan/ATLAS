@@ -1,5 +1,5 @@
 import { Link, useSearchParams } from 'react-router-dom'
-import { useState, useRef, useCallback, useEffect, type ReactNode } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo, type ReactNode } from 'react'
 import {
   Search, Fingerprint, Loader2, Database, GitBranch,
   ShieldCheck, ShieldAlert, ChevronDown, ChevronRight,
@@ -145,6 +145,30 @@ export default function EvidenceExplorer() {
   const [drawerOpen, setDrawerOpen] = useState(Boolean(requestedVendor && requestedWitnessId))
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const drawerBackToPath = useMemo(() => {
+    const next = new URLSearchParams(searchParams.toString())
+    if (activeVendor) next.set('vendor', activeVendor)
+    else next.delete('vendor')
+    next.set('tab', activeTab)
+    if (filterPain) next.set('pain_category', filterPain)
+    else next.delete('pain_category')
+    if (filterSource) next.set('source', filterSource)
+    else next.delete('source')
+    if (filterType) next.set('witness_type', filterType)
+    else next.delete('witness_type')
+    if (drawerOpen && drawerWitnessId) next.set('witness_id', drawerWitnessId)
+    else next.delete('witness_id')
+    return evidenceExplorerPath(next)
+  }, [
+    activeTab,
+    activeVendor,
+    drawerOpen,
+    drawerWitnessId,
+    filterPain,
+    filterSource,
+    filterType,
+    searchParams,
+  ])
 
   // -- Search handler ---------------------------------------------------------
 
@@ -927,6 +951,7 @@ export default function EvidenceExplorer() {
         asOfDate={witnessSnapshotDate}
         windowDays={windowDays}
         open={drawerOpen}
+        backToPath={drawerBackToPath}
         onClose={() => {
           setDrawerOpen(false)
           setDrawerWitnessId(null)

@@ -3078,6 +3078,7 @@ export default function Watchlists() {
         witnessId={evidenceDrawerWitnessId}
         open={evidenceDrawerOpen}
         onClose={handleCloseWitnessDrawer}
+        backToPath={watchlistPath(searchParams)}
         explorerUrl={
           evidenceDrawerWitnessId && evidenceDrawerVendor
             ? watchlistEvidenceExplorerPath(searchParams, evidenceDrawerVendor, evidenceDrawerWitnessId, selectedSourceFilter)

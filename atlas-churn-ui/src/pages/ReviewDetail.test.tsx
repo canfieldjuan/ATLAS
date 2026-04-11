@@ -63,4 +63,21 @@ describe('ReviewDetail', () => {
 
     expect(mockNavigate).toHaveBeenCalledWith('/vendors/Zendesk')
   })
+
+  it('returns to evidence explorer when back_to points at an evidence workspace', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/reviews/review-1?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit']}>
+        <Routes>
+          <Route path="/reviews/:id" element={<ReviewDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Zendesk' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Back to Evidence' }))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/evidence?vendor=Zendesk&tab=witnesses&source=reddit')
+  })
 })
