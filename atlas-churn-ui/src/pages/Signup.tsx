@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertCircle, ShieldCheck, Target } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuth } from '../auth/AuthContext'
@@ -27,7 +27,11 @@ const PRODUCTS = [
 export default function Signup() {
   const { user, signup } = useAuth()
   const navigate = useNavigate()
-  const [product, setProduct] = useState<string>('b2b_retention')
+  const [searchParams] = useSearchParams()
+  const redirectTo = searchParams.get('redirect_to')?.trim() || '/'
+  const requestedProduct = searchParams.get('product')?.trim() || 'b2b_retention'
+  const selectedProduct = PRODUCTS.some((entry) => entry.id === requestedProduct) ? requestedProduct : 'b2b_retention'
+  const [product, setProduct] = useState<string>(selectedProduct)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
@@ -35,7 +39,7 @@ export default function Signup() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  if (user) return <Navigate to="/" replace />
+  if (user) return <Navigate to={redirectTo} replace />
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -47,7 +51,9 @@ export default function Signup() {
     setLoading(true)
     try {
       await signup(email, password, fullName, accountName, product)
-      navigate('/onboarding')
+      const next = new URLSearchParams()
+      if (redirectTo && redirectTo !== '/') next.set('back_to', redirectTo)
+      navigate(next.toString() ? `/onboarding?${next.toString()}` : '/onboarding')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Registration failed')
     } finally {
@@ -165,7 +171,15 @@ export default function Signup() {
 
           <p className="text-center text-sm text-slate-400">
             Already have an account?{' '}
-            <Link to="/login" className="text-cyan-400 hover:text-cyan-300">
+            <Link
+              to={`/login?${new URLSearchParams(
+                {
+                  ...(redirectTo && redirectTo !== '/' ? { redirect_to: redirectTo } : {}),
+                  ...(product ? { product } : {}),
+                },
+              ).toString()}`}
+              className="text-cyan-400 hover:text-cyan-300"
+            >
               Sign in
             </Link>
           </p>

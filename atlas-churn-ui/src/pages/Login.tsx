@@ -1,17 +1,20 @@
 import { useState, type FormEvent } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import AtlasRobotLogo from '../components/AtlasRobotLogo'
 
 export default function Login() {
   const { user, login } = useAuth()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const redirectTo = searchParams.get('redirect_to')?.trim() || '/'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  if (user) return <Navigate to="/" replace />
+  if (user) return <Navigate to={redirectTo} replace />
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -19,6 +22,7 @@ export default function Login() {
     setLoading(true)
     try {
       await login(email, password)
+      navigate(redirectTo, { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
@@ -84,7 +88,12 @@ export default function Login() {
 
           <p className="text-center text-sm text-slate-400">
             No account?{' '}
-            <Link to="/signup" className="text-cyan-400 hover:text-cyan-300">
+            <Link
+              to={`/signup?${new URLSearchParams(
+                redirectTo && redirectTo !== '/' ? { redirect_to: redirectTo } : {},
+              ).toString()}`}
+              className="text-cyan-400 hover:text-cyan-300"
+            >
               Create one
             </Link>
           </p>
