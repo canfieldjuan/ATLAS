@@ -681,7 +681,7 @@ async def _fetch_latest_tenant_vendor_report(
         FROM b2b_intelligence
         WHERE report_type = $1
           AND LOWER(vendor_filter) = LOWER($2)
-        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, b2b_intelligence.id DESC
         LIMIT 1
         """,
         report_type,
@@ -3461,7 +3461,7 @@ async def list_tenant_reports(
             LIMIT 1
         ) rs ON TRUE
         {where}
-        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+        ORDER BY report_date DESC NULLS LAST, created_at DESC NULLS LAST, b2b_intelligence.id DESC
         LIMIT ${idx}
         """,
         *params,
