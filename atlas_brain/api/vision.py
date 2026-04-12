@@ -9,7 +9,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.params import Param
 
 from ..storage.repositories import get_vision_event_repo, get_unified_alert_repo
 from ..vision import get_vision_subscriber, get_alert_manager
@@ -18,6 +19,41 @@ from ..alerts import AlertRule, create_vision_rule
 logger = logging.getLogger("atlas.api.vision")
 
 router = APIRouter(prefix="/vision", tags=["vision"])
+
+
+def _unwrap_param_default(value: object | None) -> object | None:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
+def _clean_optional_text(value: object | None) -> str | None:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(422, f"{field_name} is required")
+    return text
+
+
+def _clean_int_query(value: object | None, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
+
+
+def _clean_bool_query(value: object | None, *, default: bool) -> bool:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return bool(value)
 
 
 @router.get("/events")
@@ -35,6 +71,12 @@ async def get_vision_events(
     Returns a list of detection events from atlas_vision nodes,
     optionally filtered by various criteria.
     """
+    limit = _clean_int_query(limit, default=100)
+    source_id = _clean_optional_text(source_id)
+    node_id = _clean_optional_text(node_id)
+    class_name = _clean_optional_text(class_name)
+    event_type = _clean_optional_text(event_type)
+    since_minutes = _clean_int_query(since_minutes, default=0) if _unwrap_param_default(since_minutes) is not None else None
     repo = get_vision_event_repo()
 
     since = None
@@ -70,6 +112,8 @@ async def get_event_counts(
 
     Useful for dashboards and statistics.
     """
+    since_minutes = _clean_int_query(since_minutes, default=60)
+    group_by = _clean_required_text(group_by, "group_by")
     repo = get_vision_event_repo()
 
     since = datetime.utcnow() - timedelta(minutes=since_minutes)
@@ -94,6 +138,7 @@ async def get_events_in_range(
 
     Useful for investigating specific incidents.
     """
+    source_id = _clean_optional_text(source_id)
     repo = get_vision_event_repo()
 
     events = await repo.get_events_in_range(
@@ -117,6 +162,7 @@ async def get_active_cameras(
     """
     Get list of cameras that have reported events recently.
     """
+    since_minutes = _clean_int_query(since_minutes, default=5)
     repo = get_vision_event_repo()
     cameras = await repo.get_active_cameras(since_minutes=since_minutes)
 
@@ -157,6 +203,7 @@ async def cleanup_old_events(
 
     Only deletes events older than the specified number of days.
     """
+    older_than_days = _clean_int_query(older_than_days, default=7)
     repo = get_vision_event_repo()
 
     older_than = datetime.utcnow() - timedelta(days=older_than_days)
@@ -220,6 +267,13 @@ async def create_alert_rule(
     Message templates can use: {class_name}, {source}, {source_id}, {time}
     Note: Use /alerts/rules for creating rules for other event types.
     """
+    name = _clean_required_text(name, "name")
+    source_pattern = _clean_required_text(source_pattern, "source_pattern")
+    class_name = _clean_required_text(class_name, "class_name")
+    detection_type = _clean_required_text(detection_type, "detection_type")
+    message_template = _clean_required_text(message_template, "message_template")
+    cooldown_seconds = _clean_int_query(cooldown_seconds, default=30)
+    priority = _clean_int_query(priority, default=5)
     manager = get_alert_manager()
 
     rule = create_vision_rule(
@@ -248,6 +302,7 @@ async def create_alert_rule(
 @router.delete("/alerts/rules/{rule_name}")
 async def delete_alert_rule(rule_name: str):
     """Delete an alert rule."""
+    rule_name = _clean_required_text(rule_name, "rule_name")
     manager = get_alert_manager()
 
     if manager.remove_rule(rule_name):
@@ -259,6 +314,7 @@ async def delete_alert_rule(rule_name: str):
 @router.post("/alerts/rules/{rule_name}/enable")
 async def enable_alert_rule(rule_name: str):
     """Enable an alert rule."""
+    rule_name = _clean_required_text(rule_name, "rule_name")
     manager = get_alert_manager()
 
     if manager.enable_rule(rule_name):
@@ -270,6 +326,7 @@ async def enable_alert_rule(rule_name: str):
 @router.post("/alerts/rules/{rule_name}/disable")
 async def disable_alert_rule(rule_name: str):
     """Disable an alert rule."""
+    rule_name = _clean_required_text(rule_name, "rule_name")
     manager = get_alert_manager()
 
     if manager.disable_rule(rule_name):
@@ -298,6 +355,11 @@ async def get_alerts(
     By default only shows unacknowledged alerts.
     Note: Use /alerts for alerts from all event types.
     """
+    limit = _clean_int_query(limit, default=50)
+    include_acknowledged = _clean_bool_query(include_acknowledged, default=False)
+    rule_name = _clean_optional_text(rule_name)
+    source_id = _clean_optional_text(source_id)
+    since_minutes = _clean_int_query(since_minutes, default=0) if _unwrap_param_default(since_minutes) is not None else None
     repo = get_unified_alert_repo()
 
     since = None
@@ -329,6 +391,7 @@ async def get_alert_stats(
     Returns counts by rule, source, and acknowledgment status.
     Note: Use /alerts/stats for stats from all event types.
     """
+    since_hours = _clean_int_query(since_hours, default=24)
     repo = get_unified_alert_repo()
 
     since = datetime.utcnow() - timedelta(hours=since_hours)
@@ -362,6 +425,8 @@ async def acknowledge_alert(
     """Acknowledge a single alert."""
     from uuid import UUID
 
+    alert_id = _clean_required_text(alert_id, "alert_id")
+    acknowledged_by = _clean_optional_text(acknowledged_by)
     repo = get_unified_alert_repo()
 
     try:
@@ -386,6 +451,9 @@ async def acknowledge_all_alerts(
 
     Optionally filter by rule or source.
     """
+    acknowledged_by = _clean_optional_text(acknowledged_by)
+    rule_name = _clean_optional_text(rule_name)
+    source_id = _clean_optional_text(source_id)
     repo = get_unified_alert_repo()
 
     count = await repo.acknowledge_all(
