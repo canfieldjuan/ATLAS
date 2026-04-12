@@ -1669,6 +1669,12 @@ async def list_reports(
         SELECT id, report_date, report_type, executive_summary,
              vendor_filter, category_filter, status, created_at,
              COALESCE((intelligence_data->>'data_stale')::boolean, false) AS data_stale,
+             intelligence_data->>'data_as_of_date' AS evidence_data_as_of_date,
+             intelligence_data->>'as_of_date' AS evidence_as_of_date,
+             intelligence_data->>'report_date' AS evidence_report_date,
+             intelligence_data->>'analysis_window_days' AS evidence_analysis_window_days,
+             intelligence_data->>'window_days' AS evidence_window_days,
+             intelligence_data->>'evidence_window_days' AS evidence_fallback_window_days,
              latest_failure_step, latest_error_code, latest_error_summary,
              blocker_count, warning_count,
              (
@@ -1705,6 +1711,17 @@ async def list_reports(
         blocker_count = r["blocker_count"] or 0
         warning_count = r["warning_count"] or 0
         unresolved_issue_count = r["unresolved_issue_count"] or 0
+        evidence_snapshot = report_evidence_snapshot_payload(
+            report_date=r["report_date"],
+            intelligence_data={
+                "data_as_of_date": r.get("evidence_data_as_of_date"),
+                "as_of_date": r.get("evidence_as_of_date"),
+                "report_date": r.get("evidence_report_date"),
+                "analysis_window_days": r.get("evidence_analysis_window_days"),
+                "window_days": r.get("evidence_window_days"),
+                "evidence_window_days": r.get("evidence_fallback_window_days"),
+            },
+        )
         trust = report_trust_payload(
             report_date=r["report_date"],
             created_at=r["created_at"],
@@ -1739,6 +1756,8 @@ async def list_reports(
                 "review_label": trust["review_label"],
                 "trust": trust,
                 "has_pdf_export": trust["artifact_state"] == "ready",
+                "as_of_date": evidence_snapshot["as_of_date"],
+                "analysis_window_days": evidence_snapshot["analysis_window_days"],
                 "created_at": str(r["created_at"]) if r["created_at"] else None,
             }
         )

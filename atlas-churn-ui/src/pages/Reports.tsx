@@ -283,11 +283,18 @@ function vendorDetailPath(vendorName: string, backTo?: string) {
   return `${base}?${next.toString()}`
 }
 
-function evidencePath(vendorName: string, backTo: string) {
+function evidencePath(
+  vendorName: string,
+  backTo: string,
+  asOfDate?: string | null,
+  windowDays?: number | null,
+) {
   const next = new URLSearchParams()
   next.set('vendor', vendorName)
   next.set('tab', 'witnesses')
   next.set('back_to', backTo)
+  if (asOfDate) next.set('as_of_date', asOfDate)
+  if (windowDays) next.set('window_days', String(windowDays))
   return `/evidence?${next.toString()}`
 }
 
@@ -466,6 +473,30 @@ export default function Reports() {
     }),
     [reports, qualityFilter, freshnessFilter, reviewFilter],
   )
+  const sharedVendorEvidenceSnapshot = useMemo(() => {
+    const normalizedVendor = activeVendorFilter.trim().toLowerCase()
+    if (!normalizedVendor) return null
+
+    const matchingReports = filteredReports.filter((report) => {
+      return (report.vendor_filter || '').trim().toLowerCase() === normalizedVendor
+    })
+    if (matchingReports.length === 0) return null
+
+    const snapshotKeys = new Set(
+      matchingReports.map((report) => {
+        return `${report.as_of_date || ''}::${report.analysis_window_days ?? ''}`
+      }),
+    )
+    if (snapshotKeys.size !== 1) return null
+
+    const snapshot = matchingReports[0]
+    if (!snapshot.as_of_date && !snapshot.analysis_window_days) return null
+
+    return {
+      as_of_date: snapshot.as_of_date ?? null,
+      analysis_window_days: snapshot.analysis_window_days ?? null,
+    }
+  }, [activeVendorFilter, filteredReports])
 
   // Reset page when data or filters change
   const reportCount = filteredReports.length
@@ -953,7 +984,12 @@ export default function Reports() {
                     Vendor workspace
                   </Link>
                   <Link
-                    to={directEvidencePath ?? evidencePath(activeVendorFilter, currentLibraryPath)}
+                    to={directEvidencePath ?? evidencePath(
+                      activeVendorFilter,
+                      currentLibraryPath,
+                      sharedVendorEvidenceSnapshot?.as_of_date ?? null,
+                      sharedVendorEvidenceSnapshot?.analysis_window_days ?? null,
+                    )}
                     className="text-violet-300 hover:text-violet-200 transition-colors"
                   >
                     Evidence

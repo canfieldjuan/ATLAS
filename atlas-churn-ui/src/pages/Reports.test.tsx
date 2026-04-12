@@ -81,6 +81,8 @@ describe('Reports', () => {
           executive_summary: 'Summary',
           created_at: '2026-04-10T00:00:00Z',
           report_date: '2026-04-10',
+          as_of_date: '2026-04-08',
+          analysis_window_days: 45,
           status: 'completed',
           blocker_count: 0,
           warning_count: 0,
@@ -106,6 +108,8 @@ describe('Reports', () => {
       executive_summary: 'Summary',
       created_at: '2026-04-10T00:00:00Z',
       report_date: '2026-04-10',
+      as_of_date: '2026-04-08',
+      analysis_window_days: 45,
       status: 'completed',
       report_subscription: null,
       has_pdf_export: true,
@@ -1254,12 +1258,79 @@ describe('Reports', () => {
     })
     expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
       'href',
-      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1&as_of_date=2026-04-08&window_days=45',
     )
     expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
       'href',
       '/opportunities?vendor=Zendesk&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
     )
+  })
+
+  it('falls back to vendor evidence when the visible vendor reports disagree on snapshot context', async () => {
+    api.fetchReports.mockResolvedValueOnce({
+      reports: [
+        {
+          id: 'report-1',
+          report_type: 'battle_card',
+          vendor_filter: 'Zendesk',
+          category_filter: null,
+          executive_summary: 'Summary',
+          created_at: '2026-04-10T00:00:00Z',
+          report_date: '2026-04-10',
+          as_of_date: '2026-04-08',
+          analysis_window_days: 45,
+          status: 'completed',
+          blocker_count: 0,
+          warning_count: 0,
+          unresolved_issue_count: 0,
+          quality_status: 'sales_ready',
+          report_subscription: null,
+          has_pdf_export: true,
+          latest_failure_step: null,
+          latest_error_summary: null,
+        },
+        {
+          id: 'report-2',
+          report_type: 'vendor_scorecard',
+          vendor_filter: 'Zendesk',
+          category_filter: null,
+          executive_summary: 'Conflicting snapshot',
+          created_at: '2026-04-09T00:00:00Z',
+          report_date: '2026-04-09',
+          as_of_date: '2026-04-01',
+          analysis_window_days: 30,
+          status: 'completed',
+          blocker_count: 0,
+          warning_count: 0,
+          unresolved_issue_count: 0,
+          quality_status: null,
+          report_subscription: null,
+          has_pdf_export: true,
+          latest_failure_step: null,
+          latest_error_summary: null,
+        },
+      ],
+      count: 2,
+    })
+
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+        'href',
+        '/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      )
+    })
   })
 
   it('hydrates library filters from the URL query string', async () => {

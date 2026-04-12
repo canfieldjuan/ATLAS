@@ -212,14 +212,14 @@ export interface Report {
     review_state?: 'clean' | 'warnings' | 'open_review' | 'blocked' | null
     review_label?: string | null
   } | null
+  as_of_date?: string | null
+  analysis_window_days?: number | null
   created_at: string | null
 }
 
 export interface ReportDetail extends Report {
   category_filter: string | null
   intelligence_data: Record<string, unknown> | null
-  as_of_date?: string | null
-  analysis_window_days?: number | null
   section_evidence?: Record<string, {
     state: 'witness_backed' | 'partial' | 'thin'
     label: string

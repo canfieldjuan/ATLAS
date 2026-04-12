@@ -378,6 +378,12 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
             "latest_error_code": None,
             "latest_error_summary": None,
             "data_stale": True,
+            "evidence_data_as_of_date": "2026-04-08",
+            "evidence_as_of_date": None,
+            "evidence_report_date": None,
+            "evidence_analysis_window_days": None,
+            "evidence_window_days": "60",
+            "evidence_fallback_window_days": None,
             "blocker_count": 1,
             "warning_count": 0,
             "unresolved_issue_count": 0,
@@ -408,6 +414,8 @@ async def test_list_tenant_reports_exposes_normalized_trust_fields(monkeypatch):
     assert report["freshness_label"] == "Stale"
     assert report["review_state"] == "blocked"
     assert report["review_label"] == "Blocked"
+    assert report["as_of_date"] == "2026-04-08"
+    assert report["analysis_window_days"] == 60
     assert report["trust"] == {
         "artifact_state": "ready",
         "artifact_label": "Ready",

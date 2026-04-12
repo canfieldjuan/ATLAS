@@ -2376,6 +2376,12 @@ async def test_list_reports_exposes_normalized_trust_fields():
                 "status": "published",
                 "created_at": created_at,
                 "data_stale": False,
+                "evidence_data_as_of_date": "2026-03-18",
+                "evidence_as_of_date": None,
+                "evidence_report_date": None,
+                "evidence_analysis_window_days": "45",
+                "evidence_window_days": None,
+                "evidence_fallback_window_days": None,
                 "latest_failure_step": None,
                 "latest_error_code": None,
                 "latest_error_summary": None,
@@ -2404,6 +2410,8 @@ async def test_list_reports_exposes_normalized_trust_fields():
     assert report["artifact_label"] == "Ready"
     assert report["freshness_state"] == "monitor"
     assert report["review_state"] == "warnings"
+    assert report["as_of_date"] == "2026-03-18"
+    assert report["analysis_window_days"] == 45
     assert report["trust"] == {
         "artifact_state": "ready",
         "artifact_label": "Ready",
