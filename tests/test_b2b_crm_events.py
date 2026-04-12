@@ -42,3 +42,99 @@ def test_ingest_crm_events_batch_rejects_non_object_json_before_db_touch(monkeyp
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Body must be an object containing an 'events' array"
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+
+def test_ingest_crm_event_trims_text_fields_before_persistence(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+
+    monkeypatch.setattr(crm_events_api.settings.crm_event, "enabled", True)
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchval = AsyncMock(return_value="11111111-1111-1111-1111-111111111111")
+    monkeypatch.setattr(crm_events_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/crm/events",
+            json={
+                "crm_provider": " hubspot ",
+                "event_type": " deal_won ",
+                "crm_event_id": " evt-1 ",
+                "company_name": " Acme Corp ",
+                "contact_email": "   ",
+                "contact_name": " Jane Doe ",
+                "deal_id": " deal-1 ",
+                "deal_name": " Expansion ",
+                "deal_stage": " closedwon ",
+                "event_timestamp": " 2026-04-12T10:00:00Z ",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["crm_provider"] == "hubspot"
+    assert body["event_type"] == "deal_won"
+
+    args = pool.fetchval.await_args.args
+    assert args[1] == "hubspot"
+    assert args[2] == "evt-1"
+    assert args[3] == "deal_won"
+    assert args[4] == "Acme Corp"
+    assert args[5] is None
+    assert args[6] == "Jane Doe"
+    assert args[7] == "deal-1"
+    assert args[8] == "Expansion"
+    assert args[9] == "closedwon"
+
+
+def test_ingest_crm_events_batch_trims_text_fields_before_persistence(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+
+    monkeypatch.setattr(crm_events_api.settings.crm_event, "enabled", True)
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchval = AsyncMock(return_value="22222222-2222-2222-2222-222222222222")
+    monkeypatch.setattr(crm_events_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/crm/events/batch",
+            json={
+                "events": [
+                    {
+                        "crm_provider": " salesforce ",
+                        "event_type": " meeting_booked ",
+                        "crm_event_id": " batch-1 ",
+                        "company_name": " Beta Corp ",
+                        "contact_email": "   ",
+                        "contact_name": " Sam Buyer ",
+                        "deal_id": " deal-2 ",
+                        "deal_name": " Renewal ",
+                        "deal_stage": " evaluation ",
+                        "event_timestamp": " 2026-04-12T11:00:00Z ",
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ingested"] == 1
+    assert body["errors"] == []
+    assert body["created_ids"] == ["22222222-2222-2222-2222-222222222222"]
+
+    args = pool.fetchval.await_args.args
+    assert args[1] == "salesforce"
+    assert args[2] == "batch-1"
+    assert args[3] == "meeting_booked"
+    assert args[4] == "Beta Corp"
+    assert args[5] is None
+    assert args[6] == "Sam Buyer"
+    assert args[7] == "deal-2"
+    assert args[8] == "Renewal"
+    assert args[9] == "evaluation"

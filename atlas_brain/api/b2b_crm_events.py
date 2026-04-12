@@ -59,6 +59,13 @@ def _pool_or_503():
     return pool
 
 
+def _clean_optional_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _start_crm_trace(
     *,
     provider: str,
@@ -129,18 +136,29 @@ async def ingest_crm_event(
     if not cfg.enabled:
         raise HTTPException(status_code=503, detail="CRM event ingestion is disabled")
 
-    if body.crm_provider not in VALID_CRM_PROVIDERS:
+    crm_provider = (_clean_optional_text(body.crm_provider) or "").lower()
+    event_type = (_clean_optional_text(body.event_type) or "").lower()
+    crm_event_id = _clean_optional_text(body.crm_event_id)
+    company_name = _clean_optional_text(body.company_name)
+    contact_email = _clean_optional_text(body.contact_email)
+    contact_name = _clean_optional_text(body.contact_name)
+    deal_id = _clean_optional_text(body.deal_id)
+    deal_name = _clean_optional_text(body.deal_name)
+    deal_stage = _clean_optional_text(body.deal_stage)
+    event_timestamp = _clean_optional_text(body.event_timestamp)
+
+    if crm_provider not in VALID_CRM_PROVIDERS:
         raise HTTPException(
             status_code=400,
             detail=f"crm_provider must be one of {sorted(VALID_CRM_PROVIDERS)}",
         )
-    if body.event_type not in VALID_EVENT_TYPES:
+    if event_type not in VALID_EVENT_TYPES:
         raise HTTPException(
             status_code=400,
             detail=f"event_type must be one of {sorted(VALID_EVENT_TYPES)}",
         )
 
-    if not body.company_name and not body.contact_email:
+    if not company_name and not contact_email:
         raise HTTPException(
             status_code=400,
             detail="At least one of company_name or contact_email is required for matching",
@@ -148,15 +166,15 @@ async def ingest_crm_event(
 
     pool = _pool_or_503()
     span = _start_crm_trace(
-        provider=body.crm_provider,
-        event_type=body.event_type,
+        provider=crm_provider,
+        event_type=event_type,
         account_id=str(user.account_id) if user else None,
     )
 
     event_ts = None
-    if body.event_timestamp:
+    if event_timestamp:
         try:
-            event_ts = datetime.fromisoformat(body.event_timestamp.replace("Z", "+00:00"))
+            event_ts = datetime.fromisoformat(event_timestamp.replace("Z", "+00:00"))
         except (ValueError, AttributeError):
             pass
 
@@ -183,15 +201,15 @@ async def ingest_crm_event(
                 processed_at = NULL
             RETURNING id
             """,
-            body.crm_provider,
-            body.crm_event_id,
-            body.event_type,
-            body.company_name,
-            body.contact_email,
-            body.contact_name,
-            body.deal_id,
-            body.deal_name,
-            body.deal_stage,
+            crm_provider,
+            crm_event_id,
+            event_type,
+            company_name,
+            contact_email,
+            contact_name,
+            deal_id,
+            deal_name,
+            deal_stage,
             body.deal_amount,
             json.dumps(body.event_data or {}, default=str),
             event_ts,
@@ -201,7 +219,7 @@ async def ingest_crm_event(
         _end_crm_trace(
             span,
             status="failed",
-            event_type=body.event_type,
+            event_type=event_type,
             error_message=str(exc),
             error_type=type(exc).__name__,
         )
@@ -211,14 +229,14 @@ async def ingest_crm_event(
     response = {
         "id": str(event_id),
         "status": "pending",
-        "crm_provider": body.crm_provider,
-        "event_type": body.event_type,
+        "crm_provider": crm_provider,
+        "event_type": event_type,
     }
     _end_crm_trace(
         span,
         status="completed",
         output_data=response,
-        event_type=body.event_type,
+        event_type=event_type,
         ingested=1,
         errors=0,
     )
@@ -271,20 +289,20 @@ async def ingest_crm_events_batch(
             errors.append({"index": i, "error": "Event must be a dict"})
             continue
 
-        provider = evt.get("crm_provider", "")
-        event_type = evt.get("event_type", "")
+        provider = (_clean_optional_text(evt.get("crm_provider")) or "").lower()
+        event_type = (_clean_optional_text(evt.get("event_type")) or "").lower()
         if provider not in VALID_CRM_PROVIDERS or event_type not in VALID_EVENT_TYPES:
             errors.append({"index": i, "error": "Invalid crm_provider or event_type"})
             continue
 
-        company = evt.get("company_name")
-        email = evt.get("contact_email")
+        company = _clean_optional_text(evt.get("company_name"))
+        email = _clean_optional_text(evt.get("contact_email"))
         if not company and not email:
             errors.append({"index": i, "error": "company_name or contact_email required"})
             continue
 
         event_ts = None
-        ts_raw = evt.get("event_timestamp")
+        ts_raw = _clean_optional_text(evt.get("event_timestamp"))
         if ts_raw:
             try:
                 event_ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
@@ -313,14 +331,14 @@ async def ingest_crm_events_batch(
                 RETURNING id
                 """,
                 provider,
-                evt.get("crm_event_id"),
+                _clean_optional_text(evt.get("crm_event_id")),
                 event_type,
                 company,
                 email,
-                evt.get("contact_name"),
-                evt.get("deal_id"),
-                evt.get("deal_name"),
-                evt.get("deal_stage"),
+                _clean_optional_text(evt.get("contact_name")),
+                _clean_optional_text(evt.get("deal_id")),
+                _clean_optional_text(evt.get("deal_name")),
+                _clean_optional_text(evt.get("deal_stage")),
                 evt.get("deal_amount"),
                 json.dumps(evt.get("event_data", {}), default=str),
                 event_ts,
