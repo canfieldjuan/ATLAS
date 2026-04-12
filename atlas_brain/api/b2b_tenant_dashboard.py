@@ -3354,9 +3354,9 @@ async def generate_tenant_comparison_report(
     _require_b2b_product(user)
     primary_vendor = _clean_required_text(body.primary_vendor, "primary_vendor")
     comparison_vendor = _clean_required_text(body.comparison_vendor, "comparison_vendor")
-    pool = _pool_or_503()
     if primary_vendor.lower() == comparison_vendor.lower():
         raise HTTPException(status_code=400, detail="Choose two different vendors")
+    pool = _pool_or_503()
 
     if settings.saas_auth.enabled and not _is_admin_user(user):
         tracked = await pool.fetchval(
@@ -3390,9 +3390,9 @@ async def generate_tenant_account_comparison_report(
     _require_b2b_product(user)
     primary_company = _clean_required_text(body.primary_company, "primary_company")
     comparison_company = _clean_required_text(body.comparison_company, "comparison_company")
-    pool = _pool_or_503()
     if primary_company.lower() == comparison_company.lower():
         raise HTTPException(status_code=400, detail="Choose two different companies")
+    pool = _pool_or_503()
 
     from ..autonomous.tasks.b2b_churn_intelligence import generate_company_comparison_report
 

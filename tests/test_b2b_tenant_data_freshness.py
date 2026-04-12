@@ -857,6 +857,20 @@ async def test_tenant_report_action_routes_reject_blank_required_body_text_witho
             "comparison_company is required",
         ),
         (
+            lambda: mod.generate_tenant_comparison_report(
+                mod.VendorComparisonRequest(primary_vendor="Zendesk", comparison_vendor=" zendesk "),
+                user=user,
+            ),
+            "Choose two different vendors",
+        ),
+        (
+            lambda: mod.generate_tenant_account_comparison_report(
+                mod.AccountComparisonRequest(primary_company="Acme", comparison_company=" acme "),
+                user=user,
+            ),
+            "Choose two different companies",
+        ),
+        (
             lambda: mod.generate_tenant_account_deep_dive_report(
                 mod.AccountDeepDiveRequest(company_name="   "),
                 user=user,
