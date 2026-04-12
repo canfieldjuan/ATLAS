@@ -98,6 +98,15 @@ _CONSUMER_REQUIRED_CONTRACTS = {
 
 _PACKET_SCHEMA_VERSION = "witness_packet_v1"
 
+_ACCOUNT_REASONING_PREVIEW_CONSUMERS = frozenset({
+    "vendor_briefing",
+    "vendor_scorecard",
+})
+_ACCOUNT_REASONING_PREVIEW_DISCLAIMER = (
+    "Early account signal only: account reasoning is below the normal confidence "
+    "bar and should be treated as directional, not canonical."
+)
+
 
 def _coerce_json_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -640,6 +649,14 @@ class SynthesisView:
         rc = self.reasoning_contracts.get(name)
         return rc if isinstance(rc, dict) else {}
 
+    def account_reasoning_preview(self) -> dict[str, Any]:
+        account = self.contract("account_reasoning")
+        if not account:
+            raw_account = self.raw.get("account_reasoning")
+            if isinstance(raw_account, dict) and raw_account:
+                account = raw_account
+        return _build_account_reasoning_preview(account)
+
     def witness(self, witness_id: str) -> dict[str, Any]:
         target = str(witness_id or "").strip()
         if not target:
@@ -925,6 +942,18 @@ class SynthesisView:
             context["reasoning_contract_gaps"] = gaps
             context["_suppressed_sections"] = suppressed
 
+        if consumer in _ACCOUNT_REASONING_PREVIEW_CONSUMERS:
+            preview = self.account_reasoning_preview()
+            if preview and not context.get("account_reasoning"):
+                context["account_reasoning_preview"] = preview
+                disclaimers.setdefault(
+                    "account_reasoning",
+                    str(
+                        preview.get("disclaimer")
+                        or _ACCOUNT_REASONING_PREVIEW_DISCLAIMER
+                    ),
+                )
+
         if disclaimers:
             context["reasoning_section_disclaimers"] = disclaimers
             context["_section_disclaimers"] = disclaimers
@@ -1023,6 +1052,76 @@ def _coerce_iso_date(value: Any) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _coerce_reasoning_int(value: Any) -> int | None:
+    if isinstance(value, dict) and "value" in value:
+        value = value.get("value")
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_account_reasoning_preview(
+    account_reasoning: dict[str, Any] | None,
+    *,
+    limit: int = 5,
+) -> dict[str, Any]:
+    if not isinstance(account_reasoning, dict) or not account_reasoning:
+        return {}
+    confidence = str(account_reasoning.get("confidence") or "").strip().lower()
+    if confidence != "insufficient":
+        return {}
+
+    metrics: dict[str, int] = {}
+    for key in ("total_accounts", "high_intent_count", "active_eval_count"):
+        value = _coerce_reasoning_int(account_reasoning.get(key))
+        if value is not None:
+            metrics[key] = value
+
+    priority_names: list[str] = []
+    for item in account_reasoning.get("top_accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("company") or "").strip()
+        if name and name not in priority_names:
+            priority_names.append(name)
+        if len(priority_names) >= limit:
+            break
+
+    if not priority_names and not any(value > 0 for value in metrics.values()):
+        return {}
+
+    summary = str(account_reasoning.get("market_summary") or "").strip()
+    if not summary:
+        active_eval = metrics.get("active_eval_count")
+        high_intent = metrics.get("high_intent_count")
+        total_accounts = metrics.get("total_accounts")
+        if active_eval is not None and high_intent is not None:
+            summary = (
+                f"{active_eval} accounts are in active evaluation while "
+                f"{high_intent} accounts show high-intent churn signals."
+            )
+        elif high_intent is not None:
+            summary = f"{high_intent} accounts show high-intent churn signals."
+        elif total_accounts is not None:
+            summary = f"{total_accounts} accounts are currently in scope."
+
+    preview = {
+        "preview_mode": "early_account_signal",
+        "disclaimer": _ACCOUNT_REASONING_PREVIEW_DISCLAIMER,
+        "account_reasoning": dict(account_reasoning),
+    }
+    if summary:
+        preview["account_pressure_summary"] = summary
+    if metrics:
+        preview["account_pressure_metrics"] = metrics
+    if priority_names:
+        preview["priority_account_names"] = priority_names
+    return preview
 
 
 def required_contracts_for_consumer(consumer: str) -> tuple[str, ...]:

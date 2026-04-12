@@ -41,6 +41,7 @@ from ._b2b_shared import (
     _align_vendor_intelligence_record_to_scorecard,
     _timing_summary_payload,
     _reasoning_int,
+    read_vendor_company_signal_review_queue,
     read_vendor_intelligence_record,
     read_vendor_intelligence,
     read_vendor_scorecard_detail,
@@ -121,6 +122,28 @@ def _apply_synthesis_view_to_briefing(
         if merged_accounts:
             briefing["named_accounts"] = merged_accounts
         used = True
+    else:
+        preview = context.get("account_reasoning_preview")
+        if isinstance(preview, dict) and preview:
+            preview_reasoning = preview.get("account_reasoning")
+            if isinstance(preview_reasoning, dict) and preview_reasoning:
+                briefing["account_reasoning_preview"] = preview_reasoning
+                briefing["account_reasoning_preview_only"] = True
+                for key in (
+                    "account_pressure_summary",
+                    "account_pressure_metrics",
+                    "priority_account_names",
+                ):
+                    value = preview.get(key)
+                    if value not in ("", [], {}, None):
+                        briefing[key] = value
+                merged_accounts = _merge_named_accounts_with_account_reasoning(
+                    briefing.get("named_accounts") or [],
+                    preview_reasoning,
+                )
+                if merged_accounts:
+                    briefing["named_accounts"] = merged_accounts
+                used = True
 
     if contracts:
         briefing["reasoning_contracts"] = contracts
@@ -195,6 +218,26 @@ def _apply_synthesis_view_to_briefing(
         requested_as_of=requested_as_of,
     )
     return used
+
+
+async def _attach_company_signal_review_queue_to_briefing(
+    pool,
+    briefing: dict[str, Any],
+    *,
+    vendor_name: str,
+) -> bool:
+    try:
+        queue = await read_vendor_company_signal_review_queue(
+            pool,
+            vendor_name=vendor_name,
+        )
+    except Exception:
+        logger.debug("Company signal review queue load failed for %s", vendor_name, exc_info=True)
+        return False
+    if not queue:
+        return False
+    briefing["company_signal_review_queue"] = queue
+    return True
 
 
 def _apply_reasoning_synthesis_to_briefing(
@@ -526,7 +569,7 @@ def _finalize_briefing_presentation(briefing: dict[str, Any]) -> None:
         account_pressure_summary = str(
             briefing.get("account_pressure_summary") or ""
         ).strip()
-        if account_pressure_summary:
+        if account_pressure_summary and not briefing.get("account_reasoning_preview_only"):
             briefing["executive_summary"] = account_pressure_summary
         else:
             timing_summary = str(briefing.get("timing_summary") or "").strip()
@@ -1744,6 +1787,7 @@ async def build_vendor_briefing(
             "weekly_churn_feed": False,
             "reasoning_synthesis": False,
             "account_reasoning": False,
+            "company_signal_review_queue": False,
             "churn_signals": False,
             "evidence_vault": False,
             "product_profile": False,
@@ -1879,6 +1923,12 @@ async def build_vendor_briefing(
         if reasoning_view is not None:
             if _apply_synthesis_view_to_briefing(briefing, reasoning_view):
                 briefing["data_sources"]["reasoning_synthesis"] = True
+    if await _attach_company_signal_review_queue_to_briefing(
+        pool,
+        briefing,
+        vendor_name=vendor_name,
+    ):
+        briefing["data_sources"]["company_signal_review_queue"] = True
 
     # ------------------------------------------------------------------
     # Source 6: b2b_segment_intelligence

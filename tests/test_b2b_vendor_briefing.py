@@ -2,7 +2,7 @@ import csv
 import io
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -415,6 +415,89 @@ def test_apply_reasoning_synthesis_to_briefing_promotes_account_reasoning():
     assert briefing["priority_account_names"] == ["Acme Corp"]
     assert briefing["named_accounts"][0]["company"] == "Acme Corp"
     assert briefing["named_accounts"][0]["reasoning_backed"] is True
+
+
+def test_apply_reasoning_synthesis_to_briefing_surfaces_sparse_account_preview():
+    briefing = {"named_accounts": []}
+    feed_entry = {
+        "reasoning_contracts": {
+            "schema_version": "v1",
+            "vendor_core_reasoning": {
+                "schema_version": "v1",
+                "causal_narrative": {"trigger": "Price hike"},
+            },
+            "account_reasoning": {
+                "schema_version": "v1",
+                "confidence": "insufficient",
+                "market_summary": "A single post-purchase account is in scope.",
+                "total_accounts": {"value": 1, "source_id": "accounts:summary:total_accounts"},
+                "top_accounts": [
+                    {
+                        "name": "Concentrix",
+                        "intent_score": 0.6,
+                        "source_id": "accounts:company:concentrix",
+                    },
+                ],
+            },
+        },
+    }
+
+    used = briefing_mod._apply_reasoning_synthesis_to_briefing(briefing, feed_entry)
+
+    assert used is True
+    assert "account_reasoning" not in briefing
+    assert briefing["account_reasoning_preview"]["top_accounts"][0]["name"] == "Concentrix"
+    assert briefing["account_reasoning_preview_only"] is True
+    assert briefing["account_pressure_summary"] == "A single post-purchase account is in scope."
+    assert briefing["account_pressure_metrics"]["total_accounts"] == 1
+    assert briefing["priority_account_names"] == ["Concentrix"]
+    assert briefing["named_accounts"][0]["company"] == "Concentrix"
+    assert briefing["reasoning_section_disclaimers"]["account_reasoning"]
+
+
+def test_finalize_briefing_presentation_does_not_promote_sparse_account_preview_to_executive_summary():
+    briefing = {
+        "account_reasoning_preview_only": True,
+        "account_pressure_summary": "A single post-purchase account is in scope.",
+        "timing_summary": "Renewal activity is concentrated in Q3.",
+    }
+
+    briefing_mod._finalize_briefing_presentation(briefing)
+
+    assert briefing["executive_summary"] == "Renewal activity is concentrated in Q3."
+
+
+@pytest.mark.asyncio
+async def test_attach_company_signal_review_queue_to_briefing():
+    pool = object()
+    briefing = {"vendor_name": "Zendesk"}
+    queue = {
+        "vendor": "Zendesk",
+        "candidate_bucket": "analyst_review",
+        "review_status": "pending",
+        "totals": {"pending_groups": 2},
+        "operator_focus": {"action": "review_low_trust_policy"},
+        "groups": [{"company": "Acme Corp"}],
+    }
+    queue_mock = AsyncMock(return_value=queue)
+    with patch.object(
+        briefing_mod,
+        "read_vendor_company_signal_review_queue",
+        queue_mock,
+    ):
+        used = await briefing_mod._attach_company_signal_review_queue_to_briefing(
+            pool,
+            briefing,
+            vendor_name="Zendesk",
+        )
+
+    queue_mock.assert_awaited_once_with(
+        pool,
+        vendor_name="Zendesk",
+    )
+    assert used is True
+    assert briefing["company_signal_review_queue"]["vendor"] == "Zendesk"
+    assert briefing["company_signal_review_queue"]["groups"][0]["company"] == "Acme Corp"
 
 
 def test_apply_reasoning_synthesis_to_briefing_surfaces_anchor_examples_and_reference_ids():

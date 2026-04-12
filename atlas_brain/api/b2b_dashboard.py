@@ -47,6 +47,7 @@ from ..autonomous.tasks._b2b_shared import (
     read_company_signal_candidate_groups,
     read_company_signal_candidate_group_summary,
     read_company_signal_review_impact_summary,
+    read_vendor_company_signal_review_queue,
     read_high_intent_companies,
     read_ranked_vendor_signal_rows,
     read_vendor_signal_detail,
@@ -271,6 +272,19 @@ def _overlay_reasoning_detail_from_view(
     contracts = context.get("reasoning_contracts")
     if isinstance(contracts, dict) and contracts:
         target["reasoning_contracts"] = contracts
+    account_preview = context.get("account_reasoning_preview")
+    if isinstance(account_preview, dict) and account_preview:
+        preview_contract = account_preview.get("account_reasoning")
+        if isinstance(preview_contract, dict) and preview_contract:
+            target["account_reasoning_preview"] = preview_contract
+        for key in (
+            "account_pressure_summary",
+            "account_pressure_metrics",
+            "priority_account_names",
+        ):
+            value = account_preview.get(key)
+            if value not in (None, "", [], {}):
+                target[key] = value
     reference_ids = context.get("reference_ids")
     if isinstance(reference_ids, dict) and reference_ids:
         target["reasoning_reference_ids"] = reference_ids
@@ -301,6 +315,24 @@ def _overlay_reasoning_detail_from_view(
         view,
         requested_as_of=requested_as_of,
     )
+
+
+async def _attach_company_signal_review_queue(
+    pool,
+    target: dict[str, Any],
+    *,
+    vendor_name: str,
+) -> None:
+    try:
+        queue = await read_vendor_company_signal_review_queue(
+            pool,
+            vendor_name=vendor_name,
+        )
+    except Exception:
+        logger.debug("Company signal review queue load failed", exc_info=True)
+        return
+    if queue:
+        target["company_signal_review_queue"] = queue
 
 
 def _should_scope(user: AuthUser | None) -> bool:
@@ -1184,6 +1216,11 @@ async def get_signal(
             view,
             requested_as_of=date.today(),
         )
+    await _attach_company_signal_review_queue(
+        pool,
+        result,
+        vendor_name=row["vendor_name"],
+    )
     result = await _apply_field_overrides(pool, "churn_signal", str(row["id"]), result)
     return result
 
@@ -1364,6 +1401,11 @@ async def get_vendor_profile(vendor_name: str, user: AuthUser | None = Depends(o
                 view,
                 requested_as_of=date.today(),
             )
+        await _attach_company_signal_review_queue(
+            pool,
+            sig,
+            vendor_name=signal_row["vendor_name"],
+        )
         sig = await _apply_field_overrides(pool, "churn_signal", str(signal_row["id"]), sig)
         profile["churn_signal"] = sig
     else:

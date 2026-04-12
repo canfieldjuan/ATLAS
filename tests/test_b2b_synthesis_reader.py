@@ -171,6 +171,49 @@ def test_consumer_context_surfaces_scope_manifest_atoms_and_delta():
     assert context["reasoning_delta"]["changed"] is True
 
 
+def test_filtered_consumer_context_surfaces_sparse_account_preview():
+    raw = {
+        "reasoning_contracts": {
+            "schema_version": "v2",
+            "vendor_core_reasoning": {
+                "causal_narrative": {
+                    "primary_wedge": "price_squeeze",
+                    "confidence": "high",
+                },
+            },
+            "account_reasoning": {
+                "confidence": "insufficient",
+                "market_summary": "A single post-purchase account is in scope.",
+                "total_accounts": {
+                    "value": 1,
+                    "source_id": "accounts:summary:total_accounts",
+                },
+                "top_accounts": [
+                    {
+                        "name": "Concentrix",
+                        "intent_score": 0.6,
+                        "source_id": "accounts:company:concentrix",
+                    },
+                ],
+            },
+        },
+    }
+    view = load_synthesis_view(raw, "Salesforce", schema_version="v2")
+
+    context = view.filtered_consumer_context("vendor_scorecard")
+
+    assert "account_reasoning" not in context["reasoning_contracts"]
+    assert "account_reasoning:insufficient" in context["reasoning_contract_gaps"]
+    assert "account_reasoning:suppressed" in context["reasoning_contract_gaps"]
+    assert context["account_reasoning_preview"]["account_pressure_metrics"]["total_accounts"] == 1
+    assert context["account_reasoning_preview"]["priority_account_names"] == ["Concentrix"]
+    assert (
+        context["account_reasoning_preview"]["account_reasoning"]["top_accounts"][0]["name"]
+        == "Concentrix"
+    )
+    assert context["reasoning_section_disclaimers"]["account_reasoning"]
+
+
 @pytest.mark.asyncio
 async def test_returns_none_when_no_data():
     pool = _mock_pool(synth_row=None)

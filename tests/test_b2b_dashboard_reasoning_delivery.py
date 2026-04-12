@@ -354,6 +354,21 @@ async def test_dashboard_get_signal_overlays_synthesis_detail(monkeypatch):
         "_load_reasoning_views_for_vendors",
         AsyncMock(return_value={"zendesk": _make_view("Zendesk")}),
     )
+    queue_mock = AsyncMock(
+        return_value={
+            "vendor": "Zendesk",
+            "candidate_bucket": "analyst_review",
+            "review_status": "pending",
+            "totals": {"pending_groups": 2},
+            "operator_focus": {"action": "review_low_trust_policy"},
+            "groups": [{"company": "Acme Corp"}],
+        }
+    )
+    monkeypatch.setattr(
+        mod,
+        "read_vendor_company_signal_review_queue",
+        queue_mock,
+    )
     monkeypatch.setattr(
         mod,
         "_apply_field_overrides",
@@ -362,9 +377,15 @@ async def test_dashboard_get_signal_overlays_synthesis_detail(monkeypatch):
 
     result = await mod.get_signal("Zendesk", product_category=None, user=None)
 
+    queue_mock.assert_awaited_once_with(
+        pool,
+        vendor_name="Zendesk",
+    )
     assert result["reasoning_executive_summary"] == "Pricing pressure is driving evaluation activity."
     assert result["reasoning_reference_ids"]["witness_ids"] == ["witness:test:1"]
     assert result["reasoning_source"] == "b2b_reasoning_synthesis"
+    assert result["company_signal_review_queue"]["totals"]["pending_groups"] == 2
+    assert result["company_signal_review_queue"]["groups"][0]["company"] == "Acme Corp"
 
 
 @pytest.mark.asyncio
@@ -638,6 +659,110 @@ async def test_dashboard_get_signal_uses_filtered_reasoning_contracts(monkeypatc
     result = await mod.get_signal("Zendesk", product_category=None, user=None)
 
     assert "account_reasoning" not in result.get("reasoning_contracts", {})
+    assert "account_reasoning:suppressed" in result["reasoning_contract_gaps"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_get_signal_surfaces_sparse_account_preview(monkeypatch):
+    from atlas_brain.api import b2b_dashboard as mod
+    from atlas_brain.autonomous.tasks._b2b_synthesis_reader import load_synthesis_view
+
+    pool = SimpleNamespace(
+        fetchrow=AsyncMock(
+            return_value={
+                "id": "sig-1",
+                "vendor_name": "Salesforce",
+                "product_category": "CRM",
+                "total_reviews": 100,
+                "negative_reviews": 30,
+                "churn_intent_count": 22,
+                "avg_urgency_score": 6.4,
+                "avg_rating_normalized": 0.4,
+                "nps_proxy": -0.2,
+                "price_complaint_rate": 0.18,
+                "decision_maker_churn_rate": 0.12,
+                "support_sentiment": -0.1,
+                "legacy_support_score": -0.2,
+                "new_feature_velocity": 0.3,
+                "employee_growth_rate": 0.04,
+                "top_pain_categories": [],
+                "top_competitors": [],
+                "top_feature_gaps": [],
+                "company_churn_list": [],
+                "quotable_evidence": [],
+                "top_use_cases": [],
+                "top_integration_stacks": [],
+                "budget_signal_summary": {},
+                "sentiment_distribution": {},
+                "buyer_authority_summary": {},
+                "timeline_summary": {},
+                "source_distribution": {},
+                "sample_review_ids": [],
+                "review_window_start": None,
+                "review_window_end": None,
+                "confidence_score": 0.42,
+                "keyword_spike_count": 2,
+                "keyword_spike_keywords": [],
+                "keyword_trend_summary": None,
+                "last_computed_at": None,
+                "created_at": None,
+            }
+        ),
+    )
+    monkeypatch.setattr(mod, "_pool_or_503", lambda: pool)
+    monkeypatch.setattr(
+        mod,
+        "_apply_field_overrides",
+        AsyncMock(side_effect=lambda pool, entity_type, entity_id, payload: payload),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_load_reasoning_views_for_vendors",
+        AsyncMock(
+            return_value={
+                "salesforce": load_synthesis_view(
+                    {
+                        "reasoning_contracts": {
+                            "vendor_core_reasoning": {
+                                "causal_narrative": {
+                                    "primary_wedge": "price_squeeze",
+                                    "summary": "Pricing pressure is driving evaluation activity.",
+                                    "data_gaps": [],
+                                    "confidence": "medium",
+                                },
+                            },
+                            "account_reasoning": {
+                                "confidence": "insufficient",
+                                "market_summary": "A single post-purchase account is in scope.",
+                                "total_accounts": {
+                                    "value": 1,
+                                    "source_id": "accounts:summary:total_accounts",
+                                },
+                                "top_accounts": [
+                                    {
+                                        "name": "Concentrix",
+                                        "intent_score": 0.6,
+                                        "source_id": "accounts:company:concentrix",
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                    vendor_name="Salesforce",
+                    schema_version="v2",
+                    as_of_date=date(2026, 4, 12),
+                ),
+            }
+        ),
+    )
+
+    result = await mod.get_signal("Salesforce", product_category=None, user=None)
+
+    assert "account_reasoning" not in result.get("reasoning_contracts", {})
+    assert result["account_reasoning_preview"]["top_accounts"][0]["name"] == "Concentrix"
+    assert result["account_pressure_metrics"]["total_accounts"] == 1
+    assert result["priority_account_names"] == ["Concentrix"]
+    assert result["reasoning_section_disclaimers"]["account_reasoning"]
     assert "account_reasoning:suppressed" in result["reasoning_contract_gaps"]
 
 
