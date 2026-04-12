@@ -2573,6 +2573,9 @@ async def list_displacement_edges(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
+    from_vendor = _optional_query_text(from_vendor)
+    to_vendor = _optional_query_text(to_vendor)
+    min_strength = _optional_query_text(min_strength)
     strength_order = {"strong": 3, "moderate": 2, "emerging": 1}
     if min_strength and min_strength not in strength_order:
         raise HTTPException(400, f"Invalid min_strength: {min_strength}")
@@ -3817,6 +3820,8 @@ async def list_vendor_pain_points(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
+    pain_category = _optional_query_text(pain_category)
     conditions: list[str] = []
     params: list = []
     idx = 1
@@ -3902,6 +3907,8 @@ async def list_vendor_use_cases(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
+    use_case_name = _optional_query_text(use_case_name)
     conditions: list[str] = []
     params: list = []
     idx = 1
@@ -3983,6 +3990,8 @@ async def list_vendor_integrations(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
+    integration_name = _optional_query_text(integration_name)
     conditions: list[str] = []
     params: list = []
     idx = 1
@@ -4062,6 +4071,9 @@ async def list_vendor_buyer_profiles(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
+    role_type = _optional_query_text(role_type)
+    buying_stage = _optional_query_text(buying_stage)
     conditions: list[str] = []
     params: list = []
     idx = 1
@@ -4307,6 +4319,8 @@ async def list_change_events(
     user: AuthUser | None = Depends(optional_auth),
 ):
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
+    event_type = _optional_query_text(event_type)
     conditions: list[str] = ["event_date >= CURRENT_DATE - $1::int"]
     params: list = [days]
     idx = 2
@@ -4418,6 +4432,7 @@ async def list_concurrent_events(
     same day' which may indicate a market-level trend rather than vendor-specific.
     """
     pool = _pool_or_503()
+    event_type = _optional_query_text(event_type)
 
     type_filter = ""
     params: list = [days, min_vendors, limit]
@@ -4793,6 +4808,7 @@ async def signal_effectiveness(
         )
 
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
     group_expr = _SIGNAL_GROUP_EXPRESSIONS[group_by]
 
     conditions: list[str] = [
@@ -5024,6 +5040,7 @@ async def get_outcome_distribution(
 ):
     """System-wide campaign outcome distribution (funnel view)."""
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
 
     conditions: list[str] = [
         "bc.vendor_name IN (SELECT vendor_name FROM tracked_vendors WHERE account_id = $1::uuid)"
@@ -5111,6 +5128,7 @@ async def get_signal_to_outcome(
         )
 
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
     group_expr = _ATTRIBUTION_GROUP_EXPRS[group_by]
 
     conditions: list[str] = ["bc.sequence_id IS NOT NULL", "cs.outcome != 'pending'"]

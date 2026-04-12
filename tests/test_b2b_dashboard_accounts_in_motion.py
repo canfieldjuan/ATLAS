@@ -1925,6 +1925,191 @@ async def test_list_corrections_normalizes_blank_filters():
 
 
 @pytest.mark.asyncio
+async def test_list_displacement_edges_normalizes_blank_filters():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.list_displacement_edges(
+            from_vendor="   ",
+            to_vendor="	",
+            min_strength="  ",
+            min_confidence=None,
+            window_days=90,
+            limit=50,
+            user=None,
+        )
+
+    assert result == {"edges": [], "count": 0}
+    query, *params = pool.fetch.await_args.args
+    assert "from_vendor ILIKE" not in query
+    assert "to_vendor ILIKE" not in query
+    assert "signal_strength = ANY" not in query
+    assert params == [90, 50]
+
+
+@pytest.mark.asyncio
+async def test_vendor_analytics_endpoints_normalize_blank_filters():
+    cases = [
+        (
+            b2b_dashboard.list_vendor_pain_points,
+            {
+                "vendor_name": "   ",
+                "pain_category": "	",
+                "min_confidence": 0,
+                "min_mentions": 0,
+                "limit": 50,
+                "user": None,
+            },
+            {"pain_points": [], "count": 0},
+            ["vendor_name ILIKE", "pain_category = $"],
+        ),
+        (
+            b2b_dashboard.list_vendor_use_cases,
+            {
+                "vendor_name": "   ",
+                "use_case_name": "",
+                "min_confidence": 0,
+                "min_mentions": 0,
+                "limit": 50,
+                "user": None,
+            },
+            {"use_cases": [], "count": 0},
+            ["vendor_name ILIKE", "use_case_name ILIKE"],
+        ),
+        (
+            b2b_dashboard.list_vendor_integrations,
+            {
+                "vendor_name": "	",
+                "integration_name": "  ",
+                "min_confidence": 0,
+                "min_mentions": 0,
+                "limit": 50,
+                "user": None,
+            },
+            {"integrations": [], "count": 0},
+            ["vendor_name ILIKE", "integration_name ILIKE"],
+        ),
+        (
+            b2b_dashboard.list_vendor_buyer_profiles,
+            {
+                "vendor_name": "  ",
+                "role_type": "	",
+                "buying_stage": "",
+                "min_confidence": 0,
+                "min_reviews": 0,
+                "limit": 50,
+                "user": None,
+            },
+            {"profiles": [], "count": 0},
+            ["vendor_name ILIKE", "role_type = $", "buying_stage = $"],
+        ),
+    ]
+
+    for endpoint, kwargs, expected, forbidden_fragments in cases:
+        pool = MagicMock()
+        pool.fetch = AsyncMock(return_value=[])
+        with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+            result = await endpoint(**kwargs)
+
+        assert result == expected
+        query, *params = pool.fetch.await_args.args
+        for fragment in forbidden_fragments:
+            assert fragment not in query
+        assert params == [50]
+
+
+@pytest.mark.asyncio
+async def test_event_analytics_endpoints_normalize_blank_filters():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.list_change_events(
+            vendor_name="   ",
+            event_type="	",
+            days=30,
+            limit=50,
+            user=None,
+        )
+
+    assert result == {"events": [], "count": 0}
+    query, *params = pool.fetch.await_args.args
+    assert "vendor_name ILIKE" not in query
+    assert "event_type = $" not in query
+    assert params == [30, 50]
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.list_concurrent_events(
+            days=30,
+            event_type="  ",
+            min_vendors=2,
+            limit=50,
+            user=None,
+        )
+
+    assert result["event_type_filter"] is None
+    assert result["concurrent_events"] == []
+    assert result["total"] == 0
+    query, *params = pool.fetch.await_args.args
+    assert "AND event_type = $4" not in query
+    assert params == [30, 2, 50]
+
+
+@pytest.mark.asyncio
+async def test_outcome_analytics_endpoints_normalize_blank_vendor_filters():
+    user = MagicMock(account_id="account-1", is_admin=False)
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.signal_effectiveness(
+            vendor_name="   ",
+            min_sequences=5,
+            group_by="buying_stage",
+            user=user,
+        )
+
+    assert result["vendor_filter"] is None
+    assert result["groups"] == []
+    query, *params = pool.fetch.await_args.args
+    assert "bc.vendor_name ILIKE" not in query
+    assert params == [5, "account-1"]
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.get_outcome_distribution(
+            vendor_name="	",
+            user=user,
+        )
+
+    assert result["vendor_filter"] is None
+    assert result["buckets"] == []
+    query, *params = pool.fetch.await_args.args
+    assert "bc.vendor_name ILIKE" not in query
+    assert params == ["account-1"]
+
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.get_signal_to_outcome(
+            vendor_name="  ",
+            min_sequences=5,
+            group_by="buying_stage",
+            user=user,
+        )
+
+    assert result["vendor_filter"] is None
+    assert result["groups"] == []
+    query, *params = pool.fetch.await_args.args
+    assert "bc.vendor_name ILIKE" not in query
+    assert params == [5, "account-1"]
+
+
+@pytest.mark.asyncio
 async def test_list_webhooks_exposes_latest_failure_summary():
     created_at = datetime.now(timezone.utc) - timedelta(days=1)
     failed_at = datetime.now(timezone.utc) - timedelta(hours=2)
