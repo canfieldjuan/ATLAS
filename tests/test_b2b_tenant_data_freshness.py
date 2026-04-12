@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -810,7 +810,7 @@ async def test_tenant_vendor_history_requires_tracked_vendor_and_reads_snapshots
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
 
     result = await mod.get_tenant_vendor_history(
-        vendor_name="BigCommerce",
+        vendor_name=" BigCommerce ",
         days=90,
         limit=24,
         user=user,
@@ -818,7 +818,9 @@ async def test_tenant_vendor_history_requires_tracked_vendor_and_reads_snapshots
 
     assert result == {"vendor_name": "BigCommerce", "snapshots": [], "count": 0}
     assert "tracked_vendors" in pool.fetchval.await_args.args[0]
+    assert pool.fetchval.await_args.args[1:] == (UUID(user.account_id), "BigCommerce")
     assert "FROM b2b_vendor_snapshots" in pool.fetch.await_args.args[0]
+    assert pool.fetch.await_args.args[1:] == ("BigCommerce", 90, 24)
 
 
 @pytest.mark.asyncio
@@ -878,17 +880,41 @@ async def test_compare_tenant_vendor_periods_computes_deltas(monkeypatch):
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
 
     result = await mod.compare_tenant_vendor_periods(
-        vendor_name="BigCommerce",
+        vendor_name=" BigCommerce ",
         period_a_days_ago=30,
         period_b_days_ago=0,
         user=user,
     )
 
     assert result["vendor_name"] == "BigCommerce"
+    assert "tracked_vendors" in pool.fetchval.await_args.args[0]
+    assert pool.fetchval.await_args.args[1:] == (UUID(user.account_id), "BigCommerce")
     assert result["deltas"]["avg_urgency"] == 1.1
     assert result["deltas"]["churn_intent"] == 15
     assert result["deltas"]["total_reviews"] == 20
     assert pool.fetchrow.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_tenant_vendor_routes_reject_blank_vendor_names_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    cases = [
+        lambda: mod.get_tenant_vendor_history(vendor_name="   ", days=90, limit=24, user=user),
+        lambda: mod.compare_tenant_vendor_periods(vendor_name="	", period_a_days_ago=30, period_b_days_ago=0, user=user),
+        lambda: mod.get_vendor_detail("  ", user=user),
+    ]
+
+    for call in cases:
+        monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        with pytest.raises(mod.HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == "vendor_name is required"
 
 
 @pytest.mark.asyncio
@@ -2160,7 +2186,7 @@ async def test_get_vendor_detail_interpolates_canonical_review_predicate(monkeyp
         ),
     )
 
-    result = await mod.get_vendor_detail("Salesforce", user=user)
+    result = await mod.get_vendor_detail(" Salesforce ", user=user)
 
     assert result["vendor_name"] == "Salesforce"
     assert result["churn_signal"] is None

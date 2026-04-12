@@ -145,6 +145,13 @@ def _clean_optional_text(value: Any) -> str | None:
     return text or None
 
 
+def _clean_required_text(value: Any, field_name: str) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(status_code=400, detail=f"{field_name} is required")
+    return text
+
+
 def _company_signal_lookup_key(company_name: Any, vendor_name: Any) -> tuple[str, str] | None:
     company_key = normalize_company_name(str(company_name or "").strip())
     vendor_key = _normalize_vendor_name(vendor_name)
@@ -1849,8 +1856,8 @@ async def list_tenant_slow_burn_watchlist(
 async def get_vendor_detail(vendor_name: str, user: AuthUser = Depends(require_auth)):
     """Full vendor detail: signal + pain + competitors + evidence."""
     _require_b2b_product(user)
+    vname = _clean_required_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
-    vname = vendor_name.strip()
 
     # Verify vendor is tracked by this account
     if settings.saas_auth.enabled and not _is_admin_user(user):
@@ -2785,8 +2792,8 @@ async def get_tenant_vendor_history(
 ):
     """Snapshot history for a tracked vendor."""
     _require_b2b_product(user)
+    vname = _clean_required_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
-    vname = vendor_name.strip()
 
     if settings.saas_auth.enabled and not _is_admin_user(user):
         acct = _uuid.UUID(user.account_id)
@@ -2848,8 +2855,8 @@ async def compare_tenant_vendor_periods(
 ):
     """Compare two snapshot periods for a tracked vendor."""
     _require_b2b_product(user)
+    vname = _clean_required_text(vendor_name, "vendor_name")
     pool = _pool_or_503()
-    vname = vendor_name.strip()
 
     if settings.saas_auth.enabled and not _is_admin_user(user):
         acct = _uuid.UUID(user.account_id)
