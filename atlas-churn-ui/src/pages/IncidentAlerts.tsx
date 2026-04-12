@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ArrowRight, BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BellRing, CheckCircle2, ChevronDown, ChevronRight, Copy, FlaskConical, RefreshCw, ShieldAlert, Trash2, X } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import { PageError } from '../components/ErrorBoundary'
 import useApiData from '../hooks/useApiData'
@@ -628,6 +628,91 @@ function buildActivityReferences(source: AlertActivityReferenceSource): AlertAct
   return references
 }
 
+function DestructiveActionModal({
+  title,
+  message,
+  confirmLabel,
+  confirmingLabel,
+  confirming,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string
+  message: string
+  confirmLabel: string
+  confirmingLabel: string
+  confirming: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        className="absolute inset-0 bg-slate-950/80"
+        onClick={() => {
+          if (!confirming) onCancel()
+        }}
+      />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="incident-alerts-destructive-action-title"
+        className="relative z-10 w-full max-w-md rounded-xl border border-rose-500/20 bg-slate-950 p-6 shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="rounded-lg bg-rose-500/10 p-2 text-rose-300">
+              <Trash2 className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 id="incident-alerts-destructive-action-title" className="text-base font-semibold text-white">
+                {title}
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">{message}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!confirming) onCancel()
+            }}
+            className="text-slate-500 hover:text-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={confirming}
+            aria-label="Close destructive action dialog"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {error ? (
+          <div role="alert" className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+            {error}
+          </div>
+        ) : null}
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={confirming}
+            className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={confirming}
+            className="inline-flex items-center gap-2 rounded-md bg-rose-500 px-3 py-2 text-sm font-medium text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {confirming ? confirmingLabel : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function IncidentAlerts() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -661,6 +746,8 @@ export default function IncidentAlerts() {
   const [manualTestResults, setManualTestResults] = useState<Record<string, ManualTestResult>>({})
   const [message, setMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [pendingDeleteWebhook, setPendingDeleteWebhook] = useState<{ id: string; label: string; url: string } | null>(null)
+  const [pendingDeleteError, setPendingDeleteError] = useState<string | null>(null)
 
   const {
     data: summary,
@@ -1205,8 +1292,20 @@ export default function IncidentAlerts() {
     }
   }
 
+  function requestDeleteWebhook(webhook: { id: string; description: string | null; url: string }) {
+    setPendingDeleteWebhook({
+      id: webhook.id,
+      label: webhook.description?.trim() || webhook.url,
+      url: webhook.url,
+    })
+    setPendingDeleteError(null)
+    setActionError(null)
+    setMessage(null)
+  }
+
   async function handleDeleteWebhook(webhookId: string) {
     setBusyWebhookId(webhookId)
+    setPendingDeleteError(null)
     setActionError(null)
     setMessage(null)
     try {
@@ -1214,15 +1313,23 @@ export default function IncidentAlerts() {
       setSelectedWebhookId((current) => (current === webhookId ? null : current))
       setMessage('Webhook deleted')
       await refreshAll()
+      setPendingDeleteWebhook(null)
     } catch (err) {
       setMessage(null)
-      setActionError(err instanceof Error ? err.message : 'Failed to delete webhook')
+      setPendingDeleteError(err instanceof Error ? err.message : 'Failed to delete webhook')
     } finally {
       setBusyWebhookId(null)
     }
   }
 
   if (error) return <PageError error={error} onRetry={() => void refreshAll()} />
+
+  const pendingDeleteWebhookMessage = pendingDeleteWebhook
+    ? pendingDeleteWebhook.label === pendingDeleteWebhook.url
+      ? `Delete webhook ${pendingDeleteWebhook.url}? This removes the endpoint and stops all outbound deliveries to it.`
+      : `Delete webhook ${pendingDeleteWebhook.label}? This removes ${pendingDeleteWebhook.url} and stops all outbound deliveries to this endpoint.`
+    : null
+  const pendingDeleteBusy = pendingDeleteWebhook != null && busyWebhookId === pendingDeleteWebhook.id
 
   return (
     <div className="space-y-6">
@@ -1558,7 +1665,7 @@ export default function IncidentAlerts() {
                     <button
                       type="button"
                       disabled={isBusy}
-                      onClick={() => void handleDeleteWebhook(webhook.id)}
+                      onClick={() => requestDeleteWebhook(webhook)}
                       className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200 transition-colors hover:bg-rose-500/20 disabled:opacity-50"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -2004,6 +2111,23 @@ export default function IncidentAlerts() {
           </form>
         </section>
       </div>
+      {pendingDeleteWebhook && pendingDeleteWebhookMessage ? (
+        <DestructiveActionModal
+          title="Delete webhook endpoint"
+          message={pendingDeleteWebhookMessage}
+          confirmLabel="Delete webhook"
+          confirmingLabel="Deleting..."
+          confirming={pendingDeleteBusy}
+          error={pendingDeleteError}
+          onCancel={() => {
+            if (!pendingDeleteBusy) {
+              setPendingDeleteWebhook(null)
+              setPendingDeleteError(null)
+            }
+          }}
+          onConfirm={() => void handleDeleteWebhook(pendingDeleteWebhook.id)}
+        />
+      ) : null}
     </div>
   )
 }

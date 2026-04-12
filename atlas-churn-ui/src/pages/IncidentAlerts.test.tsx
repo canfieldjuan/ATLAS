@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -158,6 +158,59 @@ describe('IncidentAlerts', () => {
     expect(screen.getByRole('button', { name: 'Retry Failed Test' })).toBeInTheDocument()
     expect(screen.getByText('Latest failure · signal_update · 500')).toBeInTheDocument()
     expect(screen.getByText(/downstream timeout/)).toBeInTheDocument()
+  })
+
+  it('uses an in-app confirmation modal before deleting a webhook', async () => {
+    const user = userEvent.setup()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/alerts']}>
+          <IncidentAlerts />
+        </MemoryRouter>,
+      )
+
+      const deleteButton = await screen.findByRole('button', { name: 'Delete' })
+      await user.click(deleteButton)
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      expect(api.deleteWebhookSubscription).not.toHaveBeenCalled()
+
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent('Delete webhook PagerDuty bridge?')
+      expect(dialog).toHaveTextContent('https://hooks.example.com/churn')
+
+      await user.click(within(dialog).getByRole('button', { name: 'Delete webhook' }))
+
+      await waitFor(() => {
+        expect(api.deleteWebhookSubscription).toHaveBeenCalledWith('wh-1')
+      })
+      expect(await screen.findByText('Webhook deleted')).toBeInTheDocument()
+    } finally {
+      confirmSpy.mockRestore()
+    }
+  })
+
+  it('does not delete a webhook when the in-app confirmation modal is cancelled', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    const deleteButton = await screen.findByRole('button', { name: 'Delete' })
+    await user.click(deleteButton)
+
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(api.deleteWebhookSubscription).not.toHaveBeenCalled()
+    })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
 
