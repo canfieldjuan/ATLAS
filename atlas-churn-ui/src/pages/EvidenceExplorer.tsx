@@ -1456,6 +1456,7 @@ export default function EvidenceExplorer() {
         asOfDate={witnessSnapshotDate}
         windowDays={windowDays}
         open={drawerOpen}
+        explorerUrl={drawerBackToPath}
         backToPath={drawerBackToPath}
         onClose={() => {
           setDrawerOpen(false)

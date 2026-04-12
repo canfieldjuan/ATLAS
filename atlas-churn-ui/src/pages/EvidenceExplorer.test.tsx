@@ -202,6 +202,34 @@ describe('EvidenceExplorer', () => {
     }
   })
 
+  it('wires exact explorer shortcuts into the witness drawer', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk']}>
+          <EvidenceExplorer />
+        </MemoryRouter>,
+      )
+
+      const explorerLink = await screen.findByRole('link', { name: 'Open in Evidence Explorer' })
+      expect(explorerLink).toHaveAttribute(
+        'href',
+        '/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk',
+      )
+
+      await user.click(screen.getByRole('button', { name: 'Copy evidence explorer link' }))
+      await waitFor(() => {
+        expect(clipboardSpy).toHaveBeenCalledWith(
+          `${window.location.origin}/evidence?vendor=Zendesk&tab=witnesses&pain_category=pricing&source=reddit&witness_type=pricing&witness_id=witness%3Azendesk%3A1&back_to=%2Fwatchlists%3Fview%3Dview-1%26account_vendor%3DZendesk`,
+        )
+      })
+    } finally {
+      clipboardSpy.mockRestore()
+    }
+  })
+
 
 
   it('preserves review detail back navigation from the URL', async () => {
