@@ -95,19 +95,37 @@ const WINDOW_OPTIONS = [
 const DISPOSITION_TABS = ['active', 'saved', 'snoozed', 'dismissed', 'all'] as const
 type DispositionTab = (typeof DISPOSITION_TABS)[number]
 
+const BACK_TARGET_RULES = [
+  { prefix: '/vendors/', label: 'Back to Vendor' },
+  { prefix: '/vendors', label: 'Back to Vendors' },
+  { prefix: '/watchlists', label: 'Back to Watchlists' },
+  { prefix: '/alerts', label: 'Back to Alerts' },
+  { prefix: '/evidence', label: 'Back to Evidence' },
+  { prefix: '/reports/', label: 'Back to Report' },
+  { prefix: '/reports', label: 'Back to Reports' },
+  { prefix: '/reviews/', label: 'Back to Review' },
+  { prefix: '/reviews', label: 'Back to Reviews' },
+  { prefix: '/dashboard', label: 'Back to Dashboard' },
+  { prefix: '/vendor-targets', label: 'Back to Vendor Targets' },
+  { prefix: '/briefing-review', label: 'Back to Briefing Review' },
+  { prefix: '/blog-review', label: 'Back to Blog Review' },
+  { prefix: '/affiliates', label: 'Back to Affiliates' },
+  { prefix: '/prospects', label: 'Back to Prospects' },
+  { prefix: '/challengers', label: 'Back to Challengers' },
+  { prefix: '/campaign-review', label: 'Back to Campaign Review' },
+  { prefix: '/pipeline-review', label: 'Back to Pipeline Review' },
+  { prefix: '/predictor', label: 'Back to Predictor' },
+] as const
+
 function resolveBackTarget(rawValue: string | null): string | null {
   const value = rawValue?.trim() || ''
   if (!value) return null
-  if (value.startsWith('/vendors/') || value.startsWith('/watchlists') || value.startsWith('/alerts')) return value
-  return null
+  return BACK_TARGET_RULES.some((rule) => value.startsWith(rule.prefix)) ? value : null
 }
 
 function backButtonLabel(target: string | null): string {
   if (!target) return 'Back'
-  if (target.startsWith('/vendors/')) return 'Back to Vendor'
-  if (target.startsWith('/watchlists')) return 'Back to Watchlists'
-  if (target.startsWith('/alerts')) return 'Back to Alerts'
-  return 'Back'
+  return BACK_TARGET_RULES.find((rule) => target.startsWith(rule.prefix))?.label ?? 'Back'
 }
 
 function opportunitiesPath(vendorName: string, backTarget: string | null): string {

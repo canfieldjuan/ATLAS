@@ -135,6 +135,69 @@ describe('Opportunities', () => {
     })
   })
 
+  it.each([
+    {
+      name: 'supports evidence back_to navigation',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit',
+      routePath: '/evidence',
+      destinationText: 'Evidence workspace',
+      linkName: 'Back to Evidence',
+      expectedHref: '/evidence?vendor=Zendesk&tab=witnesses&source=reddit',
+    },
+    {
+      name: 'supports report detail back_to navigation',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freports%2Freport-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      routePath: '/reports/:id',
+      destinationText: 'Report detail',
+      linkName: 'Back to Report',
+      expectedHref: '/reports/report-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    },
+    {
+      name: 'supports reports back_to navigation',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freports%3Fvendor_filter%3DZendesk%26back_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      routePath: '/reports',
+      destinationText: 'Reports workspace',
+      linkName: 'Back to Reports',
+      expectedHref: '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Fview%3Dview-1',
+    },
+    {
+      name: 'supports review detail back_to navigation',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Fwatchlists%253Fview%253Dview-1',
+      routePath: '/reviews/:id',
+      destinationText: 'Review detail',
+      linkName: 'Back to Review',
+      expectedHref: '/reviews/review-1?back_to=%2Fwatchlists%3Fview%3Dview-1',
+    },
+    {
+      name: 'supports vendor list back_to navigation',
+      initialEntry: '/opportunities?vendor=Zendesk&back_to=%2Fvendors%3Fsearch%3DZendesk%26min_urgency%3D6',
+      routePath: '/vendors',
+      destinationText: 'Vendor list',
+      linkName: 'Back to Vendors',
+      expectedHref: '/vendors?search=Zendesk&min_urgency=6',
+    },
+  ])('$name', async ({ initialEntry, routePath, destinationText, linkName, expectedHref }) => {
+    const user = userEvent.setup()
+    const router = createMemoryRouter(
+      [
+        { path: '/opportunities', element: <Opportunities /> },
+        { path: routePath, element: <div>{destinationText}</div> },
+      ],
+      { initialEntries: [initialEntry] },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    expect(await screen.findByRole('link', { name: linkName })).toHaveAttribute('href', expectedHref)
+    expect(screen.getByPlaceholderText('Filter vendor...')).toHaveValue('Zendesk')
+
+    await user.click(screen.getByRole('link', { name: linkName }))
+
+    await waitFor(() => {
+      expect(screen.getByText(destinationText)).toBeInTheDocument()
+    })
+  })
+
   it('shows vendor workspace, evidence, and report shortcuts for the active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/opportunities', element: <Opportunities /> }],
