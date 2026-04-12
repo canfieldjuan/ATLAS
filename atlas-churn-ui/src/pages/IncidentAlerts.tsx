@@ -102,6 +102,7 @@ const CHANNEL_GUIDANCE: Record<WebhookChannel, { title: string; detail: string }
 
 const SUMMARY_WINDOWS = [7, 30, 90] as const
 const ACTIVITY_LOG_LIMIT = 10
+const MAX_UPSTREAM_PATH_DEPTH = 4
 
 function parseSummaryWindow(value: string | null) {
   const parsed = Number(value)
@@ -516,6 +517,36 @@ function backToLabel(value: string | null) {
   return 'Back'
 }
 
+function upstreamNestedPath(value: string | null, prefix: string): string | null {
+  let current = parseBackTo(value)
+
+  for (let depth = 0; depth < MAX_UPSTREAM_PATH_DEPTH && current; depth += 1) {
+    if (current.startsWith(prefix)) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = parseBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
+function upstreamWatchlistsPath(value: string | null): string | null {
+  return upstreamNestedPath(value, '/watchlists')
+}
+
+function watchlistsShortcutLabel(path: string | null) {
+  if (!path) return 'Watchlists'
+  try {
+    const url = new URL(path, window.location.origin)
+    return url.searchParams.get('account_company')?.trim() ? 'Account Review' : 'Watchlists'
+  } catch {
+    return 'Watchlists'
+  }
+}
+
 function buildActivitySearchParams({
   webhookId,
   deliveryStatus,
@@ -897,6 +928,33 @@ export default function IncidentAlerts() {
   const currentAlertsUrl = useMemo(() => (
     location.search ? `${location.pathname}${location.search}` : location.pathname
   ), [location.pathname, location.search])
+
+  const directWatchlistsShortcutPath = useMemo(() => upstreamWatchlistsPath(requestedBackTo), [requestedBackTo])
+  const directVendorShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/vendors/'), [requestedBackTo])
+  const directEvidenceShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/evidence'), [requestedBackTo])
+  const directReportsShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/reports'), [requestedBackTo])
+  const directOpportunitiesShortcutPath = useMemo(() => upstreamNestedPath(requestedBackTo, '/opportunities'), [requestedBackTo])
+
+  const vendorScopedHeaderShortcuts = useMemo(() => {
+    const vendorName = requestedVendorName.trim()
+    if (!vendorName) return null
+    return {
+      watchlistsLabel: watchlistsShortcutLabel(directWatchlistsShortcutPath),
+      watchlistsPath: directWatchlistsShortcutPath ?? buildWatchlistsPath(vendorName, currentAlertsUrl),
+      vendorWorkspacePath: directVendorShortcutPath ?? buildVendorWorkspacePath(vendorName, currentAlertsUrl),
+      evidencePath: directEvidenceShortcutPath ?? buildVendorScopedPath('/evidence', vendorName, currentAlertsUrl),
+      reportsPath: directReportsShortcutPath ?? buildVendorScopedPath('/reports', vendorName, currentAlertsUrl),
+      opportunitiesPath: directOpportunitiesShortcutPath ?? buildVendorScopedPath('/opportunities', vendorName, currentAlertsUrl),
+    }
+  }, [
+    currentAlertsUrl,
+    directEvidenceShortcutPath,
+    directOpportunitiesShortcutPath,
+    directReportsShortcutPath,
+    directVendorShortcutPath,
+    directWatchlistsShortcutPath,
+    requestedVendorName,
+  ])
 
   const clearVendorScopePath = useMemo(() => {
     const next = buildActivitySearchParams({
@@ -1395,6 +1453,50 @@ export default function IncidentAlerts() {
               >
                 Clear vendor scope
               </Link>
+            </div>
+          ) : null}
+          {vendorScopedHeaderShortcuts ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link
+                to={vendorScopedHeaderShortcuts.watchlistsPath}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                {vendorScopedHeaderShortcuts.watchlistsLabel}
+              </Link>
+              {renderShortcutCopyButton(vendorScopedHeaderShortcuts.watchlistsPath, vendorScopedHeaderShortcuts.watchlistsLabel.toLowerCase())}
+              <Link
+                to={vendorScopedHeaderShortcuts.vendorWorkspacePath}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                Vendor workspace
+              </Link>
+              {renderShortcutCopyButton(vendorScopedHeaderShortcuts.vendorWorkspacePath, 'vendor workspace')}
+              <Link
+                to={vendorScopedHeaderShortcuts.evidencePath}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                Evidence
+              </Link>
+              {renderShortcutCopyButton(vendorScopedHeaderShortcuts.evidencePath, 'evidence')}
+              <Link
+                to={vendorScopedHeaderShortcuts.reportsPath}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                Reports
+              </Link>
+              {renderShortcutCopyButton(vendorScopedHeaderShortcuts.reportsPath, 'reports')}
+              <Link
+                to={vendorScopedHeaderShortcuts.opportunitiesPath}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
+              >
+                <ArrowRight className="h-3.5 w-3.5" />
+                Opportunities
+              </Link>
+              {renderShortcutCopyButton(vendorScopedHeaderShortcuts.opportunitiesPath, 'opportunities')}
             </div>
           ) : null}
         </div>

@@ -182,6 +182,104 @@ describe('IncidentAlerts', () => {
     }))
   })
 
+  it('shows vendor-scope workflow shortcuts in the header when a vendor filter is active', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-scope',
+          url: 'https://hooks.example.com/vendor',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Vendor scoped endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 3,
+          recent_success_rate_7d: 1,
+        },
+      ],
+      count: 1,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?vendor=Acme%20Rival']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
+      'href',
+      '/watchlists?vendor_name=Acme+Rival&back_to=%2Falerts%3Fvendor%3DAcme%2520Rival',
+    )
+    expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
+      'href',
+      '/vendors/Acme%20Rival?back_to=%2Falerts%3Fvendor%3DAcme%2520Rival',
+    )
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
+      'href',
+      '/evidence?vendor=Acme+Rival&back_to=%2Falerts%3Fvendor%3DAcme%2520Rival',
+    )
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute(
+      'href',
+      '/reports?vendor_filter=Acme+Rival&back_to=%2Falerts%3Fvendor%3DAcme%2520Rival',
+    )
+    expect(screen.getByRole('link', { name: 'Opportunities' })).toHaveAttribute(
+      'href',
+      '/opportunities?vendor=Acme+Rival&back_to=%2Falerts%3Fvendor%3DAcme%2520Rival',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Copy evidence link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/evidence?vendor=Acme+Rival&back_to=%2Falerts%3Fvendor%3DAcme%2520Rival`,
+      )
+    })
+    expect(await screen.findByText('Copied evidence link')).toBeInTheDocument()
+  })
+
+  it('reuses exact upstream workflow paths for vendor-scoped header shortcuts', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    api.listWebhooks.mockResolvedValueOnce({
+      webhooks: [
+        {
+          id: 'wh-upstream',
+          url: 'https://hooks.example.com/vendor',
+          event_types: ['churn_alert'],
+          channel: 'generic',
+          enabled: true,
+          description: 'Vendor scoped endpoint',
+          created_at: '2026-04-09T03:00:00Z',
+          updated_at: '2026-04-10T03:00:00Z',
+          recent_deliveries_7d: 3,
+          recent_success_rate_7d: 1,
+        },
+      ],
+      count: 1,
+    })
+    const upstreamAccountReviewPath = '/watchlists?account_vendor=Acme+Rival&account_company=Acme+Bank&account_report_date=2026-04-10&account_watch_vendor=Acme+Rival&account_category=Switch+Risk&account_track_mode=competitor'
+    const upstreamEvidencePath = `/evidence?vendor=Acme+Rival&tab=witnesses&witness_id=witness%3Aacme%3A1&back_to=${encodeURIComponent(upstreamAccountReviewPath)}`
+
+    render(
+      <MemoryRouter initialEntries={[`/alerts?vendor=Acme%20Rival&back_to=${encodeURIComponent(upstreamEvidencePath)}`]}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Account Review' })).toHaveAttribute('href', upstreamAccountReviewPath)
+    expect(screen.getByRole('link', { name: 'Evidence' })).toHaveAttribute('href', upstreamEvidencePath)
+
+    await user.click(screen.getByRole('button', { name: 'Copy account review link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${upstreamAccountReviewPath}`)
+    })
+    expect(await screen.findByText('Copied account review link')).toBeInTheDocument()
+  })
+
   it('uses an in-app confirmation modal before deleting a webhook', async () => {
     const user = userEvent.setup()
     const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true)
