@@ -6204,6 +6204,13 @@ async def list_corrections(
     limit: int = Query(50, ge=1, le=200),
     user: AuthUser | None = Depends(optional_auth),
 ):
+    entity_type = _optional_query_text(entity_type)
+    entity_id = _optional_query_text(entity_id)
+    correction_type = _optional_query_text(correction_type)
+    status = _optional_query_text(status)
+    corrected_by = _optional_query_text(corrected_by)
+    start_date = _optional_query_text(start_date)
+    end_date = _optional_query_text(end_date)
     pool = _pool_or_503()
     conditions: list[str] = []
     params: list = []

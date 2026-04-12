@@ -1895,6 +1895,36 @@ async def test_export_high_intent_normalizes_blank_vendor_filter():
 
 
 @pytest.mark.asyncio
+async def test_list_corrections_normalizes_blank_filters():
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+
+    with patch.object(b2b_dashboard, "_pool_or_503", return_value=pool):
+        result = await b2b_dashboard.list_corrections(
+            entity_type="   ",
+            entity_id="	",
+            correction_type="  ",
+            status="",
+            corrected_by="   ",
+            start_date="  ",
+            end_date="	",
+            limit=50,
+            user=None,
+        )
+
+    assert result == {"corrections": [], "count": 0}
+    query, *params = pool.fetch.await_args.args
+    assert "entity_type = $" not in query
+    assert "entity_id = $" not in query
+    assert "correction_type = $" not in query
+    assert "status = $" not in query
+    assert "corrected_by ILIKE" not in query
+    assert "created_at >= $" not in query
+    assert "created_at < $" not in query
+    assert params == [50]
+
+
+@pytest.mark.asyncio
 async def test_list_webhooks_exposes_latest_failure_summary():
     created_at = datetime.now(timezone.utc) - timedelta(days=1)
     failed_at = datetime.now(timezone.utc) - timedelta(hours=2)
