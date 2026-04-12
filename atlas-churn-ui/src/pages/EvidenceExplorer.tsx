@@ -78,6 +78,12 @@ function evidenceOpportunitiesPath(searchParams: URLSearchParams, vendorName: st
   return `/opportunities?${params.toString()}`
 }
 
+function evidenceAlertsPath(searchParams: URLSearchParams) {
+  const params = new URLSearchParams()
+  params.set('back_to', evidenceExplorerPath(searchParams))
+  return `/alerts?${params.toString()}`
+}
+
 function evidenceReportsPath(searchParams: URLSearchParams, vendorName: string) {
   const params = new URLSearchParams()
   params.set('vendor_filter', vendorName)
@@ -251,6 +257,22 @@ function upstreamOpportunitiesPath(value: string | null): string | null {
   return null
 }
 
+function upstreamAlertsPath(value: string | null): string | null {
+  let current = parseBackTo(value)
+
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (current.startsWith('/alerts')) return current
+    try {
+      const url = new URL(current, window.location.origin)
+      current = parseBackTo(url.searchParams.get('back_to'))
+    } catch {
+      return null
+    }
+  }
+
+  return null
+}
+
 function upstreamReviewPath(value: string | null, reviewId: string): string | null {
   let current = parseBackTo(value)
 
@@ -361,6 +383,7 @@ export default function EvidenceExplorer() {
   const [drawerWitnessId, setDrawerWitnessId] = useState<string | null>(requestedWitnessId || null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedWatchlistsState, setCopiedWatchlistsState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [copiedAlertsState, setCopiedAlertsState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedVendorWorkspaceState, setCopiedVendorWorkspaceState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedOpportunitiesState, setCopiedOpportunitiesState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [copiedReportsState, setCopiedReportsState] = useState<'idle' | 'copied' | 'error'>('idle')
@@ -368,6 +391,7 @@ export default function EvidenceExplorer() {
   const [copiedAccountReviewState, setCopiedAccountReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const [copiedReviewState, setCopiedReviewState] = useState<{ id: string; status: 'copied' | 'error' } | null>(null)
   const directWatchlistsShortcutPath = useMemo(() => upstreamWatchlistsPath(requestedBackTo), [requestedBackTo])
+  const directAlertsShortcutPath = useMemo(() => upstreamAlertsPath(requestedBackTo), [requestedBackTo])
   const directVendorWorkspacePath = useMemo(() => upstreamVendorPath(requestedBackTo), [requestedBackTo])
   const directReportsShortcutPath = useMemo(() => upstreamReportsPath(requestedBackTo), [requestedBackTo])
   const directOpportunitiesShortcutPath = useMemo(() => upstreamOpportunitiesPath(requestedBackTo), [requestedBackTo])
@@ -694,6 +718,15 @@ export default function EvidenceExplorer() {
     }
   }
 
+  async function handleCopyAlertsLink(path: string) {
+    try {
+      await copyText(`${window.location.origin}${path}`)
+      setCopiedAlertsState('copied')
+    } catch {
+      setCopiedAlertsState('error')
+    }
+  }
+
   async function handleCopyVendorWorkspaceLink(path: string) {
     try {
       await copyText(`${window.location.origin}${path}`)
@@ -794,6 +827,22 @@ export default function EvidenceExplorer() {
                   </button>
                 </span>
               ) : null}
+              <span className="inline-flex items-center gap-2">
+                <Link
+                  to={directAlertsShortcutPath ?? evidenceAlertsPath(searchParams)}
+                  className="text-rose-300 hover:text-rose-200 transition-colors"
+                >
+                  Alerts API
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyAlertsLink(directAlertsShortcutPath ?? evidenceAlertsPath(searchParams))}
+                  className="text-slate-400 hover:text-white transition-colors"
+                  aria-label="Copy alerts link"
+                >
+                  {copiedAlertsState === 'copied' ? 'Copied' : copiedAlertsState === 'error' ? 'Copy Failed' : 'Copy Link'}
+                </button>
+              </span>
               <span className="inline-flex items-center gap-2">
                 <Link
                   to={directVendorWorkspacePath ?? evidenceVendorPath(searchParams, activeVendor)}

@@ -587,7 +587,7 @@ describe('EvidenceExplorer', () => {
     )
   })
 
-  it('shows watchlists, vendor workspace, opportunities, and reports shortcuts for the active vendor', async () => {
+  it('shows watchlists, alerts, vendor workspace, opportunities, and reports shortcuts for the active vendor', async () => {
     render(
       <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
         <EvidenceExplorer />
@@ -598,6 +598,10 @@ describe('EvidenceExplorer', () => {
     expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
       'href',
       '/watchlists?view=view-zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
+    )
+    expect(screen.getByRole('link', { name: 'Alerts API' })).toHaveAttribute(
+      'href',
+      '/alerts?back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
     expect(screen.getByRole('link', { name: 'Vendor workspace' })).toHaveAttribute(
       'href',
@@ -611,6 +615,56 @@ describe('EvidenceExplorer', () => {
       'href',
       '/reports?vendor_filter=Zendesk&back_to=%2Fevidence%3Fvendor%3DZendesk%26tab%3Dwitnesses%26source%3Dreddit%26witness_id%3Dwitness%253Azendesk%253A1',
     )
+  })
+
+  it('prefers the exact upstream alerts shortcut when entered from an alerts path', async () => {
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fwebhook%253Dwh-crm%2526window%253D30d']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const alertsLink = await screen.findByRole('link', { name: 'Alerts API' })
+    expect(alertsLink).toHaveAttribute(
+      'href',
+      '/alerts?webhook=wh-crm&window=30d',
+    )
+  })
+
+  it('copies the exact upstream alerts shortcut when entered from an alerts path', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&back_to=%2Freviews%2Freview-1%3Fback_to%3D%252Falerts%253Fwebhook%253Dwh-crm%2526window%253D30d']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const alertsLink = await screen.findByRole('link', { name: 'Alerts API' })
+    await user.click(screen.getByRole('button', { name: 'Copy alerts link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${alertsLink.getAttribute('href')}`)
+    })
+  })
+
+  it('copies the active alerts shortcut link', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/evidence?vendor=Zendesk&tab=witnesses&source=reddit&witness_id=witness%3Azendesk%3A1']}>
+        <EvidenceExplorer />
+      </MemoryRouter>,
+    )
+
+    const alertsLink = await screen.findByRole('link', { name: 'Alerts API' })
+    await user.click(screen.getByRole('button', { name: 'Copy alerts link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(`${window.location.origin}${alertsLink.getAttribute('href')}`)
+    })
   })
 
   it('prefers the exact upstream vendor workspace shortcut when entered from a vendor path', async () => {
