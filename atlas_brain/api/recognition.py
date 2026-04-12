@@ -9,14 +9,43 @@ from typing import Any, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.params import Param
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from ..config import settings
 
 logger = logging.getLogger("atlas.api.recognition")
 
 router = APIRouter(prefix="/recognition", tags=["recognition"])
+
+
+def _unwrap_param_default(value: object | None) -> object | None:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
+def _clean_optional_text(value: object | None) -> str | None:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _clean_required_text(value: object | None, field_name: str) -> str:
+    text = _clean_optional_text(value)
+    if text is None:
+        raise HTTPException(422, f"{field_name} is required")
+    return text
+
+
+def _clean_int_query(value: object | None, *, default: int) -> int:
+    value = _unwrap_param_default(value)
+    if value is None:
+        return default
+    return int(value)
 
 
 def _get_vision_url() -> str:
@@ -90,6 +119,14 @@ class CreatePersonRequest(BaseModel):
     is_known: bool = True
     metadata: Optional[dict[str, Any]] = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def _clean_name(cls, value):
+        text = _clean_optional_text(value)
+        if text is None:
+            raise ValueError("name is required")
+        return text
+
 
 class PersonResponse(BaseModel):
     id: str
@@ -104,6 +141,16 @@ class UpdatePersonRequest(BaseModel):
     name: Optional[str] = None
     is_known: Optional[bool] = None
     metadata: Optional[dict[str, Any]] = None
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _clean_name(cls, value):
+        if value is None:
+            return None
+        text = _clean_optional_text(value)
+        if text is None:
+            raise ValueError("name is required")
+        return text
 
 
 @router.post("/persons")
@@ -129,12 +176,14 @@ async def list_persons(include_unknown: bool = Query(default=True)):
 @router.get("/persons/{person_id}")
 async def get_person(person_id: str):
     """Get person details by ID."""
+    person_id = _clean_required_text(person_id, "person_id")
     return await _proxy_request("GET", f"/recognition/persons/{person_id}")
 
 
 @router.patch("/persons/{person_id}")
 async def update_person(person_id: str, request: UpdatePersonRequest):
     """Update a person's details."""
+    person_id = _clean_required_text(person_id, "person_id")
     return await _proxy_request(
         "PATCH",
         f"/recognition/persons/{person_id}",
@@ -145,12 +194,14 @@ async def update_person(person_id: str, request: UpdatePersonRequest):
 @router.delete("/persons/{person_id}")
 async def delete_person(person_id: str):
     """Delete a person and all their embeddings."""
+    person_id = _clean_required_text(person_id, "person_id")
     return await _proxy_request("DELETE", f"/recognition/persons/{person_id}")
 
 
 @router.get("/persons/{person_id}/embeddings")
 async def get_person_embeddings(person_id: str):
     """Get embedding counts for a person."""
+    person_id = _clean_required_text(person_id, "person_id")
     return await _proxy_request("GET", f"/recognition/persons/{person_id}/embeddings")
 
 
@@ -160,6 +211,8 @@ async def get_recognition_events(
     limit: int = Query(default=50, ge=1, le=200),
 ):
     """Get recent recognition events."""
+    person_id = _clean_optional_text(person_id)
+    limit = _clean_int_query(limit, default=50)
     params = {"limit": limit}
     if person_id:
         params["person_id"] = person_id
@@ -174,11 +227,27 @@ class EnrollFaceRequest(BaseModel):
     camera_id: str = "webcam_office"
     source: str = "enrollment"
 
+    @field_validator("person_id", "camera_id", "source", mode="before")
+    @classmethod
+    def _clean_required_fields(cls, value, info):
+        text = _clean_optional_text(value)
+        if text is None:
+            raise ValueError(f"{info.field_name} is required")
+        return text
+
 
 class IdentifyRequest(BaseModel):
     camera_id: str = "webcam_office"
     threshold: Optional[float] = None
     auto_enroll_unknown: Optional[bool] = None
+
+    @field_validator("camera_id", mode="before")
+    @classmethod
+    def _clean_camera_id(cls, value):
+        text = _clean_optional_text(value)
+        if text is None:
+            raise ValueError("camera_id is required")
+        return text
 
 
 @router.post("/enroll/face")
@@ -213,6 +282,14 @@ class StartGaitEnrollRequest(BaseModel):
     person_id: str
     camera_id: str = "webcam_office"
 
+    @field_validator("person_id", "camera_id", mode="before")
+    @classmethod
+    def _clean_required_fields(cls, value, info):
+        text = _clean_optional_text(value)
+        if text is None:
+            raise ValueError(f"{info.field_name} is required")
+        return text
+
 
 @router.post("/enroll/gait/start")
 async def start_gait_enrollment(request: StartGaitEnrollRequest):
@@ -227,6 +304,7 @@ async def start_gait_enrollment(request: StartGaitEnrollRequest):
 @router.post("/enroll/gait/frame")
 async def add_gait_frame(camera_id: str = Query(default="webcam_office")):
     """Capture a frame and add pose to gait buffer."""
+    camera_id = _clean_required_text(camera_id, "camera_id")
     return await _proxy_request(
         "POST",
         "/recognition/enroll/gait/frame",
@@ -239,6 +317,7 @@ async def complete_gait_enrollment(
     walking_direction: Optional[str] = Query(default=None),
 ):
     """Complete gait enrollment using collected frames."""
+    walking_direction = _clean_optional_text(walking_direction)
     params = {}
     if walking_direction:
         params["walking_direction"] = walking_direction
@@ -265,6 +344,14 @@ class GaitIdentifyRequest(BaseModel):
     camera_id: str = "webcam_office"
     threshold: Optional[float] = None
 
+    @field_validator("camera_id", mode="before")
+    @classmethod
+    def _clean_camera_id(cls, value):
+        text = _clean_optional_text(value)
+        if text is None:
+            raise ValueError("camera_id is required")
+        return text
+
 
 @router.post("/identify/gait/start")
 async def start_gait_identification():
@@ -275,6 +362,7 @@ async def start_gait_identification():
 @router.post("/identify/gait/frame")
 async def add_gait_identify_frame(camera_id: str = Query(default="webcam_office")):
     """Add a frame for gait identification."""
+    camera_id = _clean_required_text(camera_id, "camera_id")
     return await _proxy_request(
         "POST",
         "/recognition/identify/gait/frame",
@@ -296,6 +384,14 @@ class CombinedIdentifyRequest(BaseModel):
     camera_id: str = "webcam_office"
     face_threshold: Optional[float] = None
     gait_threshold: Optional[float] = None
+
+    @field_validator("camera_id", mode="before")
+    @classmethod
+    def _clean_camera_id(cls, value):
+        text = _clean_optional_text(value)
+        if text is None:
+            raise ValueError("camera_id is required")
+        return text
 
 
 @router.post("/identify/combined")
