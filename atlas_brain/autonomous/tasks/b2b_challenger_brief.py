@@ -2104,6 +2104,26 @@ async def run(task: ScheduledTask) -> dict[str, Any]:
             report_row = await fetchrow(sql, *sql_args) if callable(fetchrow) else None
             if report_row is None:
                 await pool.execute(sql.replace(" RETURNING id", ""), *sql_args)
+            elif report_status == "published" and report_row.get("id"):
+                try:
+                    from ...services.b2b.webhook_dispatcher import dispatch_report_generated_webhook
+
+                    await dispatch_report_generated_webhook(
+                        pool,
+                        report_id=report_row["id"],
+                        report_type="challenger_brief",
+                        vendor_name=incumbent,
+                        category_filter=challenger,
+                        status=report_status,
+                        report_date=str(today),
+                        llm_model="pipeline_deterministic",
+                    )
+                except Exception:
+                    logger.debug(
+                        "Webhook dispatch skipped for report_generated challenger_brief %s/%s",
+                        incumbent,
+                        challenger,
+                    )
             persisted += 1
             from ..visibility import record_attempt
             await record_attempt(

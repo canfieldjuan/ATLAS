@@ -292,6 +292,36 @@ async def test_resolve_webhook_activity_account_focus_prefers_review_id_match():
     }
 
 
+def test_build_report_generated_payload_skips_failed_status():
+    payload = webhook_dispatcher._build_report_generated_payload(
+        report_id='report-1',
+        report_type='battle_card',
+        vendor_name='Acme Rival',
+        status='failed',
+    )
+
+    assert payload is None
+
+
+def test_build_report_generated_payload_formats_vendor_comparison_title():
+    payload = webhook_dispatcher._build_report_generated_payload(
+        report_id='report-1',
+        report_type='vendor_comparison',
+        vendor_name='Zendesk',
+        category_filter='Freshdesk',
+        status='published',
+    )
+
+    assert payload == {
+        'artifact_type': 'vendor_comparison',
+        'report_id': 'report-1',
+        'report_type': 'vendor_comparison',
+        'report_title': 'Zendesk vs Freshdesk',
+        'status': 'published',
+        'category_filter': 'Freshdesk',
+    }
+
+
 @pytest.mark.asyncio
 async def test_log_crm_push_persists_signal_id_from_envelope():
     pool = MagicMock()

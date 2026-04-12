@@ -5185,6 +5185,25 @@ async def generate_vendor_comparison_report(
         )
         if row:
             report_data["report_id"] = str(row["id"])
+            try:
+                from ...services.b2b.webhook_dispatcher import dispatch_report_generated_webhook
+
+                await dispatch_report_generated_webhook(
+                    pool,
+                    report_id=row["id"],
+                    report_type="vendor_comparison",
+                    vendor_name=primary_name,
+                    category_filter=comparison_name,
+                    status="published",
+                    report_date=str(today),
+                    llm_model="pipeline_aggregation",
+                )
+            except Exception:
+                logger.debug(
+                    "Webhook dispatch skipped for report_generated vendor comparison %s/%s",
+                    primary_name,
+                    comparison_name,
+                )
     return report_data
 
 
@@ -5568,8 +5587,7 @@ async def generate_challenger_report(
 
     # Persist to b2b_intelligence
     try:
-        await pool.execute(
-            """
+        sql = """
             INSERT INTO b2b_intelligence (
                 report_date, report_type, vendor_filter,
                 intelligence_data, executive_summary, data_density, status, llm_model
@@ -5579,7 +5597,9 @@ async def generate_challenger_report(
                           executive_summary = EXCLUDED.executive_summary,
                           data_density = EXCLUDED.data_density,
                           created_at = now()
-            """,
+            RETURNING id
+        """
+        sql_args = (
             today,
             "challenger_intel",
             challenger_name,
@@ -5595,6 +5615,29 @@ async def generate_challenger_report(
             "published",
             "pipeline_aggregation",
         )
+        fetchrow = getattr(pool, "fetchrow", None)
+        report_row = await fetchrow(sql, *sql_args) if callable(fetchrow) else None
+        if report_row is None:
+            await pool.execute(sql.replace(" RETURNING id", ""), *sql_args)
+        elif report_row.get("id"):
+            report_data["report_id"] = str(report_row["id"])
+            try:
+                from ...services.b2b.webhook_dispatcher import dispatch_report_generated_webhook
+
+                await dispatch_report_generated_webhook(
+                    pool,
+                    report_id=report_row["id"],
+                    report_type="challenger_intel",
+                    vendor_name=challenger_name,
+                    status="published",
+                    report_date=str(today),
+                    llm_model="pipeline_aggregation",
+                )
+            except Exception:
+                logger.debug(
+                    "Webhook dispatch skipped for report_generated challenger_intel %s",
+                    challenger_name,
+                )
     except Exception:
         logger.exception("Failed to store challenger report for %s", challenger_name)
 

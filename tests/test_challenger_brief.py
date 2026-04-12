@@ -1705,6 +1705,73 @@ class TestChallengerBriefRunProgress:
         ]
 
     @pytest.mark.asyncio
+    async def test_run_dispatches_report_generated_webhook_for_persisted_brief(self, monkeypatch):
+        pool = type("Pool", (), {
+            "is_initialized": True,
+            "execute": AsyncMock(),
+            "fetch": AsyncMock(return_value=[]),
+            "fetchrow": AsyncMock(return_value={"id": uuid4()}),
+        })()
+
+        async def fake_gather(*_args, **_kwargs):
+            for coro in _args:
+                close = getattr(coro, "close", None)
+                if close:
+                    close()
+            return (
+                None,
+                None,
+                {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                None,
+                None,
+                None,
+                None,
+                None,
+                [],
+            )
+
+        dispatch = AsyncMock(return_value=1)
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod.settings.b2b_churn, "intelligence_enabled", True, raising=False)
+        monkeypatch.setattr(brief_mod, "_update_execution_progress", AsyncMock())
+        monkeypatch.setattr(brief_mod, "get_db_pool", lambda: pool)
+        monkeypatch.setattr(brief_mod, "_check_freshness", AsyncMock(return_value=date(2026, 3, 18)))
+        monkeypatch.setattr(brief_mod, "_fetch_latest_evidence_vault", AsyncMock(return_value={}))
+        monkeypatch.setattr(
+            brief_mod,
+            "_select_displacement_pairs",
+            AsyncMock(return_value=[{"incumbent": "Zendesk", "challenger": "Freshdesk"}]),
+        )
+        monkeypatch.setattr(brief_mod.asyncio, "gather", fake_gather)
+        monkeypatch.setattr(
+            brief_mod,
+            "_build_challenger_brief",
+            lambda **kwargs: {
+                "_executive_summary": "summary",
+                "displacement_summary": {"total_mentions": 3, "source_distribution": {"reddit": 3}},
+                "data_sources": {"battle_card": False},
+                "total_target_accounts": 0,
+            },
+        )
+        monkeypatch.setattr(
+            "atlas_brain.services.b2b.webhook_dispatcher.dispatch_report_generated_webhook",
+            dispatch,
+        )
+
+        task = type("Task", (), {"metadata": {"_execution_id": str(uuid4())}})()
+        result = await brief_mod.run(task)
+
+        assert result["persisted"] == 1
+        dispatch.assert_awaited_once()
+        _, kwargs = dispatch.await_args
+        assert kwargs["report_type"] == "challenger_brief"
+        assert kwargs["vendor_name"] == "Zendesk"
+        assert kwargs["category_filter"] == "Freshdesk"
+        assert kwargs["status"] == "published"
+        assert kwargs["report_date"] == "2026-03-18"
+        assert kwargs["llm_model"] == "pipeline_deterministic"
+
+    @pytest.mark.asyncio
     async def test_run_scopes_pairs_to_test_vendors(self, monkeypatch):
         pool = type("Pool", (), {
             "is_initialized": True,

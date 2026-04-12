@@ -2139,8 +2139,7 @@ async def _persist_battle_card(
         report_source_review_count,
         report_source_dist,
     )
-    await pool.execute(
-        """
+    sql = """
         INSERT INTO b2b_intelligence (
             report_date, report_type, vendor_filter,
             intelligence_data, executive_summary, data_density, status, llm_model,
@@ -2157,7 +2156,9 @@ async def _persist_battle_card(
                       source_review_count = EXCLUDED.source_review_count,
                       source_distribution = EXCLUDED.source_distribution,
                       created_at = now()
-        """,
+        RETURNING id
+    """
+    sql_args = (
         today,
         "battle_card",
         vendor,
@@ -2169,6 +2170,25 @@ async def _persist_battle_card(
         card_source_count,
         json.dumps(card_source_dist),
     )
+    fetchrow = getattr(pool, "fetchrow", None)
+    report_row = await fetchrow(sql, *sql_args) if callable(fetchrow) else None
+    if report_row is None:
+        await pool.execute(sql.replace(" RETURNING id", ""), *sql_args)
+    elif report_row.get("id"):
+        try:
+            from ...services.b2b.webhook_dispatcher import dispatch_report_generated_webhook
+
+            await dispatch_report_generated_webhook(
+                pool,
+                report_id=report_row["id"],
+                report_type="battle_card",
+                vendor_name=vendor,
+                status=status,
+                report_date=str(today),
+                llm_model=llm_model,
+            )
+        except Exception:
+            logger.debug("Webhook dispatch skipped for report_generated battle card %s", vendor)
     return True
 
 

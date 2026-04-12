@@ -161,6 +161,87 @@ async def dispatch_webhooks_multi(
     return total
 
 
+def _format_report_generated_title(
+    report_type: str,
+    vendor_name: str,
+    category_filter: str | None = None,
+) -> str:
+    report_label = str(report_type or "report").replace("_", " ").title()
+    vendor_text = str(vendor_name or "").strip()
+    category_text = str(category_filter or "").strip()
+    if report_type == "vendor_comparison" and category_text:
+        return f"{vendor_text} vs {category_text}".strip()
+    if report_type == "challenger_brief" and category_text:
+        return f"{vendor_text} vs {category_text} Challenger Brief".strip()
+    if category_text:
+        return f"{vendor_text} {report_label}: {category_text}".strip()
+    return f"{vendor_text} {report_label}".strip()
+
+
+def _build_report_generated_payload(
+    *,
+    report_id,
+    report_type: str,
+    vendor_name: str,
+    category_filter: str | None = None,
+    status: str | None = None,
+    report_date: str | None = None,
+    llm_model: str | None = None,
+) -> dict | None:
+    report_id_text = str(report_id or "").strip()
+    report_type_text = str(report_type or "").strip()
+    vendor_text = str(vendor_name or "").strip()
+    category_text = str(category_filter or "").strip()
+    status_text = str(status or "published").strip().lower() or "published"
+    if not report_id_text or not report_type_text or not vendor_text:
+        return None
+    if status_text in {"failed", "error"}:
+        return None
+    payload = {
+        "artifact_type": report_type_text,
+        "report_id": report_id_text,
+        "report_type": report_type_text,
+        "report_title": _format_report_generated_title(
+            report_type_text,
+            vendor_text,
+            category_filter=category_text or None,
+        ),
+        "status": status_text,
+    }
+    if category_text:
+        payload["category_filter"] = category_text
+    if report_date:
+        payload["report_date"] = str(report_date)
+    if llm_model:
+        payload["llm_model"] = str(llm_model)
+    return payload
+
+
+async def dispatch_report_generated_webhook(
+    pool,
+    *,
+    report_id,
+    report_type: str,
+    vendor_name: str,
+    category_filter: str | None = None,
+    status: str | None = None,
+    report_date: str | None = None,
+    llm_model: str | None = None,
+) -> int:
+    payload = _build_report_generated_payload(
+        report_id=report_id,
+        report_type=report_type,
+        vendor_name=vendor_name,
+        category_filter=category_filter,
+        status=status,
+        report_date=report_date,
+        llm_model=llm_model,
+    )
+    if payload is None:
+        return 0
+    return await dispatch_webhooks(pool, "report_generated", str(vendor_name).strip(), payload)
+
+
 def _build_envelope(event_type: str, vendor_name: str, payload: dict) -> dict:
     """Wrap the raw payload in a standard envelope."""
     return {

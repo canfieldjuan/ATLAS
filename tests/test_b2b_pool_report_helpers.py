@@ -662,6 +662,99 @@ async def test_vendor_snapshot_from_pools_uses_shared_scorecard_metrics(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_generate_vendor_comparison_report_dispatches_report_generated_webhook(monkeypatch):
+    primary_snapshot = {
+        "vendor_name": "Zendesk",
+        "signal_count": 8,
+        "churn_intent_count": 3,
+        "churn_signal_density": 2.2,
+        "avg_urgency_score": 6.1,
+        "positive_review_pct": 48.0,
+        "recommend_ratio": 22.0,
+        "top_pain_categories": [{"category": "pricing"}],
+        "top_competitors": [{"competitor": "Freshdesk", "count": 4}],
+        "top_feature_gaps": [{"gap": "automation", "count": 2}],
+        "company_examples": [],
+        "quote_highlights": [],
+        "product_categories": ["Support"],
+    }
+    comparison_snapshot = {
+        "vendor_name": "Freshdesk",
+        "signal_count": 5,
+        "churn_intent_count": 1,
+        "churn_signal_density": 1.4,
+        "avg_urgency_score": 5.4,
+        "positive_review_pct": 52.0,
+        "recommend_ratio": 31.0,
+        "top_pain_categories": [{"category": "support"}],
+        "top_competitors": [{"competitor": "Zendesk", "count": 3}],
+        "top_feature_gaps": [{"gap": "reporting", "count": 1}],
+        "company_examples": [],
+        "quote_highlights": [],
+        "product_categories": ["Support"],
+    }
+    monkeypatch.setattr(
+        mod,
+        "_vendor_snapshot_from_pools",
+        AsyncMock(side_effect=[primary_snapshot, comparison_snapshot]),
+    )
+    monkeypatch.setattr(mod, "_head_to_head_from_edges", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod, "_fetch_product_profiles", AsyncMock(return_value=[]))
+    monkeypatch.setattr(mod, "_switching_triggers_from_dynamics", AsyncMock(side_effect=[[], []]))
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.load_best_reasoning_views",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.load_prior_reasoning_snapshots",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(
+        "atlas_brain.autonomous.tasks._b2b_synthesis_reader.synthesis_view_to_reasoning_entry",
+        lambda _view: {},
+    )
+    dispatch = AsyncMock(return_value=1)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher.dispatch_report_generated_webhook",
+        dispatch,
+    )
+
+    report_id = uuid4()
+
+    class Pool:
+        async def fetchrow(self, query, *args):
+            normalized = " ".join(str(query).split())
+            if "SELECT intelligence_data FROM b2b_intelligence" in normalized:
+                return None
+            if "INSERT INTO b2b_intelligence" in normalized:
+                return {"id": report_id}
+            raise AssertionError(normalized)
+
+    report = await mod.generate_vendor_comparison_report(
+        Pool(),
+        "Zendesk",
+        "Freshdesk",
+        window_days=90,
+        persist=True,
+    )
+
+    assert report is not None
+    assert report["report_id"] == str(report_id)
+    dispatch.assert_awaited_once()
+    args, kwargs = dispatch.await_args
+    assert args[0].__class__.__name__ == "Pool"
+    assert kwargs == {
+        "report_id": report_id,
+        "report_type": "vendor_comparison",
+        "vendor_name": "Zendesk",
+        "category_filter": "Freshdesk",
+        "status": "published",
+        "report_date": str(mod.date.today()),
+        "llm_model": "pipeline_aggregation",
+    }
+
+
+@pytest.mark.asyncio
 async def test_generate_company_deep_dive_report_uses_shared_archetype_lookup(monkeypatch):
     pool = object()
     snapshot = {

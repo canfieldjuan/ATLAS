@@ -281,6 +281,54 @@ async def test_generate_vendor_report_normalizes_generic_pain_categories():
 
 
 @pytest.mark.asyncio
+async def test_generate_challenger_report_dispatches_report_generated_webhook(monkeypatch):
+    report_id = uuid4()
+    pool = SimpleNamespace(
+        fetch=AsyncMock(return_value=[
+            {
+                "review_id": uuid4(),
+                "vendor_name": "Salesforce",
+                "reviewer_company": "Acme",
+                "product_category": "CRM",
+                "urgency": 8,
+                "is_dm": True,
+                "role_type": "economic_buyer",
+                "buying_stage": "evaluation",
+                "seat_count": 120,
+                "competitors_json": [{"name": "HubSpot", "features": []}],
+                "pain_json": [{"category": "pricing"}],
+                "quotable_phrases": [],
+                "feature_gaps": [],
+                "reviewer_title": "VP Sales",
+                "company_size_raw": "100-499",
+                "industry": "Software",
+            }
+        ]),
+        fetchrow=AsyncMock(return_value={"id": report_id}),
+        execute=AsyncMock(return_value="INSERT 0 1"),
+    )
+    dispatch = AsyncMock(return_value=1)
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher.dispatch_report_generated_webhook",
+        dispatch,
+    )
+
+    report = await churn_intel_mod.generate_challenger_report(pool, "HubSpot", window_days=90)
+
+    assert report is not None
+    assert report["report_id"] == str(report_id)
+    dispatch.assert_awaited_once_with(
+        pool,
+        report_id=report_id,
+        report_type="challenger_intel",
+        vendor_name="HubSpot",
+        status="published",
+        report_date=str(churn_intel_mod.date.today()),
+        llm_model="pipeline_aggregation",
+    )
+
+
+@pytest.mark.asyncio
 async def test_generate_challenger_report_normalizes_generic_pain_categories():
     pool = SimpleNamespace(
         fetch=AsyncMock(return_value=[
@@ -2691,6 +2739,16 @@ class _FakePersistPool:
         return 0
 
 
+class _FakePersistFetchPool(_FakePersistPool):
+    def __init__(self, report_id: Any) -> None:
+        super().__init__()
+        self.report_id = report_id
+
+    async def fetchrow(self, *args: Any) -> dict[str, Any]:
+        self.calls.append(args)
+        return {"id": self.report_id}
+
+
 class TestBattleCardPersistence:
     @pytest.mark.asyncio
     async def test_persist_battle_card_writes_deterministic_sections(self):
@@ -2753,6 +2811,39 @@ class TestBattleCardPersistence:
         assert payload["render_packet_version"] == "contract_first_v1"
         assert payload["render_contracts_used"] is False
         assert pool.calls[0][8] == "pipeline_deterministic"
+
+    @pytest.mark.asyncio
+    async def test_persist_battle_card_dispatches_report_generated_webhook(self, monkeypatch):
+        report_id = uuid4()
+        pool = _FakePersistFetchPool(report_id)
+        card = _sample_battle_card()
+        dispatch = AsyncMock(return_value=1)
+        monkeypatch.setattr(
+            "atlas_brain.services.b2b.webhook_dispatcher.dispatch_report_generated_webhook",
+            dispatch,
+        )
+
+        persisted = await _persist_battle_card(
+            pool,
+            today=date(2026, 3, 18),
+            card=card,
+            data_density=json.dumps({"vendors_analyzed": 1}),
+            report_source_review_count=42,
+            report_source_dist={"g2": 30, "reddit": 12},
+            llm_model="pipeline_deterministic",
+            status="needs_review",
+        )
+
+        assert persisted is True
+        dispatch.assert_awaited_once_with(
+            pool,
+            report_id=report_id,
+            report_type="battle_card",
+            vendor_name=card["vendor"],
+            status="needs_review",
+            report_date="2026-03-18",
+            llm_model="pipeline_deterministic",
+        )
 
     @pytest.mark.asyncio
     async def test_retire_gated_out_battle_cards_deletes_latest_vendor_rows(self):
