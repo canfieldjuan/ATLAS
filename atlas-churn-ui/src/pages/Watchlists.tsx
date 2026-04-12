@@ -1550,6 +1550,18 @@ export default function Watchlists() {
     }
   }
 
+  async function handleCopySelectedOpportunitiesLink() {
+    if (!selectedAccount) return
+    try {
+      await navigator.clipboard.writeText(watchlistOpportunitiesUrl(selectedAccountSearchParams, selectedAccount.vendor))
+      setActionError(null)
+      setActionMessage(`Copied opportunities link for ${selectedAccount.company || selectedAccount.vendor}`)
+    } catch (err) {
+      setActionMessage(null)
+      setActionError(err instanceof Error ? err.message : 'Failed to copy opportunities link')
+    }
+  }
+
   async function handleCopySelectedEvidenceLink() {
     if (!selectedAccount) return
     try {
@@ -3955,6 +3967,7 @@ export default function Watchlists() {
         onViewReport={(item) => navigate(watchlistReportsPath(selectedAccountSearchParams, item.vendor))}
         onCopyReportLink={() => void handleCopySelectedReportsLink()}
         onViewOpportunity={(item) => navigate(watchlistOpportunitiesPath(selectedAccountSearchParams, item.vendor))}
+        onCopyOpportunityLink={() => void handleCopySelectedOpportunitiesLink()}
         onViewReview={(reviewId) => selectedAccount
           ? navigate(watchlistReviewDetailPath(selectedAccountSearchParams, selectedAccount, reviewId))
           : null}

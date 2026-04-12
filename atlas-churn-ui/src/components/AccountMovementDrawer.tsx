@@ -36,6 +36,7 @@ interface AccountMovementDrawerProps {
   onViewReport?: (item: AccountsInMotionFeedItem) => void
   onCopyReportLink?: (item: AccountsInMotionFeedItem) => void
   onViewOpportunity?: (item: AccountsInMotionFeedItem) => void
+  onCopyOpportunityLink?: (item: AccountsInMotionFeedItem) => void
   onViewReview?: (reviewId: string) => void
   onCopyReviewLink?: (reviewId: string) => void
   onCopyLink?: () => void
@@ -92,6 +93,7 @@ export default function AccountMovementDrawer({
   onViewReport,
   onCopyReportLink,
   onViewOpportunity,
+  onCopyOpportunityLink,
   onViewReview,
   onCopyReviewLink,
   onCopyLink,
@@ -276,13 +278,25 @@ export default function AccountMovementDrawer({
               </button>
             )}
             {onViewOpportunity && (
-              <button
-                className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
-                onClick={() => onViewOpportunity(item)}
-              >
-                <Telescope className="h-3.5 w-3.5" />
-                View opportunities
-              </button>
+              <>
+                <button
+                  className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-500/20"
+                  onClick={() => onViewOpportunity(item)}
+                >
+                  <Telescope className="h-3.5 w-3.5" />
+                  View opportunities
+                </button>
+                {onCopyOpportunityLink && (
+                  <button
+                    aria-label="Copy opportunities link"
+                    className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700"
+                    onClick={() => onCopyOpportunityLink(item)}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy opportunities
+                  </button>
+                )}
+              </>
             )}
             {onGenerateCampaign && (
               <button
