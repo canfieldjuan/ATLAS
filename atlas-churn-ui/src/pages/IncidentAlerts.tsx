@@ -423,6 +423,18 @@ function formatReviewTargetLabel(activity: {
   return vendor ? `Review target: ${vendor}` : `Review target: ${reviewId}`
 }
 
+function formatVendorTargetLabel(activity: {
+  review_id?: string | null
+  report_id?: string | null
+  vendor_name?: string | null
+  account_review_focus?: AlertAccountReviewFocus | null
+}) {
+  if (activity.account_review_focus) return null
+  if (normalizeActivityReference(activity.review_id) || normalizeActivityReference(activity.report_id)) return null
+  const vendor = String(activity.vendor_name || '').trim()
+  return vendor ? `Vendor target: ${vendor}` : null
+}
+
 function generateWebhookSecret() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
   const bytes = new Uint8Array(24)
@@ -1265,6 +1277,11 @@ export default function IncidentAlerts() {
                               {formatReportTargetLabel(latestFailureContext)}
                             </div>
                           ) : null}
+                          {formatVendorTargetLabel(latestFailureContext) ? (
+                            <div className="mt-1 text-[11px] font-medium text-rose-100/90">
+                              {formatVendorTargetLabel(latestFailureContext)}
+                            </div>
+                          ) : null}
                           {renderActivityReferences(latestFailureReferences)}
                           {renderActivityDetailShortcuts(latestFailureContext, currentAlertsUrl)}
                           {renderActivityVendorShortcuts(latestFailureContext, currentAlertsUrl)}
@@ -1302,6 +1319,11 @@ export default function IncidentAlerts() {
                               {formatReportTargetLabel(latestManualTestContext)}
                             </div>
                           ) : null}
+                          {latestManualTestContext && formatVendorTargetLabel(latestManualTestContext) ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatVendorTargetLabel(latestManualTestContext)}
+                            </div>
+                          ) : null}
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
                           {latestManualTestContext ? renderActivityDetailShortcuts(latestManualTestContext, currentAlertsUrl) : null}
                           {latestManualTestContext ? renderActivityVendorShortcuts(latestManualTestContext, currentAlertsUrl) : null}
@@ -1326,6 +1348,11 @@ export default function IncidentAlerts() {
                           {formatReportTargetLabel(latestCrmPush) ? (
                             <div className="mt-1 text-[11px] font-medium text-current/90">
                               {formatReportTargetLabel(latestCrmPush)}
+                            </div>
+                          ) : null}
+                          {formatVendorTargetLabel(latestCrmPush) ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatVendorTargetLabel(latestCrmPush)}
                             </div>
                           ) : null}
                           {renderActivityReferences(latestCrmPush)}

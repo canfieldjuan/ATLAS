@@ -270,6 +270,7 @@ describe('IncidentAlerts', () => {
     )
 
     expect(await screen.findByText('Vendor-only endpoint')).toBeInTheDocument()
+    expect(screen.getByText('Vendor target: Acme Rival')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Open Review' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Open Report' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Watchlists' })).toHaveAttribute(
