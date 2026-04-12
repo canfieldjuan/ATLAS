@@ -140,7 +140,7 @@ async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus
                         'company_name': 'Acme Bank',
                         'signal_type': 'competitive_displacement',
                         'company_signal_id': '22222222-2222-2222-2222-222222222222',
-                        'review_id': 'review-123',
+                        'review_id': '33333333-3333-4333-8333-333333333334',
                     },
                 },
                 'status_code': 202,
@@ -165,21 +165,84 @@ async def test_list_webhook_deliveries_exposes_payload_context_and_account_focus
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
             b2b_dashboard,
-            '_resolve_webhook_activity_account_focus',
-            AsyncMock(return_value=focus),
-        ) as resolve_focus:
-            result = await b2b_dashboard.list_webhook_deliveries('3df7f790-6afc-4e0f-b40e-a78f77e60dd2', success=None, event_type=None, start_date=None, end_date=None, limit=50, user=user)
+            '_fetch_company_signal_focus_context',
+            AsyncMock(return_value={
+                'signal_id': '22222222-2222-2222-2222-222222222222',
+                'company_name': 'Acme Bank',
+                'vendor_name': 'Acme Rival',
+                'review_id': '33333333-3333-4333-8333-333333333334',
+            }),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(return_value=focus),
+            ) as resolve_focus:
+                result = await b2b_dashboard.list_webhook_deliveries('3df7f790-6afc-4e0f-b40e-a78f77e60dd2', success=None, event_type=None, start_date=None, end_date=None, limit=50, user=user)
 
     assert result['count'] == 1
     delivery = result['deliveries'][0]
     assert delivery['vendor_name'] == 'Acme Rival'
     assert delivery['company_name'] == 'Acme Bank'
     assert delivery['signal_type'] == 'competitive_displacement'
+    assert delivery['review_id'] == '33333333-3333-4333-8333-333333333334'
     assert delivery['account_review_focus'] == focus
     resolve_focus.assert_awaited_once()
     _, kwargs = resolve_focus.await_args
     assert kwargs['signal_id'] == '22222222-2222-2222-2222-222222222222'
-    assert kwargs['review_id'] == 'review-123'
+    assert kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
+
+
+@pytest.mark.asyncio
+async def test_list_crm_push_log_exposes_review_id_from_signal_context():
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=1)
+    pool.fetch = AsyncMock(
+        return_value=[
+            {
+                'id': 'cc5659f4-dfe6-4c12-8fd6-e6eb5579cc46',
+                'signal_type': 'company_signal',
+                'signal_id': '22222222-2222-2222-2222-222222222222',
+                'vendor_name': 'Acme Rival',
+                'company_name': 'Acme Bank',
+                'crm_record_id': 'crm-43',
+                'crm_record_type': 'deal',
+                'status': 'success',
+                'error': None,
+                'pushed_at': datetime(2026, 4, 11, 2, 30, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    user = MagicMock(account_id='11111111-1111-1111-1111-111111111111')
+
+    with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
+        with patch.object(
+            b2b_dashboard,
+            '_fetch_company_signal_focus_context',
+            AsyncMock(return_value={
+                'signal_id': '22222222-2222-2222-2222-222222222222',
+                'company_name': 'Acme Bank',
+                'vendor_name': 'Acme Rival',
+                'review_id': '33333333-3333-4333-8333-333333333334',
+            }),
+        ) as fetch_signal_context:
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(return_value=None),
+            ) as resolve_focus:
+                result = await b2b_dashboard.list_crm_push_log(
+                    'aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44',
+                    limit=50,
+                    user=user,
+                )
+
+    push = result['pushes'][0]
+    assert push['review_id'] == '33333333-3333-4333-8333-333333333334'
+    fetch_signal_context.assert_awaited_once()
+    resolve_focus.assert_awaited_once()
+    _, kwargs = resolve_focus.await_args
+    assert kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
 
 
 @pytest.mark.asyncio
@@ -215,18 +278,30 @@ async def test_list_crm_push_log_exposes_account_review_focus():
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
             b2b_dashboard,
-            '_resolve_webhook_activity_account_focus',
-            AsyncMock(return_value=focus),
-        ) as resolve_focus:
-            result = await b2b_dashboard.list_crm_push_log('aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44', limit=50, user=user)
+            '_fetch_company_signal_focus_context',
+            AsyncMock(return_value={
+                'signal_id': '22222222-2222-2222-2222-222222222222',
+                'company_name': 'Acme Bank',
+                'vendor_name': 'Acme Rival',
+                'review_id': '33333333-3333-4333-8333-333333333334',
+            }),
+        ):
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(return_value=focus),
+            ) as resolve_focus:
+                result = await b2b_dashboard.list_crm_push_log('aa5659f4-dfe6-4c12-8fd6-e6eb5579cc44', limit=50, user=user)
 
     assert result['count'] == 1
     push = result['pushes'][0]
     assert push['signal_id'] == '22222222-2222-2222-2222-222222222222'
+    assert push['review_id'] == '33333333-3333-4333-8333-333333333334'
     assert push['account_review_focus'] == focus
     resolve_focus.assert_awaited_once()
     _, kwargs = resolve_focus.await_args
     assert kwargs['signal_id'] == '22222222-2222-2222-2222-222222222222'
+    assert kwargs['review_id'] == '33333333-3333-4333-8333-333333333334'
 
 
 @pytest.mark.asyncio

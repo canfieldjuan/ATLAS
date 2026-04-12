@@ -448,6 +448,12 @@ function buildReportDetailPath(reportId: string, backTo: string) {
   return `/reports/${encodeURIComponent(reportId)}?${next.toString()}`
 }
 
+function buildReviewDetailPath(reviewId: string, backTo: string) {
+  const next = new URLSearchParams()
+  next.set('back_to', backTo)
+  return `/reviews/${encodeURIComponent(reviewId)}?${next.toString()}`
+}
+
 export default function IncidentAlerts() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1127,8 +1133,16 @@ export default function IncidentAlerts() {
                                     ) : null}
                                     attempt {delivery.attempt} · {formatDurationMs(delivery.duration_ms)} · {formatTs(delivery.delivered_at)}
                                   </div>
-                                  {delivery.account_review_focus || delivery.report_id || delivery.vendor_name ? (
+                                  {delivery.review_id || delivery.account_review_focus || delivery.report_id || delivery.vendor_name ? (
                                     <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                      {delivery.review_id ? (
+                                        <Link
+                                          to={buildReviewDetailPath(delivery.review_id, activityBackTo)}
+                                          className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                        >
+                                          Review
+                                        </Link>
+                                      ) : null}
                                       {delivery.account_review_focus ? (
                                         <Link
                                           to={buildAccountReviewPath(delivery.account_review_focus, activityBackTo)}
@@ -1227,8 +1241,16 @@ export default function IncidentAlerts() {
                                       {push.report_type || push.signal_type ? <>{push.report_type || push.signal_type} · </> : null}
                                       {push.crm_record_type || 'record'}{push.crm_record_id ? ` · ${push.crm_record_id}` : ''} · {formatTs(push.pushed_at)}
                                     </div>
-                                    {push.account_review_focus || push.report_id || push.vendor_name ? (
+                                    {push.review_id || push.account_review_focus || push.report_id || push.vendor_name ? (
                                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                        {push.review_id ? (
+                                          <Link
+                                            to={buildReviewDetailPath(push.review_id, activityBackTo)}
+                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
+                                          >
+                                            Review
+                                          </Link>
+                                        ) : null}
                                         {push.account_review_focus ? (
                                           <Link
                                             to={buildAccountReviewPath(push.account_review_focus, activityBackTo)}

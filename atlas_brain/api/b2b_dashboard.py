@@ -6168,18 +6168,26 @@ async def list_webhook_deliveries(
     deliveries = []
     for r in rows:
         context = _extract_webhook_activity_context(r.get("payload"))
+        signal_id = context.get("signal_id")
+        signal_context = None
+        if signal_id:
+            signal_context = signal_cache.get(signal_id)
+            if signal_context is None and signal_id not in signal_cache:
+                signal_context = await _fetch_company_signal_focus_context(pool, signal_id)
+                signal_cache[signal_id] = signal_context
         report_context = await _fetch_webhook_activity_report_context(
             pool,
             context.get("report_id"),
             report_activity_cache,
         )
+        resolved_review_id = context.get("review_id") or (signal_context or {}).get("review_id")
         account_review_focus = await _resolve_webhook_activity_account_focus(
             pool,
             user,
             vendor_name=context.get("vendor_name"),
             company_name=context.get("company_name"),
-            signal_id=context.get("signal_id"),
-            review_id=context.get("review_id"),
+            signal_id=signal_id,
+            review_id=resolved_review_id,
             report_cache=report_cache,
             tracked_vendor_cache=tracked_vendor_cache,
             signal_cache=signal_cache,
@@ -6194,8 +6202,9 @@ async def list_webhook_deliveries(
             "error": r["error"],
             "delivered_at": r["delivered_at"].isoformat(),
             "vendor_name": context.get("vendor_name") or (report_context or {}).get("vendor_name"),
-            "company_name": context.get("company_name"),
+            "company_name": context.get("company_name") or (signal_context or {}).get("company_name"),
             "signal_type": context.get("signal_type") or r["event_type"],
+            "review_id": resolved_review_id,
             "report_id": context.get("report_id") or (report_context or {}).get("report_id"),
             "report_type": context.get("report_type") or (report_context or {}).get("report_type"),
             "report_title": context.get("report_title") or (report_context or {}).get("report_title"),
@@ -6282,15 +6291,23 @@ async def list_crm_push_log(
     for r in rows:
         signal_type = str(r["signal_type"] or "").strip()
         signal_id = str(r["signal_id"]) if r["signal_id"] else None
+        signal_context = None
+        if signal_id and signal_type != "report_generated":
+            signal_context = signal_cache.get(signal_id)
+            if signal_context is None and signal_id not in signal_cache:
+                signal_context = await _fetch_company_signal_focus_context(pool, signal_id)
+                signal_cache[signal_id] = signal_context
         report_context = None
         if signal_type == "report_generated" and signal_id:
             report_context = await _fetch_webhook_activity_report_context(pool, signal_id, report_activity_cache)
+        resolved_review_id = (signal_context or {}).get("review_id")
         account_review_focus = await _resolve_webhook_activity_account_focus(
             pool,
             user,
             vendor_name=r["vendor_name"],
             company_name=r["company_name"],
             signal_id=None if signal_type == "report_generated" else signal_id,
+            review_id=resolved_review_id,
             report_cache=report_cache,
             tracked_vendor_cache=tracked_vendor_cache,
             signal_cache=signal_cache,
@@ -6299,8 +6316,9 @@ async def list_crm_push_log(
             "id": str(r["id"]),
             "signal_type": signal_type,
             "signal_id": signal_id,
-            "vendor_name": r["vendor_name"] or (report_context or {}).get("vendor_name"),
-            "company_name": r["company_name"],
+            "vendor_name": r["vendor_name"] or (signal_context or {}).get("vendor_name") or (report_context or {}).get("vendor_name"),
+            "company_name": r["company_name"] or (signal_context or {}).get("company_name"),
+            "review_id": resolved_review_id,
             "report_id": signal_id if signal_type == "report_generated" else None,
             "report_type": (report_context or {}).get("report_type"),
             "report_title": (report_context or {}).get("report_title"),
@@ -7218,6 +7236,16 @@ async def _list_accounts_in_motion_from_report(
     }
 
 
+def _normalize_webhook_activity_uuid_text(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return str(_uuid.UUID(raw))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _extract_webhook_activity_context(payload: Any) -> dict[str, str | None]:
     envelope = _safe_json(payload)
     if not isinstance(envelope, dict):
@@ -7231,19 +7259,18 @@ def _extract_webhook_activity_context(payload: Any) -> dict[str, str | None]:
     signal_id_value = data.get("company_signal_id")
     if signal_id_value is None:
         signal_id_value = data.get("signal_id")
-    signal_id = str(signal_id_value).strip() if signal_id_value is not None else ""
-    review_id = str(data.get("review_id") or "").strip()
-    report_id_value = data.get("report_id")
-    report_id = str(report_id_value).strip() if report_id_value is not None else ""
+    signal_id = _normalize_webhook_activity_uuid_text(signal_id_value)
+    review_id = _normalize_webhook_activity_uuid_text(data.get("review_id"))
+    report_id = _normalize_webhook_activity_uuid_text(data.get("report_id"))
     report_type = str(data.get("report_type") or data.get("artifact_type") or "").strip() or None
     report_title = str(data.get("report_title") or "").strip() or None
     return {
         "vendor_name": vendor_name,
         "company_name": company_name,
         "signal_type": signal_type,
-        "signal_id": signal_id or None,
-        "review_id": review_id or None,
-        "report_id": report_id or None,
+        "signal_id": signal_id,
+        "review_id": review_id,
+        "report_id": report_id,
         "report_type": report_type,
         "report_title": report_title,
     }
