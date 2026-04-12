@@ -228,3 +228,70 @@ def test_native_crm_webhooks_reject_invalid_json_before_db_touch(monkeypatch):
             )
             assert response.status_code == 400
             assert response.json()["detail"] == "Invalid JSON"
+
+
+def test_get_enrichment_stats_scopes_to_authenticated_account(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+    app.dependency_overrides[crm_events_api.optional_auth] = lambda: SimpleNamespace(
+        account_id="11111111-1111-1111-1111-111111111111"
+    )
+
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "total_events": 4,
+            "matched": 2,
+            "unmatched": 1,
+            "skipped": 0,
+            "pending": 1,
+            "errored": 0,
+            "has_company": 3,
+            "has_email": 2,
+            "missing_both": 1,
+            "enriched_count": 1,
+            "enriched_matched": 1,
+        }
+    )
+    monkeypatch.setattr(crm_events_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/crm/events/enrichment-stats")
+
+    assert response.status_code == 200
+    query, *params = pool.fetchrow.await_args.args
+    assert "WHERE account_id = $1::uuid" in query
+    assert params == ["11111111-1111-1111-1111-111111111111"]
+
+
+def test_get_enrichment_stats_keeps_global_query_without_auth(monkeypatch):
+    app = FastAPI()
+    app.include_router(crm_events_api.router)
+
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "total_events": 0,
+            "matched": 0,
+            "unmatched": 0,
+            "skipped": 0,
+            "pending": 0,
+            "errored": 0,
+            "has_company": 0,
+            "has_email": 0,
+            "missing_both": 0,
+            "enriched_count": 0,
+            "enriched_matched": 0,
+        }
+    )
+    monkeypatch.setattr(crm_events_api, "get_db_pool", lambda: pool)
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/crm/events/enrichment-stats")
+
+    assert response.status_code == 200
+    query, *params = pool.fetchrow.await_args.args
+    assert "WHERE account_id = $1::uuid" not in query
+    assert params == []

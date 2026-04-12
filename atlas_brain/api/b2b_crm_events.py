@@ -955,12 +955,16 @@ async def get_enrichment_stats(
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Show enrichment coverage and effectiveness stats for CRM events."""
-    pool = get_db_pool()
-    if not pool.is_initialized:
-        raise HTTPException(503, "Database not ready")
+    pool = _pool_or_503()
+
+    where = ""
+    params: list[str] = []
+    if user:
+        where = "WHERE account_id = $1::uuid"
+        params.append(str(user.account_id))
 
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT
             COUNT(*) AS total_events,
             COUNT(*) FILTER (WHERE status = 'matched') AS matched,
@@ -974,7 +978,9 @@ async def get_enrichment_stats(
             COUNT(*) FILTER (WHERE processing_notes LIKE '%[enriched]%') AS enriched_count,
             COUNT(*) FILTER (WHERE processing_notes LIKE '%[enriched]%' AND status = 'matched') AS enriched_matched
         FROM b2b_crm_events
-        """
+        {where}
+        """,
+        *params,
     )
 
     total = row["total_events"] or 0
