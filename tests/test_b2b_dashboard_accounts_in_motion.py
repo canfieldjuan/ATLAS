@@ -2652,6 +2652,38 @@ def test_revert_correction_rejects_invalid_uuid_before_db_touch(monkeypatch):
     assert response.json()['detail'] == 'correction_id must be a valid UUID'
 
 
+def test_list_corrections_rejects_invalid_entity_type_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(b2b_dashboard.router)
+
+    def fail_pool():
+        raise AssertionError("DB pool should not be acquired for invalid correction filters")
+
+    monkeypatch.setattr(b2b_dashboard, 'get_db_pool', fail_pool)
+
+    with TestClient(app) as client:
+        response = client.get('/b2b/dashboard/corrections?entity_type=bogus')
+
+    assert response.status_code == 400
+    assert 'Invalid entity_type.' in response.json()['detail']
+
+
+def test_list_corrections_rejects_invalid_start_date_before_db_touch(monkeypatch):
+    app = FastAPI()
+    app.include_router(b2b_dashboard.router)
+
+    def fail_pool():
+        raise AssertionError("DB pool should not be acquired for invalid correction dates")
+
+    monkeypatch.setattr(b2b_dashboard, 'get_db_pool', fail_pool)
+
+    with TestClient(app) as client:
+        response = client.get('/b2b/dashboard/corrections?start_date=not-a-date')
+
+    assert response.status_code == 400
+    assert response.json()['detail'] == 'Invalid start_date (ISO 8601 expected)'
+
+
 @pytest.mark.asyncio
 async def test_list_corrections_normalizes_blank_filters():
     pool = MagicMock()

@@ -6599,7 +6599,6 @@ async def list_corrections(
     corrected_by = _optional_query_text(corrected_by)
     start_date = _optional_query_text(start_date)
     end_date = _optional_query_text(end_date)
-    pool = _pool_or_503()
     conditions: list[str] = []
     params: list = []
     idx = 1
@@ -6669,6 +6668,7 @@ async def list_corrections(
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     params.append(limit)
 
+    pool = _pool_or_503()
     rows = await pool.fetch(
         f"""
         SELECT id, entity_type, entity_id, correction_type, field_name,
