@@ -2236,7 +2236,7 @@ async def test_list_watchlist_alert_events_returns_view_scoped_rows(monkeypatch)
     monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
     monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
 
-    result = await mod.list_watchlist_alert_events(view_id=view_id, status="open", limit=25, user=user)
+    result = await mod.list_watchlist_alert_events(view_id=view_id, status=" open ", limit=25, user=user)
 
     assert result["watchlist_view_id"] == str(view_id)
     assert result["watchlist_view_name"] == "Hot CRM alerts"
@@ -2245,6 +2245,47 @@ async def test_list_watchlist_alert_events_returns_view_scoped_rows(monkeypatch)
     sql = pool.fetch.await_args.args[0]
     assert "FROM b2b_watchlist_alert_events" in sql
     assert "status = $3" in sql
+
+
+@pytest.mark.asyncio
+async def test_list_watchlist_alert_events_normalizes_blank_status_to_open(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    view_id = uuid4()
+    pool = SimpleNamespace(
+        is_initialized=True,
+        fetchrow=AsyncMock(
+            return_value={
+                "id": view_id,
+                "account_id": account_id,
+                "name": "Hot CRM alerts",
+                "vendor_name": "Salesforce",
+                "category": "CRM",
+                "source": None,
+                "min_urgency": 8.0,
+                "include_stale": False,
+                "named_accounts_only": True,
+                "changed_wedges_only": False,
+                "vendor_alert_threshold": 7.5,
+                "account_alert_threshold": 8.5,
+                "stale_days_threshold": 2,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ),
+        fetch=AsyncMock(return_value=[]),
+    )
+    user = SimpleNamespace(account_id=str(account_id), product="b2b_retention")
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    result = await mod.list_watchlist_alert_events(view_id=view_id, status="   ", limit=25, user=user)
+
+    assert result == {"watchlist_view_id": str(view_id), "watchlist_view_name": "Hot CRM alerts", "status": "open", "events": [], "count": 0}
+    fetch_args = pool.fetch.await_args.args
+    assert "AND status = $3" in fetch_args[0]
+    assert fetch_args[1:] == (account_id, view_id, "open", 25)
 
 
 @pytest.mark.asyncio

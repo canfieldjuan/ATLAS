@@ -2428,7 +2428,8 @@ async def list_watchlist_alert_events(
     if not view_row:
         raise HTTPException(status_code=404, detail="Saved view not found")
 
-    status_value = str(status or "open").strip().lower()
+    status_text = _clean_optional_text(status)
+    status_value = (status_text or "open").lower()
     if status_value not in {"open", "resolved", "all"}:
         raise HTTPException(status_code=422, detail="status must be one of: open, resolved, all")
 
