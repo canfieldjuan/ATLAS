@@ -55,7 +55,7 @@ async def test_get_evidence_vault_uses_shared_vendor_intelligence_reader(monkeyp
     )
     monkeypatch.setattr(evidence_mcp, "_search_vendor_intelligence_record", reader)
 
-    body = json.loads(await evidence_mcp.get_evidence_vault("zen"))
+    body = json.loads(await evidence_mcp.get_evidence_vault("  zen  "))
 
     reader.assert_awaited_once_with(
         pool,
@@ -195,3 +195,135 @@ async def test_list_account_intelligence_normalizes_blank_vendor_filter(monkeypa
     assert "vendor_name ILIKE" not in query
     assert params == [date.today(), 30]
     assert body["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_segment_intelligence_trims_vendor_name_before_query(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "vendor_name": "Zendesk",
+            "as_of_date": date(2026, 3, 31),
+            "analysis_window_days": 30,
+            "schema_version": 2,
+            "segments": {},
+            "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+        }
+    )
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.get_segment_intelligence("  zen  "))
+
+    pool.fetchrow.assert_awaited_once()
+    _query, vendor_query, as_of_date, window_days = pool.fetchrow.await_args.args
+    assert vendor_query == "zen"
+    assert as_of_date == date.today()
+    assert window_days == 30
+    assert body["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_temporal_intelligence_trims_vendor_name_before_query(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "vendor_name": "Zendesk",
+            "as_of_date": date(2026, 3, 31),
+            "analysis_window_days": 30,
+            "schema_version": 2,
+            "temporal": {},
+            "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+        }
+    )
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.get_temporal_intelligence("  zen  "))
+
+    pool.fetchrow.assert_awaited_once()
+    _query, vendor_query, as_of_date, window_days = pool.fetchrow.await_args.args
+    assert vendor_query == "zen"
+    assert as_of_date == date.today()
+    assert window_days == 30
+    assert body["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_displacement_dynamics_trims_vendor_names_before_query(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "from_vendor": "Zendesk",
+            "to_vendor": "Freshdesk",
+            "as_of_date": date(2026, 3, 31),
+            "analysis_window_days": 30,
+            "schema_version": 2,
+            "dynamics": {},
+            "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+        }
+    )
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.get_displacement_dynamics("  zen  ", "  fresh  "))
+
+    pool.fetchrow.assert_awaited_once()
+    _query, from_vendor, to_vendor, as_of_date, window_days = pool.fetchrow.await_args.args
+    assert from_vendor == "zen"
+    assert to_vendor == "fresh"
+    assert as_of_date == date.today()
+    assert window_days == 30
+    assert body["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_category_dynamics_trims_category_before_query(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "category": "CRM",
+            "as_of_date": date(2026, 3, 31),
+            "analysis_window_days": 30,
+            "schema_version": 2,
+            "dynamics": {},
+            "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+        }
+    )
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.get_category_dynamics("  crm  "))
+
+    pool.fetchrow.assert_awaited_once()
+    _query, category, as_of_date, window_days = pool.fetchrow.await_args.args
+    assert category == "crm"
+    assert as_of_date == date.today()
+    assert window_days == 30
+    assert body["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_account_intelligence_trims_vendor_name_before_query(monkeypatch):
+    pool = MagicMock()
+    pool.is_initialized = True
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "vendor_name": "Zendesk",
+            "as_of_date": date(2026, 3, 31),
+            "analysis_window_days": 30,
+            "schema_version": 2,
+            "accounts": {},
+            "created_at": datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+        }
+    )
+    monkeypatch.setattr(evidence_mcp, "get_pool", lambda: pool)
+
+    body = json.loads(await evidence_mcp.get_account_intelligence("  zen  "))
+
+    pool.fetchrow.assert_awaited_once()
+    _query, vendor_query, as_of_date, window_days = pool.fetchrow.await_args.args
+    assert vendor_query == "zen"
+    assert as_of_date == date.today()
+    assert window_days == 30
+    assert body["success"] is True

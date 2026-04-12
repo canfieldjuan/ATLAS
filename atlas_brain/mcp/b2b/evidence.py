@@ -13,6 +13,12 @@ def _clean_optional_text(value: Optional[str]) -> Optional[str]:
     return text or None
 
 
+def _clean_required_text(value: Optional[str]) -> str | None:
+    text = _clean_optional_text(value)
+    if text is None:
+        return None
+    return text
+
 
 # -------------------------------------------------------------------
 # Evidence Vault
@@ -68,7 +74,8 @@ async def get_evidence_vault(
     as_of_date: Latest date to consider (ISO format, default today)
     window_days: Analysis window in days (default 30)
     """
-    if not vendor_name or not vendor_name.strip():
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
 
     window_days = max(1, min(window_days, 3650))
@@ -86,7 +93,7 @@ async def get_evidence_vault(
 
         row = await _search_vendor_intelligence_record(
             pool,
-            vendor_query=vendor_name.strip(),
+            vendor_query=clean_vendor_name,
             as_of=target_date,
             analysis_window_days=window_days,
         )
@@ -203,7 +210,8 @@ async def get_segment_intelligence(
     as_of_date: Latest date to consider (ISO format, default today)
     window_days: Analysis window in days (default 30)
     """
-    if not vendor_name or not vendor_name.strip():
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
 
     window_days = max(1, min(window_days, 3650))
@@ -230,7 +238,7 @@ async def get_segment_intelligence(
             ORDER BY as_of_date DESC, created_at DESC
             LIMIT 1
             """,
-            vendor_name.strip(),
+            clean_vendor_name,
             target_date,
             window_days,
         )
@@ -375,7 +383,8 @@ async def get_temporal_intelligence(
     as_of_date: Latest date to consider (ISO format, default today)
     window_days: Analysis window in days (default 30)
     """
-    if not vendor_name or not vendor_name.strip():
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
 
     window_days = max(1, min(window_days, 3650))
@@ -402,7 +411,7 @@ async def get_temporal_intelligence(
             ORDER BY as_of_date DESC, created_at DESC
             LIMIT 1
             """,
-            vendor_name.strip(),
+            clean_vendor_name,
             target_date,
             window_days,
         )
@@ -547,9 +556,11 @@ async def get_displacement_dynamics(
     as_of_date: Latest date to consider (ISO format, default today)
     window_days: Analysis window in days (default 30)
     """
-    if not from_vendor or not from_vendor.strip():
+    clean_from_vendor = _clean_required_text(from_vendor)
+    if clean_from_vendor is None:
         return json.dumps({"success": False, "error": "from_vendor is required"})
-    if not to_vendor or not to_vendor.strip():
+    clean_to_vendor = _clean_required_text(to_vendor)
+    if clean_to_vendor is None:
         return json.dumps({"success": False, "error": "to_vendor is required"})
 
     window_days = max(1, min(window_days, 3650))
@@ -577,8 +588,8 @@ async def get_displacement_dynamics(
             ORDER BY as_of_date DESC, created_at DESC
             LIMIT 1
             """,
-            from_vendor.strip(),
-            to_vendor.strip(),
+            clean_from_vendor,
+            clean_to_vendor,
             target_date,
             window_days,
         )
@@ -741,7 +752,8 @@ async def get_category_dynamics(
     as_of_date: Latest date to consider (ISO format, default today)
     window_days: Analysis window in days (default 30)
     """
-    if not category or not category.strip():
+    clean_category = _clean_required_text(category)
+    if clean_category is None:
         return json.dumps({"success": False, "error": "category is required"})
 
     window_days = max(1, min(window_days, 3650))
@@ -768,7 +780,7 @@ async def get_category_dynamics(
             ORDER BY as_of_date DESC, created_at DESC
             LIMIT 1
             """,
-            category.strip(),
+            clean_category,
             target_date,
             window_days,
         )
@@ -909,7 +921,8 @@ async def get_account_intelligence(
     as_of_date: Latest date to consider (ISO format, default today)
     window_days: Analysis window in days (default 30)
     """
-    if not vendor_name or not vendor_name.strip():
+    clean_vendor_name = _clean_required_text(vendor_name)
+    if clean_vendor_name is None:
         return json.dumps({"success": False, "error": "vendor_name is required"})
 
     window_days = max(1, min(window_days, 3650))
@@ -936,7 +949,7 @@ async def get_account_intelligence(
             ORDER BY as_of_date DESC, created_at DESC
             LIMIT 1
             """,
-            vendor_name.strip(),
+            clean_vendor_name,
             target_date,
             window_days,
         )
