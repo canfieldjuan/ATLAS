@@ -3274,11 +3274,9 @@ async def generate_tenant_comparison_report(
 ):
     """Generate a vendor comparison report from tenant-scoped dashboard."""
     _require_b2b_product(user)
+    primary_vendor = _clean_required_text(body.primary_vendor, "primary_vendor")
+    comparison_vendor = _clean_required_text(body.comparison_vendor, "comparison_vendor")
     pool = _pool_or_503()
-    primary_vendor = body.primary_vendor.strip()
-    comparison_vendor = body.comparison_vendor.strip()
-    if not primary_vendor or not comparison_vendor:
-        raise HTTPException(status_code=400, detail="Both vendors are required")
     if primary_vendor.lower() == comparison_vendor.lower():
         raise HTTPException(status_code=400, detail="Choose two different vendors")
 
@@ -3312,11 +3310,9 @@ async def generate_tenant_account_comparison_report(
 ):
     """Generate a company comparison report from tenant-scoped dashboard."""
     _require_b2b_product(user)
+    primary_company = _clean_required_text(body.primary_company, "primary_company")
+    comparison_company = _clean_required_text(body.comparison_company, "comparison_company")
     pool = _pool_or_503()
-    primary_company = body.primary_company.strip()
-    comparison_company = body.comparison_company.strip()
-    if not primary_company or not comparison_company:
-        raise HTTPException(status_code=400, detail="Both companies are required")
     if primary_company.lower() == comparison_company.lower():
         raise HTTPException(status_code=400, detail="Choose two different companies")
 
@@ -3341,10 +3337,8 @@ async def generate_tenant_account_deep_dive_report(
 ):
     """Generate a company deep-dive report from tenant-scoped dashboard."""
     _require_b2b_product(user)
+    company_name = _clean_required_text(body.company_name, "company_name")
     pool = _pool_or_503()
-    company_name = body.company_name.strip()
-    if not company_name:
-        raise HTTPException(status_code=400, detail="company_name is required")
 
     from ..autonomous.tasks.b2b_churn_intelligence import generate_company_deep_dive_report
 
@@ -3366,10 +3360,8 @@ async def generate_tenant_battle_card_report(
 ):
     """Return a persisted battle card artifact for a tracked vendor."""
     _require_b2b_product(user)
+    vendor_name = _clean_required_text(body.vendor_name, "vendor_name")
     pool = _pool_or_503()
-    vendor_name = body.vendor_name.strip()
-    if not vendor_name:
-        raise HTTPException(status_code=400, detail="vendor_name is required")
 
     tracked_vendor = vendor_name
     if settings.saas_auth.enabled and not _is_admin_user(user):
@@ -3742,6 +3734,8 @@ async def upsert_report_subscription(
 ):
     """Create or update the saved recurring-delivery policy for the library or a specific report."""
     _require_b2b_product(user)
+    scope_label = _clean_required_text(body.scope_label, "scope_label")
+    delivery_note = _clean_optional_text(body.delivery_note)
     pool = _pool_or_503()
     normalized_scope_type, normalized_scope_key = _normalize_report_subscription_scope(
         scope_type,
@@ -3764,9 +3758,6 @@ async def upsert_report_subscription(
             detail="Add at least one recipient before enabling recurring delivery",
         )
 
-    scope_label = body.scope_label.strip()
-    if not scope_label:
-        raise HTTPException(status_code=400, detail="scope_label is required")
     normalized_filter_payload = _normalize_report_subscription_filter_payload(
         normalized_scope_type,
         body.filter_payload,
@@ -3846,7 +3837,7 @@ async def upsert_report_subscription(
         body.deliverable_focus,
         body.freshness_policy,
         normalized_recipients,
-        body.delivery_note.strip(),
+        delivery_note,
         body.enabled,
         next_delivery_at,
         user_id,

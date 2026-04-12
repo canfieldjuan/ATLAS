@@ -690,7 +690,7 @@ async def test_generate_tenant_battle_card_report_reuses_existing_persisted_repo
     )
 
     result = await mod.generate_tenant_battle_card_report(
-        mod.BattleCardRequest(vendor_name="zendesk"),
+        mod.BattleCardRequest(vendor_name=" Zendesk "),
         user=user,
     )
 
@@ -698,6 +698,7 @@ async def test_generate_tenant_battle_card_report_reuses_existing_persisted_repo
     assert result["report_id"] == str(report_id)
     assert result["vendor_name"] == "Zendesk"
     assert result["reused"] is True
+    mod._resolve_tracked_vendor_for_view.assert_awaited_once_with(pool, UUID(user.account_id), "Zendesk")
 
 
 @pytest.mark.asyncio
@@ -727,7 +728,7 @@ async def test_generate_tenant_battle_card_report_runs_scoped_task_when_missing(
     monkeypatch.setattr(mod, "get_task_scheduler", lambda: scheduler)
 
     result = await mod.generate_tenant_battle_card_report(
-        mod.BattleCardRequest(vendor_name="Zendesk"),
+        mod.BattleCardRequest(vendor_name=" Zendesk "),
         user=user,
     )
 
@@ -741,6 +742,180 @@ async def test_generate_tenant_battle_card_report_runs_scoped_task_when_missing(
     assert task.metadata["scope_name"] == "Zendesk"
     assert task.metadata["scope_trigger"] == "tenant_manual_request"
     assert task.metadata["test_vendors"] == ["Zendesk"]
+    mod._resolve_tracked_vendor_for_view.assert_awaited_once_with(pool, UUID(user.account_id), "Zendesk")
+
+
+@pytest.mark.asyncio
+async def test_tenant_report_action_routes_reject_blank_required_body_text_without_db_touch(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+
+    cases = [
+        (
+            lambda: mod.generate_tenant_comparison_report(
+                mod.VendorComparisonRequest(primary_vendor="   ", comparison_vendor="Freshdesk"),
+                user=user,
+            ),
+            "primary_vendor is required",
+        ),
+        (
+            lambda: mod.generate_tenant_comparison_report(
+                mod.VendorComparisonRequest(primary_vendor="Zendesk", comparison_vendor="   "),
+                user=user,
+            ),
+            "comparison_vendor is required",
+        ),
+        (
+            lambda: mod.generate_tenant_account_comparison_report(
+                mod.AccountComparisonRequest(primary_company="   ", comparison_company="Acme"),
+                user=user,
+            ),
+            "primary_company is required",
+        ),
+        (
+            lambda: mod.generate_tenant_account_comparison_report(
+                mod.AccountComparisonRequest(primary_company="Acme", comparison_company="   "),
+                user=user,
+            ),
+            "comparison_company is required",
+        ),
+        (
+            lambda: mod.generate_tenant_account_deep_dive_report(
+                mod.AccountDeepDiveRequest(company_name="   "),
+                user=user,
+            ),
+            "company_name is required",
+        ),
+        (
+            lambda: mod.generate_tenant_battle_card_report(
+                mod.BattleCardRequest(vendor_name="   "),
+                user=user,
+            ),
+            "vendor_name is required",
+        ),
+        (
+            lambda: mod.upsert_report_subscription(
+                "library",
+                "library",
+                mod.ReportSubscriptionUpsertRequest(scope_label="   ", enabled=False),
+                user=user,
+            ),
+            "scope_label is required",
+        ),
+    ]
+
+    for call, detail in cases:
+        monkeypatch.setattr(mod, "get_db_pool", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        monkeypatch.setattr(mod, "_pool_or_503", lambda: (_ for _ in ()).throw(AssertionError("db should not be touched")))
+        with pytest.raises(mod.HTTPException) as exc:
+            await call()
+        assert exc.value.status_code == 400
+        assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+async def test_generate_tenant_comparison_report_trims_body_vendor_names(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import b2b_churn_intelligence as intelligence
+
+    pool = SimpleNamespace(is_initialized=True, fetchval=AsyncMock(return_value=1))
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    generate = AsyncMock(return_value={"status": "ready", "vendor_pair": ["Zendesk", "Freshdesk"]})
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod.settings.saas_auth, "enabled", True, raising=False)
+    monkeypatch.setattr(intelligence, "generate_vendor_comparison_report", generate)
+
+    result = await mod.generate_tenant_comparison_report(
+        mod.VendorComparisonRequest(primary_vendor=" Zendesk ", comparison_vendor=" Freshdesk ", window_days=30, persist=False),
+        user=user,
+    )
+
+    assert result == {"status": "ready", "vendor_pair": ["Zendesk", "Freshdesk"]}
+    assert pool.fetchval.await_args.args[1:] == (user.account_id, "Zendesk")
+    generate.assert_awaited_once_with(pool, "Zendesk", "Freshdesk", window_days=30, persist=False)
+
+
+@pytest.mark.asyncio
+async def test_generate_tenant_company_reports_trim_body_company_names(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+    from atlas_brain.autonomous.tasks import b2b_churn_intelligence as intelligence
+
+    pool = SimpleNamespace(is_initialized=True)
+    user = SimpleNamespace(account_id=str(uuid4()), product="b2b_retention", role="member", is_admin=False)
+    compare = AsyncMock(return_value={"status": "ready", "companies": ["Acme", "Beta"]})
+    deep_dive = AsyncMock(return_value={"status": "ready", "company_name": "Acme"})
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(intelligence, "generate_company_comparison_report", compare)
+    monkeypatch.setattr(intelligence, "generate_company_deep_dive_report", deep_dive)
+
+    compare_result = await mod.generate_tenant_account_comparison_report(
+        mod.AccountComparisonRequest(primary_company=" Acme ", comparison_company=" Beta ", window_days=14, persist=False),
+        user=user,
+    )
+    deep_dive_result = await mod.generate_tenant_account_deep_dive_report(
+        mod.AccountDeepDiveRequest(company_name=" Acme ", window_days=21, persist=False),
+        user=user,
+    )
+
+    assert compare_result == {"status": "ready", "companies": ["Acme", "Beta"]}
+    assert deep_dive_result == {"status": "ready", "company_name": "Acme"}
+    compare.assert_awaited_once_with(pool, "Acme", "Beta", window_days=14, persist=False)
+    deep_dive.assert_awaited_once_with(pool, "Acme", window_days=21, persist=False)
+
+
+@pytest.mark.asyncio
+async def test_upsert_report_subscription_trims_scope_label_and_delivery_note(monkeypatch):
+    from atlas_brain.api import b2b_tenant_dashboard as mod
+
+    account_id = uuid4()
+    user_id = uuid4()
+    subscription_id = uuid4()
+    now = datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc)
+    pool = SimpleNamespace(is_initialized=True, execute=AsyncMock())
+    row = {
+        "id": subscription_id,
+        "scope_type": "library",
+        "scope_key": "library",
+        "scope_label": "Custom report label",
+        "filter_payload": {},
+        "report_id": None,
+        "delivery_frequency": "weekly",
+        "deliverable_focus": "all",
+        "freshness_policy": "fresh_or_monitor",
+        "recipient_emails": [],
+        "delivery_note": "Internal note",
+        "enabled": False,
+        "next_delivery_at": None,
+        "last_delivery_status": None,
+        "last_delivery_at": None,
+        "last_delivery_freshness_state": None,
+        "last_delivery_summary": None,
+        "last_delivery_error": None,
+        "last_delivery_report_count": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    monkeypatch.setattr(mod, "get_db_pool", lambda: pool)
+    monkeypatch.setattr(mod, "_fetch_report_subscription_schedule_row", AsyncMock(return_value=None))
+    monkeypatch.setattr(mod, "_fetch_report_subscription_row", AsyncMock(return_value=row))
+
+    result = await mod.upsert_report_subscription(
+        "library",
+        "library",
+        mod.ReportSubscriptionUpsertRequest(scope_label=" Custom report label ", delivery_note=" Internal note ", enabled=False),
+        user=SimpleNamespace(account_id=str(account_id), user_id=str(user_id), product="b2b_retention"),
+    )
+
+    execute_args = pool.execute.await_args.args
+    assert execute_args[5] == "Custom report label"
+    assert execute_args[11] == "Internal note"
+    assert result["subscription"]["scope_label"] == "Custom report label"
+    assert result["subscription"]["delivery_note"] == "Internal note"
 
 
 @pytest.mark.asyncio
