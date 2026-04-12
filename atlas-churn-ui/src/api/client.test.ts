@@ -104,22 +104,23 @@ describe('api client helpers', () => {
       })
     vi.stubGlobal('fetch', fetchMock)
 
-    await fetchWebhookDeliverySummary(30)
+    await fetchWebhookDeliverySummary(30, { vendor_name: 'Acme Rival' })
     await listWebhookDeliveries('wh-1', {
       success: false,
       event_type: 'signal_update',
       limit: 10,
+      vendor_name: 'Acme Rival',
     })
-    await listWebhookCrmPushLog('wh-1', { limit: 5, status: 'success' })
+    await listWebhookCrmPushLog('wh-1', { limit: 5, status: 'success', vendor_name: 'Acme Rival' })
 
     expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/delivery-summary?days=30',
+      '/api/v1/b2b/tenant/webhooks/delivery-summary?days=30&vendor_name=Acme+Rival',
     )
     expect(String(fetchMock.mock.calls[1]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10',
+      '/api/v1/b2b/tenant/webhooks/wh-1/deliveries?success=false&event_type=signal_update&limit=10&vendor_name=Acme+Rival',
     )
     expect(String(fetchMock.mock.calls[2]?.[0] ?? '')).toContain(
-      '/api/v1/b2b/tenant/webhooks/wh-1/crm-push-log?limit=5&status=success',
+      '/api/v1/b2b/tenant/webhooks/wh-1/crm-push-log?limit=5&status=success&vendor_name=Acme+Rival',
     )
   })
 

@@ -5929,14 +5929,27 @@ async def create_webhook(
 
 @router.get("/webhooks")
 async def list_webhooks(
+    vendor_name: Optional[str] = Query(None),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
+    delivery_vendor_sql = _webhook_activity_vendor_context_sql(
+        "dl",
+        "dl_signal",
+        "dl_report",
+        "dl_signal_report",
+    )
+    crm_vendor_sql = _webhook_activity_vendor_context_sql(
+        "cp",
+        "cp_signal",
+        "cp_report",
+    )
 
     rows = await pool.fetch(
-        """
+        f"""
         SELECT ws.id, ws.url, ws.event_types,
                COALESCE(ws.channel, 'generic') AS channel,
                ws.enabled, ws.description, ws.created_at, ws.updated_at,
@@ -5978,15 +5991,23 @@ async def list_webhooks(
             SELECT COUNT(*) AS recent_deliveries,
                    COUNT(*) FILTER (WHERE dl.success) AS recent_successes
             FROM b2b_webhook_delivery_log dl
+            LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
+            LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
+            LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
             WHERE dl.subscription_id = ws.id
               AND dl.delivered_at > NOW() - INTERVAL '7 days'
               AND dl.event_type <> 'test'
+              AND ($2::text IS NULL OR LOWER({delivery_vendor_sql}) = LOWER($2))
         ) AS recent_activity ON TRUE
         LEFT JOIN LATERAL (
             SELECT event_type, status_code, response_body, error, delivered_at, signal_id, review_id, report_id, vendor_name, company_name
             FROM b2b_webhook_delivery_log dl
+            LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
+            LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
+            LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
             WHERE dl.subscription_id = ws.id
               AND NOT dl.success
+              AND ($2::text IS NULL OR LOWER({delivery_vendor_sql}) = LOWER($2))
             ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
             LIMIT 1
         ) AS latest_failure ON TRUE
@@ -6002,7 +6023,10 @@ async def list_webhooks(
             SELECT id, signal_type, signal_id, review_id, vendor_name, company_name,
                    crm_record_id, crm_record_type, status, error, pushed_at
             FROM b2b_crm_push_log cp
+            LEFT JOIN b2b_company_signals cp_signal ON cp_signal.id = cp.signal_id
+            LEFT JOIN b2b_intelligence cp_report ON cp_report.id = cp.signal_id
             WHERE cp.subscription_id = ws.id
+              AND ($2::text IS NULL OR LOWER({crm_vendor_sql}) = LOWER($2))
             ORDER BY cp.pushed_at DESC, cp.id DESC
             LIMIT 1
         ) AS latest_crm ON TRUE
@@ -6010,6 +6034,7 @@ async def list_webhooks(
         ORDER BY ws.created_at DESC
         """,
         user.account_id,
+        vendor_name,
     )
 
     report_cache: dict[str, Any] = {}
@@ -6209,17 +6234,25 @@ async def list_webhooks(
 @router.get("/webhooks/delivery-summary")
 async def webhook_delivery_summary(
     days: int = Query(7, ge=1, le=90),
+    vendor_name: Optional[str] = Query(None),
     user: AuthUser | None = Depends(optional_auth),
 ):
     """Aggregate delivery health across all webhooks for the authenticated account."""
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
     pool = _pool_or_503()
+    vendor_name = _optional_query_text(vendor_name)
+    delivery_vendor_sql = _webhook_activity_vendor_context_sql(
+        "dl",
+        "dl_signal",
+        "dl_report",
+        "dl_signal_report",
+    )
 
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT
-            COUNT(DISTINCT ws.id) AS active_subscriptions,
+            COUNT(DISTINCT ws.id) FILTER (WHERE dl.id IS NOT NULL) AS active_subscriptions,
             COUNT(dl.id) AS total_deliveries,
             COUNT(dl.id) FILTER (WHERE dl.success) AS successful,
             COUNT(dl.id) FILTER (WHERE NOT dl.success) AS failed,
@@ -6228,14 +6261,23 @@ async def webhook_delivery_summary(
                 FILTER (WHERE dl.success) AS p95_success_duration_ms,
             MAX(dl.delivered_at) AS last_delivery_at
         FROM b2b_webhook_subscriptions ws
-        LEFT JOIN b2b_webhook_delivery_log dl
-            ON dl.subscription_id = ws.id
-            AND dl.delivered_at > NOW() - ($2 || ' days')::interval
-            AND dl.event_type <> 'test'
+        LEFT JOIN LATERAL (
+            SELECT dl.id, dl.success, dl.duration_ms, dl.delivered_at
+            FROM b2b_webhook_delivery_log dl
+            LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
+            LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
+            LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
+            WHERE dl.subscription_id = ws.id
+              AND dl.delivered_at > NOW() - ($2 || ' days')::interval
+              AND dl.event_type <> 'test'
+              AND ($3::text IS NULL OR LOWER({delivery_vendor_sql}) = LOWER($3))
+        ) AS dl ON TRUE
         WHERE ws.account_id = $1::uuid
           AND ws.enabled = true
         """,
-        user.account_id, str(days),
+        user.account_id,
+        str(days),
+        vendor_name,
     )
 
     total = row["total_deliveries"] or 0
@@ -6415,6 +6457,7 @@ async def list_webhook_deliveries(
     webhook_id: str,
     success: Optional[bool] = Query(None, description="Filter by delivery success"),
     event_type: Optional[str] = Query(None, description="Filter by event type"),
+    vendor_name: Optional[str] = Query(None, description="Filter by exact vendor context"),
     start_date: Optional[str] = Query(None, description="Deliveries on or after (ISO 8601)"),
     end_date: Optional[str] = Query(None, description="Deliveries before (ISO 8601)"),
     limit: int = Query(50, ge=1, le=200),
@@ -6429,6 +6472,7 @@ async def list_webhook_deliveries(
         raise HTTPException(status_code=400, detail="webhook_id must be a valid UUID")
 
     event_type = _optional_query_text(event_type)
+    vendor_name = _optional_query_text(vendor_name)
     start_date = _optional_query_text(start_date)
     end_date = _optional_query_text(end_date)
 
@@ -6455,24 +6499,31 @@ async def list_webhook_deliveries(
     if not owns:
         raise HTTPException(status_code=404, detail="Webhook not found")
 
-    conditions = ["subscription_id = $1"]
+    conditions = ["dl.subscription_id = $1"]
     params: list = [wid]
     idx = 2
 
     if success is not None:
-        conditions.append(f"success = ${idx}")
+        conditions.append(f"dl.success = ${idx}")
         params.append(success)
         idx += 1
     if event_type:
-        conditions.append(f"event_type = ${idx}")
+        conditions.append(f"dl.event_type = ${idx}")
         params.append(event_type)
         idx += 1
+    if vendor_name:
+        conditions.append(
+            "LOWER(COALESCE(dl.vendor_name, dl_signal.vendor_name, dl_report.vendor_filter, dl_signal_report.vendor_filter)) = LOWER($%d)"
+            % idx
+        )
+        params.append(vendor_name)
+        idx += 1
     if parsed_start_date is not None:
-        conditions.append(f"delivered_at >= ${idx}")
+        conditions.append(f"dl.delivered_at >= ${idx}")
         params.append(parsed_start_date)
         idx += 1
     if parsed_end_date is not None:
-        conditions.append(f"delivered_at < ${idx}")
+        conditions.append(f"dl.delivered_at < ${idx}")
         params.append(parsed_end_date)
         idx += 1
 
@@ -6481,12 +6532,15 @@ async def list_webhook_deliveries(
 
     rows = await pool.fetch(
         f"""
-        SELECT id, event_type, payload, signal_id, review_id, report_id,
-               vendor_name, company_name, status_code, duration_ms,
-               attempt, success, error, delivered_at
-        FROM b2b_webhook_delivery_log
+        SELECT dl.id, dl.event_type, dl.payload, dl.signal_id, dl.review_id, dl.report_id,
+               dl.vendor_name, dl.company_name, dl.status_code, dl.duration_ms,
+               dl.attempt, dl.success, dl.error, dl.delivered_at
+        FROM b2b_webhook_delivery_log dl
+        LEFT JOIN b2b_company_signals dl_signal ON dl_signal.id = dl.signal_id
+        LEFT JOIN b2b_intelligence dl_report ON dl_report.id = dl.report_id
+        LEFT JOIN b2b_intelligence dl_signal_report ON dl_signal_report.id = dl.signal_id
         WHERE {where}
-        ORDER BY delivered_at DESC, attempt DESC, id DESC
+        ORDER BY dl.delivered_at DESC, dl.attempt DESC, dl.id DESC
         LIMIT ${idx}
         """,
         *params,
@@ -6605,6 +6659,7 @@ async def list_crm_push_log(
     webhook_id: str,
     limit: int = 50,
     status: Optional[str] = Query(None, description="Filter by normalized CRM push status"),
+    vendor_name: Optional[str] = Query(None, description="Filter by exact vendor context"),
     user: AuthUser | None = Depends(optional_auth),
 ):
     if not user:
@@ -6618,6 +6673,7 @@ async def list_crm_push_log(
     limit = max(1, min(limit, 200))
     raw_status = status if isinstance(status, str) or status is None else None
     normalized_status = _normalize_crm_push_status(raw_status)
+    vendor_name = _optional_query_text(vendor_name)
     if raw_status is not None and normalized_status not in {"success", "failed"}:
         raise HTTPException(status_code=400, detail="status must be one of: success, failed")
     pool = _pool_or_503()
@@ -6631,10 +6687,10 @@ async def list_crm_push_log(
         raise HTTPException(status_code=404, detail="Webhook not found")
 
     normalized_status_sql = (
-        "CASE WHEN lower(coalesce(status, '')) = 'pushed' THEN 'success' "
-        "ELSE lower(coalesce(status, '')) END"
+        "CASE WHEN lower(coalesce(cp.status, '')) = 'pushed' THEN 'success' "
+        "ELSE lower(coalesce(cp.status, '')) END"
     )
-    conditions = ["subscription_id = $1"]
+    conditions = ["cp.subscription_id = $1"]
     params: list[Any] = [wid]
     idx = 2
     if normalized_status == "success":
@@ -6643,14 +6699,23 @@ async def list_crm_push_log(
         idx += 1
     elif normalized_status == "failed":
         conditions.append(f"coalesce({normalized_status_sql}, '') <> 'success'")
+    if vendor_name:
+        conditions.append(
+            "LOWER(COALESCE(cp.vendor_name, cp_signal.vendor_name, cp_report.vendor_filter)) = LOWER($%d)"
+            % idx
+        )
+        params.append(vendor_name)
+        idx += 1
     params.append(limit)
     rows = await pool.fetch(
         f"""
-        SELECT id, signal_type, signal_id, review_id, vendor_name, company_name,
-               crm_record_id, crm_record_type, status, error, pushed_at
-        FROM b2b_crm_push_log
+        SELECT cp.id, cp.signal_type, cp.signal_id, cp.review_id, cp.vendor_name, cp.company_name,
+               cp.crm_record_id, cp.crm_record_type, cp.status, cp.error, cp.pushed_at
+        FROM b2b_crm_push_log cp
+        LEFT JOIN b2b_company_signals cp_signal ON cp_signal.id = cp.signal_id
+        LEFT JOIN b2b_intelligence cp_report ON cp_report.id = cp.signal_id
         WHERE {' AND '.join(conditions)}
-        ORDER BY pushed_at DESC, id DESC
+        ORDER BY cp.pushed_at DESC, cp.id DESC
         LIMIT ${idx}
         """,
         *params,
@@ -7632,6 +7697,22 @@ def _normalize_webhook_activity_uuid_text(value: Any) -> str | None:
         return str(_uuid.UUID(raw))
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def _webhook_activity_vendor_context_sql(
+    activity_alias: str,
+    signal_alias: str,
+    report_alias: str,
+    signal_report_alias: str | None = None,
+) -> str:
+    columns = [
+        f"{activity_alias}.vendor_name",
+        f"{signal_alias}.vendor_name",
+        f"{report_alias}.vendor_filter",
+    ]
+    if signal_report_alias:
+        columns.append(f"{signal_report_alias}.vendor_filter")
+    return f"COALESCE({', '.join(columns)})"
 
 
 def _normalize_crm_push_status(value: Any) -> str | None:

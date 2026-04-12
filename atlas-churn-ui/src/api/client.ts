@@ -607,12 +607,19 @@ export interface WebhookTestResult {
   error?: string
 }
 
-export async function listWebhooks() {
-  return get<{ webhooks: WebhookSubscription[]; count: number }>(WEBHOOKS_BASE, '/webhooks')
+export async function listWebhooks(params?: {
+  vendor_name?: string
+}) {
+  return get<{ webhooks: WebhookSubscription[]; count: number }>(WEBHOOKS_BASE, '/webhooks', params)
 }
 
-export async function fetchWebhookDeliverySummary(days = 7) {
-  return get<WebhookDeliverySummary>(WEBHOOKS_BASE, '/webhooks/delivery-summary', { days })
+export async function fetchWebhookDeliverySummary(days = 7, params?: {
+  vendor_name?: string
+}) {
+  return get<WebhookDeliverySummary>(WEBHOOKS_BASE, '/webhooks/delivery-summary', {
+    days,
+    ...params,
+  })
 }
 
 export async function createWebhook(body: WebhookCreateBody) {
@@ -635,6 +642,7 @@ export async function listWebhookDeliveries(webhookId: string, params?: {
   success?: boolean
   event_type?: string
   limit?: number
+  vendor_name?: string
 }) {
   return get<{ deliveries: WebhookDelivery[]; count: number }>(
     WEBHOOKS_BASE,
@@ -646,6 +654,7 @@ export async function listWebhookDeliveries(webhookId: string, params?: {
 export async function listWebhookCrmPushLog(webhookId: string, params: number | {
   limit?: number
   status?: 'success' | 'failed'
+  vendor_name?: string
 } = 20) {
   const requestParams = typeof params === 'number'
     ? { limit: params }
@@ -656,6 +665,7 @@ export async function listWebhookCrmPushLog(webhookId: string, params: number | 
     {
       limit: requestParams.limit ?? 20,
       ...(requestParams.status ? { status: requestParams.status } : {}),
+      ...(requestParams.vendor_name ? { vendor_name: requestParams.vendor_name } : {}),
     },
   )
 }

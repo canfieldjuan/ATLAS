@@ -57,13 +57,16 @@ const DEFAULT_DELIVERIES = [
   },
 ]
 
-function filterDeliveries(params?: { success?: boolean; event_type?: string; limit?: number }) {
+function filterDeliveries(params?: { success?: boolean; event_type?: string; limit?: number; vendor_name?: string }) {
   let deliveries = [...DEFAULT_DELIVERIES]
   if (typeof params?.success === 'boolean') {
     deliveries = deliveries.filter((delivery) => delivery.success === params.success)
   }
   if (params?.event_type) {
     deliveries = deliveries.filter((delivery) => delivery.event_type === params.event_type)
+  }
+  if (params?.vendor_name) {
+    deliveries = deliveries.filter((delivery) => delivery.vendor_name === params.vendor_name)
   }
   const limit = params?.limit ?? deliveries.length
   return { deliveries: deliveries.slice(0, limit), count: deliveries.length }
@@ -118,6 +121,7 @@ describe('IncidentAlerts', () => {
       success?: boolean
       event_type?: string
       limit?: number
+      vendor_name?: string
     }) => filterDeliveries(params))
     api.listWebhookCrmPushLog.mockResolvedValue({
       pushes: [],
@@ -158,6 +162,24 @@ describe('IncidentAlerts', () => {
     expect(screen.getByRole('button', { name: 'Retry Failed Test' })).toBeInTheDocument()
     expect(screen.getByText('Latest failure · signal_update · 500')).toBeInTheDocument()
     expect(screen.getByText(/downstream timeout/)).toBeInTheDocument()
+  })
+
+  it('hydrates vendor-scoped alert views through the API and URL state', async () => {
+    render(
+      <MemoryRouter initialEntries={['/alerts?vendor=Acme%20Rival&webhook=wh-1']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Scoped to vendor: Acme Rival')).toBeInTheDocument()
+    expect(screen.getByText('Webhooks with Activity')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Clear vendor scope' })).toHaveAttribute('href', '/alerts?webhook=wh-1')
+    expect(api.fetchWebhookDeliverySummary).toHaveBeenCalledWith(7, { vendor_name: 'Acme Rival' })
+    expect(api.listWebhooks).toHaveBeenCalledWith({ vendor_name: 'Acme Rival' })
+    expect(api.listWebhookDeliveries).toHaveBeenCalledWith('wh-1', expect.objectContaining({
+      limit: 10,
+      vendor_name: 'Acme Rival',
+    }))
   })
 
   it('uses an in-app confirmation modal before deleting a webhook', async () => {
@@ -905,6 +927,27 @@ describe('IncidentAlerts', () => {
     await waitFor(() => {
       expect(clipboardSpy).toHaveBeenCalledWith(
         `${window.location.origin}/alerts?days=30&webhook=wh-1&back_to=%2Fwatchlists%3Fview%3Dview-1`,
+      )
+    })
+    expect(await screen.findByText('Copied webhook link')).toBeInTheDocument()
+  })
+
+  it('preserves vendor scope in copied webhook links', async () => {
+    const user = userEvent.setup()
+    const clipboardSpy = vi.spyOn(window.navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+
+    render(
+      <MemoryRouter initialEntries={['/alerts?vendor=Acme%20Rival&webhook=wh-1&delivery_status=failed']}>
+        <IncidentAlerts />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Incident Alerts API' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Copy Webhook Link' }))
+
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/alerts?vendor=Acme+Rival&webhook=wh-1`,
       )
     })
     expect(await screen.findByText('Copied webhook link')).toBeInTheDocument()

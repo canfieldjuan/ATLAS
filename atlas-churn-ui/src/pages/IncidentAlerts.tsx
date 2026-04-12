@@ -522,6 +522,7 @@ function buildActivitySearchParams({
   deliveryEvent,
   crmStatus,
   summaryWindow,
+  vendorName,
   backTo,
 }: {
   webhookId: string | null
@@ -529,10 +530,12 @@ function buildActivitySearchParams({
   deliveryEvent: 'all' | string
   crmStatus: 'all' | 'success' | 'failed'
   summaryWindow: (typeof SUMMARY_WINDOWS)[number]
+  vendorName?: string | null
   backTo?: string | null
 }) {
   const next = new URLSearchParams()
   if (summaryWindow !== 7) next.set('days', String(summaryWindow))
+  if (vendorName) next.set('vendor', vendorName)
   if (webhookId) {
     next.set('webhook', webhookId)
     if (deliveryStatus !== 'all') next.set('delivery_status', deliveryStatus)
@@ -716,6 +719,7 @@ function DestructiveActionModal({
 export default function IncidentAlerts() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
+  const requestedVendorName = searchParams.get('vendor')?.trim() || ''
   const requestedWebhookId = searchParams.get('webhook')?.trim() || ''
   const requestedDeliveryStatus = searchParams.get('delivery_status') === 'success' || searchParams.get('delivery_status') === 'failed'
     ? (searchParams.get('delivery_status') as 'success' | 'failed')
@@ -756,8 +760,11 @@ export default function IncidentAlerts() {
     refresh: refreshSummary,
     refreshing: summaryRefreshing,
   } = useApiData(
-    () => fetchWebhookDeliverySummary(summaryWindow),
-    [summaryWindow],
+    () => fetchWebhookDeliverySummary(
+      summaryWindow,
+      requestedVendorName ? { vendor_name: requestedVendorName } : undefined,
+    ),
+    [requestedVendorName, summaryWindow],
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
 
@@ -768,8 +775,8 @@ export default function IncidentAlerts() {
     refresh: refreshWebhooks,
     refreshing: listRefreshing,
   } = useApiData(
-    () => listWebhooks(),
-    [],
+    () => listWebhooks(requestedVendorName ? { vendor_name: requestedVendorName } : undefined),
+    [requestedVendorName],
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
 
@@ -794,9 +801,10 @@ export default function IncidentAlerts() {
         ...(deliveryStatusFilter === 'success' ? { success: true } : {}),
         ...(deliveryStatusFilter === 'failed' ? { success: false } : {}),
         ...(deliveryEventFilter !== 'all' ? { event_type: deliveryEventFilter } : {}),
+        ...(requestedVendorName ? { vendor_name: requestedVendorName } : {}),
       })
       : Promise.resolve({ deliveries: [], count: 0 })),
-    [deliveryEventFilter, deliveryStatusFilter, selectedWebhookId],
+    [deliveryEventFilter, deliveryStatusFilter, requestedVendorName, selectedWebhookId],
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
 
@@ -810,9 +818,10 @@ export default function IncidentAlerts() {
       ? listWebhookCrmPushLog(selectedWebhookId, {
         limit: ACTIVITY_LOG_LIMIT,
         ...(crmStatusFilter !== 'all' ? { status: crmStatusFilter } : {}),
+        ...(requestedVendorName ? { vendor_name: requestedVendorName } : {}),
       })
       : Promise.resolve({ pushes: [], count: 0 })),
-    [crmStatusFilter, selectedWebhook?.channel, selectedWebhookId],
+    [crmStatusFilter, requestedVendorName, selectedWebhook?.channel, selectedWebhookId],
     { refreshOnFocus: false, refreshOnReconnect: false },
   )
 
@@ -869,6 +878,33 @@ export default function IncidentAlerts() {
       deliveryEvent: deliveryEventFilter,
       crmStatus: activityCrmStatus,
       summaryWindow,
+      vendorName: requestedVendorName,
+      backTo: requestedBackTo,
+    })
+    const query = next.toString()
+    return query ? `${location.pathname}?${query}` : location.pathname
+  }, [
+    activityCrmStatus,
+    deliveryEventFilter,
+    deliveryStatusFilter,
+    location.pathname,
+    requestedVendorName,
+    requestedBackTo,
+    selectedWebhookId,
+    summaryWindow,
+  ])
+
+  const currentAlertsUrl = useMemo(() => (
+    location.search ? `${location.pathname}${location.search}` : location.pathname
+  ), [location.pathname, location.search])
+
+  const clearVendorScopePath = useMemo(() => {
+    const next = buildActivitySearchParams({
+      webhookId: selectedWebhookId,
+      deliveryStatus: deliveryStatusFilter,
+      deliveryEvent: deliveryEventFilter,
+      crmStatus: activityCrmStatus,
+      summaryWindow,
       backTo: requestedBackTo,
     })
     const query = next.toString()
@@ -882,10 +918,6 @@ export default function IncidentAlerts() {
     selectedWebhookId,
     summaryWindow,
   ])
-
-  const currentAlertsUrl = useMemo(() => (
-    location.search ? `${location.pathname}${location.search}` : location.pathname
-  ), [location.pathname, location.search])
 
   useEffect(() => {
     setSummaryWindow((current) => (current === requestedSummaryWindow ? current : requestedSummaryWindow))
@@ -904,6 +936,7 @@ export default function IncidentAlerts() {
       deliveryEvent: deliveryEventFilter,
       crmStatus: activityCrmStatus,
       summaryWindow,
+      vendorName: requestedVendorName,
       backTo: requestedBackTo,
     })
     if (next.toString() === searchParams.toString()) return
@@ -912,6 +945,7 @@ export default function IncidentAlerts() {
     activityCrmStatus,
     deliveryEventFilter,
     deliveryStatusFilter,
+    requestedVendorName,
     requestedBackTo,
     searchParams,
     selectedWebhookId,
@@ -961,6 +995,7 @@ export default function IncidentAlerts() {
           ? activityCrmStatus
           : 'all',
         summaryWindow,
+        vendorName: requestedVendorName,
         backTo: requestedBackTo,
       })
       const path = `${window.location.origin}${location.pathname}?${next.toString()}`
@@ -982,6 +1017,7 @@ export default function IncidentAlerts() {
         deliveryEvent: 'all',
         crmStatus: 'all',
         summaryWindow,
+        vendorName: requestedVendorName,
         backTo: requestedBackTo,
       })
       const path = `${window.location.origin}${location.pathname}?${next.toString()}`
@@ -1348,6 +1384,19 @@ export default function IncidentAlerts() {
           <p className="mt-1 max-w-3xl text-sm text-slate-400">
             Configure outbound webhooks for churn incidents, signal changes, and durable artifact updates without leaving the product.
           </p>
+          {requestedVendorName ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-xs font-medium text-cyan-200">
+                Scoped to vendor: {requestedVendorName}
+              </span>
+              <Link
+                to={clearVendorScopePath}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/70 px-2.5 py-1 text-xs text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
+              >
+                Clear vendor scope
+              </Link>
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <label className="text-xs text-slate-500" htmlFor="alerts-summary-window">Window</label>
@@ -1394,16 +1443,17 @@ export default function IncidentAlerts() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Active Webhooks"
+          label={requestedVendorName ? 'Webhooks with Activity' : 'Active Webhooks'}
           value={summary?.active_subscriptions ?? 0}
           icon={<BellRing className="h-4 w-4 text-cyan-400" />}
+          sub={requestedVendorName || undefined}
           skeleton={loading}
         />
         <StatCard
           label="Deliveries"
           value={summary?.total_deliveries ?? 0}
           icon={<FlaskConical className="h-4 w-4 text-violet-400" />}
-          sub={`${summaryWindow}-day window`}
+          sub={requestedVendorName ? `${summaryWindow}-day window · ${requestedVendorName}` : `${summaryWindow}-day window`}
           skeleton={loading}
         />
         <StatCard
@@ -1787,7 +1837,11 @@ export default function IncidentAlerts() {
                                 </div>
                               )) : (
                                 <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
-                                  {hasActiveDeliveryFilters ? 'No deliveries match the current filters.' : 'No recent delivery attempts for this webhook.'}
+                                  {hasActiveDeliveryFilters
+                                    ? 'No deliveries match the current filters.'
+                                    : requestedVendorName
+                                      ? `No recent delivery attempts for ${requestedVendorName} on this webhook.`
+                                      : 'No recent delivery attempts for this webhook.'}
                                 </div>
                               )}
                             </div>
@@ -1846,7 +1900,11 @@ export default function IncidentAlerts() {
                                   </div>
                                 )) : (
                                   <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
-                                    {hasActiveCrmFilters ? 'No CRM pushes match the current filters.' : 'No CRM push activity recorded for this webhook yet.'}
+                                    {hasActiveCrmFilters
+                                      ? 'No CRM pushes match the current filters.'
+                                      : requestedVendorName
+                                        ? `No CRM push activity for ${requestedVendorName} on this webhook yet.`
+                                        : 'No CRM push activity recorded for this webhook yet.'}
                                   </div>
                                 )}
                               </div>
