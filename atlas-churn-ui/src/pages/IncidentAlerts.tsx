@@ -1019,48 +1019,58 @@ export default function IncidentAlerts() {
     )
   }
 
-  function renderActivityVendorShortcuts(activity: AlertActivityVendorSource, backTo: string) {
+  function renderActivityVendorShortcuts(
+    activity: AlertActivityVendorSource,
+    backTo: string,
+    options?: {
+      includeCopy?: boolean
+      hideWhenExactTarget?: boolean
+      compact?: boolean
+    },
+  ) {
     const vendorName = normalizeActivityReference(activity.vendor_name)
     const reviewId = normalizeActivityReference(activity.review_id)
     const reportId = normalizeActivityReference(activity.report_id)
-    if (!vendorName || reviewId || reportId) return null
+    if (!vendorName) return null
+    const includeCopy = options?.includeCopy ?? false
+    const hideWhenExactTarget = options?.hideWhenExactTarget ?? true
+    const compact = options?.compact ?? false
+    if (hideWhenExactTarget && (reviewId || reportId)) return null
+    const watchlistsPath = buildWatchlistsPath(vendorName, backTo)
+    const vendorWorkspacePath = buildVendorWorkspacePath(vendorName, backTo)
+    const evidencePath = buildVendorScopedPath('/evidence', vendorName, backTo)
+    const reportsPath = buildVendorScopedPath('/reports', vendorName, backTo)
+    const opportunitiesPath = buildVendorScopedPath('/opportunities', vendorName, backTo)
+    const className = compact
+      ? 'rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800'
+      : 'inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800'
     return (
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Link
-          to={buildWatchlistsPath(vendorName, backTo)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
+      <div className={`mt-2 flex flex-wrap gap-2${compact ? ' text-xs' : ''}`}>
+        <Link to={watchlistsPath} className={className}>
+          {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Watchlists
         </Link>
-        <Link
-          to={buildVendorWorkspacePath(vendorName, backTo)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
+        {includeCopy ? renderShortcutCopyButton(watchlistsPath, 'watchlists') : null}
+        <Link to={vendorWorkspacePath} className={className}>
+          {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Vendor workspace
         </Link>
-        <Link
-          to={buildVendorScopedPath('/evidence', vendorName, backTo)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
+        {includeCopy ? renderShortcutCopyButton(vendorWorkspacePath, 'vendor workspace') : null}
+        <Link to={evidencePath} className={className}>
+          {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Evidence
         </Link>
-        <Link
-          to={buildVendorScopedPath('/reports', vendorName, backTo)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
+        {includeCopy ? renderShortcutCopyButton(evidencePath, 'evidence') : null}
+        <Link to={reportsPath} className={className}>
+          {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Reports
         </Link>
-        <Link
-          to={buildVendorScopedPath('/opportunities', vendorName, backTo)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 transition-colors hover:bg-slate-800"
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
+        {includeCopy ? renderShortcutCopyButton(reportsPath, 'reports') : null}
+        <Link to={opportunitiesPath} className={className}>
+          {!compact ? <ArrowRight className="h-3.5 w-3.5" /> : null}
           Opportunities
         </Link>
+        {includeCopy ? renderShortcutCopyButton(opportunitiesPath, 'opportunities') : null}
       </div>
     )
   }
@@ -1655,40 +1665,13 @@ export default function IncidentAlerts() {
                                   {delivery.review_id || delivery.account_review_focus || delivery.report_id || delivery.vendor_name ? (
                                     <>
                                       {renderActivityDetailShortcuts(delivery, activityBackTo, { compact: true, includeCopy: true })}
-                                      {delivery.vendor_name ? (
-                                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                                          <Link
-                                            to={buildWatchlistsPath(delivery.vendor_name, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Watchlists
-                                          </Link>
-                                          <Link
-                                            to={buildVendorWorkspacePath(delivery.vendor_name, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Vendor workspace
-                                          </Link>
-                                          <Link
-                                            to={buildVendorScopedPath('/evidence', delivery.vendor_name, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Evidence
-                                          </Link>
-                                          <Link
-                                            to={buildVendorScopedPath('/reports', delivery.vendor_name, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Reports
-                                          </Link>
-                                          <Link
-                                            to={buildVendorScopedPath('/opportunities', delivery.vendor_name, activityBackTo)}
-                                            className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                          >
-                                            Opportunities
-                                          </Link>
-                                        </div>
-                                      ) : null}
+                                      {delivery.vendor_name
+                                        ? renderActivityVendorShortcuts(delivery, activityBackTo, {
+                                          includeCopy: true,
+                                          hideWhenExactTarget: false,
+                                          compact: true,
+                                        })
+                                        : null}
                                     </>
                                   ) : null}
                                   {delivery.error ? (
@@ -1741,40 +1724,13 @@ export default function IncidentAlerts() {
                                     {push.review_id || push.account_review_focus || push.report_id || push.vendor_name ? (
                                       <>
                                         {renderActivityDetailShortcuts(push, activityBackTo, { compact: true, includeCopy: true })}
-                                        {push.vendor_name ? (
-                                          <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                                            <Link
-                                              to={buildWatchlistsPath(push.vendor_name, activityBackTo)}
-                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                            >
-                                              Watchlists
-                                            </Link>
-                                            <Link
-                                              to={buildVendorWorkspacePath(push.vendor_name, activityBackTo)}
-                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                            >
-                                              Vendor workspace
-                                            </Link>
-                                            <Link
-                                              to={buildVendorScopedPath('/evidence', push.vendor_name, activityBackTo)}
-                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                            >
-                                              Evidence
-                                            </Link>
-                                            <Link
-                                              to={buildVendorScopedPath('/reports', push.vendor_name, activityBackTo)}
-                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                            >
-                                              Reports
-                                            </Link>
-                                            <Link
-                                              to={buildVendorScopedPath('/opportunities', push.vendor_name, activityBackTo)}
-                                              className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-slate-200 transition-colors hover:bg-slate-800"
-                                            >
-                                              Opportunities
-                                            </Link>
-                                          </div>
-                                        ) : null}
+                                        {push.vendor_name
+                                          ? renderActivityVendorShortcuts(push, activityBackTo, {
+                                            includeCopy: true,
+                                            hideWhenExactTarget: false,
+                                            compact: true,
+                                          })
+                                          : null}
                                       </>
                                     ) : null}
                                     {push.error ? (

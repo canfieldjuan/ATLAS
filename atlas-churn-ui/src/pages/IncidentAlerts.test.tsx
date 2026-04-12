@@ -897,6 +897,22 @@ describe('IncidentAlerts', () => {
       )
     })
     expect(await screen.findByText('Copied review link')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy vendor workspace link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/vendors/Acme%20Rival?back_to=%2Falerts%3Fwebhook%3Dwh-1`,
+      )
+    })
+    expect(await screen.findByText('Copied vendor workspace link')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Copy evidence link' }))
+    await waitFor(() => {
+      expect(clipboardSpy).toHaveBeenCalledWith(
+        `${window.location.origin}/evidence?vendor=Acme+Rival&back_to=%2Falerts%3Fwebhook%3Dwh-1`,
+      )
+    })
+    expect(await screen.findByText('Copied evidence link')).toBeInTheDocument()
   })
 
   it('copies canonical signal ids from delivery activity rows', async () => {
