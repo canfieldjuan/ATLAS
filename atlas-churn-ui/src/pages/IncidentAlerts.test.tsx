@@ -187,6 +187,8 @@ describe('IncidentAlerts', () => {
           latest_test_signal_id: null,
           latest_test_review_id: null,
           latest_test_report_id: 'report-test',
+          latest_test_report_type: 'battle_card',
+          latest_test_report_title: 'Battle Card · Acme Rival',
         },
       ],
       count: 1,
@@ -203,6 +205,7 @@ describe('IncidentAlerts', () => {
     expect(screen.getByText('sig-fail')).toBeInTheDocument()
     expect(screen.getByText('review-fail')).toBeInTheDocument()
     expect(screen.getByText('report-test')).toBeInTheDocument()
+    expect(screen.getByText('Report target: Battle Card · Acme Rival')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open Review' })).toHaveAttribute(
       'href',
       '/reviews/review-fail?back_to=%2Falerts',

@@ -75,7 +75,7 @@ async def test_list_webhooks_exposes_latest_test_summary():
                 'latest_test_signal_id': None,
                 'latest_test_review_id': None,
                 'latest_test_report_id': '44444444-4444-4444-8444-444444444444',
-                'latest_test_vendor_name': 'Acme Rival',
+                'latest_test_vendor_name': None,
                 'latest_test_company_name': 'Acme Bank',
             }
         ]
@@ -98,14 +98,26 @@ async def test_list_webhooks_exposes_latest_test_summary():
         'category': 'Budget Risk',
         'track_mode': 'competitor',
     }
+    latest_test_report_context = {
+        'report_id': '44444444-4444-4444-8444-444444444444',
+        'report_type': 'battle_card',
+        'vendor_name': 'Acme Rival',
+        'category_filter': None,
+        'report_title': 'Battle Card · Acme Rival',
+    }
 
     with patch.object(b2b_dashboard, '_pool_or_503', return_value=pool):
         with patch.object(
             b2b_dashboard,
-            '_resolve_webhook_activity_account_focus',
-            AsyncMock(side_effect=[latest_failure_focus, latest_test_focus]),
-        ) as resolve_account_focus:
-            result = await b2b_dashboard.list_webhooks(user=user)
+            '_fetch_webhook_activity_report_context',
+            AsyncMock(side_effect=[None, latest_test_report_context]),
+        ) as fetch_report_context:
+            with patch.object(
+                b2b_dashboard,
+                '_resolve_webhook_activity_account_focus',
+                AsyncMock(side_effect=[latest_failure_focus, latest_test_focus]),
+            ) as resolve_account_focus:
+                result = await b2b_dashboard.list_webhooks(user=user)
 
     assert result['count'] == 1
     webhook = result['webhooks'][0]
@@ -124,9 +136,12 @@ async def test_list_webhooks_exposes_latest_test_summary():
     assert webhook['latest_test_signal_id'] is None
     assert webhook['latest_test_review_id'] is None
     assert webhook['latest_test_report_id'] == '44444444-4444-4444-8444-444444444444'
+    assert webhook['latest_test_report_type'] == 'battle_card'
+    assert webhook['latest_test_report_title'] == 'Battle Card · Acme Rival'
     assert webhook['latest_test_vendor_name'] == 'Acme Rival'
     assert webhook['latest_test_company_name'] == 'Acme Bank'
     assert webhook['latest_test_account_review_focus'] == latest_test_focus
+    assert fetch_report_context.await_count == 2
     assert resolve_account_focus.await_count == 2
     first_kwargs = resolve_account_focus.await_args_list[0].kwargs
     assert first_kwargs['vendor_name'] == 'Acme Rival'
@@ -138,6 +153,7 @@ async def test_list_webhooks_exposes_latest_test_summary():
     assert second_kwargs['company_name'] == 'Acme Bank'
     assert second_kwargs['signal_id'] is None
     assert second_kwargs['review_id'] is None
+    assert fetch_report_context.await_args_list[1].args[1] == '44444444-4444-4444-8444-444444444444'
 
 
 

@@ -5967,7 +5967,14 @@ async def list_webhooks(
         latest_failure_signal_id = _normalize_webhook_activity_uuid_text(r["latest_failure_signal_id"]) if "latest_failure_signal_id" in r and r["latest_failure_signal_id"] else None
         latest_failure_review_id = _normalize_webhook_activity_uuid_text(r["latest_failure_review_id"]) if "latest_failure_review_id" in r and r["latest_failure_review_id"] else None
         latest_failure_report_id = _normalize_webhook_activity_uuid_text(r["latest_failure_report_id"]) if "latest_failure_report_id" in r and r["latest_failure_report_id"] else None
-        latest_failure_vendor_name = _optional_query_text(r["latest_failure_vendor_name"]) if "latest_failure_vendor_name" in r and r["latest_failure_vendor_name"] else None
+        latest_failure_report_context = await _fetch_webhook_activity_report_context(
+            pool,
+            latest_failure_report_id,
+            report_activity_cache,
+        )
+        latest_failure_vendor_name = (
+            _optional_query_text(r["latest_failure_vendor_name"]) if "latest_failure_vendor_name" in r and r["latest_failure_vendor_name"] else None
+        ) or (latest_failure_report_context or {}).get("vendor_name")
         latest_failure_company_name = _optional_query_text(r["latest_failure_company_name"]) if "latest_failure_company_name" in r and r["latest_failure_company_name"] else None
         latest_failure_account_review_focus = (
             await _resolve_webhook_activity_account_focus(
@@ -5981,7 +5988,7 @@ async def list_webhooks(
                 tracked_vendor_cache=tracked_vendor_cache,
                 signal_cache=signal_cache,
             )
-            if any((latest_failure_signal_id, latest_failure_review_id, latest_failure_vendor_name, latest_failure_company_name))
+            if any((latest_failure_signal_id, latest_failure_review_id, latest_failure_company_name))
             else None
         )
         latest_test_success = r["latest_test_success"] if "latest_test_success" in r else None
@@ -5991,7 +5998,14 @@ async def list_webhooks(
         latest_test_signal_id = _normalize_webhook_activity_uuid_text(r["latest_test_signal_id"]) if "latest_test_signal_id" in r and r["latest_test_signal_id"] else None
         latest_test_review_id = _normalize_webhook_activity_uuid_text(r["latest_test_review_id"]) if "latest_test_review_id" in r and r["latest_test_review_id"] else None
         latest_test_report_id = _normalize_webhook_activity_uuid_text(r["latest_test_report_id"]) if "latest_test_report_id" in r and r["latest_test_report_id"] else None
-        latest_test_vendor_name = _optional_query_text(r["latest_test_vendor_name"]) if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None
+        latest_test_report_context = await _fetch_webhook_activity_report_context(
+            pool,
+            latest_test_report_id,
+            report_activity_cache,
+        )
+        latest_test_vendor_name = (
+            _optional_query_text(r["latest_test_vendor_name"]) if "latest_test_vendor_name" in r and r["latest_test_vendor_name"] else None
+        ) or (latest_test_report_context or {}).get("vendor_name")
         latest_test_company_name = _optional_query_text(r["latest_test_company_name"]) if "latest_test_company_name" in r and r["latest_test_company_name"] else None
         latest_test_account_review_focus = (
             await _resolve_webhook_activity_account_focus(
@@ -6005,7 +6019,7 @@ async def list_webhooks(
                 tracked_vendor_cache=tracked_vendor_cache,
                 signal_cache=signal_cache,
             )
-            if any((latest_test_signal_id, latest_test_review_id, latest_test_vendor_name, latest_test_company_name))
+            if any((latest_test_signal_id, latest_test_review_id, latest_test_company_name))
             else None
         )
         latest_crm_push = None
@@ -6084,6 +6098,8 @@ async def list_webhooks(
             "latest_failure_signal_id": latest_failure_signal_id,
             "latest_failure_review_id": latest_failure_review_id,
             "latest_failure_report_id": latest_failure_report_id,
+            "latest_failure_report_type": (latest_failure_report_context or {}).get("report_type"),
+            "latest_failure_report_title": (latest_failure_report_context or {}).get("report_title"),
             "latest_failure_vendor_name": latest_failure_vendor_name,
             "latest_failure_company_name": latest_failure_company_name,
             "latest_failure_account_review_focus": latest_failure_account_review_focus,
@@ -6094,6 +6110,8 @@ async def list_webhooks(
             "latest_test_signal_id": latest_test_signal_id,
             "latest_test_review_id": latest_test_review_id,
             "latest_test_report_id": latest_test_report_id,
+            "latest_test_report_type": (latest_test_report_context or {}).get("report_type"),
+            "latest_test_report_title": (latest_test_report_context or {}).get("report_title"),
             "latest_test_vendor_name": latest_test_vendor_name,
             "latest_test_company_name": latest_test_company_name,
             "latest_test_account_review_focus": latest_test_account_review_focus,

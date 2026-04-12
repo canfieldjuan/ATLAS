@@ -505,6 +505,8 @@ export interface WebhookSubscription {
   latest_failure_signal_id?: string | null
   latest_failure_review_id?: string | null
   latest_failure_report_id?: string | null
+  latest_failure_report_type?: string | null
+  latest_failure_report_title?: string | null
   latest_failure_vendor_name?: string | null
   latest_failure_company_name?: string | null
   latest_failure_account_review_focus?: AlertAccountReviewFocus | null
@@ -515,6 +517,8 @@ export interface WebhookSubscription {
   latest_test_signal_id?: string | null
   latest_test_review_id?: string | null
   latest_test_report_id?: string | null
+  latest_test_report_type?: string | null
+  latest_test_report_title?: string | null
   latest_test_vendor_name?: string | null
   latest_test_company_name?: string | null
   latest_test_account_review_focus?: AlertAccountReviewFocus | null

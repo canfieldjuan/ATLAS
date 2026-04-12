@@ -395,6 +395,19 @@ function formatAccountReviewTargetLabel(focus: AlertAccountReviewFocus | null | 
     : `Account review target: ${company}`
 }
 
+function formatReportTargetLabel(activity: {
+  report_id?: string | null
+  report_title?: string | null
+  report_type?: string | null
+}) {
+  const reportId = normalizeActivityReference(activity.report_id)
+  if (!reportId) return null
+  const title = String(activity.report_title || '').trim()
+  if (title) return `Report target: ${title}`
+  const reportType = String(activity.report_type || '').trim()
+  return reportType ? `Report target: ${reportType}` : `Report target: ${reportId}`
+}
+
 function generateWebhookSecret() {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
   const bytes = new Uint8Array(24)
@@ -1151,6 +1164,8 @@ export default function IncidentAlerts() {
               }
               const latestFailureContext = {
                 ...latestFailureReferences,
+                report_type: webhook.latest_failure_report_type,
+                report_title: webhook.latest_failure_report_title,
                 vendor_name: webhook.latest_failure_vendor_name,
                 account_review_focus: webhook.latest_failure_account_review_focus ?? null,
               }
@@ -1164,6 +1179,8 @@ export default function IncidentAlerts() {
               const latestManualTestContext = latestManualTestReferences
                 ? {
                     ...latestManualTestReferences,
+                    report_type: webhook.latest_test_report_type,
+                    report_title: webhook.latest_test_report_title,
                     vendor_name: webhook.latest_test_vendor_name,
                     account_review_focus: webhook.latest_test_account_review_focus ?? null,
                   }
@@ -1212,6 +1229,11 @@ export default function IncidentAlerts() {
                               {formatAccountReviewTargetLabel(latestFailureContext.account_review_focus)}
                             </div>
                           ) : null}
+                          {formatReportTargetLabel(latestFailureContext) ? (
+                            <div className="mt-1 text-[11px] font-medium text-rose-100/90">
+                              {formatReportTargetLabel(latestFailureContext)}
+                            </div>
+                          ) : null}
                           {renderActivityReferences(latestFailureReferences)}
                           {renderActivityDetailShortcuts(latestFailureContext, currentAlertsUrl)}
                           {renderActivityVendorShortcuts(latestFailureContext, currentAlertsUrl)}
@@ -1237,6 +1259,11 @@ export default function IncidentAlerts() {
                           {latestManualTestContext?.account_review_focus ? (
                             <div className="mt-1 text-[11px] font-medium text-current/90">
                               {formatAccountReviewTargetLabel(latestManualTestContext.account_review_focus)}
+                            </div>
+                          ) : null}
+                          {latestManualTestContext && formatReportTargetLabel(latestManualTestContext) ? (
+                            <div className="mt-1 text-[11px] font-medium text-current/90">
+                              {formatReportTargetLabel(latestManualTestContext)}
                             </div>
                           ) : null}
                           {latestManualTestReferences ? renderActivityReferences(latestManualTestReferences) : null}
