@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 import atlas_brain.autonomous.tasks.b2b_report_subscription_delivery as mod
+from atlas_brain.templates.email.report_subscription_delivery import (
+    render_report_subscription_delivery_html,
+    render_report_subscription_delivery_text,
+)
 
 
 class _DuePool:
@@ -211,6 +215,138 @@ def test_build_delivery_artifact_includes_normalized_trust_fields():
     assert artifact["freshness_state"] == "fresh"
     assert artifact["trust"]["review_state"] == "warnings"
     assert artifact["trust"]["artifact_state"] == "ready"
+
+
+def test_build_delivery_artifact_includes_account_pressure_preview_fields():
+    row = {
+        "id": "report-2",
+        "report_type": "battle_card",
+        "vendor_filter": "Salesforce",
+        "category_filter": None,
+        "status": "sales_ready",
+        "quality_status": "sales_ready",
+        "blocker_count": 0,
+        "warning_count": 0,
+        "unresolved_issue_count": 0,
+        "report_date": datetime.now(timezone.utc) - timedelta(hours=8),
+        "created_at": datetime.now(timezone.utc) - timedelta(hours=8),
+        "executive_summary": "Summary",
+        "intelligence_data": {
+            "account_reasoning_preview_only": True,
+            "account_reasoning_preview": {
+                "disclaimer": "Early account signal only.",
+                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                "priority_account_names": ["Concentrix", "Concentrix", "  "],
+            },
+        },
+        "data_density": {},
+    }
+
+    artifact = mod._build_delivery_artifact(row)
+
+    assert artifact["account_reasoning_preview_only"] is True
+    assert artifact["account_pressure_summary"] == (
+        "A single named account is showing early evaluation pressure."
+    )
+    assert artifact["priority_account_names"] == ["Concentrix"]
+    assert artifact["account_pressure_disclaimer"] == "Early account signal only."
+
+
+def test_delivery_content_hash_includes_account_pressure_fields():
+    row = {
+        "scope_type": "report",
+        "scope_key": "report-1",
+        "scope_label": "Recurring battle card",
+        "filter_payload": {},
+        "delivery_note": "",
+    }
+    base_artifact = {
+        "report_id": "report-1",
+        "report_type": "battle_card",
+        "title": "Battle card",
+        "trust_label": "Evidence-backed",
+        "artifact_state": "ready",
+        "artifact_label": "Ready",
+        "quality_status": "sales_ready",
+        "blocker_count": 0,
+        "warning_count": 0,
+        "unresolved_issue_count": 0,
+        "freshness_state": "fresh",
+        "freshness_label": "Fresh",
+        "review_state": "clean",
+        "review_label": "Clean",
+        "executive_summary": "Summary",
+        "evidence_highlights": ["highlight"],
+        "section_evidence": {},
+        "section_evidence_summary": {},
+    }
+
+    without_pressure = mod._delivery_content_hash(row, [base_artifact])
+    with_pressure = mod._delivery_content_hash(
+        row,
+        [
+            {
+                **base_artifact,
+                "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+                "priority_account_names": ["Concentrix"],
+                "account_reasoning_preview_only": True,
+                "account_pressure_disclaimer": "Early account signal only.",
+            }
+        ],
+    )
+
+    assert without_pressure != with_pressure
+
+
+def test_render_delivery_templates_include_account_pressure_block():
+    artifact = {
+        "title": "Battle card",
+        "type_label": "Battle Card",
+        "trust_label": "Evidence-backed",
+        "artifact_label": "Ready",
+        "review_label": "Warnings",
+        "freshness_label": "Fresh",
+        "freshness_detail": "",
+        "executive_summary": "Summary",
+        "account_pressure_summary": "A single named account is showing early evaluation pressure.",
+        "priority_account_names": ["Concentrix"],
+        "account_pressure_disclaimer": "Early account signal only.",
+        "evidence_highlights": ["Named account pressure from review evidence."],
+        "section_evidence_summary": {
+            "witness_backed_count": 1,
+            "partial_count": 0,
+            "partial_sections": [],
+            "thin_count": 0,
+            "thin_sections": [],
+        },
+        "report_url": "https://example.com/report-1",
+    }
+
+    html = render_report_subscription_delivery_html(
+        account_name="Atlas",
+        scope_label="Recurring battle card",
+        summary_line="One artifact is ready.",
+        frequency_label="Weekly",
+        manage_url="https://example.com/manage",
+        delivery_note="",
+        artifacts=[artifact],
+    )
+    text = render_report_subscription_delivery_text(
+        account_name="Atlas",
+        scope_label="Recurring battle card",
+        summary_line="One artifact is ready.",
+        frequency_label="Weekly",
+        manage_url="https://example.com/manage",
+        delivery_note="",
+        artifacts=[artifact],
+    )
+
+    assert "Account Pressure" in html
+    assert "Concentrix" in html
+    assert "Early account signal only." in html
+    assert "Account pressure: A single named account is showing early evaluation pressure." in text
+    assert "Priority accounts: Concentrix" in text
+    assert "Note: Early account signal only." in text
 
 
 @pytest.mark.asyncio

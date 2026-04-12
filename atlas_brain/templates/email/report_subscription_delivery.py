@@ -29,6 +29,9 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
     executive_summary = escape(str(artifact.get("executive_summary") or "No executive summary is attached to this artifact yet."))
     report_url = escape(str(artifact.get("report_url") or ""), quote=True)
     evidence_highlights = artifact.get("evidence_highlights") or []
+    account_pressure_summary = str(artifact.get("account_pressure_summary") or "").strip()
+    account_pressure_disclaimer = str(artifact.get("account_pressure_disclaimer") or "").strip()
+    priority_account_names = artifact.get("priority_account_names") or []
     section_evidence_summary = artifact.get("section_evidence_summary") or {}
 
     highlight_items = ""
@@ -51,6 +54,36 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
             "Witness Highlights"
             "</div>"
             f"<ul style=\"padding-left:18px;margin:0;\">{highlight_items}</ul>"
+            "</div>"
+        )
+
+    priority_accounts_line = ""
+    if isinstance(priority_account_names, list):
+        cleaned_priority_names = [str(item or "").strip() for item in priority_account_names if str(item or "").strip()]
+        if cleaned_priority_names:
+            priority_accounts_line = (
+                "<div style=\"margin-top:8px;font-size:13px;color:#334155;line-height:1.6;\">"
+                f"<strong>Priority accounts:</strong> {escape(', '.join(cleaned_priority_names[:3]))}"
+                "</div>"
+            )
+
+    account_pressure_block = ""
+    if account_pressure_summary or priority_accounts_line or account_pressure_disclaimer:
+        disclaimer_line = ""
+        if account_pressure_disclaimer:
+            disclaimer_line = (
+                "<div style=\"margin-top:8px;font-size:12px;color:#64748b;line-height:1.6;\">"
+                f"{escape(account_pressure_disclaimer)}"
+                "</div>"
+            )
+        account_pressure_block = (
+            "<div style=\"margin-top:14px;\">"
+            "<div style=\"font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#0f766e;margin-bottom:8px;\">"
+            "Account Pressure"
+            "</div>"
+            f"<div style=\"font-size:14px;color:#334155;line-height:1.7;\">{escape(account_pressure_summary)}</div>"
+            f"{priority_accounts_line}"
+            f"{disclaimer_line}"
             "</div>"
         )
 
@@ -111,6 +144,7 @@ def _artifact_section_html(artifact: dict[str, object]) -> str:
       {"<br><span style=\"color:#64748b;\">" + freshness_detail + "</span>" if freshness_detail else ""}
     </div>
     <p style="margin:14px 0 0;font-size:14px;color:#334155;line-height:1.7;">{executive_summary}</p>
+    {account_pressure_block}
     {section_coverage_block}
     {highlight_block}
     {cta_block}
@@ -237,6 +271,9 @@ def render_report_subscription_delivery_text(
             lines.append(f"  Detail: {freshness_detail}")
         lines.append(f"  Summary: {artifact.get('executive_summary') or 'No executive summary is attached to this artifact yet.'}")
         evidence_highlights = artifact.get("evidence_highlights") or []
+        account_pressure_summary = str(artifact.get("account_pressure_summary") or "").strip()
+        account_pressure_disclaimer = str(artifact.get("account_pressure_disclaimer") or "").strip()
+        priority_account_names = artifact.get("priority_account_names") or []
         section_evidence_summary = artifact.get("section_evidence_summary") or {}
         if isinstance(section_evidence_summary, dict):
             lines.append("  Section coverage:")
@@ -249,6 +286,14 @@ def render_report_subscription_delivery_text(
             lines.append(
                 f"    {_coverage_line('Thin evidence', section_evidence_summary.get('thin_count'), section_evidence_summary.get('thin_sections'))}"
             )
+        if account_pressure_summary:
+            lines.append(f"  Account pressure: {account_pressure_summary}")
+        if isinstance(priority_account_names, list):
+            cleaned_priority_names = [str(item or "").strip() for item in priority_account_names if str(item or "").strip()]
+            if cleaned_priority_names:
+                lines.append(f"  Priority accounts: {', '.join(cleaned_priority_names[:3])}")
+        if account_pressure_disclaimer:
+            lines.append(f"  Note: {account_pressure_disclaimer}")
         if isinstance(evidence_highlights, list):
             for highlight in evidence_highlights[:3]:
                 text = str(highlight or "").strip()

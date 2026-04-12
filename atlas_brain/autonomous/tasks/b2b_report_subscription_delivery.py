@@ -593,6 +593,49 @@ def _extract_evidence_highlights(intelligence_data: dict[str, Any], *, limit: in
     return []
 
 
+def _extract_account_pressure_payload(intelligence_data: dict[str, Any]) -> dict[str, Any]:
+    preview = intelligence_data.get("account_reasoning_preview")
+    if not isinstance(preview, dict):
+        preview = {}
+
+    summary = str(
+        intelligence_data.get("account_pressure_summary")
+        or preview.get("account_pressure_summary")
+        or ""
+    ).strip()
+    disclaimer = str(preview.get("disclaimer") or "").strip()
+    preview_only = bool(intelligence_data.get("account_reasoning_preview_only"))
+
+    priority_names: list[str] = []
+    raw_priority_names = intelligence_data.get("priority_account_names")
+    if not isinstance(raw_priority_names, list):
+        raw_priority_names = preview.get("priority_account_names")
+    if isinstance(raw_priority_names, list):
+        seen: set[str] = set()
+        for item in raw_priority_names:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            priority_names.append(text)
+            if len(priority_names) >= 5:
+                break
+
+    payload: dict[str, Any] = {}
+    if summary:
+        payload["account_pressure_summary"] = summary
+    if priority_names:
+        payload["priority_account_names"] = priority_names
+    if preview_only:
+        payload["account_reasoning_preview_only"] = True
+    if disclaimer and (preview_only or summary or priority_names):
+        payload["account_pressure_disclaimer"] = disclaimer
+    return payload
+
+
 def _frequency_label(frequency: str) -> str:
     return str(frequency or "weekly").replace("_", " ").title()
 
@@ -688,6 +731,16 @@ def _delivery_content_hash(row, artifacts: list[dict[str, Any]]) -> str:
                 "review_label": str(artifact.get("review_label") or ""),
                 "executive_summary": str(artifact["executive_summary"] or ""),
                 "evidence_highlights": [str(item or "") for item in artifact.get("evidence_highlights") or []],
+                "account_pressure_summary": str(artifact.get("account_pressure_summary") or ""),
+                "priority_account_names": [
+                    str(item or "") for item in artifact.get("priority_account_names") or []
+                ],
+                "account_reasoning_preview_only": bool(
+                    artifact.get("account_reasoning_preview_only")
+                ),
+                "account_pressure_disclaimer": str(
+                    artifact.get("account_pressure_disclaimer") or ""
+                ),
                 "section_evidence": [
                     {
                         "section": str(section_key or ""),
@@ -1076,7 +1129,7 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
         or intelligence_data.get("executive_summary")
         or "No executive summary is attached to this artifact yet."
     ).strip()
-    return {
+    artifact = {
         "report_id": row["id"],
         "report_type": str(row["report_type"] or ""),
         "title": _report_display_title(row),
@@ -1107,6 +1160,8 @@ def _build_delivery_artifact(row) -> dict[str, Any]:
         "evidence_highlights": _extract_evidence_highlights(intelligence_data),
         "report_url": _report_url(row["id"]),
     }
+    artifact.update(_extract_account_pressure_payload(intelligence_data))
+    return artifact
 
 
 async def _resolve_artifact_selection(pool, row, tracked_vendors: set[str]) -> _ArtifactSelectionResult:
