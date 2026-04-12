@@ -27,6 +27,10 @@ from ..services.scraping.target_provisioning import (
     provision_vendor_onboarding_targets,
 )
 from ..services.campaign_sender import get_campaign_sender
+from ..services.company_normalization import (
+    normalize_company_name,
+    normalized_company_name_sql,
+)
 from ..services.b2b.report_trust import (
     REPORT_QUALITY_STATUSES,
     report_freshness_payload,
@@ -139,6 +143,56 @@ def _matches_source_filter(account: dict[str, Any], source: str | None) -> bool:
 def _clean_optional_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _company_signal_lookup_key(company_name: Any, vendor_name: Any) -> tuple[str, str] | None:
+    company_key = normalize_company_name(str(company_name or "").strip())
+    vendor_key = _normalize_vendor_name(vendor_name)
+    if not company_key or not vendor_key:
+        return None
+    return company_key, vendor_key
+
+
+async def _load_company_signal_ids_for_opportunities(
+    pool,
+    opportunities: list["PushToCrmOpportunity"],
+) -> dict[tuple[str, str], str]:
+    requested_pairs: list[tuple[str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for opportunity in opportunities:
+        lookup_key = _company_signal_lookup_key(opportunity.company, opportunity.vendor)
+        if lookup_key is None or lookup_key in seen_pairs:
+            continue
+        seen_pairs.add(lookup_key)
+        requested_pairs.append(lookup_key)
+
+    if not requested_pairs:
+        return {}
+
+    rows = await pool.fetch(
+        f"""
+        WITH requested AS (
+            SELECT DISTINCT company_key, vendor_key
+            FROM UNNEST($1::text[], $2::text[]) AS request(company_key, vendor_key)
+        )
+        SELECT cs.id, cs.company_name, cs.vendor_name
+        FROM b2b_company_signals cs
+        JOIN requested req
+          ON {normalized_company_name_sql('cs.company_name')} = req.company_key
+         AND LOWER(TRIM(COALESCE(cs.vendor_name, ''))) = req.vendor_key
+        """,
+        [company_key for company_key, _vendor_key in requested_pairs],
+        [vendor_key for _company_key, vendor_key in requested_pairs],
+    )
+
+    lookup: dict[tuple[str, str], str] = {}
+    for row in rows:
+        lookup_key = _company_signal_lookup_key(row.get('company_name'), row.get('vendor_name'))
+        signal_id = str(row.get('id') or "").strip()
+        if lookup_key is None or not signal_id or lookup_key in lookup:
+            continue
+        lookup[lookup_key] = signal_id
+    return lookup
 
 
 def _threshold_hit_numeric(value: Any, threshold: float | None) -> bool:
@@ -1290,10 +1344,16 @@ async def push_to_crm(
     max_payload_bytes = _coerce_int_with_default(getattr(cfg, "max_payload_bytes", 65536), 65536)
     pushed = 0
     failed: list[dict[str, str]] = []
+    company_signal_ids = await _load_company_signal_ids_for_opportunities(pool, body.opportunities)
 
     for opp in body.opportunities:
         opp_data = opp.model_dump(exclude_none=True)
         opp_data["company_name"] = opp_data.pop("company", "")
+        lookup_key = _company_signal_lookup_key(opp.company, opp.vendor)
+        if lookup_key is not None:
+            company_signal_id = company_signal_ids.get(lookup_key)
+            if company_signal_id:
+                opp_data["company_signal_id"] = company_signal_id
         envelope = _build_envelope("high_intent_push", opp.vendor, opp_data)
 
         opp_ok = False

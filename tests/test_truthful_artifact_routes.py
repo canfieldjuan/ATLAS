@@ -781,24 +781,36 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
     app.include_router(tenant_dashboard_api.router)
     app.dependency_overrides[require_auth] = _auth_user
 
+    signal_id = uuid4()
+
     class Pool:
         is_initialized = True
 
-        async def fetch(self, *_args):
-            return [
-                {
-                    "id": "sub-1",
-                    "url": "https://example.com/webhook",
-                    "secret": "secret",
-                    "account_id": _auth_user().account_id,
-                    "channel": "crm_hubspot",
-                    "auth_header": None,
-                }
-            ]
+        async def fetch(self, query, *_args):
+            if "FROM b2b_webhook_subscriptions" in query:
+                return [
+                    {
+                        "id": "sub-1",
+                        "url": "https://example.com/webhook",
+                        "secret": "secret",
+                        "account_id": _auth_user().account_id,
+                        "channel": "crm_hubspot",
+                        "auth_header": None,
+                    }
+                ]
+            if "FROM b2b_company_signals" in query:
+                return [
+                    {
+                        "id": signal_id,
+                        "company_name": "Acme, Inc.",
+                        "vendor_name": " Salesforce ",
+                    }
+                ]
+            raise AssertionError(f"Unexpected query: {query}")
 
     captured: dict[str, object] = {}
     log_push = AsyncMock()
-    
+
     async def fake_deliver(pool, sub, event_type, envelope, payload_bytes, cfg):
         await log_push(pool, sub["id"], event_type, envelope)
         return True
@@ -857,11 +869,86 @@ def test_push_to_crm_routes_high_intent_payload(monkeypatch):
     assert envelope["event"] == "high_intent_push"
     assert envelope["vendor"] == "Salesforce"
     assert envelope["data"]["company_name"] == "Acme"
+    assert envelope["data"]["company_signal_id"] == str(signal_id)
     assert envelope["data"]["role_type"] == "revops"
     assert envelope["data"]["competitor_context"] == "HubSpot"
     assert envelope["data"]["primary_quote"] == "We need better renewal controls."
     assert envelope["data"]["trust_tier"] == "high"
     assert "company" not in envelope["data"]
+    assert log_push.await_count == 1
+
+
+def test_push_to_crm_omits_company_signal_id_without_canonical_match(monkeypatch):
+    app = FastAPI()
+    app.include_router(tenant_dashboard_api.router)
+    app.dependency_overrides[require_auth] = _auth_user
+
+    class Pool:
+        is_initialized = True
+
+        async def fetch(self, query, *_args):
+            if "FROM b2b_webhook_subscriptions" in query:
+                return [
+                    {
+                        "id": "sub-1",
+                        "url": "https://example.com/webhook",
+                        "secret": "secret",
+                        "account_id": _auth_user().account_id,
+                        "channel": "crm_hubspot",
+                        "auth_header": None,
+                    }
+                ]
+            if "FROM b2b_company_signals" in query:
+                return []
+            raise AssertionError(f"Unexpected query: {query}")
+
+    captured: dict[str, object] = {}
+    log_push = AsyncMock()
+
+    async def fake_deliver(pool, sub, event_type, envelope, payload_bytes, cfg):
+        await log_push(pool, sub["id"], event_type, envelope)
+        return True
+
+    def fake_format_for_channel(channel, envelope):
+        captured["channel"] = channel
+        captured["envelope"] = envelope
+        return b"{}"
+
+    monkeypatch.setattr(tenant_dashboard_api, "get_db_pool", lambda: Pool())
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._format_for_channel",
+        fake_format_for_channel,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._deliver_single",
+        fake_deliver,
+    )
+    monkeypatch.setattr(
+        "atlas_brain.services.b2b.webhook_dispatcher._log_crm_push",
+        log_push,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/b2b/tenant/push-to-crm",
+            json={
+                "opportunities": [
+                    {
+                        "company": "Acme",
+                        "vendor": "Salesforce",
+                        "urgency": 8.5,
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["pushed"] == 1
+    assert response.json()["failed"] == []
+    envelope = captured["envelope"]
+    assert isinstance(envelope, dict)
+    assert envelope["data"]["company_name"] == "Acme"
+    assert "company_signal_id" not in envelope["data"]
     assert log_push.await_count == 1
 
 
