@@ -985,6 +985,22 @@ describe('Reports', () => {
     )
   })
 
+  it('shows an account-review back label for focused watchlist context', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/reports', element: <Reports /> }],
+      {
+        initialEntries: [
+          '/reports?vendor_filter=Zendesk&back_to=%2Fwatchlists%3Faccount_vendor%3DZendesk%26account_company%3DAcme%2BCorp%26account_report_date%3D2026-04-05%26account_watch_vendor%3DZendesk%26account_category%3DHelpdesk%26account_track_mode%3Dcompetitor',
+        ],
+      },
+    )
+
+    render(<RouterProvider router={router} />)
+
+    await screen.findByText('Intelligence Library')
+    expect(screen.getByRole('button', { name: 'Back to Account Review' })).toBeInTheDocument()
+  })
+
   it('shows vendor workspace, evidence, and opportunity shortcuts for an active vendor filter', async () => {
     const router = createMemoryRouter(
       [{ path: '/reports', element: <Reports /> }],

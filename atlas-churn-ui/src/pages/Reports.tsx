@@ -308,7 +308,14 @@ export default function Reports() {
   const backButtonLabel = reportsBackTarget.startsWith('/vendors/')
     ? 'Back to Vendor'
     : reportsBackTarget.startsWith('/watchlists')
-      ? 'Back to Watchlists'
+      ? (() => {
+          try {
+            const url = new URL(reportsBackTarget, window.location.origin)
+            return url.searchParams.get('account_company')?.trim() ? 'Back to Account Review' : 'Back to Watchlists'
+          } catch {
+            return 'Back to Watchlists'
+          }
+        })()
       : reportsBackTarget.startsWith('/reviews')
         ? 'Back to Review'
         : reportsBackTarget.startsWith('/evidence')
